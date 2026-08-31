@@ -28,7 +28,6 @@ final class WorkboardLiveRepository {
     private let openConversationHandler: @MainActor (UUID) -> Void
     private let openMaterialHandler: @MainActor (WorkboardMaterialSnapshot) -> Void
     private let openGatewaySettingsHandler: @MainActor () -> Void
-    private let captureVoiceHandler: (@MainActor () async throws -> String)?
     private let shapeDraftHandler: (@MainActor (WorkboardEditDraft) async throws -> WorkboardEditDraft)?
     private let readBriefingHandler: (@MainActor (String) async -> Void)?
     private let stopBriefingHandler: (@MainActor () -> Void)?
@@ -44,6 +43,11 @@ final class WorkboardLiveRepository {
     /// they simply fall back to their type icon until they become recent again.
     private static let maximumLiveLocalThumbnails = 96
 
+    /// Decode window for the preview wave. Each job is uninterruptible CPU work
+    /// on the shared cooperative pool, so the width is a courtesy to every other
+    /// awaiting continuation in the process, not a throughput knob.
+    private static let maximumConcurrentThumbnailDecodes = 4
+
     init(
         store: ConversationStore = .shared,
         settings: SettingsManager = .shared,
@@ -52,7 +56,6 @@ final class WorkboardLiveRepository {
         openConversation: @escaping @MainActor (UUID) -> Void,
         openMaterial: @escaping @MainActor (WorkboardMaterialSnapshot) -> Void,
         openGatewaySettings: @escaping @MainActor () -> Void,
-        captureVoice: (@MainActor () async throws -> String)? = nil,
         shapeDraft: (@MainActor (WorkboardEditDraft) async throws -> WorkboardEditDraft)? = nil,
         readBriefingAloud: (@MainActor (String) async -> Void)? = nil,
         stopBriefingAloud: (@MainActor () -> Void)? = nil
@@ -68,7 +71,6 @@ final class WorkboardLiveRepository {
         self.openConversationHandler = openConversation
         self.openMaterialHandler = openMaterial
         self.openGatewaySettingsHandler = openGatewaySettings
-        self.captureVoiceHandler = captureVoice
         self.shapeDraftHandler = shapeDraft
         self.readBriefingHandler = readBriefingAloud
         self.stopBriefingHandler = stopBriefingAloud
@@ -106,9 +108,9 @@ final class WorkboardLiveRepository {
             },
             deleteItem: { [self] itemID in
                 try await store.deleteWorkItem(id: itemID)
-                await WorkboardReviewReminderScheduler.shared.cancel(itemID: itemID)
             },
             duplicateItem: { [self] itemID in try await duplicateItem(id: itemID) },
+            reorderItems: { [self] reorder in try await reorderItems(reorder) },
             setState: { [self] itemID, state in try await setState(state, for: itemID) },
             acknowledgeRun: { [self] itemID, runID, resultKey in
                 guard let item = try await store.acknowledgeWorkDispatchReview(
@@ -124,11 +126,9 @@ final class WorkboardLiveRepository {
             openConversation: { [self] id in openConversationHandler(id) },
             openMaterial: { [self] material in openMaterialHandler(material) },
             openGatewaySettings: { [self] in openGatewaySettingsHandler() },
-            captureVoice: captureVoiceHandler,
             shapeDraft: shapeDraftHandler,
             readBriefingAloud: readBriefingHandler,
-            stopBriefingAloud: stopBriefingHandler,
-            reorderItems: { [self] reorder in try await reorderItems(reorder) }
+            stopBriefingAloud: stopBriefingHandler
         )
     }
 
@@ -145,21 +145,22 @@ final class WorkboardLiveRepository {
         // Keep this a cancelable read. Capture ownership belongs exclusively to
         // `WorkCaptureRefreshCoordinator`; allowing a view load to claim queue
         // bytes would let its own claim/ack notification cancel the caller.
-        _ = try await store.reconcileWorkAssetVault()
         let records = try await store.fetchWorkItems()
-        return try await snapshots(for: records)
+        return try await snapshots(for: records, isCompleteBoard: true)
     }
 
-    private func snapshots(for records: [WorkItemRecord]) async throws -> [WorkboardItemSnapshot] {
-        await WorkboardReviewReminderScheduler.shared.reconcile(records)
-        let conversationIDs = Set(records.flatMap { $0.dispatches.compactMap(\.conversationID) })
-        var messagesByID: [UUID: MessageRecord] = [:]
-        for conversationID in conversationIDs {
-            for message in try await store.fetchMessages(for: conversationID) {
-                messagesByID[message.id] = message
-            }
-        }
-        let localThumbnails = await localPresentationThumbnails(for: records)
+    /// `isCompleteBoard` is false for every partial projection — a single saved
+    /// brief, one reordered pin cohort — so board-wide bookkeeping stays out of
+    /// paths that can only see a slice of the board.
+    private func snapshots(
+        for records: [WorkItemRecord],
+        isCompleteBoard: Bool = false
+    ) async throws -> [WorkboardItemSnapshot] {
+        let messagesByID = try await resultMessages(for: records)
+        let localThumbnails = await localPresentationThumbnails(
+            for: records,
+            prunesCache: isCompleteBoard
+        )
         return records.map {
             Self.snapshot(
                 for: $0,
@@ -169,6 +170,34 @@ final class WorkboardLiveRepository {
         }
     }
 
+    /// Reads only the turns a run actually projects — the reply it displays and
+    /// the failed user turn it reads a failure code from. Faulting every message
+    /// of every linked conversation costs the full text and attachment rows of
+    /// unrelated chat history on a path that runs on each debounced refresh.
+    ///
+    /// Resolved in ONE batched store read rather than one read per run: the set
+    /// scales with the whole board, and a task per entry would open that many
+    /// private-queue Core Data contexts at once against a single coordinator.
+    private func resultMessages(
+        for records: [WorkItemRecord]
+    ) async throws -> [UUID: MessageRecord] {
+        var wanted: [UUID: UUID] = [:]
+        for dispatch in records.flatMap(\.dispatches) {
+            guard let conversationID = dispatch.conversationID else { continue }
+            switch dispatch.activity {
+            case .replied(let messageID):
+                wanted[messageID] = conversationID
+            case .failed(let messageID, _):
+                wanted[messageID] = conversationID
+            case .prepared, .waiting, .replyPendingSync, .conversationRemoved:
+                continue
+            }
+        }
+        guard !wanted.isEmpty else { return [:] }
+
+        return try await store.fetchMessages(conversationIDsByMessageID: wanted)
+    }
+
     /// Builds transient previews from the device-local vault. The resulting
     /// bytes exist only in this repository's memory and the presentation
     /// snapshot: they are never written back to Core Data and therefore never
@@ -176,7 +205,8 @@ final class WorkboardLiveRepository {
     /// actor, keeping both UI responsiveness and the no-synced-file-content
     /// privacy invariant intact.
     private func localPresentationThumbnails(
-        for records: [WorkItemRecord]
+        for records: [WorkItemRecord],
+        prunesCache: Bool
     ) async -> [UUID: Data] {
         let candidates = records
             .flatMap(\.materials)
@@ -189,39 +219,67 @@ final class WorkboardLiveRepository {
                 ($0.updatedAt, $0.id.uuidString) > ($1.updatedAt, $1.id.uuidString)
             }
         let boundedCandidates = Array(candidates.prefix(Self.maximumLiveLocalThumbnails))
-        let candidateIDs = Set(boundedCandidates.map(\.id))
-        localThumbnailCache = localThumbnailCache.filter { candidateIDs.contains($0.key) }
+        if prunesCache {
+            // Only the whole board knows which entries are genuinely gone. A
+            // partial projection pruning here would evict — and force a re-decode
+            // of — every other card's preview on each autosave.
+            let candidateIDs = Set(boundedCandidates.map(\.id))
+            localThumbnailCache = localThumbnailCache.filter { candidateIDs.contains($0.key) }
+        }
 
         var result: [UUID: Data] = [:]
-        var jobs: [(id: UUID, revision: Int64, url: URL)] = []
+        var pending: [(id: UUID, revision: Int64, key: String)] = []
         for material in boundedCandidates {
             let revision = Self.revision(for: material.updatedAt)
             if let cached = localThumbnailCache[material.id], cached.revision == revision {
                 result[material.id] = cached.data
                 continue
             }
-            guard let url = try? await store.localURLForWorkMaterial(id: material.id) else {
+            // The record already carries its vault key, so the URL comes from one
+            // vault hop for the whole wave rather than a store round-trip each.
+            guard let key = material.localVaultKey else {
                 localThumbnailCache.removeValue(forKey: material.id)
                 continue
             }
-            jobs.append((material.id, revision, url))
+            pending.append((material.id, revision, key))
+        }
+        guard !pending.isEmpty else { return result }
+
+        let urlsByKey = await store.workAssetVault.urls(for: pending.map(\.key))
+        var jobs: [(id: UUID, revision: Int64, url: URL)] = []
+        for entry in pending {
+            guard let url = urlsByKey[entry.key] else {
+                localThumbnailCache.removeValue(forKey: entry.id)
+                continue
+            }
+            jobs.append((entry.id, entry.revision, url))
         }
 
+        // ImageIO downsampling never suspends, so an unbounded fan-out would hold
+        // every cooperative thread and stall unrelated continuations.
+        let decodeWidth = Self.maximumConcurrentThumbnailDecodes
         let generated = await withTaskGroup(
             of: (UUID, Int64, Data?).self,
             returning: [(UUID, Int64, Data?)].self
         ) { group in
-            for job in jobs {
+            var next = 0
+            while next < jobs.count, next < decodeWidth {
+                let job = jobs[next]
                 group.addTask {
-                    (
-                        job.id,
-                        job.revision,
-                        ImageProcessor.thumbnailOnly(fromFileAt: job.url)
-                    )
+                    (job.id, job.revision, ImageProcessor.thumbnailOnly(fromFileAt: job.url))
                 }
+                next += 1
             }
             var values: [(UUID, Int64, Data?)] = []
-            for await value in group { values.append(value) }
+            while let value = await group.next() {
+                values.append(value)
+                guard next < jobs.count else { continue }
+                let job = jobs[next]
+                group.addTask {
+                    (job.id, job.revision, ImageProcessor.thumbnailOnly(fromFileAt: job.url))
+                }
+                next += 1
+            }
             return values
         }
         for (id, revision, data) in generated {
@@ -268,7 +326,7 @@ final class WorkboardLiveRepository {
             desiredResult: record.content.desiredOutcome,
             constraints: record.content.constraints,
             reviewBy: record.content.dueAt,
-            state: presentationState(record.state),
+            state: record.state,
             materials: record.materials
                 .sorted { ($0.sequence, $0.createdAt, $0.id.uuidString) < ($1.sequence, $1.createdAt, $1.id.uuidString) }
                 .map { materialSnapshot($0, transientThumbnail: localThumbnails[$0.id]) },
@@ -281,15 +339,6 @@ final class WorkboardLiveRepository {
             lastSentRevision: latestStartedDispatch.map { revision(for: $0.createdAt) },
             wasCapturedExternally: record.captureEnvelopeID != nil
         )
-    }
-
-    private static func presentationState(_ state: WorkItemState) -> WorkboardItemState {
-        switch state {
-        case .draft: return .draft
-        case .waiting: return .waiting
-        case .review: return .review
-        case .done: return .done
-        }
     }
 
     private static func materialSnapshot(
@@ -335,39 +384,21 @@ final class WorkboardLiveRepository {
         }
     }
 
-    private static func presentationKind(_ record: WorkMaterialRecord) -> WorkboardMaterialKind {
-        switch record.kind {
-        case .image: return .image
-        case .file: return .file
-        case .link: return .link
-        case .note, .transcript: return .note
-        case .unknown:
-            return record.filename != nil || record.hasPayload ? .file : .note
-        }
+    /// Delegated, never re-derived. The send boundary refuses any brief whose
+    /// final prompt differs from the previewed one by a byte, and the preview's
+    /// prompt row is built from this card's kind and name — so a second copy of
+    /// the rule here would turn one edited helper into a permanent refusal on
+    /// every Send for that card. Both are internal so the tests can drive the
+    /// real preview mapping instead of a transcription of it.
+    static func presentationKind(_ record: WorkMaterialRecord) -> WorkboardMaterialKind {
+        WorkBriefMaterialPacket.packetKind(for: record).presentationKind
     }
 
-    private static func materialName(_ record: WorkMaterialRecord) -> String {
-        let candidates = [record.title, record.filename ?? ""]
-        if let value = candidates.first(where: {
-            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }) {
-            return value
-        }
-        if let value = record.urlString,
-           let host = URLComponents(string: value)?.host,
-           !host.isEmpty {
-            return host
-        }
-        switch presentationKind(record) {
-        case .image:
-            return String(localized: "workboard.material.image", defaultValue: "Image")
-        case .file:
-            return String(localized: "workboard.material.file", defaultValue: "File")
-        case .link:
-            return String(localized: "workboard.material.link", defaultValue: "Link")
-        case .note:
-            return String(localized: "workboard.material.note", defaultValue: "Note")
-        }
+    static func materialName(_ record: WorkMaterialRecord) -> String {
+        WorkBriefMaterialPacket.label(
+            for: record,
+            kind: WorkBriefMaterialPacket.packetKind(for: record)
+        )
     }
 
     private static func materialDetail(_ record: WorkMaterialRecord) -> String? {
@@ -409,13 +440,13 @@ final class WorkboardLiveRepository {
         let finishedAt: Date?
         switch dispatch.activity {
         case .prepared:
+            // Preparation stamps `dispatchedAt` in the same transaction that
+            // persists the turn, so no stored run rests here; a row that
+            // somehow does reads as an ordinary reviewable failure.
             state = .failed
             resultMarkdown = nil
             resultAttachments = []
-            failureMessage = String(
-                localized: "workboard.run.preparedNotSent",
-                defaultValue: "This brief was prepared but did not start. You can review and send it again."
-            )
+            failureMessage = safeFailureMessage(nil, ref: ref)
             finishedAt = nil
         case .waiting:
             state = .waiting
@@ -514,13 +545,12 @@ final class WorkboardLiveRepository {
                 name: RemoteAgentRefMetadata.displayName(for: ref, customs: badgeRoster),
                 detail: gatewayDetail(ref),
                 capabilities: capabilities,
-                availability: .configured(String(
+                configurationStatus: String(
                     localized: "workboard.gateway.configured.status",
                     defaultValue: fileTransferReady
                         ? "Configured on this device; full file transfer is ready."
                         : "Configured on this device; reachability is verified when you send."
-                )),
-                isRecommended: false
+                )
             ))
         }
         return (choices, badgeRoster)
@@ -613,49 +643,21 @@ final class WorkboardLiveRepository {
         // Most failures therefore happen while New Work is still purely in memory.
         let payload: Data?
         let sourceFileURL: URL?
-        let thumbnail: Data?
         let textContent: String?
         let urlString: String?
         switch material.kind {
-        case .image:
+        case .image, .file:
             if let url = material.fileURL {
                 payload = nil
                 sourceFileURL = url
-                let byteCount = material.byteCount ?? -1
-                if WorkAssetVault.shouldMirror(byteCount: byteCount),
-                   let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) {
-                    thumbnail = await Task.detached(priority: .userInitiated) {
-                        ImageProcessor.thumbnailOnly(from: data)
-                    }.value
-                } else {
-                    thumbnail = nil
-                }
             } else {
                 guard let data = material.data, !data.isEmpty else {
                     throw WorkboardLiveRepositoryError.missingPayload
                 }
                 payload = data
                 sourceFileURL = nil
-                thumbnail = await Task.detached(priority: .userInitiated) {
-                    ImageProcessor.thumbnailOnly(from: data)
-                }.value
             }
             textContent = nil
-            urlString = nil
-        case .file:
-            if let url = material.fileURL {
-                payload = nil
-                sourceFileURL = url
-                textContent = nil
-            } else {
-                guard let data = material.data, !data.isEmpty else {
-                    throw WorkboardLiveRepositoryError.missingPayload
-                }
-                payload = data
-                sourceFileURL = nil
-                textContent = nil
-            }
-            thumbnail = nil
             urlString = nil
         case .link:
             guard let value = material.urlString,
@@ -664,7 +666,6 @@ final class WorkboardLiveRepository {
             }
             payload = nil
             sourceFileURL = nil
-            thumbnail = nil
             textContent = nil
             urlString = value
         case .note:
@@ -672,7 +673,6 @@ final class WorkboardLiveRepository {
             guard !text.isEmpty else { throw WorkboardLiveRepositoryError.emptyNote }
             payload = nil
             sourceFileURL = nil
-            thumbnail = nil
             textContent = text
             urlString = nil
         }
@@ -702,7 +702,6 @@ final class WorkboardLiveRepository {
                 filename: material.kind == .image || material.kind == .file ? material.name : nil,
                 mimeType: material.mimeType,
                 payload: payload,
-                thumbnailData: thumbnail,
                 byteSize: material.byteCount ?? payload.map { Int64($0.count) },
                 sequence: sequence,
                 sourceDevice: SourceDevice.current
@@ -811,28 +810,16 @@ final class WorkboardLiveRepository {
             throw WorkboardLiveRepositoryError.missingPayload
         }
         let byteSize = replacement.byteCount ?? -1
-        // Reattachment replaces local bytes and metadata only. Persisting an
-        // extract here would copy user file content into private CloudKit.
-        let replacementText: String? = nil
-        let replacementThumbnail: Data?
-        if replacement.kind == .image,
-           WorkAssetVault.shouldMirror(byteCount: byteSize),
-           let data = try? Data(contentsOf: sourceURL, options: [.mappedIfSafe]) {
-            replacementThumbnail = await Task.detached(priority: .userInitiated) {
-                ImageProcessor.thumbnailOnly(from: data)
-            }.value
-        } else {
-            replacementThumbnail = nil
-        }
         do {
+            // Reattachment replaces local bytes and metadata only. Persisting an
+            // extract or a preview here would copy user file content into
+            // private CloudKit; the board renders previews from the vault.
             guard try await store.replaceWorkMaterialPayloadFile(
                 id: materialID,
                 from: sourceURL,
                 byteSize: byteSize,
                 filename: replacement.name,
                 mimeType: replacement.mimeType,
-                textContent: replacementText,
-                thumbnailData: replacementThumbnail,
                 sourceDevice: SourceDevice.current,
                 expectedOwnerRevision: expectedRevision,
                 onProgress: onProgress
@@ -889,7 +876,7 @@ final class WorkboardLiveRepository {
     }
 
     private func setState(
-        _ requestedState: WorkboardItemState,
+        _ requestedState: WorkItemState,
         for itemID: UUID
     ) async throws -> WorkboardItemSnapshot {
         guard var item = try await store.fetchWorkItem(id: itemID) else {
@@ -991,6 +978,20 @@ enum WorkboardLiveRepositoryError: LocalizedError, Equatable {
                 localized: "workboard.error.gatewayUnavailable",
                 defaultValue: "That gateway is not ready on this device. Nothing was sent."
             )
+        }
+    }
+}
+
+/// The prompt packet's kinds and the card's kinds are the same four shapes named
+/// for two audiences. This is the only place they are equated, so neither side
+/// can grow a case the other silently maps somewhere plausible.
+private extension WorkBriefMaterialPacket.Kind {
+    var presentationKind: WorkboardMaterialKind {
+        switch self {
+        case .image: return .image
+        case .file: return .file
+        case .link: return .link
+        case .note: return .note
         }
     }
 }

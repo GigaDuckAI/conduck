@@ -398,21 +398,13 @@ actor WorkCaptureDrainer {
                 filename: filename,
                 mimeType: entry.mimeType,
                 payload: nil,
-                thumbnailData: isImage ? thumbnail(from: payloadURL, byteSize: byteSize) : nil,
                 byteSize: byteSize,
                 sequence: sequence,
-                storageMode: WorkAssetVault.shouldMirror(byteCount: byteSize)
-                    ? .syncedPayload : .localVault,
+                storageMode: .localVault,
                 sourceDevice: sourceDevice,
                 createdAt: createdAt
             )
         }
-    }
-
-    private static func thumbnail(from url: URL, byteSize: Int64) -> Data? {
-        guard WorkAssetVault.shouldMirror(byteCount: byteSize),
-              let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else { return nil }
-        return ImageProcessor.thumbnailOnly(from: data)
     }
 }
 

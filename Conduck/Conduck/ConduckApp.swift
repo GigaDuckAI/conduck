@@ -118,16 +118,6 @@ private final class NotificationDelegate: NSObject, UNUserNotificationCenterDele
         // userInfo. Re-post on the in-app deep-link bus so RootView/ContentView
         // foregrounds + opens that thread (local fetch by ID; no URL scheme).
         let userInfo = response.notification.request.content.userInfo
-        if let itemID = userInfo[NotificationDeepLink.workItemIDKey] as? String,
-           UUID(uuidString: itemID) != nil {
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(
-                    name: .openWorkboardDeepLink,
-                    object: nil,
-                    userInfo: [NotificationDeepLink.workItemIDKey: itemID]
-                )
-            }
-        }
         if let idString = userInfo[NotificationDeepLink.conversationIDKey] as? String {
             let requestIdentifier = response.notification.request.identifier
             // Retire the WHOLE conversation's banners, not just the tapped one.
@@ -298,9 +288,9 @@ struct ConduckApp: App {
                     openWindow(id: "main")
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .openWorkboardDeepLink)) { _ in
-                    // A review reminder can arrive while the accessory-style
-                    // app has no visible window. Foreground the singleton main
-                    // window before PersonalWorkbenchView selects the card.
+                    // Preserving a Chat turn as Work deep-links to the new item.
+                    // Foreground the singleton main window before
+                    // PersonalWorkbenchView selects the card.
                     openWindow(id: "main")
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .showWorkboard)) { _ in

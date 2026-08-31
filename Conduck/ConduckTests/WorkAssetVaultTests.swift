@@ -140,12 +140,61 @@ final class WorkAssetVaultTests: XCTestCase {
         XCTAssertEqual(secondPayloadAfterFirstDelete, Data("second store".utf8))
     }
 
-    func testFilePayloadMirroringIsDisabled() {
-        XCTAssertEqual(WorkAssetVault.mirroredPayloadCeilingBytes, 0)
-        XCTAssertFalse(WorkAssetVault.shouldMirror(byteCount: 0))
-        XCTAssertFalse(WorkAssetVault.shouldMirror(byteCount: 1))
-        XCTAssertFalse(WorkAssetVault.shouldMirror(byteCount: 20 * 1_024 * 1_024))
-        XCTAssertFalse(WorkAssetVault.shouldMirror(byteCount: -1))
+    func testFilePayloadsNeverEnterTheMirroredModel() async throws {
+        let store = ConversationStore(inMemory: true)
+        let item = try await store.createWorkItem()
+        let large = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                kind: .file,
+                filename: "large.bin",
+                payload: Data(repeating: 0xAB, count: 1_024 * 1_024)
+            ),
+            to: item.id
+        )
+        let tiny = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                kind: .image,
+                filename: "tiny.jpg",
+                payload: Data([0xFF, 0xD8, 0xFF]),
+                thumbnailData: Data([0x01, 0x02])
+            ),
+            to: item.id
+        )
+
+        XCTAssertEqual(large.storageMode, .localVault)
+        XCTAssertEqual(tiny.storageMode, .localVault,
+                       "size is not a lane: every payload is device-local")
+        XCTAssertNil(tiny.thumbnailData,
+                     "a thumbnail is file content and stays off the shared model")
+    }
+
+    func testVaultCopyDuplicatesBytesUnderAFreshKey() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("work-vault-copy-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let vault = WorkAssetVault(baseURL: directory)
+
+        let payload = Data("bytes to duplicate".utf8)
+        let original = try await vault.store(payload, suggestedExtension: "txt")
+        await vault.markReferenced(original)
+        let copy = try await vault.copy(key: original)
+        await vault.markReferenced(copy.key)
+
+        XCTAssertNotEqual(copy.key, original)
+        XCTAssertEqual(copy.byteCount, Int64(payload.count))
+        let copiedData = try await vault.data(for: copy.key)
+        XCTAssertEqual(copiedData, payload)
+
+        try await vault.remove(copy.key)
+        let originalSurvives = try await vault.data(for: original)
+        XCTAssertEqual(originalSurvives, payload)
+
+        do {
+            _ = try await vault.copy(key: WorkAssetVault.makeKey(id: UUID(), suggestedExtension: "txt"))
+            XCTFail("Copying an absent key must fail rather than publish an empty leaf")
+        } catch WorkAssetVault.VaultError.missing {
+            // Expected.
+        }
     }
 
     func testUnknownSizeFileStreamsLocallyAndPersistsObservedByteCount() async throws {

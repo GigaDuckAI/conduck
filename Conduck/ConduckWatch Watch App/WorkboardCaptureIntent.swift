@@ -19,12 +19,24 @@ nonisolated struct WatchWorkboardCapture: Equatable, Sendable {
 }
 
 nonisolated enum WatchWorkboardCaptureText {
+    /// Mirrors `WorkCaptureEnvelope.maximumNoteCharacters`, the bound every
+    /// other capture ingress enforces. The Watch target does not compile the
+    /// envelope, so the value is restated here; a Shortcut can pipe a whole
+    /// document into this parameter, and an unbounded objective is both
+    /// unexportable to CloudKit and a cost on every board load.
+    static let maximumObjectiveCharacters = 16_000
+
     static func prepare(_ rawValue: String) throws -> WatchWorkboardCapture {
         let normalized = rawValue
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { throw WatchWorkboardCaptureError.emptyThought }
+        // Refuse rather than truncate: a silently shortened brief looks like a
+        // successful capture and loses the part the person cared about.
+        guard normalized.count <= maximumObjectiveCharacters else {
+            throw WatchWorkboardCaptureError.thoughtTooLong
+        }
 
         let title = normalized
             .split(whereSeparator: \.isNewline)
@@ -39,12 +51,21 @@ nonisolated enum WatchWorkboardCaptureText {
 
 nonisolated enum WatchWorkboardCaptureError: LocalizedError {
     case emptyThought
+    case thoughtTooLong
 
     var errorDescription: String? {
-        String(
-            localized: "intent.workboardCapture.error.empty",
-            defaultValue: "Say or type what you want to prepare first."
-        )
+        switch self {
+        case .emptyThought:
+            return String(
+                localized: "intent.workboardCapture.error.empty",
+                defaultValue: "Say or type what you want to prepare first."
+            )
+        case .thoughtTooLong:
+            return String(
+                localized: "intent.workboardCapture.error.tooLong",
+                defaultValue: "That’s too long to add to Work. Shorten it, then try again."
+            )
+        }
     }
 }
 
@@ -85,7 +106,7 @@ extension ConversationStore {
 struct CaptureWorkboardIntent: AppIntent {
     static var title: LocalizedStringResource = LocalizedStringResource(
         "intent.workboardCapture.title",
-        defaultValue: "Add to Workboard"
+        defaultValue: "Add to Work"
     )
 
     static var description = IntentDescription(
@@ -106,7 +127,7 @@ struct CaptureWorkboardIntent: AppIntent {
     var thought: String
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Add \(\.$thought) to Workboard")
+        Summary("Add \(\.$thought) to Work")
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {

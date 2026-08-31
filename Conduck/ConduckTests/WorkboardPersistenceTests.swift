@@ -4,8 +4,8 @@
 // WorkboardPersistenceTests.swift
 //
 // End-to-end in-memory Core Data coverage for Workboard capture idempotency,
-// rich-material search, the atomic prepare/retry boundary, honest state
-// projection, immutable snapshots, and conversation-preserving deletion.
+// material privacy, the atomic prepare/retry boundary, honest state projection,
+// immutable snapshots, duplication, and conversation-preserving deletion.
 
 import XCTest
 @testable import Conduck
@@ -80,7 +80,7 @@ final class WorkboardPersistenceTests: XCTestCase {
         XCTAssertGreaterThan(prepared.workItem.updatedAt, changed.updatedAt)
     }
 
-    func testCaptureIdempotencyMaterialsAndFullTextSearch() async throws {
+    func testCaptureIdempotencyAndLocalMaterialPrivacy() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
         let content = WorkItemContent(
@@ -120,18 +120,164 @@ final class WorkboardPersistenceTests: XCTestCase {
         XCTAssertNil(WorkMaterialSnapshot(record: material).textContent,
                      "immutable dispatch metadata must not reintroduce local file content")
         let loadedPayload = try await store.loadWorkMaterialPayload(id: material.id)
-        let itemMatches = try await store.fetchWorkItems(matching: "estonian tradeoffs").map(\.id)
-        let materialMatches = try await store.fetchWorkItems(matching: "dhl pricing").map(\.id)
-        let privateBodyMatches = try await store.fetchWorkItems(
-            matching: "zone based express service"
-        )
-        let unrelatedMatches = try await store.fetchWorkItems(matching: "unrelated phrase")
-
         XCTAssertEqual(loadedPayload, payload)
-        XCTAssertEqual(itemMatches, [first.id])
-        XCTAssertEqual(materialMatches, [first.id])
-        XCTAssertTrue(privateBodyMatches.isEmpty)
-        XCTAssertTrue(unrelatedMatches.isEmpty)
+    }
+
+    func testRecentWorkItemSummariesAreBoundedOpenAndModifiedFirst() async throws {
+        let store = ConversationStore(inMemory: true)
+        let oldest = try await store.createWorkItem(WorkItemDraft(
+            content: WorkItemContent(title: "Oldest"),
+            createdAt: Date(timeIntervalSince1970: 10)
+        ))
+        let middle = try await store.createWorkItem(WorkItemDraft(
+            content: WorkItemContent(title: "Middle"),
+            createdAt: Date(timeIntervalSince1970: 20)
+        ))
+        let newest = try await store.createWorkItem(WorkItemDraft(
+            content: WorkItemContent(title: "Newest"),
+            createdAt: Date(timeIntervalSince1970: 30)
+        ))
+        let completed = try await store.createWorkItem(WorkItemDraft(
+            content: WorkItemContent(title: "Completed"),
+            createdAt: Date(timeIntervalSince1970: 40)
+        ))
+        _ = try await store.completeWorkItem(id: completed.id)
+
+        let summaries = try await store.fetchRecentWorkItemSummaries(limit: 8)
+        XCTAssertEqual(summaries.map(\.id), [newest.id, middle.id, oldest.id],
+                       "a completed card never reaches the share-extension picker")
+        XCTAssertEqual(summaries.map(\.title), ["Newest", "Middle", "Oldest"])
+
+        let bounded = try await store.fetchRecentWorkItemSummaries(limit: 2)
+        XCTAssertEqual(bounded.map(\.id), [newest.id, middle.id])
+        let none = try await store.fetchRecentWorkItemSummaries(limit: 0)
+        XCTAssertTrue(none.isEmpty)
+    }
+
+    func testBriefFieldsBeyondTheSharedBoundAreRefusedNotTruncated() async throws {
+        let store = ConversationStore(inMemory: true)
+        let overlong = String(
+            repeating: "a",
+            count: WorkItemContentLimits.maximumFieldCharacters + 1
+        )
+        do {
+            _ = try await store.createWorkItem(
+                WorkItemDraft(content: WorkItemContent(title: "Too long", objective: overlong))
+            )
+            XCTFail("An unbounded objective must not reach the mirrored row")
+        } catch WorkboardStoreError.contentTooLong {
+            // Expected.
+        }
+
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Bounded", objective: "Short"))
+        )
+        var overlongContext = item.content
+        overlongContext.context = overlong
+        do {
+            _ = try await store.updateWorkItem(id: item.id, content: overlongContext)
+            XCTFail("The same bound applies to every editable brief field")
+        } catch WorkboardStoreError.contentTooLong {
+            // Expected.
+        }
+        let unchangedValue = try await store.fetchWorkItem(id: item.id)
+        let unchanged = try XCTUnwrap(unchangedValue)
+        XCTAssertEqual(unchanged.content.objective, "Short")
+        XCTAssertEqual(unchanged.content.context, "")
+    }
+
+    func testDuplicateCopiesMaterialsToFreshIdentitiesAndDistinctVaultKeys() async throws {
+        let store = ConversationStore(inMemory: true)
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Reusable brief", objective: "Copy me"))
+        )
+        let note = try await store.addWorkMaterial(
+            WorkMaterialDraft(kind: .note, title: "Decision note", textContent: "Keep this"),
+            to: item.id
+        )
+        let payload = Data("original bytes".utf8)
+        let file = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                kind: .file,
+                title: "Rate card",
+                filename: "rates.txt",
+                mimeType: "text/plain",
+                payload: payload,
+                sequence: 1
+            ),
+            to: item.id
+        )
+
+        let duplicate = try await store.duplicateWorkItem(id: item.id)
+        XCTAssertNotEqual(duplicate.id, item.id)
+        XCTAssertTrue(duplicate.dispatches.isEmpty, "runs are history, never a template")
+        XCTAssertEqual(duplicate.materials.map(\.title), [note.title, file.title])
+        XCTAssertTrue(duplicate.materials.allSatisfy { $0.id != note.id && $0.id != file.id },
+                      "a copied material must own a fresh identity")
+
+        let copiedFile = try XCTUnwrap(duplicate.materials.first { $0.kind == .file })
+        let copiedKey = try XCTUnwrap(copiedFile.localVaultKey)
+        XCTAssertNotEqual(copiedKey, file.localVaultKey,
+                          "each card owns its own vault leaf so deletion stays independent")
+        XCTAssertEqual(copiedFile.availability, .availableLocally)
+        XCTAssertEqual(copiedFile.byteSize, Int64(payload.count))
+        let copiedPayload = try await store.loadWorkMaterialPayload(id: copiedFile.id)
+        XCTAssertEqual(copiedPayload, payload)
+
+        // Deleting the copy must not reclaim the source's bytes.
+        try await store.deleteWorkItem(id: duplicate.id)
+        let sourcePayload = try await store.loadWorkMaterialPayload(id: file.id)
+        XCTAssertEqual(sourcePayload, payload)
+        let sourceItemValue = try await store.fetchWorkItem(id: item.id)
+        let sourceItem = try XCTUnwrap(sourceItemValue)
+        XCTAssertEqual(sourceItem.materials.map(\.id), [note.id, file.id])
+        let orphans = try await store.reconcileWorkAssetVault()
+        XCTAssertEqual(orphans, 0)
+    }
+
+    func testDuplicateFailurePartWayThroughLeavesNoCardAndNoOrphanBytes() async throws {
+        let store = ConversationStore(inMemory: true)
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Partly copyable"))
+        )
+        let payload = Data("copyable bytes".utf8)
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                kind: .file,
+                title: "Copied first",
+                filename: "first.txt",
+                payload: payload,
+                sequence: 0
+            ),
+            to: item.id
+        )
+        // A synced-lane row whose bytes never arrived from CloudKit: the copy
+        // must refuse rather than hand back a card that silently lost material.
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                kind: .file,
+                title: "Never materialized",
+                filename: "second.txt",
+                sequence: 1,
+                storageMode: .syncedPayload
+            ),
+            to: item.id
+        )
+
+        do {
+            _ = try await store.duplicateWorkItem(id: item.id)
+            XCTFail("An unavailable payload must abort the whole duplication")
+        } catch WorkboardStoreError.materialPayloadUnavailable {
+            // Expected.
+        }
+
+        let items = try await store.fetchWorkItems()
+        XCTAssertEqual(items.map(\.id), [item.id], "no partial duplicate may survive")
+        let orphans = try await store.reconcileWorkAssetVault()
+        XCTAssertEqual(orphans, 0, "the rolled-back copy must leave no vault file behind")
+        let survivingFile = try XCTUnwrap(items.first?.materials.first)
+        let sourcePayload = try await store.loadWorkMaterialPayload(id: survivingFile.id)
+        XCTAssertEqual(sourcePayload, payload)
     }
 
     func testAtomicPrepareIsIdempotentAndStateFollowsExactMessageStatus() async throws {
@@ -173,25 +319,23 @@ final class WorkboardPersistenceTests: XCTestCase {
         )
 
         let first = try await store.prepareWorkDispatch(preparation)
-        XCTAssertTrue(first.created)
         XCTAssertEqual(first.message.status, "failed", "prepare creates a retryable inert turn")
-        XCTAssertEqual(first.workItem.state, .draft, "dispatchedAt=nil is still a prepared draft")
+        XCTAssertNotNil(first.dispatch.dispatchedAt,
+                        "committed rows have crossed the dispatch boundary")
+        XCTAssertEqual(first.workItem.state, .review,
+                       "dispatched + still failed needs attention until retry claims it")
         XCTAssertEqual(first.dispatch.promptSnapshot, preparation.canonicalPrompt)
         XCTAssertEqual(first.dispatch.briefSnapshot, snapshot)
 
-        let repeated = try await store.prepareWorkDispatch(preparation)
-        XCTAssertFalse(repeated.created, "same caller id must not authorize a second network attempt")
+        do {
+            _ = try await store.prepareWorkDispatch(preparation)
+            XCTFail("same caller id must not authorize a second network attempt")
+        } catch WorkboardStoreError.identifierCollision {
+            // Expected.
+        }
         let repeatedUserMessageCount = try await store.fetchMessages(for: conversationID)
             .filter { $0.role == "user" }.count
         XCTAssertEqual(repeatedUserMessageCount, 1)
-
-        let firstStart = try await store.markWorkDispatchStarted(id: dispatchID)
-        let repeatedStart = try await store.markWorkDispatchStarted(id: dispatchID)
-        let stateAfterStart = try await store.fetchWorkItem(id: item.id)?.state
-        XCTAssertTrue(firstStart)
-        XCTAssertFalse(repeatedStart)
-        XCTAssertEqual(stateAfterStart, .review,
-                       "started + still failed needs attention until retry claims it")
 
         let beganRetry = await store.beginRetry(messageID: messageID)
         let stateDuringRetry = try await store.fetchWorkItem(id: item.id)?.state
@@ -202,10 +346,18 @@ final class WorkboardPersistenceTests: XCTestCase {
         let stateAfterSent = try await store.fetchWorkItem(id: item.id)?.state
         XCTAssertEqual(stateAfterSent, .review,
                        "sent proves a reply landed even if its row is temporarily not visible")
-        _ = try await store.acknowledgeWorkItemReview(id: item.id)
+        do {
+            _ = try await store.acknowledgeWorkDispatchReview(
+                workItemID: item.id,
+                dispatchID: dispatchID,
+                expectedResultKey: "reply:\(UUID().uuidString.lowercased())"
+            )
+            XCTFail("A missing reply identity cannot be acknowledged away")
+        } catch WorkboardStoreError.staleRevision {
+            // Expected: `.replyPendingSync` has no result identity to approve.
+        }
         let stateWithoutReplyIdentity = try await store.fetchWorkItem(id: item.id)?.state
-        XCTAssertEqual(stateWithoutReplyIdentity, .review,
-                       "a missing reply identity cannot be acknowledged away")
+        XCTAssertEqual(stateWithoutReplyIdentity, .review)
 
         _ = try await store.appendMessage(
             role: "agent",
@@ -213,9 +365,17 @@ final class WorkboardPersistenceTests: XCTestCase {
             conversationID: conversationID,
             sourceDevice: "gateway"
         )
-        let stateWithReply = try await store.fetchWorkItem(id: item.id)?.state
-        XCTAssertEqual(stateWithReply, .review)
-        _ = try await store.acknowledgeWorkItemReview(id: item.id)
+        let repliedValue = try await store.fetchWorkItem(id: item.id)
+        let replied = try XCTUnwrap(repliedValue)
+        XCTAssertEqual(replied.state, .review)
+        let replyKey = try XCTUnwrap(
+            replied.dispatches.first { $0.id == dispatchID }?.activity.resultKey
+        )
+        _ = try await store.acknowledgeWorkDispatchReview(
+            workItemID: item.id,
+            dispatchID: dispatchID,
+            expectedResultKey: replyKey
+        )
         let stateAfterAcknowledgement = try await store.fetchWorkItem(id: item.id)?.state
         XCTAssertEqual(stateAfterAcknowledgement, .draft)
 
@@ -278,8 +438,6 @@ final class WorkboardPersistenceTests: XCTestCase {
             sourceDevice: "mac"
         )
         _ = try await store.prepareWorkDispatch(second)
-        _ = try await store.markWorkDispatchStarted(id: first.dispatchID)
-        _ = try await store.markWorkDispatchStarted(id: second.dispatchID)
         try await store.updateStatus(messageID: first.userMessageID, status: "sent")
         try await store.updateStatus(messageID: second.userMessageID, status: "sent")
         _ = try await store.appendMessage(
@@ -367,7 +525,6 @@ final class WorkboardPersistenceTests: XCTestCase {
         )
 
         _ = try await store.prepareWorkDispatch(preparation)
-        _ = try await store.markWorkDispatchStarted(id: preparation.dispatchID)
         _ = try await store.appendMessage(
             role: "user",
             text: "An unrelated follow-up",
@@ -433,7 +590,6 @@ final class WorkboardPersistenceTests: XCTestCase {
         )
 
         _ = try await store.prepareWorkDispatch(preparation)
-        _ = try await store.markWorkDispatchStarted(id: preparation.dispatchID)
         try await store.updateStatus(messageID: preparation.userMessageID, status: "sent")
         _ = try await store.appendMessage(
             role: "user",
@@ -500,7 +656,6 @@ final class WorkboardPersistenceTests: XCTestCase {
             sourceDevice: "phone"
         )
         _ = try await store.prepareWorkDispatch(preparation)
-        _ = try await store.markWorkDispatchStarted(id: preparation.dispatchID)
 
         try await store.deleteAll()
 
@@ -517,5 +672,47 @@ final class WorkboardPersistenceTests: XCTestCase {
         XCTAssertEqual(preserved.state, .review)
         let removedConversation = try await store.fetchConversation(id: preparation.conversationID)
         XCTAssertNil(removedConversation)
+    }
+
+    func testDeleteAllKeepsAnAlreadyTombstonedRunsOriginalRemovalDate() async throws {
+        let store = ConversationStore(inMemory: true)
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Tombstoned once"))
+        )
+        let preparation = WorkDispatchPreparation(
+            workItemID: item.id,
+            gatewayRef: "custom:v1:test",
+            gatewayName: "Gateway",
+            canonicalPrompt: "One run, deleted early.",
+            briefSnapshot: WorkBriefSnapshot(
+                title: item.content.title,
+                objective: "",
+                context: "",
+                desiredOutcome: "",
+                constraints: "",
+                dueAt: nil,
+                materials: []
+            ),
+            expectedWorkItemRevision: WorkboardRevision.value(for: item.updatedAt),
+            expectedMaterialVersions: [],
+            sourceDevice: "phone"
+        )
+        _ = try await store.prepareWorkDispatch(preparation)
+
+        try await store.deleteConversation(id: preparation.conversationID)
+        let firstValue = try await store.fetchWorkItem(id: item.id)
+        let firstRun = try XCTUnwrap(
+            try XCTUnwrap(firstValue).dispatches.first { $0.id == preparation.dispatchID }
+        )
+        let firstRemovedAt = try XCTUnwrap(firstRun.conversationRemovedAt)
+
+        try await store.deleteAll()
+
+        let laterValue = try await store.fetchWorkItem(id: item.id)
+        let laterRun = try XCTUnwrap(
+            try XCTUnwrap(laterValue).dispatches.first { $0.id == preparation.dispatchID }
+        )
+        XCTAssertEqual(laterRun.conversationRemovedAt, firstRemovedAt,
+                       "an erase-everything must not backdate history onto an older removal")
     }
 }

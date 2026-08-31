@@ -128,7 +128,7 @@ final class WorkboardDispatchCoordinator {
             constraints: captured.content.constraints,
             desiredResult: captured.content.desiredOutcome,
             reviewBy: captured.content.dueAt,
-            materials: selected.map(Self.promptMaterial)
+            materials: selected.map(WorkBriefMaterialPacket.init(record:))
         )
         guard packet.canonicalPrompt == request.prompt else {
             throw WorkboardDispatchError.previewMismatch
@@ -206,18 +206,19 @@ final class WorkboardDispatchCoordinator {
 
         var uploadsBoundToStore = false
         do {
-            let prepared = try await store.prepareWorkDispatch(preparation)
-            guard prepared.created else {
+            let prepared: PreparedWorkDispatch
+            do {
+                prepared = try await store.prepareWorkDispatch(preparation)
+            } catch WorkboardStoreError.identifierCollision {
                 throw WorkboardDispatchError.alreadyStarted
             }
-            // From here onward the file-lane objects belong to the durable,
-            // retryable message. A later start-marker failure must not delete
-            // payloads that the conversation now references.
+            // A committed prepare is the irreversible boundary: the run is
+            // already stamped as dispatched. From here onward the file-lane
+            // objects belong to the durable, retryable message, and nothing may
+            // delete payloads the conversation now references or flow back
+            // through the UI's "Nothing was sent" branch.
             uploadsBoundToStore = true
             await WorkboardUploadJournal.shared.finish(dispatchID: request.id)
-            guard try await store.markWorkDispatchStarted(id: prepared.dispatch.id) else {
-                throw WorkboardDispatchError.alreadyStarted
-            }
 
             // Strongly captured until retry finishes. retry's failed->sending
             // compare-and-set is the single network-attempt authority.
@@ -226,13 +227,8 @@ final class WorkboardDispatchCoordinator {
                 await viewModel.retry(prepared.message)
             }
 
-            // `markWorkDispatchStarted` is the irreversible boundary. Once it
-            // succeeds, a projection/read failure must never flow back through
-            // the UI's "Nothing was sent" branch and invite a duplicate send.
-            let refreshed = (try? await store.fetchWorkItem(id: captured.workItemID))
-                ?? prepared.workItem
             return WorkboardDispatchResult(
-                workItem: refreshed,
+                workItem: Self.receipt(for: prepared),
                 conversationID: prepared.conversation.id,
                 dispatchID: prepared.dispatch.id
             )
@@ -444,32 +440,53 @@ final class WorkboardDispatchCoordinator {
         return result
     }
 
-    private nonisolated static func promptMaterial(_ material: WorkMaterialRecord) -> WorkBriefMaterialPacket {
-        let kind: WorkBriefMaterialPacket.Kind
-        switch material.kind {
-        case .note, .transcript: kind = .note
-        case .link: kind = .link
-        case .image: kind = .image
-        case .file, .unknown: kind = .file
-        }
-        return WorkBriefMaterialPacket(
-            id: material.id,
-            kind: kind,
-            label: material.title.isEmpty ? (material.filename ?? "Untitled") : material.title,
-            // File extraction belongs exclusively to the attachment delivery
-            // lane. Including cached file text here would duplicate it in the
-            // final wire request and make the preflight prompt misleading.
-            text: material.kind == .file ? nil : material.textContent,
-            url: material.urlString,
-            mimeType: material.mimeType,
-            byteSize: material.byteSize,
-            sequence: material.sequence
+    /// The receipt for a send this coordinator has just performed. The store
+    /// commits the initial turn as `failed` so retry's failed->sending CAS stays
+    /// the single network-attempt authority, and it honestly projects that
+    /// unclaimed window as a reviewable failure for every OTHER reader — a crash
+    /// there must stay recoverable. This caller is not another reader: it has
+    /// already handed the turn to that authority, so its own receipt says the
+    /// run is waiting rather than sending the person back to a "Send Again"
+    /// button for a brief that is in flight.
+    private nonisolated static func receipt(for prepared: PreparedWorkDispatch) -> WorkItemRecord {
+        let item = prepared.workItem
+        let run = prepared.dispatch
+        let waiting = WorkDispatchRecord(
+            id: run.id,
+            workItemID: run.workItemID,
+            conversationID: run.conversationID,
+            userMessageID: run.userMessageID,
+            gatewayRef: run.gatewayRef,
+            gatewayNameSnapshot: run.gatewayNameSnapshot,
+            titleSnapshot: run.titleSnapshot,
+            promptSnapshot: run.promptSnapshot,
+            briefSnapshot: run.briefSnapshot,
+            createdAt: run.createdAt,
+            dispatchedAt: run.dispatchedAt ?? run.createdAt,
+            reviewAcknowledgedAt: run.reviewAcknowledgedAt,
+            reviewAcknowledgedResultKey: run.reviewAcknowledgedResultKey,
+            conversationRemovedAt: run.conversationRemovedAt,
+            activity: .waiting
         )
-    }
-
-    private nonisolated static func materialOrder(_ lhs: WorkMaterialRecord, _ rhs: WorkMaterialRecord) -> Bool {
-        if lhs.sequence != rhs.sequence { return lhs.sequence < rhs.sequence }
-        return lhs.id.uuidString < rhs.id.uuidString
+        // This run is the newest, so appending keeps the store's
+        // dispatched-ascending order intact.
+        let dispatches = item.dispatches.filter { $0.id != waiting.id } + [waiting]
+        return WorkItemRecord(
+            id: item.id,
+            content: item.content,
+            createdAt: item.createdAt,
+            updatedAt: item.updatedAt,
+            boardOrder: item.boardOrder,
+            completedAt: item.completedAt,
+            captureEnvelopeID: item.captureEnvelopeID,
+            currentDispatchID: item.currentDispatchID,
+            materials: item.materials,
+            dispatches: dispatches,
+            state: WorkItemStateResolver.resolve(
+                completedAt: item.completedAt,
+                dispatches: dispatches.map(\.stateFacts)
+            )
+        )
     }
 
     @concurrent

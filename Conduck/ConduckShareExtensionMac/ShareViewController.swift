@@ -660,13 +660,24 @@ final class ShareViewController: NSViewController {
                 if let tmp = try? await self.workCaptureTmpDir(for: captureID) {
                     try? FileManager.default.removeItem(at: tmp)
                 }
+                // Deterministic refusals must not offer a Try Again that replays
+                // the identical failing path; only a transient filesystem fault
+                // can improve unchanged.
                 let failure: WorkboardCommitFailure
-                switch error as? ShareError {
-                case .captureTooLarge:
-                    failure = .tooLarge
-                case .emptyCapture:
-                    failure = .empty
-                default:
+                if let shareError = error as? ShareError {
+                    switch shareError {
+                    case .captureTooLarge:
+                        failure = .tooLarge
+                    case .emptyCapture:
+                        failure = .empty
+                    case .unsupportedItem:
+                        failure = .unsupportedItem
+                    case .appGroupUnavailable:
+                        failure = .unavailable
+                    }
+                } else if error is WorkCaptureEnvelope.PublicationValidationFailure {
+                    failure = .invalidContent
+                } else {
                     failure = .unavailable
                 }
                 await MainActor.run {
@@ -708,14 +719,21 @@ final class ShareViewController: NSViewController {
             // attachment. Every other provider (including a genuine `.plist` file
             // share) copies normally.
             if let capture, ObjectIdentifier(provider) == capture.providerID { continue }
-            try await loadOne(
-                provider: provider,
-                sequence: &sequence,
-                into: tmp,
-                items: &items,
-                urls: &urls,
-                caption: &captionAccumulator
-            )
+            do {
+                try await loadOne(
+                    provider: provider,
+                    sequence: &sequence,
+                    into: tmp,
+                    items: &items,
+                    urls: &urls,
+                    caption: &captionAccumulator
+                )
+            } catch ShareError.unsupportedItem {
+                // Send carries the remaining attachments: this lane has no
+                // failure surface (the sheet is already dismissing), and a
+                // folder was never sendable material in the first place.
+                log.info("Dropped non-regular share item (folder, package, or symlink)")
+            }
         }
 
         // Safari page-text capture (nil for every non-Safari share). Carrier
@@ -883,6 +901,14 @@ final class ShareViewController: NSViewController {
                 try fm.moveItem(at: oldURL, to: payloadURL)
             }
             let attributes = try fm.attributesOfItem(atPath: payloadURL.path)
+            // Only regular-file bytes are containable. A package document
+            // (`.rtfd`, `.pages`) arrives as a DIRECTORY, whose `.size` is the
+            // node's own tens of bytes rather than the tree's — publishing it
+            // would bypass both byte limits and hand the inbox an envelope it is
+            // required to destroy on claim.
+            guard (attributes[.type] as? FileAttributeType) == .typeRegular else {
+                throw ShareError.unsupportedItem
+            }
             let byteCount = (attributes[.size] as? NSNumber)?.int64Value ?? 0
             guard byteCount <= WorkCaptureEnvelope.maximumFileBytes else {
                 throw ShareError.captureTooLarge
@@ -900,9 +926,14 @@ final class ShareViewController: NSViewController {
                 kind: isWebPage ? .webPage : (isImage ? .image : .file),
                 sequence: nextSequence,
                 relativePath: relativePath,
-                displayName: WorkCaptureEnvelope.safeDisplayName(item.originalName),
-                mimeType: item.mimeType,
-                typeIdentifier: item.utTypeIdentifier,
+                // Names and types are source-app controlled. Sanitize them into
+                // publishable metadata (or nothing) rather than letting a foreign
+                // app's malformed string fail an otherwise valid capture.
+                displayName: WorkCaptureEnvelope.safeOpaqueMetadata(
+                    WorkCaptureEnvelope.safeDisplayName(item.originalName)
+                ),
+                mimeType: WorkCaptureEnvelope.safeOpaqueMetadata(item.mimeType),
+                typeIdentifier: WorkCaptureEnvelope.safeOpaqueMetadata(item.utTypeIdentifier),
                 byteCount: byteCount
             ))
             nextSequence += 1
@@ -988,7 +1019,7 @@ final class ShareViewController: NSViewController {
                     // its bytes synchronously inside the access window into the
                     // envelope so the file is durable post-exit. On iOS this branch
                     // rejects the URL; here we keep it.
-                    if let item = copySecurityScopedFileURL(url, sequence: sequence, into: tmp) {
+                    if let item = try copySecurityScopedFileURL(url, sequence: sequence, into: tmp) {
                         items.append(item)
                         sequence += 1
                     } else {
@@ -1048,11 +1079,24 @@ final class ShareViewController: NSViewController {
     /// `contentType` resource value. Wrapped in
     /// `startAccessingSecurityScopedResource()` / `stop…` so the sandboxed appex
     /// can read the user-selected file the share host temporarily granted. Returns
-    /// nil (and the caller logs + drops) on any copy failure — never throws into
-    /// the envelope assembly (one bad file shouldn't sink the whole share).
-    private func copySecurityScopedFileURL(_ url: URL, sequence: Int, into tmp: URL) -> SharedInboxManifestItem? {
+    /// nil (and the caller logs + drops) on a copy failure — one bad file
+    /// shouldn't sink the whole share. A non-regular item is different: it
+    /// throws `ShareError.unsupportedItem` so the Work lane can say so instead
+    /// of publishing an envelope the inbox must destroy.
+    private func copySecurityScopedFileURL(_ url: URL, sequence: Int, into tmp: URL) throws -> SharedInboxManifestItem? {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        // Checked BEFORE any copy: `copyItem` recurses, so copying a folder or a
+        // package document first and rejecting it after would duplicate an entire
+        // tree (a movies library, `node_modules`) into the App Group container —
+        // minutes of I/O and a plausible out-of-disk — only to delete it again. A
+        // symlink is refused for the same reason the inbox refuses one on claim:
+        // only regular file bytes are containable.
+        let itemKinds = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard itemKinds?.isDirectory != true, itemKinds?.isSymbolicLink != true else {
+            throw ShareError.unsupportedItem
+        }
 
         // Resolve the UTI/mime from the file itself (the share host hands us a
         // bare URL with no advertised type).
@@ -1281,5 +1325,9 @@ final class ShareViewController: NSViewController {
         case appGroupUnavailable
         case captureTooLarge
         case emptyCapture
+        /// A shared item that is not a regular file (a folder, a package
+        /// document, or a symlink). The envelope contract carries file bytes
+        /// only, and `copyItem` on a directory recurses.
+        case unsupportedItem
     }
 }

@@ -412,6 +412,18 @@
         }
       }
     },
+    "share.work.error.invalidContent" : {
+      "comment" : "Non-retryable failure message when a share breaks the Work capture contract",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Something in this share can’t be saved to Work. Share it a different way, or share fewer items."
+          }
+        }
+      }
+    },
     "share.work.error.title" : {
       "comment" : "Title shown when the Share Extension cannot persist a Work capture",
       "extractionState" : "extracted_with_value",
@@ -444,6 +456,18 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Nothing was saved. Check that your device has free storage, then try again."
+          }
+        }
+      }
+    },
+    "share.work.error.unsupportedItem" : {
+      "comment" : "Non-retryable failure message when a shared item is not a regular file",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Folders and package documents can’t be added to Work. Share the files inside them instead."
           }
         }
       }

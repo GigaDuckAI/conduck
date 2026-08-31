@@ -276,16 +276,32 @@ struct WorkCaptureEnvelope: Codable, Sendable, Equatable {
         guard !value.isEmpty else { return nil }
         guard value.count > maximumDisplayNameCharacters else { return value }
 
+        // Truncation can expose whitespace that the pre-truncation trim could not
+        // see. Re-trimming keeps this function idempotent, which the publication
+        // and claim validators both assert (`safeDisplayName(x) == x`).
         let ns = value as NSString
         let ext = ns.pathExtension
         if !ext.isEmpty, ext.count <= 12 {
             let suffix = "." + ext
             let stemBudget = maximumDisplayNameCharacters - suffix.count
             if stemBudget > 0 {
-                return String(ns.deletingPathExtension.prefix(stemBudget)) + suffix
+                let stem = String(ns.deletingPathExtension.prefix(stemBudget))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !stem.isEmpty { return stem + suffix }
             }
         }
-        return String(value.prefix(maximumDisplayNameCharacters))
+        let truncated = String(value.prefix(maximumDisplayNameCharacters))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return truncated.isEmpty ? nil : truncated
+    }
+
+    /// Bounds source-controlled MIME types and UTIs at capture time. An
+    /// unusable value is dropped rather than failing the whole publication:
+    /// the annotation is descriptive metadata, and a capture the person already
+    /// confirmed must never be lost to a foreign app's malformed type string.
+    nonisolated static func safeOpaqueMetadata(_ raw: String?) -> String? {
+        guard let raw, isSafeOpaqueMetadata(raw) else { return nil }
+        return raw
     }
 
     /// A safe generated extension, not a filename. Only short ASCII letters and

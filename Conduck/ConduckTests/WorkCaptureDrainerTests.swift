@@ -194,6 +194,72 @@ final class WorkCaptureDrainerTests: XCTestCase {
         XCTAssertEqual(continued.state, .done, "capture append must not reopen human-completed Work")
     }
 
+    /// The drainer's byte-preserving promise: a persistence failure must put the
+    /// claim BACK (`release`) rather than consume it (`acknowledge`), because the
+    /// extension already moved the only copy of the payload into the queue.
+    /// Swapping those two calls destroys a person's shared file on any transient
+    /// write failure, and every other test here takes a path that succeeds.
+    func testAPersistenceFailureReleasesTheClaimAndPreservesItsPayload() async throws {
+        let store = ConversationStore(inMemory: true)
+        let otherOwner = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Already owns the identity"))
+        )
+        let target = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Capture destination"))
+        )
+        // A material ID may belong to exactly one item, so reusing it as an
+        // envelope entry ID makes the second write fail through the public API
+        // with no store seam.
+        let collidingID = UUID()
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                id: collidingID,
+                kind: .note,
+                title: "Prior material",
+                textContent: "owned elsewhere",
+                sequence: 0,
+                storageMode: .metadataOnly
+            ),
+            to: otherOwner.id
+        )
+
+        let payload = Data("shared bytes that must survive".utf8)
+        let envelope = WorkCaptureEnvelope(
+            source: .shareExtension,
+            targetWorkItemID: target.id,
+            entries: [
+                .init(
+                    kind: .image,
+                    sequence: 0,
+                    relativePath: "payload-000.png",
+                    displayName: "IMG.png",
+                    mimeType: "image/png",
+                    byteCount: Int64(payload.count)
+                ),
+                .init(id: collidingID, kind: .text, sequence: 1, text: "the write that fails"),
+            ]
+        )
+        try publish(envelope, payloads: ["payload-000.png": payload])
+
+        let inbox = WorkCaptureInbox(baseURL: root)
+        let drainer = WorkCaptureDrainer(inbox: inbox, store: store, sourceDevice: "test-device")
+        do {
+            _ = try await drainer.drainAvailableCaptures()
+            XCTFail("A material owned by another Work item must fail the import")
+        } catch {
+            XCTAssertEqual(error as? WorkboardStoreError, .invalidMaterialOwner)
+        }
+
+        let pending = try await inbox.pendingCount()
+        XCTAssertEqual(pending, 1, "a failed import must return the capture to the queue, not consume it")
+        let restored = root
+            .appendingPathComponent(envelope.id.uuidString, isDirectory: true)
+            .appendingPathComponent("payload-000.png", isDirectory: false)
+        let restoredBytes = try Data(contentsOf: restored)
+        XCTAssertEqual(restoredBytes, payload,
+                       "the queue holds the only copy of a shared file until the import commits")
+    }
+
     private func makeDrainer(store: ConversationStore) -> WorkCaptureDrainer {
         WorkCaptureDrainer(
             inbox: WorkCaptureInbox(baseURL: root),
@@ -202,9 +268,18 @@ final class WorkCaptureDrainerTests: XCTestCase {
         )
     }
 
-    private func publish(_ envelope: WorkCaptureEnvelope) throws {
+    private func publish(
+        _ envelope: WorkCaptureEnvelope,
+        payloads: [String: Data] = [:]
+    ) throws {
         let directory = root.appendingPathComponent(envelope.id.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        for (relativePath, bytes) in payloads {
+            try bytes.write(
+                to: directory.appendingPathComponent(relativePath, isDirectory: false),
+                options: .atomic
+            )
+        }
         try envelope.encoded().write(
             to: directory.appendingPathComponent("manifest.json"),
             options: .atomic

@@ -100,7 +100,7 @@ actor WorkBriefAssistant {
         throw WorkBriefAssistantError.unavailable
     }
 
-    private nonisolated static func normalized(_ value: String) -> String {
+    nonisolated static func normalized(_ value: String) -> String {
         value
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")

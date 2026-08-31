@@ -168,4 +168,57 @@ final class ConversationStoreWorkCaptureTests: XCTestCase {
         XCTAssertEqual(material.availability, .availableLocally)
         XCTAssertEqual(copied, Data())
     }
+
+    /// The chat composer caps nothing, so a pasted log is an ordinary user turn
+    /// while a brief field is bounded. Capture must keep the text rather than
+    /// fail the whole "Add to Work" on a length the person never saw — an agent
+    /// reply of any size already succeeds this way.
+    func testAnOversizedUserTurnIsCapturedAsAMaterialRatherThanRefused() async throws {
+        let store = ConversationStore(inMemory: true)
+        let conversation = try await store.createConversation(backend: "hermes")
+        let pastedLog = "Line one of the log\n"
+            + String(repeating: "x", count: WorkItemContentLimits.maximumFieldCharacters)
+        let message = try await store.appendMessage(
+            role: "user",
+            text: pastedLog,
+            conversationID: conversation.id,
+            sourceDevice: "test"
+        )
+
+        let receipt = try await store.captureMessageToWork(message, conversationID: conversation.id)
+        let itemValue = try await store.fetchWorkItem(id: receipt.itemID)
+        let item = try XCTUnwrap(itemValue)
+
+        XCTAssertEqual(receipt.addedMaterialCount, 1)
+        XCTAssertLessThanOrEqual(
+            item.content.objective.count,
+            WorkItemContentLimits.maximumFieldCharacters
+        )
+        XCTAssertFalse(
+            item.content.objective.contains(String(repeating: "x", count: 64)),
+            "The oversized turn must not be written into a bounded brief field"
+        )
+        XCTAssertEqual(item.content.title, "Line one of the log")
+
+        let material = try XCTUnwrap(item.materials.first)
+        XCTAssertEqual(material.kind, .note)
+        XCTAssertEqual(material.sequence, 0)
+        XCTAssertEqual(material.textContent, pastedLog)
+    }
+
+    /// Both surfaces that render a capture/autosave failure print
+    /// `error.localizedDescription` verbatim. Without `LocalizedError` that is
+    /// the bridged NSError fallback, which names neither the cause nor the fix.
+    func testTheContentBoundRefusalCarriesCopyAPersonCanActOn() {
+        let copy = WorkboardStoreError.contentTooLong.localizedDescription
+
+        XCTAssertFalse(
+            copy.contains("couldn’t be completed") || copy.contains("WorkboardStoreError"),
+            "The store bound must not surface as the bridged NSError fallback"
+        )
+        XCTAssertTrue(
+            copy.localizedStandardContains("shorten"),
+            "The refusal has to name the one action that clears it"
+        )
+    }
 }

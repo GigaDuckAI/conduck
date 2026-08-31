@@ -51,6 +51,43 @@ nonisolated struct WorkboardPendingUpload: Codable, Sendable, Equatable, Identif
     }
 }
 
+/// Wraps the file-lane live-task probe and the recovery DELETE so
+/// reconciliation runs with NO network in tests. Production delegates to
+/// `BackgroundFileTransfer.shared`; a mock records the keys it was asked to
+/// reclaim and answers the live-task probe.
+protocol WorkboardUploadReclaiming: Sendable {
+    /// Whether an upload task for `(shareEnvelopeID, sequence)` is LIVE on the
+    /// transfer session — a surviving PUT still owns the key, so leave it.
+    func hasLiveUploadTask(shareEnvelopeID: UUID, sequence: Int) async -> Bool
+
+    /// True only when the server confirms the key is gone (2xx, or 404). Any
+    /// other outcome keeps the key journaled for a later launch.
+    func deleteFileForRecovery(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        storedKey: String
+    ) async -> Bool
+}
+
+/// Production reclaim seam — forwards to the shared file-transfer singleton.
+struct LiveUploadReclaimer: WorkboardUploadReclaiming {
+    func hasLiveUploadTask(shareEnvelopeID: UUID, sequence: Int) async -> Bool {
+        await BackgroundFileTransfer.shared.hasLiveUploadTask(
+            shareEnvelopeID: shareEnvelopeID,
+            sequence: sequence
+        )
+    }
+
+    func deleteFileForRecovery(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        storedKey: String
+    ) async -> Bool {
+        await BackgroundFileTransfer.shared.deleteFileForRecovery(
+            snapshot: snapshot,
+            storedKey: storedKey
+        )
+    }
+}
+
 actor WorkboardUploadJournal {
     static let shared = WorkboardUploadJournal()
 
@@ -62,6 +99,7 @@ actor WorkboardUploadJournal {
 
     private let baseURL: URL
     private let fileManager: FileManager
+    private let reclaimer: any WorkboardUploadReclaiming
     /// Dispatches in this process are skipped by a launch reconciliation that
     /// happens to overlap the user pressing Send.
     private var activeDispatchIDs: Set<UUID> = []
@@ -69,11 +107,17 @@ actor WorkboardUploadJournal {
     private init() {
         self.baseURL = Self.defaultBaseURL()
         self.fileManager = .default
+        self.reclaimer = LiveUploadReclaimer()
     }
 
-    init(baseURL: URL, fileManager: FileManager = .default) {
+    init(
+        baseURL: URL,
+        fileManager: FileManager = .default,
+        reclaimer: any WorkboardUploadReclaiming = LiveUploadReclaimer()
+    ) {
         self.baseURL = baseURL
         self.fileManager = fileManager
+        self.reclaimer = reclaimer
     }
 
     func beginActivity(dispatchID: UUID) {
@@ -212,12 +256,12 @@ actor WorkboardUploadJournal {
             let remaining = pendingEntries().first(where: { $0.id == entry.id })?.uploads ?? []
             for upload in remaining {
                 guard !activeDispatchIDs.contains(entry.id) else { break }
-                let live = await BackgroundFileTransfer.shared.hasLiveUploadTask(
+                let live = await reclaimer.hasLiveUploadTask(
                     shareEnvelopeID: entry.id,
                     sequence: upload.sequence
                 )
                 guard !live else { continue }
-                let reclaimed = await BackgroundFileTransfer.shared.deleteFileForRecovery(
+                let reclaimed = await reclaimer.deleteFileForRecovery(
                     snapshot: snapshot,
                     storedKey: upload.storedKey
                 )

@@ -323,6 +323,8 @@ final class WorkCaptureInboxTests: XCTestCase {
             "share.work.error.title",
             "share.work.error.tooLarge",
             "share.work.error.unavailable",
+            "share.work.error.invalidContent",
+            "share.work.error.unsupportedItem",
         ]
         for relativePath in [
             "ConduckShareExtension/ShareView.swift",
@@ -367,6 +369,44 @@ final class WorkCaptureInboxTests: XCTestCase {
         }
     }
 
+    /// The Shortcuts action row and the parameter summary directly beneath it
+    /// are two strings for one feature on one screen, and they come from two
+    /// declarations. Renaming only the title leaves an action reading "Add to
+    /// Work" over a summary reading "Add [thought] to Workboard".
+    func testBothCaptureIntentsNameWorkInTheirTitleAndTheirParameterSummary() throws {
+        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let projectDirectory = testsDirectory.deletingLastPathComponent()
+        let sources = [
+            "Conduck/Intents/CaptureWorkboardIntent.swift",
+            "ConduckWatch Watch App/WorkboardCaptureIntent.swift",
+        ]
+        for relativePath in sources {
+            let source = try String(
+                contentsOf: projectDirectory.appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+            XCTAssertTrue(source.contains("defaultValue: \"Add to Work\""), relativePath)
+            XCTAssertTrue(
+                source.contains("Summary(\"Add \\(\\.$thought) to Work\")"),
+                "\(relativePath) must not offer a summary under a retired name"
+            )
+        }
+
+        // The summary literal IS the catalog key, so a stale key means Shortcuts
+        // still resolves the old wording on a localized device.
+        for relativePath in [
+            "Conduck/Localizable.xcstrings",
+            "ConduckWatch Watch App/Localizable.xcstrings",
+        ] {
+            let catalog = try String(
+                contentsOf: projectDirectory.appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+            XCTAssertTrue(catalog.contains("\"Add ${thought} to Work\" :"), relativePath)
+            XCTAssertFalse(catalog.contains("\"Add ${thought} to Workboard\" :"), relativePath)
+        }
+    }
+
     func testFilenameSanitationRemovesPathControlsAndBidiWhilePreservingExtension() {
         let raw = "../../folder\\\u{202E}secret\nproposal.pdf"
         let safe = WorkCaptureEnvelope.safeDisplayName(raw)
@@ -374,6 +414,85 @@ final class WorkCaptureInboxTests: XCTestCase {
         XCTAssertFalse(safe?.contains("/") == true)
         XCTAssertFalse(safe?.contains("\\") == true)
         XCTAssertLessThanOrEqual(safe?.count ?? .max, WorkCaptureEnvelope.maximumDisplayNameCharacters)
+    }
+
+    func testFilenameSanitationIsIdempotentWhenTruncationExposesTrailingSpace() {
+        // Both validators assert `safeDisplayName(x) == x`, so a value the
+        // sanitizer produced must survive a second pass unchanged.
+        let extensionless = String(repeating: "a", count: 119) + " " + String(repeating: "b", count: 40)
+        let sanitized = WorkCaptureEnvelope.safeDisplayName(extensionless)
+        XCTAssertEqual(sanitized, String(repeating: "a", count: 119))
+        XCTAssertEqual(WorkCaptureEnvelope.safeDisplayName(sanitized), sanitized)
+
+        let named = String(repeating: "a", count: 115) + " " + String(repeating: "b", count: 30) + ".pdf"
+        let sanitizedName = WorkCaptureEnvelope.safeDisplayName(named)
+        XCTAssertEqual(sanitizedName, String(repeating: "a", count: 115) + ".pdf")
+        XCTAssertEqual(WorkCaptureEnvelope.safeDisplayName(sanitizedName), sanitizedName)
+
+        let envelope = WorkCaptureEnvelope(
+            source: .shareExtension,
+            entries: [
+                .init(
+                    kind: .file,
+                    sequence: 0,
+                    relativePath: "payload-000.pdf",
+                    displayName: sanitizedName,
+                    byteCount: 1
+                )
+            ]
+        )
+        XCTAssertNoThrow(try envelope.validateForPublication())
+    }
+
+    func testOpaqueMetadataSanitationDropsUnusableTypesInsteadOfFailingTheCapture() {
+        XCTAssertEqual(WorkCaptureEnvelope.safeOpaqueMetadata("com.adobe.pdf"), "com.adobe.pdf")
+        XCTAssertNil(WorkCaptureEnvelope.safeOpaqueMetadata(nil))
+        XCTAssertNil(WorkCaptureEnvelope.safeOpaqueMetadata(""))
+        XCTAssertNil(WorkCaptureEnvelope.safeOpaqueMetadata(" com.adobe.pdf "))
+        XCTAssertNil(WorkCaptureEnvelope.safeOpaqueMetadata("com.example.\u{202E}pdf"))
+
+        let hostileTypeIdentifier = String(repeating: "u", count: 161)
+        XCTAssertNil(WorkCaptureEnvelope.safeOpaqueMetadata(hostileTypeIdentifier))
+
+        let rejected = WorkCaptureEnvelope(
+            source: .shareExtension,
+            entries: [
+                .init(
+                    kind: .file,
+                    sequence: 0,
+                    relativePath: "payload-000.pdf",
+                    displayName: "proposal.pdf",
+                    typeIdentifier: hostileTypeIdentifier,
+                    byteCount: 1
+                )
+            ]
+        )
+        XCTAssertThrowsError(try rejected.validateForPublication()) { error in
+            XCTAssertEqual(
+                error as? WorkCaptureEnvelope.PublicationValidationFailure,
+                .unsafeMetadata
+            )
+        }
+
+        // The same capture publishes once the source app's unusable type is
+        // sanitized away: the annotation is descriptive, the material is not.
+        let sanitized = WorkCaptureEnvelope(
+            source: .shareExtension,
+            entries: [
+                .init(
+                    kind: .file,
+                    sequence: 0,
+                    relativePath: "payload-000.pdf",
+                    displayName: WorkCaptureEnvelope.safeOpaqueMetadata(
+                        WorkCaptureEnvelope.safeDisplayName("proposal.pdf")
+                    ),
+                    typeIdentifier: WorkCaptureEnvelope.safeOpaqueMetadata(hostileTypeIdentifier),
+                    byteCount: 1
+                )
+            ]
+        )
+        XCTAssertNil(sanitized.entries.first?.typeIdentifier)
+        XCTAssertNoThrow(try sanitized.validateForPublication())
     }
 
     func testURLRuleAllowsWebAndRejectsLocalOrCredentiallessGarbage() {
@@ -399,6 +518,43 @@ final class WorkCaptureInboxTests: XCTestCase {
         }
         XCTAssertEqual(String(bodies[0]), String(bodies[1]))
         XCTAssertEqual(String(bodies[0]), String(bodies[2]))
+    }
+
+    /// The Watch compiles neither `WorkCaptureEnvelope` nor this bundle, so its
+    /// capture bound is a restated literal with no compile-time link to the value
+    /// every other ingress enforces. Source text is the only link available.
+    ///
+    /// Without it, lowering the envelope's bound leaves the wrist accepting a
+    /// longer dictation, confirming the capture out loud, and then having
+    /// `createWorkItem` refuse it — losing a brief the person has no other copy
+    /// of.
+    func testTheWatchCaptureBoundStillRestatesTheEnvelopeBound() throws {
+        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let projectDirectory = testsDirectory.deletingLastPathComponent()
+        let source = try String(
+            contentsOf: projectDirectory
+                .appendingPathComponent("ConduckWatch Watch App/WorkboardCaptureIntent.swift"),
+            encoding: .utf8
+        )
+        let expected = "maximumObjectiveCharacters = "
+            + Self.swiftIntegerLiteral(WorkCaptureEnvelope.maximumNoteCharacters)
+
+        XCTAssertTrue(
+            source.contains(expected),
+            "The Watch literal must be moved with WorkCaptureEnvelope.maximumNoteCharacters — expected \(expected)"
+        )
+    }
+
+    /// Rendered the way the literal is written in source, underscore separators
+    /// included, so a value that drifts fails on the exact spelling.
+    private static func swiftIntegerLiteral(_ value: Int) -> String {
+        let digits = Array(String(value))
+        var grouped: [Character] = []
+        for (offset, digit) in digits.enumerated() {
+            if offset > 0, (digits.count - offset).isMultiple(of: 3) { grouped.append("_") }
+            grouped.append(digit)
+        }
+        return String(grouped)
     }
 
     // MARK: - Claim lifecycle
@@ -707,6 +863,7 @@ final class WorkCaptureInboxTests: XCTestCase {
 
         coordinator = WorkCaptureRefreshCoordinator(
             refreshDelay: .seconds(30),
+            boardIsVisible: { true },
             drainCaptures: {
                 drainPassCount += 1
                 if drainPassCount == 1 {
@@ -743,6 +900,7 @@ final class WorkCaptureInboxTests: XCTestCase {
 
         coordinator = WorkCaptureRefreshCoordinator(
             refreshDelay: .seconds(30),
+            boardIsVisible: { true },
             drainCaptures: {
                 drainPassCount += 1
                 // Mirrors the failed claim being released to pending, which

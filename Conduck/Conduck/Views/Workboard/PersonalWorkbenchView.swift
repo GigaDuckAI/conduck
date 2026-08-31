@@ -7,29 +7,17 @@
 // while every dispatched brief still opens in Conduck's normal conversation UI.
 // This host owns only presentation routing and local preview/speech conveniences;
 // capture persistence and dispatch authority remain in their dedicated seams.
-// Wide layouts keep both destinations mounted and animate ONLY their root
-// opacity. That makes a section switch a cheap composited dissolve while title,
-// toolbar, lifecycle and accessibility state change immediately outside the
-// animation transaction. Native NavigationSplitView motion remains untouched.
+// A section switch animates ONLY root opacity: a cheap composited dissolve,
+// while title, toolbar, lifecycle and accessibility state change immediately
+// outside the animation transaction. Native NavigationSplitView motion remains
+// untouched. Chat stays mounted across the switch because it owns a selected
+// thread, an unsent composer and a live recorder; Work keeps its equivalents on
+// the view model, so the macOS shell mounts Work's columns only while they are
+// on screen (`MainWindowView.mountsWorkLayer`).
 
 #if !os(watchOS)
 
 import SwiftUI
-
-/// Both wide workspaces stay mounted so an unsent Chat draft and an unfinished
-/// Work thought survive the section switch. Toolbar/title preferences are a
-/// separate channel from pixels, though: opacity does not silence them. Every
-/// mounted destination reads this value before contributing navigation chrome.
-private struct WorkbenchDestinationIsActiveKey: EnvironmentKey {
-    static let defaultValue = true
-}
-
-extension EnvironmentValues {
-    var workbenchDestinationIsActive: Bool {
-        get { self[WorkbenchDestinationIsActiveKey.self] }
-        set { self[WorkbenchDestinationIsActiveKey.self] = newValue }
-    }
-}
 
 #if os(macOS)
 /// Gives the native macOS conversation shell access to the Work destination so
@@ -79,23 +67,43 @@ extension View {
 /// can move the otherwise persistent window chrome. Opacity is intentionally
 /// the only animated property — no layout pass, blur texture, scale raster or
 /// hand-driven split width is added to either substantial workspace tree.
+///
+/// `isActive` and `isVisible` are SEPARATE inputs because a conditionally
+/// mounted layer cannot dissolve in on the update it appears: a view inserted
+/// with no transition renders at its FINAL value. A host that unmounts the
+/// hidden layer therefore holds `isVisible` back for one update after mounting,
+/// and keeps the LEAVING layer mounted until the fade ends
+/// (`mountHold(reduceMotion:)`). `isActive` — hit testing, accessibility, draw
+/// order — always tracks the destination immediately. Both layers flip
+/// `isVisible` in the SAME update and share ONE curve, which is what makes the
+/// crossfade symmetric in both directions.
 struct WorkbenchDestinationLayerModifier: ViewModifier {
+    /// The dissolve both directions share.
+    static let duration: Double = 0.18
+    static let reduceMotionDuration: Double = 0.08
+
+    /// How long a host must keep a leaving layer mounted: the whole fade plus
+    /// one update of slack. Derived from the durations above so a hidden layer
+    /// can never be dropped part-way through its own fade.
+    static func mountHold(reduceMotion: Bool) -> Duration {
+        let seconds = (reduceMotion ? reduceMotionDuration : duration) + 0.04
+        return .milliseconds(Int(seconds * 1000))
+    }
+
     let isActive: Bool
+    let isVisible: Bool
     let reduceMotion: Bool
 
     private var animation: Animation {
-        if reduceMotion { return .linear(duration: 0.06) }
-        // A short asymmetric dissolve keeps the handoff legible without making
-        // two full workspace surfaces blend for longer than necessary.
-        return isActive
-            ? .smooth(duration: 0.14, extraBounce: 0)
-            : .linear(duration: 0.10)
+        reduceMotion
+            ? .linear(duration: Self.reduceMotionDuration)
+            : .easeInOut(duration: Self.duration)
     }
 
     func body(content: Content) -> some View {
         content
             .animation(animation) { animatedContent in
-                animatedContent.opacity(isActive ? 1 : 0)
+                animatedContent.opacity(isVisible ? 1 : 0)
             }
             // These semantics switch immediately. Only pixels dissolve.
             .zIndex(isActive ? 1 : 0)
@@ -105,12 +113,27 @@ struct WorkbenchDestinationLayerModifier: ViewModifier {
 }
 
 extension View {
+    /// For hosts that keep BOTH layers permanently mounted, where pixels can
+    /// follow the destination directly.
     func workbenchDestinationLayer(
         isActive: Bool,
         reduceMotion: Bool
     ) -> some View {
+        workbenchDestinationLayer(
+            isActive: isActive,
+            isVisible: isActive,
+            reduceMotion: reduceMotion
+        )
+    }
+
+    func workbenchDestinationLayer(
+        isActive: Bool,
+        isVisible: Bool,
+        reduceMotion: Bool
+    ) -> some View {
         modifier(WorkbenchDestinationLayerModifier(
             isActive: isActive,
+            isVisible: isVisible,
             reduceMotion: reduceMotion
         ))
     }
@@ -124,14 +147,17 @@ struct WorkbenchSectionControl: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // Chats leads, Work follows. `segment(_:title:)` derives the action,
+        // label and accessibility identifier from the destination it is handed,
+        // so the two halves carry their own wiring and order is purely visual.
         HStack(spacing: 0) {
-            segment(
-                .work,
-                title: LocalizedStringResource("workbench.work", defaultValue: "Work")
-            )
             segment(
                 .chats,
                 title: LocalizedStringResource("workbench.chats", defaultValue: "Chats")
+            )
+            segment(
+                .work,
+                title: LocalizedStringResource("workbench.work", defaultValue: "Work")
             )
         }
         .frame(width: 160, height: controlHeight)
@@ -251,16 +277,21 @@ private struct WorkbenchSectionSegmentButtonStyle: ButtonStyle {
                 #if os(macOS)
                 .onHover { isHovering = $0 }
                 #endif
-                .opacity(isEnabled ? 1 : 0.5)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isSelected)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: isHovering)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.06), value: configuration.isPressed)
+                .opacity(isEnabled ? 1 : MacPointer.disabledOpacity)
+                .animation(reduceMotion ? nil : MacPointer.highlightAnimation, value: isSelected)
+                .animation(reduceMotion ? nil : MacPointer.highlightAnimation, value: isHovering)
+                .animation(reduceMotion ? nil : MacPointer.highlightAnimation, value: configuration.isPressed)
         }
 
+        /// The selected half already carries the amber fill, so it takes the
+        /// brightness treatment instead of a wash over its own colour.
         private var washFill: Color {
-            guard isEnabled, !isSelected else { return .clear }
-            if configuration.isPressed { return AppColors.pointerPressedFill }
-            return isHovering ? AppColors.pointerHoverFill : .clear
+            guard !isSelected else { return .clear }
+            return MacPointer.highlightFill(
+                hovering: isHovering,
+                pressed: configuration.isPressed,
+                enabled: isEnabled
+            )
         }
 
         private var brightness: Double {
@@ -329,6 +360,9 @@ final class PersonalWorkbenchRouter {
 
     private var previewFileURL: URL?
     private var materialRequestID: UUID?
+    /// The request whose copy the presented sheet is showing. Compared against
+    /// `materialRequestID` so a dismissal cannot reclaim a NEWER request's work.
+    private var presentedRequestID: UUID?
 
     func openConversation(_ id: UUID) {
         #if !os(macOS)
@@ -450,11 +484,23 @@ final class PersonalWorkbenchRouter {
 
     func closeMaterial() {
         materialRequestID = nil
+        presentedRequestID = nil
         if materialPresentation != nil { materialPresentation = nil }
         if let previewFileURL {
             Self.removePreviewCopy(at: previewFileURL)
             self.previewFileURL = nil
         }
+    }
+
+    /// The preview sheet went away by ANY route — Done, an interactive swipe, or
+    /// Escape — and the disposable plaintext copy has to go with it; only Done
+    /// runs `closeMaterial()` itself. Skips the reclaim when the slot has already
+    /// moved on: `present()` clears the presentation and starts the next request
+    /// while SwiftUI is still animating this sheet away, and that newer request
+    /// (or the copy it has already committed) must survive.
+    func reclaimDismissedPreview() {
+        guard materialPresentation == nil, materialRequestID == presentedRequestID else { return }
+        closeMaterial()
     }
 
     private func commit(
@@ -467,6 +513,7 @@ final class PersonalWorkbenchRouter {
             return
         }
         previewFileURL = previewURL
+        presentedRequestID = requestID
         materialPresentation = presentation
     }
 
@@ -572,24 +619,34 @@ private final class WorkboardBriefingSpeaker {
 /// reload task. `WorkCaptureInbox` posts a change while a claim is moved and
 /// again when it is acknowledged; those notifications may request another pass,
 /// but they can never cancel the pass that owns the claimed private bytes.
+///
+/// It is also the board's SOLE load owner. Every reload — launch, foreground,
+/// capture drain, Chat mutation, remote settings change — arrives here, so the
+/// visibility gate below is total and no second mount can double-load.
 @MainActor
 final class WorkCaptureRefreshCoordinator {
     typealias Operation = @MainActor () async -> Void
     typealias DrainOperation = @MainActor () async -> Bool
+    typealias VisibilityCheck = @MainActor () -> Bool
 
     private let refreshDelay: Duration
+    private let boardIsVisible: VisibilityCheck
     private let drainCaptures: DrainOperation
     private let refresh: Operation
     private var refreshTask: Task<Void, Never>?
     private var captureDrainTask: Task<Void, Never>?
     private var captureDrainRequested = false
+    private var boardIsStale = false
+    private var hasLoadedBoard = false
 
     init(
         refreshDelay: Duration = .milliseconds(180),
+        boardIsVisible: @escaping VisibilityCheck,
         drainCaptures: @escaping DrainOperation,
         refresh: @escaping Operation
     ) {
         self.refreshDelay = refreshDelay
+        self.boardIsVisible = boardIsVisible
         self.drainCaptures = drainCaptures
         self.refresh = refresh
     }
@@ -611,8 +668,35 @@ final class WorkCaptureRefreshCoordinator {
             guard let self else { return }
             try? await Task.sleep(for: refreshDelay)
             guard !Task.isCancelled else { return }
-            await refresh()
+            await refreshIfVisible()
         }
+    }
+
+    /// Work became reachable again: run whatever reload was deferred while it
+    /// was hidden. Debounced like any other reload, which also lets the section
+    /// dissolve finish before the fetch lands; the board on screen is already
+    /// the warm one, so nothing is waiting on it.
+    func drainDeferredRefresh() {
+        guard boardIsVisible(), boardIsStale else { return }
+        schedule(includeCaptureDrain: false)
+    }
+
+    /// The board is the only reader of what `refresh()` fetches, and one pass is
+    /// an unbounded board fetch plus a gateway roster read. While Work is hidden
+    /// a reload is therefore RECORDED, not run — a chat turn posts one of these
+    /// per store mutation — and `drainDeferredRefresh()` replays the newest one.
+    ///
+    /// The FIRST pass always runs, hidden or not: it warms the board so opening
+    /// Work shows projects rather than the empty-board copy, and it is the pass
+    /// that adopts whatever the share extension left in the queue before launch.
+    private func refreshIfVisible() async {
+        guard boardIsVisible() || !hasLoadedBoard else {
+            boardIsStale = true
+            return
+        }
+        boardIsStale = false
+        hasLoadedBoard = true
+        await refresh()
     }
 
     private func startCaptureDrainIfNeeded() {
@@ -636,10 +720,10 @@ final class WorkCaptureRefreshCoordinator {
                 }
             }
 
-            await refresh()
+            await refreshIfVisible()
             captureDrainTask = nil
-            // `refresh()` suspends, so a new cross-process wake can arrive before
-            // ownership is cleared. Never lose that edge.
+            // `refreshIfVisible()` suspends, so a new cross-process wake can
+            // arrive before ownership is cleared. Never lose that edge.
             startCaptureDrainIfNeeded()
         }
     }
@@ -704,9 +788,42 @@ final class PersonalWorkbenchModel {
 
         let workboardViewModel = WorkboardViewModel(dependencies: repository.makeDependencies())
         let refreshCoordinator = WorkCaptureRefreshCoordinator(
+            boardIsVisible: { router.destination == .work },
             drainCaptures: {
                 do {
-                    _ = try await repository.drainCaptures()
+                    let report = try await repository.drainCaptures()
+                    // A malformed envelope is destroyed by the inbox before it
+                    // can reach persistence, and the share sheet has already
+                    // told the person the capture succeeded. Without this the
+                    // only signal is an item that silently never appears.
+                    if report.invalidCaptureCount > 0 {
+                        let message = report.invalidCaptureCount == 1
+                            ? String(localized: LocalizedStringResource(
+                                "workboard.capture.discarded.message.one",
+                                defaultValue: "Conduck couldn’t read one shared item, so it wasn’t added to your board."
+                            ))
+                            : String.localizedStringWithFormat(
+                                String(localized: LocalizedStringResource(
+                                    "workboard.capture.discarded.message",
+                                    defaultValue: "Conduck couldn’t read %lld shared items, so they weren’t added to your board."
+                                )),
+                                Int64(report.invalidCaptureCount)
+                            )
+                        workboardViewModel.notice = WorkboardNotice(
+                            kind: .error,
+                            title: report.invalidCaptureCount == 1
+                                ? LocalizedStringResource(
+                                    "workboard.capture.discarded.title.one",
+                                    defaultValue: "Shared item not added"
+                                )
+                                : LocalizedStringResource(
+                                    "workboard.capture.discarded.title",
+                                    defaultValue: "Shared items not added"
+                                ),
+                            message: message
+                        )
+                        AccessibilityAnnouncer.announce(message)
+                    }
                     return true
                 } catch {
                     let message = String(localized: LocalizedStringResource(
@@ -740,6 +857,12 @@ final class PersonalWorkbenchModel {
     func scheduleRefresh(includeCaptureDrain: Bool = false) {
         refreshCoordinator.schedule(includeCaptureDrain: includeCaptureDrain)
     }
+
+    /// Called when the section changes. A reload deferred while Work was hidden
+    /// lands here, so the board is current by the time its pixels are.
+    func drainDeferredBoardRefresh() {
+        refreshCoordinator.drainDeferredRefresh()
+    }
 }
 
 struct PersonalWorkbenchView<Chats: View>: View {
@@ -760,12 +883,16 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 // suspension. The durable queue is authoritative, so request a
                 // serialized pass whenever this root experience is mounted.
                 model.scheduleRefresh(includeCaptureDrain: true)
+                reconcileDurableWorkStorage()
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == ScenePhase.active {
                     model.scheduleRefresh(includeCaptureDrain: true)
-                    Task { await WorkboardUploadJournal.shared.reconcile() }
+                    reconcileDurableWorkStorage()
                 }
+            }
+            .onChange(of: model.router.destination) { _, _ in
+                model.drainDeferredBoardRefresh()
             }
             .onReceive(NotificationCenter.default.publisher(for: .conversationsDidChange)) { _ in
                 model.scheduleRefresh()
@@ -801,7 +928,13 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 model.router.destination = .chats
             }
             .modifier(WorkbenchPlatformRoutingModifier(router: model.router))
-            .sheet(item: $model.router.materialPresentation) { presentation in
+            // `onDismiss` rather than the Done button alone: a swipe or Escape
+            // writes nil straight through the binding, and the disposable
+            // plaintext copy of the material must be reclaimed on EVERY exit.
+            .sheet(
+                item: $model.router.materialPresentation,
+                onDismiss: { model.router.reclaimDismissedPreview() }
+            ) { presentation in
                 WorkboardMaterialPreviewView(
                     presentation: presentation,
                     onClose: model.router.closeMaterial
@@ -820,6 +953,17 @@ struct PersonalWorkbenchView<Chats: View>: View {
                     )))
                 )
             }
+    }
+
+    /// Launch/foreground repair for Work's two durable stores. Both sweeps have
+    /// delete authority and scale with what is on disk, so they belong on this
+    /// edge and never in the board's read path, which re-runs on ordinary Chat
+    /// activity. Sequential on purpose: one disk sweep at a time.
+    private func reconcileDurableWorkStorage() {
+        Task {
+            await WorkboardUploadJournal.shared.reconcile()
+            _ = try? await ConversationStore.shared.reconcileWorkAssetVault()
+        }
     }
 
     #if !os(macOS)

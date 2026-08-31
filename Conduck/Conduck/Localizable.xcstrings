@@ -163,7 +163,7 @@
     "Add %@ to your Watch" : {
 
     },
-    "Add ${thought} to Workboard" : {
+    "Add ${thought} to Work" : {
 
     },
     "Add Shortcut" : {
@@ -6628,6 +6628,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Say or type what you want to prepare first."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.error.tooLong" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That’s too long to add to Work. Shorten it, then try again."
           }
         }
       }
@@ -21899,222 +21910,94 @@
         }
       }
     },
-    "workboard.briefing.row.drafts" : {
-      "extractionState" : "extracted_with_value",
+    "workboard.briefing.spoken.draft" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Prepared drafts"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld prepared draft"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld prepared drafts"
+                }
+              }
+            }
           }
         }
       }
     },
-    "workboard.briefing.row.drafts.detail.many" : {
-      "extractionState" : "extracted_with_value",
+    "workboard.briefing.spoken.failure" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld drafts are ready to shape"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld send needing attention"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld sends needing attention"
+                }
+              }
+            }
           }
         }
       }
     },
-    "workboard.briefing.row.drafts.detail.one" : {
-      "extractionState" : "extracted_with_value",
+    "workboard.briefing.spoken.reply" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld draft is ready to shape"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld reply to review"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld replies to review"
+                }
+              }
+            }
           }
         }
       }
     },
-    "workboard.briefing.row.failures" : {
-      "extractionState" : "extracted_with_value",
+    "workboard.briefing.spoken.waiting" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Needs attention"
-          }
-        }
-      }
-    },
-    "workboard.briefing.row.failures.detail.many" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld sends need attention"
-          }
-        }
-      }
-    },
-    "workboard.briefing.row.failures.detail.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld send needs attention"
-          }
-        }
-      }
-    },
-    "workboard.briefing.row.replies" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Replies to review"
-          }
-        }
-      }
-    },
-    "workboard.briefing.row.replies.detail.many" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld replies arrived"
-          }
-        }
-      }
-    },
-    "workboard.briefing.row.replies.detail.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld reply arrived"
-          }
-        }
-      }
-    },
-    "workboard.briefing.row.waiting" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Waiting on AI"
-          }
-        }
-      }
-    },
-    "workboard.briefing.row.waiting.detail.many" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld requests are waiting"
-          }
-        }
-      }
-    },
-    "workboard.briefing.row.waiting.detail.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld request is waiting"
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.draft.many" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld prepared drafts"
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.draft.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld prepared draft"
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.failure.many" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld sends needing attention"
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.failure.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld send needing attention"
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.reply.many" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld replies to review"
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.reply.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld reply to review"
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.waiting.many" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld requests waiting for replies"
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.waiting.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld request waiting for a reply"
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld request waiting for a reply"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld requests waiting for replies"
+                }
+              }
+            }
           }
         }
       }
@@ -22159,6 +22042,50 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Brief My Work"
+          }
+        }
+      }
+    },
+    "workboard.capture.discarded.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck couldn’t read %lld shared items, so they weren’t added to your board."
+          }
+        }
+      }
+    },
+    "workboard.capture.discarded.message.one" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck couldn’t read one shared item, so it wasn’t added to your board."
+          }
+        }
+      }
+    },
+    "workboard.capture.discarded.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Shared items not added"
+          }
+        }
+      }
+    },
+    "workboard.capture.discarded.title.one" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Shared item not added"
           }
         }
       }
@@ -22214,6 +22141,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Shared item waiting"
+          }
+        }
+      }
+    },
+    "workboard.capture.retry.voice.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't add this recording to Work. Try again."
           }
         }
       }
@@ -22405,6 +22343,28 @@
         }
       }
     },
+    "workboard.chatCapture.longMessageObjective" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Continue working from the captured message."
+          }
+        }
+      }
+    },
+    "workboard.chatCapture.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Chat message"
+          }
+        }
+      }
+    },
     "workboard.chatCapture.open" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22566,17 +22526,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Draft not saved"
-          }
-        }
-      }
-    },
-    "workboard.column.empty" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Nothing here"
           }
         }
       }
@@ -23093,7 +23042,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "A private board reminder. The date is also preserved in the approved brief snapshot."
+            "value" : "A private board date. It is also preserved in the approved brief snapshot."
           }
         }
       }
@@ -23105,17 +23054,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Review by"
-          }
-        }
-      }
-    },
-    "workboard.editor.reviewBy.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Remind me to review"
           }
         }
       }
@@ -23259,6 +23197,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "This exact dispatch has already started. Conduck will not send it twice."
+          }
+        }
+      }
+    },
+    "workboard.error.contentTooLong" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That brief is longer than %@ characters. Shorten it, then try again."
           }
         }
       }
@@ -23527,39 +23476,6 @@
         }
       }
     },
-    "workboard.focus.accessibility" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Workboard focus filters"
-          }
-        }
-      }
-    },
-    "workboard.focus.accessibility.count" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@, %2$lld"
-          }
-        }
-      }
-    },
-    "workboard.focus.allOpen" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "All Open"
-          }
-        }
-      }
-    },
     "workboard.gateway.configured.status" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23626,17 +23542,6 @@
         }
       }
     },
-    "workboard.group.done.subtitle" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Closed by you"
-          }
-        }
-      }
-    },
     "workboard.group.drafts" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23644,17 +23549,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Drafts"
-          }
-        }
-      }
-    },
-    "workboard.group.drafts.subtitle" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Not sent"
           }
         }
       }
@@ -23670,17 +23564,6 @@
         }
       }
     },
-    "workboard.group.needsYou.subtitle" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Results and send issues"
-          }
-        }
-      }
-    },
     "workboard.group.waiting" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23688,17 +23571,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Waiting on AI"
-          }
-        }
-      }
-    },
-    "workboard.group.waiting.subtitle" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Requests in progress"
           }
         }
       }
@@ -24693,28 +24565,6 @@
         }
       }
     },
-    "workboard.preflight.gateway.ready" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Ready"
-          }
-        }
-      }
-    },
-    "workboard.preflight.gateway.recommended" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Recommended"
-          }
-        }
-      }
-    },
     "workboard.preflight.gateway.selected" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24831,7 +24681,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Review reminder"
+            "value" : "Review by"
           }
         }
       }
@@ -25034,105 +24884,6 @@
         }
       }
     },
-    "workboard.reminder.failed.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The system could not add that reminder. The brief was saved without changing its reminder."
-          }
-        }
-      }
-    },
-    "workboard.reminder.failed.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Reminder not scheduled"
-          }
-        }
-      }
-    },
-    "workboard.reminder.needsBrief.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Write what you want to review, then turn on the reminder."
-          }
-        }
-      }
-    },
-    "workboard.reminder.needsBrief.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Add the brief first"
-          }
-        }
-      }
-    },
-    "workboard.reminder.notification.body" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Workboard to decide what happens next."
-          }
-        }
-      }
-    },
-    "workboard.reminder.notification.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A brief is ready for your review"
-          }
-        }
-      }
-    },
-    "workboard.reminder.permission.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Allow notifications for Conduck in System Settings, then try again. The brief was saved without a reminder."
-          }
-        }
-      }
-    },
-    "workboard.reminder.permission.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Reminders are off"
-          }
-        }
-      }
-    },
-    "workboard.reminder.scheduling" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Checking the reminder…"
-          }
-        }
-      }
-    },
     "workboard.review.acknowledge.failed.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -25184,17 +24935,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "The request did not complete. Open its conversation to review or retry it."
-          }
-        }
-      }
-    },
-    "workboard.run.preparedNotSent" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This brief was prepared but did not start. You can review and send it again."
           }
         }
       }
@@ -25540,17 +25280,6 @@
         }
       }
     },
-    "workboard.voice.failed.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Voice capture stopped"
-          }
-        }
-      }
-    },
     "workboard.voice.listening" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -25661,17 +25390,6 @@
         }
       }
     },
-    "workboard.workspace.add.short" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Add"
-          }
-        }
-      }
-    },
     "workboard.workspace.attach" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -25723,17 +25441,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Captured"
-          }
-        }
-      }
-    },
-    "workboard.workspace.composer.accessibilityLabel" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Work thought"
           }
         }
       }

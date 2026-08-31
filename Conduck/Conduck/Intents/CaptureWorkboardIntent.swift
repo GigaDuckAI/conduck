@@ -35,7 +35,7 @@ struct CaptureWorkboardIntent: AppIntent {
     var thought: String
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Add \(\.$thought) to Workboard")
+        Summary("Add \(\.$thought) to Work")
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
@@ -44,6 +44,12 @@ struct CaptureWorkboardIntent: AppIntent {
             .replacingOccurrences(of: "\r", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { throw CaptureWorkboardIntentError.emptyThought }
+        // A Shortcut can pipe a whole document into this parameter. Refuse
+        // rather than truncate: a silently shortened brief looks like a
+        // successful capture and loses the part the person cared about.
+        guard normalized.count <= WorkCaptureEnvelope.maximumNoteCharacters else {
+            throw CaptureWorkboardIntentError.thoughtTooLong
+        }
 
         let title = normalized
             .split(whereSeparator: \.isNewline)
@@ -69,12 +75,21 @@ struct CaptureWorkboardIntent: AppIntent {
 
 private enum CaptureWorkboardIntentError: LocalizedError {
     case emptyThought
+    case thoughtTooLong
 
     var errorDescription: String? {
-        String(
-            localized: "intent.workboardCapture.error.empty",
-            defaultValue: "Say or type what you want to prepare first."
-        )
+        switch self {
+        case .emptyThought:
+            return String(
+                localized: "intent.workboardCapture.error.empty",
+                defaultValue: "Say or type what you want to prepare first."
+            )
+        case .thoughtTooLong:
+            return String(
+                localized: "intent.workboardCapture.error.tooLong",
+                defaultValue: "That’s too long to add to Work. Shorten it, then try again."
+            )
+        }
     }
 }
 #endif

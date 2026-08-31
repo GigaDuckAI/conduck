@@ -536,36 +536,15 @@ struct MessageComposerBar: View {
     }
 
     private var activePhotosPickerPresentation: Binding<Bool> {
-        activePresentationBinding(
-            get: { showingPhotosPicker },
-            set: { showingPhotosPicker = $0 }
-        )
+        $showingPhotosPicker.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeFileImporterPresentation: Binding<Bool> {
-        activePresentationBinding(
-            get: { showingFileImporter },
-            set: { showingFileImporter = $0 }
-        )
+        $showingFileImporter.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeSetupGuidePresentation: Binding<Bool> {
-        activePresentationBinding(
-            get: { showingSetupGuide },
-            set: { showingSetupGuide = $0 }
-        )
-    }
-
-    private func activePresentationBinding(
-        get: @escaping () -> Bool,
-        set: @escaping (Bool) -> Void
-    ) -> Binding<Bool> {
-        Binding(
-            get: { workbenchDestinationIsActive && get() },
-            set: { value in
-                if !value || workbenchDestinationIsActive { set(value) }
-            }
-        )
+        $showingSetupGuide.gated(by: workbenchDestinationIsActive)
     }
 
     // MARK: - Composer box (extracted to keep `body` type-checkable)

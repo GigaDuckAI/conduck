@@ -11,16 +11,17 @@
 import SwiftUI
 import CoreTransferable
 import UniformTypeIdentifiers
+#if os(iOS)
+import UIKit
+#endif
 
 enum WorkboardMetrics {
     static let contentMaxWidth: CGFloat = 920
     static let cardCornerRadius: CGFloat = 18
     static let surfaceCornerRadius: CGFloat = 16
-    static let compactSpacing: CGFloat = 10
     static let standardSpacing: CGFloat = 16
     static let generousSpacing: CGFloat = 24
     static let touchTarget: CGFloat = 44
-    static let boardColumnWidth: CGFloat = 292
 }
 
 extension UTType {
@@ -41,7 +42,31 @@ nonisolated struct WorkboardCardDragPayload: Codable, Hashable, Sendable, Transf
     }
 }
 
-extension WorkboardItemState {
+/// Presentation for the persisted lifecycle lanes. The board has no state enum
+/// of its own: these are the only things the UI adds to `WorkItemState`.
+extension WorkItemState {
+    var title: LocalizedStringResource {
+        switch self {
+        case .draft:
+            return LocalizedStringResource("workboard.state.draft", defaultValue: "Draft")
+        case .waiting:
+            return LocalizedStringResource("workboard.state.waiting", defaultValue: "Waiting")
+        case .review:
+            return LocalizedStringResource("workboard.state.review", defaultValue: "Review")
+        case .done:
+            return LocalizedStringResource("workboard.state.done", defaultValue: "Done")
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .draft: return "square.and.pencil"
+        case .waiting: return "hourglass"
+        case .review: return "sparkle.magnifyingglass"
+        case .done: return "checkmark.circle.fill"
+        }
+    }
+
     var tint: Color {
         switch self {
         case .draft: return AppColors.textTertiary
@@ -63,10 +88,27 @@ extension WorkboardItemState {
             return LocalizedStringResource("workboard.group.done", defaultValue: "Done")
         }
     }
+
+    /// Human-attention order, independent from persistence ordering.
+    nonisolated var attentionRank: Int {
+        switch self {
+        case .review: return 0
+        case .waiting: return 1
+        case .draft: return 2
+        case .done: return 3
+        }
+    }
+
+    /// The one lane order. Every list that walks the lanes derives it from
+    /// `attentionRank`, so a new lifecycle state cannot be ranked in one place
+    /// and forgotten in another.
+    nonisolated static var attentionOrder: [WorkItemState] {
+        allCases.sorted { $0.attentionRank < $1.attentionRank }
+    }
 }
 
 struct WorkboardStateBadge: View {
-    let state: WorkboardItemState
+    let state: WorkItemState
     var compact = false
 
     var body: some View {
@@ -90,9 +132,8 @@ struct WorkboardStateBadge: View {
 }
 
 struct WorkboardSectionHeader: View {
-    let state: WorkboardItemState
+    let state: WorkItemState
     let count: Int
-    var subtitle: LocalizedStringResource?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -109,12 +150,6 @@ struct WorkboardSectionHeader: View {
                 .padding(.vertical, 2)
                 .background(AppColors.backgroundSecondary, in: Capsule())
             Spacer(minLength: 8)
-            if let subtitle {
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textTertiary)
-                    .lineLimit(1)
-            }
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
@@ -123,7 +158,6 @@ struct WorkboardSectionHeader: View {
 
 struct WorkboardCard: View {
     let item: WorkboardItemSnapshot
-    let compact: Bool
     let onOpen: () -> Void
     let onDuplicate: () -> Void
     let onDelete: () -> Void
@@ -134,7 +168,7 @@ struct WorkboardCard: View {
 
     var body: some View {
         Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: compact ? 9 : 12) {
+            VStack(alignment: .leading, spacing: 9) {
                 HStack(alignment: .top, spacing: 10) {
                     WorkboardStateBadge(state: item.state, compact: true)
                     if item.isPinned {
@@ -154,17 +188,17 @@ struct WorkboardCard: View {
                 }
 
                 Text(item.displayTitle)
-                    .font(compact ? .headline : .title3.weight(.semibold))
+                    .font(.headline)
                     .foregroundStyle(AppColors.textEmphasis)
                     .multilineTextAlignment(.leading)
-                    .lineLimit(compact ? 2 : 3)
+                    .lineLimit(2)
 
                 if !item.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(item.objective)
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textSecondary)
                         .multilineTextAlignment(.leading)
-                        .lineLimit(compact ? 2 : 3)
+                        .lineLimit(2)
                 }
 
                 if item.hasChangesSinceLastSend {
@@ -181,8 +215,8 @@ struct WorkboardCard: View {
 
                 footer
             }
-            .frame(maxWidth: .infinity, minHeight: compact ? 112 : 148, alignment: .topLeading)
-            .padding(compact ? 14 : 16)
+            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+            .padding(14)
             .background {
                 RoundedRectangle(cornerRadius: WorkboardMetrics.cardCornerRadius, style: .continuous)
                     .fill(AppColors.cardBackgroundElevated)
@@ -282,7 +316,7 @@ struct WorkboardCard: View {
                 Label {
                     Text(reviewBy, format: .dateTime.month(.abbreviated).day())
                 } icon: {
-                    Image(systemName: "bell")
+                    Image(systemName: "calendar")
                 }
                 .font(.caption)
                 .foregroundStyle(reviewBy < Date() ? AppColors.error : AppColors.textTertiary)
@@ -401,6 +435,40 @@ struct WorkboardSurface<Content: View>: View {
     }
 }
 
+/// Glyph and tint for one Work material. Files route through Chat's
+/// `AttachmentChipStyle` so a CSV, a JSON payload and a source file are as
+/// distinguishable in Work as they are in a conversation, and a new file type
+/// is still described in exactly one place. Images, links and notes keep the
+/// kind glyph: `AttachmentChipStyle` maps text and code types only, so an image
+/// routed through it would come back as a document.
+enum WorkboardMaterialIcon {
+    static func symbol(for material: WorkboardMaterialSnapshot) -> String {
+        guard material.kind == .file else { return material.kind.systemImage }
+        if let mimeType = material.mimeType {
+            return AttachmentChipStyle.symbol(forMimeType: mimeType, filename: material.name)
+        }
+        let ext = (material.name as NSString).pathExtension
+        return ext.isEmpty
+            ? material.kind.systemImage
+            : AttachmentChipStyle.symbol(forExtension: ext)
+    }
+
+    static func tint(for material: WorkboardMaterialSnapshot) -> Color {
+        switch material.kind {
+        case .file:
+            if let mimeType = material.mimeType {
+                return AttachmentChipStyle.tint(forMimeType: mimeType, filename: material.name)
+            }
+            let ext = (material.name as NSString).pathExtension
+            return ext.isEmpty ? AppColors.brandAmber : AttachmentChipStyle.tint(forExtension: ext)
+        case .link:
+            return AppColors.guidedSetupBlue
+        case .image, .note:
+            return AppColors.brandAmber
+        }
+    }
+}
+
 struct WorkboardMaterialTile: View {
     let material: WorkboardMaterialSnapshot
     var isIncluded: Bool? = nil
@@ -492,9 +560,9 @@ struct WorkboardMaterialTile: View {
     }
 
     private var thumbnailPlaceholder: some View {
-        Image(systemName: material.kind.systemImage)
+        Image(systemName: WorkboardMaterialIcon.symbol(for: material))
             .font(.title2)
-            .foregroundStyle(material.kind == .link ? AppColors.guidedSetupBlue : AppColors.brandAmber)
+            .foregroundStyle(WorkboardMaterialIcon.tint(for: material))
             .accessibilityHidden(true)
     }
 
@@ -612,5 +680,192 @@ struct WorkboardAutosaveStatus: View {
         .font(.caption)
         .foregroundStyle(AppColors.textTertiary)
         .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - Adding material
+
+/// Every way material enters Work, described once for both Work surfaces.
+enum WorkboardMaterialRoute: String, CaseIterable, Identifiable {
+    case photos
+    case camera
+    case files
+    case link
+    case note
+
+    var id: String { rawValue }
+
+    var title: LocalizedStringResource {
+        switch self {
+        case .photos:
+            return LocalizedStringResource("workboard.material.addPhotos", defaultValue: "Photos")
+        case .camera:
+            return LocalizedStringResource("composer.attach.takePhoto", defaultValue: "Take Photo")
+        case .files:
+            return LocalizedStringResource("workboard.material.addFiles", defaultValue: "Files")
+        case .link:
+            return LocalizedStringResource("workboard.material.addLink.short", defaultValue: "Link")
+        case .note:
+            return LocalizedStringResource("workboard.material.addNote.short", defaultValue: "Note")
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .photos: return "photo.on.rectangle.angled"
+        case .camera: return "camera"
+        case .files: return "doc.badge.plus"
+        case .link: return "link.badge.plus"
+        case .note: return "note.text.badge.plus"
+        }
+    }
+}
+
+/// The single add-material control for Work. `.menu` mounts Chat's shared
+/// `AttachmentMenu` unchanged, so the pinned composer keeps the exact paperclip
+/// interaction a conversation has; `.row` is the editor's always-visible list of
+/// the same routes. Both presentations take the same handlers, so a new route is
+/// added and wired once. `.note` reaches only the row: it has no place in
+/// Chat's menu, and Work must not fork that shared control to add one.
+struct WorkboardMaterialActions: View {
+    enum Presentation: Equatable {
+        case menu
+        case row
+    }
+
+    let presentation: Presentation
+    let onPickPhotos: () -> Void
+    let onTakePhoto: () -> Void
+    let onPickFiles: () -> Void
+    let onAddLink: () -> Void
+    let onAddNote: () -> Void
+    var iconPointSize: CGFloat = 22
+    var iconFrame: CGFloat = WorkboardMetrics.touchTarget
+
+    /// True only on an iOS device with a camera, so the route is removed rather
+    /// than shown as a dead pill — matching `AttachmentMenu`'s own rule.
+    private var cameraAvailable: Bool {
+        #if os(iOS)
+        return UIImagePickerController.isSourceTypeAvailable(.camera)
+        #else
+        return false
+        #endif
+    }
+
+    private var rowRoutes: [WorkboardMaterialRoute] {
+        WorkboardMaterialRoute.allCases.filter { $0 != .camera || cameraAvailable }
+    }
+
+    var body: some View {
+        switch presentation {
+        case .menu:
+            AttachmentMenu(
+                onPickLibrary: onPickPhotos,
+                onTakePhoto: onTakePhoto,
+                onPickFiles: onPickFiles,
+                purpose: .work,
+                onAddLink: onAddLink,
+                iconPointSize: iconPointSize,
+                iconFrame: iconFrame
+            )
+        case .row:
+            ScrollView(.horizontal) {
+                HStack(spacing: 9) {
+                    ForEach(rowRoutes) { route in
+                        Button(action: action(for: route)) {
+                            label(for: route)
+                        }
+                        .choiceCardButton(cornerRadius: WorkboardMetrics.touchTarget / 2)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+
+    private func action(for route: WorkboardMaterialRoute) -> () -> Void {
+        switch route {
+        case .photos: return onPickPhotos
+        case .camera: return onTakePhoto
+        case .files: return onPickFiles
+        case .link: return onAddLink
+        case .note: return onAddNote
+        }
+    }
+
+    private func label(for route: WorkboardMaterialRoute) -> some View {
+        Label(route.title, systemImage: route.systemImage)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(AppColors.textPrimary)
+            .padding(.horizontal, 13)
+            .frame(minHeight: WorkboardMetrics.touchTarget)
+            .background(AppColors.backgroundSecondary, in: Capsule())
+            .overlay { Capsule().stroke(AppColors.borderSubtle, lineWidth: 1) }
+            .contentShape(Capsule())
+    }
+}
+
+// MARK: - Oversized material soft-confirm
+
+/// A pending oversized-material confirmation from any Work import route. The
+/// copy is derived here so the alert's keys have exactly one default value no
+/// matter which route raised it.
+protocol WorkboardLargeImportConfirming: Identifiable {
+    /// Byte counts of the oversized items only.
+    var largeItemByteCounts: [Int64] { get }
+}
+
+extension WorkboardLargeImportConfirming {
+    var largeImportMessage: String {
+        let counts = largeItemByteCounts
+        let totalBytes = counts.reduce(Int64(0)) { $0 + max(0, $1) }
+        let formattedSize = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+        if counts.count == 1 {
+            return String.localizedStringWithFormat(
+                String(localized: LocalizedStringResource(
+                    "workboard.material.large.confirm.message.one",
+                    defaultValue: "One large file (%@) is stored only on this device and may take a moment to copy now or send later."
+                )),
+                formattedSize
+            )
+        }
+        return String.localizedStringWithFormat(
+            String(localized: LocalizedStringResource(
+                "workboard.material.large.confirm.message",
+                defaultValue: "%1$lld large files (%2$@) are stored only on this device and may take a moment to copy now or send later."
+            )),
+            Int64(counts.count),
+            formattedSize
+        )
+    }
+}
+
+extension View {
+    /// The one soft-confirm every Work import route shows before copying
+    /// oversized material. Each route keeps its own confirm and cancel work —
+    /// only the wording and the buttons are shared.
+    func workboardLargeImportAlert<Item: WorkboardLargeImportConfirming>(
+        item: Binding<Item?>,
+        onConfirm: @escaping (Item) -> Void,
+        onCancel: @escaping (Item) -> Void
+    ) -> some View {
+        alert(item: item) { confirmation in
+            Alert(
+                title: Text(LocalizedStringResource(
+                    "workboard.material.large.confirm.title",
+                    defaultValue: "Add large files?"
+                )),
+                message: Text(verbatim: confirmation.largeImportMessage),
+                primaryButton: .default(Text(LocalizedStringResource(
+                    "workboard.material.large.confirm.add",
+                    defaultValue: "Add to Work"
+                ))) {
+                    onConfirm(confirmation)
+                },
+                secondaryButton: .cancel {
+                    onCancel(confirmation)
+                }
+            )
+        }
     }
 }

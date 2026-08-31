@@ -1081,8 +1081,9 @@ actor ConversationStore {
     /// Device-local Workboard payload storage paired with this store instance.
     /// Production uses the App Group vault; every test store gets a unique
     /// temporary vault so an in-memory Core Data test can never read, reclaim,
-    /// or remove the person's real Workboard files. Internal only because the
-    /// sibling `+Workboard` extension owns all operations on it.
+    /// or remove the person's real Workboard files. Internal so the sibling
+    /// `+Workboard` extension — and the board's preview pass, which resolves a
+    /// whole wave of leaves at once — reach exactly this store's vault.
     let workAssetVault: WorkAssetVault
 
     /// Message ids currently being copied into Work. Core Data's CloudKit-
@@ -2300,7 +2301,12 @@ actor ConversationStore {
             let dispatchRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkDispatch")
             dispatchRequest.predicate = NSPredicate(format: "conversationID != nil")
             for dispatch in try context.fetch(dispatchRequest) {
-                dispatch.setValue(cutoff, forKey: "conversationRemovedAt")
+                // A run tombstoned by an earlier single-chat delete keeps its
+                // first stamp: the removal date is shown on the immutable run and
+                // sorts it, so rewriting it would backdate history to this wipe.
+                if dispatch.value(forKey: "conversationRemovedAt") as? Date == nil {
+                    dispatch.setValue(cutoff, forKey: "conversationRemovedAt")
+                }
             }
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             let matches = try context.fetch(request)
@@ -5024,6 +5030,45 @@ actor ConversationStore {
             )
             request.fetchLimit = 1
             return try context.fetch(request).first.map { MessageRecord(managedObject: $0) }
+        }
+    }
+
+    /// The batched sibling of `fetchMessage(id:in:)`, keyed message id ->
+    /// conversation id. ONE background context and ONE fetch for the whole set:
+    /// the Work board resolves every run's displayed turn on each debounced
+    /// refresh, and calling the single-id method per run would open a private
+    /// queue context per message, all contending on one store coordinator.
+    ///
+    /// The per-conversation OR keeps the single-id method's ownership proof —
+    /// a turn is returned only for the conversation the caller paired it with —
+    /// while doing it in SQL, so no `conversation` relationship is ever faulted.
+    /// `attachments` IS prefetched, because `MessageRecord` maps that to-many
+    /// eagerly and would otherwise fault once per returned row.
+    func fetchMessages(
+        conversationIDsByMessageID: [UUID: UUID]
+    ) async throws -> [UUID: MessageRecord] {
+        guard !conversationIDsByMessageID.isEmpty else { return [:] }
+        try await ensureLoaded()
+        let context = container.newBackgroundContext()
+        let wanted = conversationIDsByMessageID
+        return try await context.perform { [context] in
+            let clauses = Dictionary(grouping: wanted, by: \.value).map { conversationID, pairs in
+                NSPredicate(
+                    format: "conversation.id == %@ AND id IN %@",
+                    conversationID as CVarArg,
+                    pairs.map(\.key)
+                )
+            }
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: clauses)
+            request.relationshipKeyPathsForPrefetching = ["attachments"]
+            var found: [UUID: MessageRecord] = [:]
+            found.reserveCapacity(wanted.count)
+            for object in try context.fetch(request) {
+                let record = MessageRecord(managedObject: object)
+                found[record.id] = record
+            }
+            return found
         }
     }
 

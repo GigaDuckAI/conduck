@@ -7,6 +7,11 @@
 // syncs the brief and material metadata, while the database stores only an
 // opaque local leaf key for each payload. Another device never sees a fake
 // attachment and dispatch stays blocked until the user explicitly reattaches it.
+//
+// EVERY payload lands here, whatever its size: keeping even modest screenshots
+// and documents out of the shared Conversations model — which Watch also mirrors
+// for chat continuity — is a device-budget and privacy boundary, not a claimed
+// CloudKit limit.
 
 #if !os(watchOS)
 import Foundation
@@ -18,13 +23,6 @@ actor WorkAssetVault {
         let key: String
         let byteCount: Int64
     }
-
-    /// Workboard file bytes are intentionally device-local. A zero ceiling keeps
-    /// even modest screenshots/documents out of the shared Conversations model,
-    /// which is also mirrored by Watch for chat continuity. Brief metadata still
-    /// syncs; another device presents an honest reattach state. This is a device-
-    /// budget and privacy boundary, not a claimed CloudKit limit.
-    nonisolated static let mirroredPayloadCeilingBytes: Int64 = 0
 
     enum VaultError: Error, Equatable {
         case unsafeKey
@@ -205,6 +203,21 @@ actor WorkAssetVault {
         return url
     }
 
+    /// Resolve many leaves in a single hop. A board refresh needs a URL for every
+    /// image material at once; asking key by key would queue that wave behind
+    /// every other vault write for the whole pass. Missing and unsafe keys are
+    /// simply absent from the result.
+    func urls(for keys: [String]) -> [String: URL] {
+        var resolved: [String: URL] = [:]
+        resolved.reserveCapacity(keys.count)
+        for key in keys where resolved[key] == nil {
+            guard let url = try? resolvedURL(for: key),
+                  fileManager.fileExists(atPath: url.path) else { continue }
+            resolved[key] = url
+        }
+        return resolved
+    }
+
     /// Copy a vault object to a stable per-dispatch temporary URL. Vault
     /// replacement/removal is serialized by this actor, so either this returns
     /// the exact old bytes or fails before any network work can start.
@@ -224,6 +237,34 @@ actor WorkAssetVault {
             )
             #endif
             return destination
+        } catch {
+            try? fileManager.removeItem(at: destination)
+            throw VaultError.writeFailed
+        }
+    }
+
+    /// Duplicate one vault object under a fresh opaque key at the filesystem
+    /// level. Copying a card must never route a several-hundred-megabyte payload
+    /// through `Data`, and each card owning its own leaf is what lets deleting
+    /// one card reclaim its bytes without touching the other's.
+    func copy(key: String, id: UUID = UUID()) throws -> StoredFile {
+        let source = try resolvedURL(for: key)
+        guard fileManager.fileExists(atPath: source.path) else { throw VaultError.missing }
+        try scaffold()
+        let destinationKey = Self.makeKey(id: id, suggestedExtension: source.pathExtension)
+        let destination = try resolvedURL(for: destinationKey)
+        do {
+            try fileManager.copyItem(at: source, to: destination)
+            #if os(iOS)
+            try? fileManager.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: destination.path
+            )
+            #endif
+            let byteCount = ((try? fileManager.attributesOfItem(atPath: destination.path))?[.size]
+                as? NSNumber)?.int64Value ?? 0
+            stagedKeys.insert(destinationKey)
+            return StoredFile(key: destinationKey, byteCount: byteCount)
         } catch {
             try? fileManager.removeItem(at: destination)
             throw VaultError.writeFailed
@@ -268,13 +309,6 @@ actor WorkAssetVault {
             if (try? fileManager.removeItem(at: child)) != nil { removed += 1 }
         }
         return removed
-    }
-
-    nonisolated static func shouldMirror(byteCount: Int64) -> Bool {
-        // Zero is a valid empty file, while negative values mean the source did
-        // not report a size. Neither is evidence that it is safe to materialize
-        // the URL in memory; both must take the streaming local-vault lane.
-        byteCount > 0 && byteCount <= mirroredPayloadCeilingBytes
     }
 
     nonisolated static func makeKey(id: UUID, suggestedExtension: String?) -> String {

@@ -477,13 +477,24 @@ final class ShareViewController: UIViewController {
                 if let tmp = try? await self.workCaptureTmpDir(for: captureID) {
                     try? FileManager.default.removeItem(at: tmp)
                 }
+                // Deterministic refusals must not offer a Try Again that replays
+                // the identical failing path; only a transient filesystem fault
+                // can improve unchanged.
                 let failure: WorkboardCommitFailure
-                switch error as? ShareError {
-                case .captureTooLarge:
-                    failure = .tooLarge
-                case .emptyCapture:
-                    failure = .empty
-                default:
+                if let shareError = error as? ShareError {
+                    switch shareError {
+                    case .captureTooLarge:
+                        failure = .tooLarge
+                    case .emptyCapture:
+                        failure = .empty
+                    case .unsupportedItem:
+                        failure = .unsupportedItem
+                    case .appGroupUnavailable:
+                        failure = .unavailable
+                    }
+                } else if error is WorkCaptureEnvelope.PublicationValidationFailure {
+                    failure = .invalidContent
+                } else {
                     failure = .unavailable
                 }
                 await MainActor.run {
@@ -700,6 +711,14 @@ final class ShareViewController: UIViewController {
                 try fm.moveItem(at: oldURL, to: payloadURL)
             }
             let attributes = try fm.attributesOfItem(atPath: payloadURL.path)
+            // Only regular-file bytes are containable. A package document
+            // (`.rtfd`, `.pages`) arrives as a DIRECTORY, whose `.size` is the
+            // node's own tens of bytes rather than the tree's — publishing it
+            // would bypass both byte limits and hand the inbox an envelope it is
+            // required to destroy on claim.
+            guard (attributes[.type] as? FileAttributeType) == .typeRegular else {
+                throw ShareError.unsupportedItem
+            }
             let byteCount = (attributes[.size] as? NSNumber)?.int64Value ?? 0
             guard byteCount <= WorkCaptureEnvelope.maximumFileBytes else {
                 throw ShareError.captureTooLarge
@@ -717,9 +736,14 @@ final class ShareViewController: UIViewController {
                 kind: isWebPage ? .webPage : (isImage ? .image : .file),
                 sequence: nextSequence,
                 relativePath: relativePath,
-                displayName: WorkCaptureEnvelope.safeDisplayName(item.originalName),
-                mimeType: item.mimeType,
-                typeIdentifier: item.utTypeIdentifier,
+                // Names and types are source-app controlled. Sanitize them into
+                // publishable metadata (or nothing) rather than letting a foreign
+                // app's malformed string fail an otherwise valid capture.
+                displayName: WorkCaptureEnvelope.safeOpaqueMetadata(
+                    WorkCaptureEnvelope.safeDisplayName(item.originalName)
+                ),
+                mimeType: WorkCaptureEnvelope.safeOpaqueMetadata(item.mimeType),
+                typeIdentifier: WorkCaptureEnvelope.safeOpaqueMetadata(item.utTypeIdentifier),
                 byteCount: byteCount
             ))
             nextSequence += 1
@@ -1056,5 +1080,8 @@ final class ShareViewController: UIViewController {
         case appGroupUnavailable
         case captureTooLarge
         case emptyCapture
+        /// A shared item that is not a regular file (a folder or a package
+        /// document). The envelope contract carries file bytes only.
+        case unsupportedItem
     }
 }

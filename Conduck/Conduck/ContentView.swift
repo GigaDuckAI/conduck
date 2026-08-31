@@ -1611,7 +1611,7 @@ struct ContentView: View {
         } catch {
             if pending.metadata.resolvedDestination == .work {
                 presentRetryError(String(
-                    localized: "workboard.capture.retry.message",
+                    localized: "workboard.capture.retry.voice.message",
                     defaultValue: "Couldn't add this recording to Work. Try again."
                 ))
             } else {

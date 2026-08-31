@@ -21,6 +21,18 @@ final class ConduckWatchSmokeTests: XCTestCase {
         XCTAssertThrowsError(try WatchWorkboardCaptureText.prepare(" \n "))
     }
 
+    func testWorkboardCaptureRefusesAnOversizedThoughtInsteadOfTruncatingIt() throws {
+        let bound = WatchWorkboardCaptureText.maximumObjectiveCharacters
+        let atBound = try WatchWorkboardCaptureText.prepare(String(repeating: "a", count: bound))
+        XCTAssertEqual(atBound.objective.count, bound)
+
+        XCTAssertThrowsError(
+            try WatchWorkboardCaptureText.prepare(String(repeating: "a", count: bound + 1))
+        ) { error in
+            XCTAssertEqual(error as? WatchWorkboardCaptureError, .thoughtTooLong)
+        }
+    }
+
     func testWorkboardCapturePersistsOnlyAnInertBrief() async throws {
         let store = ConversationStore(inMemory: true)
         let capture = WatchWorkboardCapture(

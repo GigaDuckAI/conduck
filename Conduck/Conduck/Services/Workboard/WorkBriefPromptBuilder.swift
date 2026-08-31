@@ -51,6 +51,83 @@ nonisolated struct WorkBriefMaterialPacket: Equatable, Sendable {
     }
 }
 
+extension WorkBriefMaterialPacket {
+    /// The ONE mapping from a stored material to its canonical prompt row.
+    ///
+    /// Dispatch uses this initializer directly. Preview cannot: it composes from
+    /// a `WorkboardItemSnapshot`, so `WorkboardPromptComposer.compose` builds its
+    /// packet inline from snapshot fields — but those fields come from
+    /// `WorkboardLiveRepository.presentationKind` / `.materialName`, which
+    /// delegate to `packetKind` / `label` below. So both sides still resolve one
+    /// record through ONE kind decision and ONE naming decision, which is what
+    /// the send boundary requires: it refuses any brief whose final prompt
+    /// differs from the previewed one by a byte, so a second hand-written
+    /// mapping would turn a routine material into a permanent, unexplainable
+    /// refusal that reopening Review & Send cannot clear.
+    init(record: WorkMaterialRecord) {
+        let kind = Self.packetKind(for: record)
+        self.init(
+            id: record.id,
+            kind: kind,
+            label: Self.label(for: record, kind: kind),
+            // File extraction belongs to the attachment delivery lane, and the
+            // store already keeps a file/image extract out of the mirrored row.
+            // Whatever a row does carry was shown in the preview, so it must
+            // also be what the gateway receives.
+            text: record.textContent,
+            url: record.urlString,
+            mimeType: record.mimeType,
+            // Zero is a valid empty file, not a missing size. Printing
+            // "0 bytes" would describe the material with a fact the human
+            // never saw.
+            byteSize: record.byteSize > 0 ? record.byteSize : nil,
+            sequence: record.sequence
+        )
+    }
+
+    /// Not private: the presentation mapping calls it so the preview and the
+    /// dispatch cannot disagree about what a record IS.
+    static func packetKind(for record: WorkMaterialRecord) -> Kind {
+        switch record.kind {
+        case .image: return .image
+        case .file: return .file
+        case .link: return .link
+        case .note, .transcript: return .note
+        case .unknown: return record.filename != nil || record.hasPayload ? .file : .note
+        }
+    }
+
+    /// Title, then filename, then the link's host, then the kind's own noun.
+    /// Each candidate is judged on its trimmed form but emitted verbatim: the
+    /// serializer owns the final normalization.
+    ///
+    /// Not private, for the same reason as `packetKind`: the card's name and the
+    /// prompt row's label are the same decision, made once.
+    static func label(for record: WorkMaterialRecord, kind: Kind) -> String {
+        let candidates = [record.title, record.filename ?? ""]
+        if let value = candidates.first(where: {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) {
+            return value
+        }
+        if let value = record.urlString,
+           let host = URLComponents(string: value)?.host,
+           !host.isEmpty {
+            return host
+        }
+        switch kind {
+        case .image:
+            return String(localized: "workboard.material.image", defaultValue: "Image")
+        case .file:
+            return String(localized: "workboard.material.file", defaultValue: "File")
+        case .link:
+            return String(localized: "workboard.material.link", defaultValue: "Link")
+        case .note:
+            return String(localized: "workboard.material.note", defaultValue: "Note")
+        }
+    }
+}
+
 /// The exact human-approved text and ordered material manifest for one send.
 /// It is a value snapshot: editing the live work item can never mutate it.
 nonisolated struct WorkBriefPacket: Equatable, Sendable {

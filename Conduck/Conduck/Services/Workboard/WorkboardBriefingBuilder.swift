@@ -3,8 +3,10 @@
 // Conduck
 // WorkboardBriefingBuilder.swift
 //
-// Deterministic, private Workboard briefing facts. Visible rows and spoken text
-// are rendered from one value so voice can never invent a count or completion.
+// Deterministic, private Workboard briefing facts. The spoken sentence is
+// derived from one counted value, so voice can never invent a count or a
+// completion. The visible briefing renders the board's own item lists
+// (`WorkboardBriefingSnapshot`) and borrows this sentence verbatim.
 
 #if !os(watchOS)
 import Foundation
@@ -26,194 +28,74 @@ nonisolated struct WorkboardBriefingFacts: Equatable, Sendable {
     var isEmpty: Bool { needsAttention == 0 && waiting == 0 && drafts == 0 }
 }
 
-nonisolated struct WorkboardBriefing: Equatable, Sendable {
-    nonisolated struct Row: Equatable, Sendable, Identifiable {
-        nonisolated enum Kind: String, Sendable {
-            case replies
-            case failures
-            case waiting
-            case drafts
-        }
-
-        let kind: Kind
-        let count: Int
-        let title: String
-        let detail: String
-
-        var id: String { kind.rawValue }
+nonisolated enum WorkboardBriefingBuilder {
+    /// Spoken order. A kind whose count is zero drops out of the sentence
+    /// entirely rather than being read as "0".
+    private enum Kind: CaseIterable {
+        case replies
+        case failures
+        case waiting
+        case drafts
     }
 
-    let rows: [Row]
-    let spokenText: String
-}
-
-nonisolated enum WorkboardBriefingBuilder {
-    static func build(from facts: WorkboardBriefingFacts) -> WorkboardBriefing {
+    static func build(from facts: WorkboardBriefingFacts) -> String {
         if facts.isEmpty {
-            return WorkboardBriefing(
-                rows: [],
-                spokenText: String(
-                    localized: "workboard.briefing.clear",
-                    defaultValue: "Your Workboard is clear. There is nothing open right now."
-                )
+            return String(
+                localized: "workboard.briefing.clear",
+                defaultValue: "Your Workboard is clear. There is nothing open right now."
             )
         }
 
-        let rows = [
-            row(.replies, count: facts.repliesToReview),
-            row(.failures, count: facts.failuresToReview),
-            row(.waiting, count: facts.waiting),
-            row(.drafts, count: facts.drafts)
-        ].compactMap { $0 }
-
-        let phrases = rows.map { row in
-            switch row.kind {
-            case .replies:
-                return counted(
-                    row.count,
-                    singular: LocalizedStringResource(
-                        "workboard.briefing.spoken.reply.one",
-                        defaultValue: "%lld reply to review"
-                    ),
-                    plural: LocalizedStringResource(
-                        "workboard.briefing.spoken.reply.many",
-                        defaultValue: "%lld replies to review"
-                    )
-                )
-            case .failures:
-                return counted(
-                    row.count,
-                    singular: LocalizedStringResource(
-                        "workboard.briefing.spoken.failure.one",
-                        defaultValue: "%lld send needing attention"
-                    ),
-                    plural: LocalizedStringResource(
-                        "workboard.briefing.spoken.failure.many",
-                        defaultValue: "%lld sends needing attention"
-                    )
-                )
-            case .waiting:
-                return counted(
-                    row.count,
-                    singular: LocalizedStringResource(
-                        "workboard.briefing.spoken.waiting.one",
-                        defaultValue: "%lld request waiting for a reply"
-                    ),
-                    plural: LocalizedStringResource(
-                        "workboard.briefing.spoken.waiting.many",
-                        defaultValue: "%lld requests waiting for replies"
-                    )
-                )
-            case .drafts:
-                return counted(
-                    row.count,
-                    singular: LocalizedStringResource(
-                        "workboard.briefing.spoken.draft.one",
-                        defaultValue: "%lld prepared draft"
-                    ),
-                    plural: LocalizedStringResource(
-                        "workboard.briefing.spoken.draft.many",
-                        defaultValue: "%lld prepared drafts"
-                    )
-                )
-            }
+        let phrases = Kind.allCases.compactMap { kind in
+            phrase(kind, count: count(of: kind, in: facts))
         }
 
-        return WorkboardBriefing(
-            rows: rows,
-            spokenText: String.localizedStringWithFormat(
-                String(
-                    localized: "workboard.briefing.update.format",
-                    defaultValue: "Workboard update: %@."
-                ),
-                joinedForSpeech(phrases)
-            )
+        return String.localizedStringWithFormat(
+            String(
+                localized: "workboard.briefing.update.format",
+                defaultValue: "Workboard update: %@."
+            ),
+            joinedForSpeech(phrases)
         )
     }
 
-    private static func row(_ kind: WorkboardBriefing.Row.Kind, count: Int) -> WorkboardBriefing.Row? {
+    private static func count(of kind: Kind, in facts: WorkboardBriefingFacts) -> Int {
+        switch kind {
+        case .replies: return facts.repliesToReview
+        case .failures: return facts.failuresToReview
+        case .waiting: return facts.waiting
+        case .drafts: return facts.drafts
+        }
+    }
+
+    /// One key per phrase. The singular/plural choice belongs to the catalog's
+    /// plural variation, never to a count check here: languages with more than
+    /// two plural categories cannot be expressed by a two-way branch, so a
+    /// second locale would otherwise need code changes rather than translation.
+    private static func phrase(_ kind: Kind, count: Int) -> String? {
         guard count > 0 else { return nil }
         switch kind {
         case .replies:
-            return .init(
-                kind: kind,
-                count: count,
-                title: String(localized: "workboard.briefing.row.replies", defaultValue: "Replies to review"),
-                detail: counted(
-                    count,
-                    singular: LocalizedStringResource(
-                        "workboard.briefing.row.replies.detail.one",
-                        defaultValue: "%lld reply arrived"
-                    ),
-                    plural: LocalizedStringResource(
-                        "workboard.briefing.row.replies.detail.many",
-                        defaultValue: "%lld replies arrived"
-                    )
-                )
+            return String(
+                localized: "workboard.briefing.spoken.reply",
+                defaultValue: "\(count) replies to review"
             )
         case .failures:
-            return .init(
-                kind: kind,
-                count: count,
-                title: String(localized: "workboard.briefing.row.failures", defaultValue: "Needs attention"),
-                detail: counted(
-                    count,
-                    singular: LocalizedStringResource(
-                        "workboard.briefing.row.failures.detail.one",
-                        defaultValue: "%lld send needs attention"
-                    ),
-                    plural: LocalizedStringResource(
-                        "workboard.briefing.row.failures.detail.many",
-                        defaultValue: "%lld sends need attention"
-                    )
-                )
+            return String(
+                localized: "workboard.briefing.spoken.failure",
+                defaultValue: "\(count) sends needing attention"
             )
         case .waiting:
-            return .init(
-                kind: kind,
-                count: count,
-                title: String(localized: "workboard.briefing.row.waiting", defaultValue: "Waiting on AI"),
-                detail: counted(
-                    count,
-                    singular: LocalizedStringResource(
-                        "workboard.briefing.row.waiting.detail.one",
-                        defaultValue: "%lld request is waiting"
-                    ),
-                    plural: LocalizedStringResource(
-                        "workboard.briefing.row.waiting.detail.many",
-                        defaultValue: "%lld requests are waiting"
-                    )
-                )
+            return String(
+                localized: "workboard.briefing.spoken.waiting",
+                defaultValue: "\(count) requests waiting for replies"
             )
         case .drafts:
-            return .init(
-                kind: kind,
-                count: count,
-                title: String(localized: "workboard.briefing.row.drafts", defaultValue: "Prepared drafts"),
-                detail: counted(
-                    count,
-                    singular: LocalizedStringResource(
-                        "workboard.briefing.row.drafts.detail.one",
-                        defaultValue: "%lld draft is ready to shape"
-                    ),
-                    plural: LocalizedStringResource(
-                        "workboard.briefing.row.drafts.detail.many",
-                        defaultValue: "%lld drafts are ready to shape"
-                    )
-                )
+            return String(
+                localized: "workboard.briefing.spoken.draft",
+                defaultValue: "\(count) prepared drafts"
             )
         }
-    }
-
-    private static func counted(
-        _ count: Int,
-        singular: LocalizedStringResource,
-        plural: LocalizedStringResource
-    ) -> String {
-        String.localizedStringWithFormat(
-            String(localized: count == 1 ? singular : plural),
-            Int64(count)
-        )
     }
 
     private static func joinedForSpeech(_ phrases: [String]) -> String {

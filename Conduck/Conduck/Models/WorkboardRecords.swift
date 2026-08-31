@@ -179,6 +179,18 @@ nonisolated enum WorkDispatchReplyCorrelation {
 
 // MARK: - Work item
 
+/// Length bounds every brief write is held to. The fields below are plain
+/// String attributes on a CloudKit-mirrored row, and the Shortcuts/Siri lane can
+/// pipe a whole document into one of them unattended. A record past CloudKit's
+/// non-asset payload budget can never export, so the bound is refused at the
+/// write boundary instead of truncated. It is derived from the capture
+/// envelope's note bound so an ingress pre-check and the store agree exactly; a
+/// drift between them would either strand text at the store or let the intent
+/// reject what the store would accept.
+nonisolated enum WorkItemContentLimits {
+    static let maximumFieldCharacters = WorkCaptureEnvelope.maximumNoteCharacters
+}
+
 /// The editable fields of one brief. A full value (rather than a patch full of
 /// nested optionals) makes autosave call sites explicit about what they retain.
 nonisolated struct WorkItemContent: Sendable, Hashable, Codable {
@@ -264,6 +276,16 @@ nonisolated struct WorkItemRecord: Identifiable, Sendable, Hashable {
     var unacknowledgedFailureCount: Int {
         dispatches.filter { $0.stateFacts.needsReview && $0.activity.isFailure }.count
     }
+}
+
+/// Bounded id/title/date projection of one open card. Deliberately carries no
+/// material, run or availability fact: the cross-process share-targets snapshot
+/// is rebuilt on the app's hottest notification bus and must never pay for the
+/// whole board to publish a handful of picker rows.
+nonisolated struct WorkItemSummary: Identifiable, Sendable, Hashable {
+    let id: UUID
+    let title: String
+    let updatedAt: Date
 }
 
 /// One optimistic-concurrency fact for presentation-only board ordering. The
@@ -414,50 +436,9 @@ nonisolated struct WorkMaterialDraft: Sendable {
         self.height = height
         self.byteSize = byteSize
         self.sequence = sequence
-        self.storageMode = storageMode ?? (payload == nil ? .metadataOnly : .syncedPayload)
+        self.storageMode = storageMode ?? (payload == nil ? .metadataOnly : .localVault)
         self.sourceDevice = sourceDevice
         self.createdAt = createdAt
-    }
-}
-
-/// Metadata edit that cannot accidentally clear or duplicate a large payload.
-nonisolated struct WorkMaterialEdit: Sendable, Hashable {
-    var kind: WorkMaterialKind
-    var title: String
-    var caption: String
-    var textContent: String?
-    var urlString: String?
-    var filename: String?
-    var mimeType: String?
-    var thumbnailData: Data?
-    var width: Int?
-    var height: Int?
-    var sequence: Int
-
-    init(
-        kind: WorkMaterialKind,
-        title: String = "",
-        caption: String = "",
-        textContent: String? = nil,
-        urlString: String? = nil,
-        filename: String? = nil,
-        mimeType: String? = nil,
-        thumbnailData: Data? = nil,
-        width: Int? = nil,
-        height: Int? = nil,
-        sequence: Int = 0
-    ) {
-        self.kind = kind
-        self.title = title
-        self.caption = caption
-        self.textContent = textContent
-        self.urlString = urlString
-        self.filename = filename
-        self.mimeType = mimeType
-        self.thumbnailData = thumbnailData
-        self.width = width
-        self.height = height
-        self.sequence = sequence
     }
 }
 
@@ -620,7 +601,9 @@ nonisolated struct WorkDispatchRecord: Identifiable, Sendable, Hashable {
 }
 
 /// Inputs to the final, atomic prepare-for-transport boundary. IDs are owned by
-/// the caller so retrying this method is idempotent and returns `created == false`.
+/// the caller, and a dispatch id that already exists is refused with
+/// `identifierCollision` so a replayed preparation can never start a second
+/// network attempt.
 nonisolated struct WorkDispatchPreparation: Sendable {
     let dispatchID: UUID
     let workItemID: UUID
@@ -678,11 +661,12 @@ nonisolated struct WorkDispatchPreparation: Sendable {
     }
 }
 
-/// What transport integration receives. `created == false` is the idempotency
-/// signal: the exact rows already existed, so this call must not start a second
-/// network attempt merely because the prepare boundary was retried.
+/// What transport integration receives. Reaching this value means the rows are
+/// newly committed and the run is already stamped as dispatched: the initial
+/// turn is persisted `failed` for the retry pipeline's single network attempt,
+/// so an interrupted hand-off surfaces as a reviewable run rather than a
+/// silently stranded one.
 nonisolated struct PreparedWorkDispatch: Sendable {
-    let created: Bool
     let workItem: WorkItemRecord
     let dispatch: WorkDispatchRecord
     let conversation: ConversationRecord
@@ -692,10 +676,41 @@ nonisolated struct PreparedWorkDispatch: Sendable {
 nonisolated enum WorkboardStoreError: Error, Sendable, Equatable {
     case itemNotFound
     case staleRevision
+    case contentTooLong
     case materialNotFound
     case materialPayloadUnavailable
     case dispatchNotFound
     case invalidMaterialOwner
     case identifierCollision
     case snapshotEncodingFailed
+}
+
+/// Only the cases a PERSON can cause and can act on carry copy. Two app
+/// surfaces render `error.localizedDescription` verbatim — the chat's "Add to
+/// Work" notice and the editor's autosave alert — and without this the bridged
+/// NSError fallback ("The operation couldn't be completed…") is what they show.
+/// The rest stay nil on purpose: an internal invariant failure has no user
+/// action, and inventing copy for one would dress a bug up as a decision.
+extension WorkboardStoreError: LocalizedError {
+    nonisolated var errorDescription: String? {
+        switch self {
+        case .contentTooLong:
+            // Grouped by the reader's own locale ("16,000"), not by `%lld`,
+            // which would print a bare 16000 the person has to count.
+            let limit = WorkItemContentLimits.maximumFieldCharacters.formatted(.number)
+            return String(
+                localized: "workboard.error.contentTooLong",
+                defaultValue: "That brief is longer than \(limit) characters. Shorten it, then try again."
+            )
+        case .itemNotFound,
+             .staleRevision,
+             .materialNotFound,
+             .materialPayloadUnavailable,
+             .dispatchNotFound,
+             .invalidMaterialOwner,
+             .identifierCollision,
+             .snapshotEncodingFailed:
+            return nil
+        }
+    }
 }

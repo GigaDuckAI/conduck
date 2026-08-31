@@ -166,27 +166,19 @@ struct WorkboardDispatchSheet: View {
                     .frame(width: 34, height: 34)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 7) {
-                        Text(verbatim: gateway.name)
-                            .font(.headline)
-                            .foregroundStyle(AppColors.textPrimary)
-                        if gateway.isRecommended {
-                            Text(LocalizedStringResource(
-                                "workboard.preflight.gateway.recommended",
-                                defaultValue: "Recommended"
-                            ))
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(AppColors.brandAmber)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(AppColors.brandAmber.opacity(0.11), in: Capsule())
-                        }
-                    }
+                    Text(verbatim: gateway.name)
+                        .font(.headline)
+                        .foregroundStyle(AppColors.textPrimary)
                     Text(verbatim: gateway.detail)
                         .font(.caption)
                         .foregroundStyle(AppColors.textTertiary)
                         .multilineTextAlignment(.leading)
-                    gatewayAvailability(gateway.availability)
+                    Label {
+                        Text(verbatim: gateway.configurationStatus)
+                    } icon: {
+                        Image(systemName: "checkmark.circle")
+                    }
+                    .foregroundStyle(AppColors.brandTeal)
                 }
 
                 Spacer(minLength: 10)
@@ -209,42 +201,9 @@ struct WorkboardDispatchSheet: View {
             .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         }
         .choiceCardButton(cornerRadius: 13)
-        .disabled(!gateway.availability.isUsable || viewModel.isDispatching)
+        .disabled(viewModel.isDispatching)
         .accessibilityLabel(gatewayAccessibilityLabel(gateway, selected: isSelected))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    @ViewBuilder
-    private func gatewayAvailability(_ availability: WorkboardGatewayAvailability) -> some View {
-        switch availability {
-        case .ready:
-            Label(
-                LocalizedStringResource("workboard.preflight.gateway.ready", defaultValue: "Ready"),
-                systemImage: "checkmark.circle.fill"
-            )
-            .foregroundStyle(AppColors.success)
-        case .configured(let message):
-            Label {
-                Text(verbatim: message)
-            } icon: {
-                Image(systemName: "checkmark.circle")
-            }
-            .foregroundStyle(AppColors.brandTeal)
-        case .limited(let message):
-            Label {
-                Text(verbatim: message)
-            } icon: {
-                Image(systemName: "exclamationmark.triangle.fill")
-            }
-            .foregroundStyle(AppColors.warning)
-        case .unavailable(let message):
-            Label {
-                Text(verbatim: message)
-            } icon: {
-                Image(systemName: "xmark.circle.fill")
-            }
-            .foregroundStyle(AppColors.error)
-        }
     }
 
     private func materialsSection(_ item: WorkboardItemSnapshot) -> some View {
@@ -280,8 +239,10 @@ struct WorkboardDispatchSheet: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(AppColors.cardBackgroundElevated)
-                    Image(systemName: material.kind.systemImage)
-                        .foregroundStyle(supported ? AppColors.brandAmber : AppColors.textTertiary)
+                    Image(systemName: WorkboardMaterialIcon.symbol(for: material))
+                        .foregroundStyle(supported
+                            ? WorkboardMaterialIcon.tint(for: material)
+                            : AppColors.textTertiary)
                 }
                 .frame(width: 44, height: 44)
                 .accessibilityHidden(true)
@@ -348,7 +309,7 @@ struct WorkboardDispatchSheet: View {
             let includedImages = item.materials.filter {
                 $0.kind == .image && viewModel.isMaterialIncluded($0)
             }
-            if !unsupported.isEmpty || !unavailable.isEmpty || !includedImages.isEmpty || gatewayIsLimited(gateway) {
+            if !unsupported.isEmpty || !unavailable.isEmpty || !includedImages.isEmpty {
                 WorkboardSurface {
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -400,11 +361,6 @@ struct WorkboardDispatchSheet: View {
                                 ))
                                 .font(.subheadline)
                                 .foregroundStyle(AppColors.textSecondary)
-                            }
-                            if case .limited(let message) = gateway.availability {
-                                Text(verbatim: message)
-                                    .font(.subheadline)
-                                    .foregroundStyle(AppColors.textSecondary)
                             }
                         }
                     }
@@ -470,12 +426,12 @@ struct WorkboardDispatchSheet: View {
                     Label {
                         Text(LocalizedStringResource(
                             "workboard.preflight.promise.reviewBy",
-                            defaultValue: "Review reminder"
+                            defaultValue: "Review by"
                         ))
                         Text(verbatim: ": ")
                         Text(reviewBy, format: .dateTime.weekday(.wide).month(.wide).day().hour().minute())
                     } icon: {
-                        Image(systemName: "bell.fill")
+                        Image(systemName: "calendar")
                             .foregroundStyle(AppColors.brandAmber)
                     }
                     .font(.subheadline)
@@ -588,25 +544,10 @@ struct WorkboardDispatchSheet: View {
         }
     }
 
-    private func gatewayIsLimited(_ gateway: WorkboardGatewayChoice) -> Bool {
-        if case .limited = gateway.availability { return true }
-        return false
-    }
-
     private func gatewayAccessibilityLabel(_ gateway: WorkboardGatewayChoice, selected: Bool) -> Text {
         let selection = selected
             ? String(localized: LocalizedStringResource("workboard.preflight.gateway.selected", defaultValue: "Selected"))
             : String(localized: LocalizedStringResource("workboard.preflight.gateway.notSelected", defaultValue: "Not selected"))
-        let availability: String
-        switch gateway.availability {
-        case .ready:
-            availability = String(localized: LocalizedStringResource(
-                "workboard.preflight.gateway.ready",
-                defaultValue: "Ready"
-            ))
-        case .configured(let message), .limited(let message), .unavailable(let message):
-            availability = message
-        }
         let format = String(localized: LocalizedStringResource(
             "workboard.preflight.gateway.accessibility",
             defaultValue: "%1$@. %2$@. %3$@. %4$@"
@@ -615,7 +556,7 @@ struct WorkboardDispatchSheet: View {
             format,
             gateway.name,
             gateway.detail,
-            availability,
+            gateway.configurationStatus,
             selection
         ))
     }

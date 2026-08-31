@@ -81,10 +81,13 @@
 
 import SwiftUI
 
-// MARK: - Geometry
+// MARK: - Shared pointer contract
 
-/// Shared geometry for macOS pointer targets. One home for the numbers so a
-/// tweak lands everywhere at once instead of drifting per screen.
+/// Geometry and hover/press feedback for pointer targets. One home for the
+/// numbers so a tweak lands everywhere at once instead of drifting per screen.
+/// It sits above this file's `#if os(macOS)` fence because controls compiled on
+/// every platform — the Work / Chats section control, `pointerIconButton`'s
+/// defaulted shape — read from it too.
 enum MacPointer {
     /// Minimum live square for an icon-only control. Apple's pointer guidance
     /// puts the floor at 28pt; a bare SF Symbol glyph is roughly 13pt, which is
@@ -116,6 +119,39 @@ enum MacPointer {
     /// strobe when the pointer sweeps down a list.
     static let highlightAnimation: Animation = .easeOut(duration: 0.12)
 
+    /// How far a disabled control is dimmed.
+    ///
+    /// MEASURED: SwiftUI's built-in `.plain` renders a disabled label at roughly
+    /// half strength (peak label luminance 0.912 enabled → 0.488 disabled on this
+    /// palette). A CUSTOM `ButtonStyle` gets no such treatment for free — it renders
+    /// a disabled label identically to an enabled one. Since every style in this
+    /// file REPLACED `.plain` at its call sites, each one owes that dimming back,
+    /// or a `.disabled(...)` row looks fully live and silently swallows clicks.
+    /// The repo's own `MacDiagnosticsActionButtonStyle` reached the same 0.5.
+    static let disabledOpacity: Double = 0.5
+
+    /// The wash painted OVER a hovered or pressed control. Returns `.clear` when
+    /// the control is disabled — a highlight on something inert is a lie about what
+    /// a click would do.
+    ///
+    /// It is an overlay, not a background, and that is load-bearing: most of this
+    /// app's cards, chips and CTAs paint their OWN opaque fill inside the button's
+    /// label (`AppColors.cardBackground`, `cardBackgroundElevated`,
+    /// `backgroundSecondary` and the accent pills all have no alpha). A wash behind
+    /// such a label is completely hidden, so a background-based highlight silently
+    /// does nothing on exactly the controls that most look like buttons. Over the
+    /// top, the same 7% warm tint lightens an opaque fill and a transparent row
+    /// alike. It never intercepts clicks — see `.allowsHitTesting(false)`.
+    ///
+    /// Declared here rather than behind the `#if os(macOS)` fence below: the
+    /// Work / Chats section control is compiled on every platform and paints the
+    /// same wash, and a second copy of these constants is how the two drift.
+    static func highlightFill(hovering: Bool, pressed: Bool, enabled: Bool) -> Color {
+        guard enabled else { return .clear }
+        if pressed { return AppColors.pointerPressedFill }
+        return hovering ? AppColors.pointerHoverFill : .clear
+    }
+
     /// Outline of a compact control's hover wash. Match the control's OWN drawn
     /// shape: a rounded-square wash behind a circular chrome button tints only
     /// the corner slivers outside the circle, which reads as a rendering bug.
@@ -128,39 +164,6 @@ enum MacPointer {
 }
 
 #if os(macOS)
-
-// MARK: - Disabled appearance
-
-/// How far a disabled control is dimmed.
-///
-/// MEASURED: SwiftUI's built-in `.plain` renders a disabled label at roughly
-/// half strength (peak label luminance 0.912 enabled → 0.488 disabled on this
-/// palette). A CUSTOM `ButtonStyle` gets no such treatment for free — it renders
-/// a disabled label identically to an enabled one. Since every style here
-/// REPLACED `.plain` at its call sites, each one owes that dimming back, or a
-/// `.disabled(...)` row looks fully live and silently swallows clicks. The
-/// repo's own `MacDiagnosticsActionButtonStyle` reached the same 0.5.
-private let pointerDisabledOpacity: Double = 0.5
-
-// MARK: - Shared highlight
-
-/// The wash painted OVER a hovered or pressed control. Returns `.clear` when
-/// the control is disabled — a highlight on something inert is a lie about what
-/// a click would do.
-///
-/// It is an overlay, not a background, and that is load-bearing: most of this
-/// app's cards, chips and CTAs paint their OWN opaque fill inside the button's
-/// label (`AppColors.cardBackground`, `cardBackgroundElevated`,
-/// `backgroundSecondary` and the accent pills all have no alpha). A wash behind
-/// such a label is completely hidden, so a background-based highlight silently
-/// does nothing on exactly the controls that most look like buttons. Over the
-/// top, the same 7% warm tint lightens an opaque fill and a transparent row
-/// alike. It never intercepts clicks — see `.allowsHitTesting(false)`.
-private func pointerHighlightFill(hovering: Bool, pressed: Bool, enabled: Bool) -> Color {
-    guard enabled else { return .clear }
-    if pressed { return AppColors.pointerPressedFill }
-    return hovering ? AppColors.pointerHoverFill : .clear
-}
 
 // MARK: - Settings row
 
@@ -225,7 +228,7 @@ struct SettingsRowButtonStyle: ButtonStyle {
                 .frame(maxWidth: .infinity, minHeight: minHeight, alignment: alignment)
                 .overlay {
                     RoundedRectangle(cornerRadius: washCornerRadius, style: .continuous)
-                        .fill(pointerHighlightFill(
+                        .fill(MacPointer.highlightFill(
                             hovering: hovering,
                             pressed: configuration.isPressed,
                             enabled: isEnabled
@@ -237,7 +240,7 @@ struct SettingsRowButtonStyle: ButtonStyle {
                 .contentShape(Rectangle())
                 .onHover { hovering = $0 }
                 // Restores the dimming `.plain` gave these call sites for free.
-                .opacity(isEnabled ? 1 : pointerDisabledOpacity)
+                .opacity(isEnabled ? 1 : MacPointer.disabledOpacity)
                 .animation(MacPointer.highlightAnimation, value: hovering)
                 .animation(MacPointer.highlightAnimation, value: configuration.isPressed)
         }
@@ -285,7 +288,7 @@ struct PointerIconButtonStyle: ButtonStyle {
                 .frame(minWidth: size, minHeight: size)
                 .overlay {
                     washShape
-                        .fill(pointerHighlightFill(
+                        .fill(MacPointer.highlightFill(
                             hovering: hovering,
                             pressed: configuration.isPressed,
                             enabled: isEnabled
@@ -295,7 +298,7 @@ struct PointerIconButtonStyle: ButtonStyle {
                 .contentShape(Rectangle())
                 .onHover { hovering = $0 }
                 // Restores the dimming `.plain` gave these call sites for free.
-                .opacity(isEnabled ? 1 : pointerDisabledOpacity)
+                .opacity(isEnabled ? 1 : MacPointer.disabledOpacity)
                 .animation(MacPointer.highlightAnimation, value: hovering)
                 .animation(MacPointer.highlightAnimation, value: configuration.isPressed)
         }
@@ -337,7 +340,7 @@ struct PointerIconButtonStyle: ButtonStyle {
 ///
 /// Disabled drops the fill AND the stroke, not just the opacity: chrome that
 /// still looks like a container is a lie about what a click would do, the same
-/// reasoning behind `pointerHighlightFill`'s `guard enabled`.
+/// reasoning behind `MacPointer.highlightFill`'s `guard enabled`.
 ///
 /// A rounded square, deliberately not a circle or capsule — this is header
 /// chrome docked to a corner, not a floating control. Arrow cursor, per the
@@ -389,7 +392,7 @@ struct PointerChromeButtonStyle: ButtonStyle {
                         // Above the resting fill and still behind the label:
                         // the fill is opaque, so a wash painted under it would
                         // never be visible.
-                        shape.fill(pointerHighlightFill(
+                        shape.fill(MacPointer.highlightFill(
                             hovering: hovering,
                             pressed: configuration.isPressed,
                             enabled: isEnabled
@@ -409,7 +412,7 @@ struct PointerChromeButtonStyle: ButtonStyle {
                 // must not hand back live area they already have.
                 .contentShape(Rectangle())
                 .onHover { hovering = $0 }
-                .opacity(isEnabled ? 1 : pointerDisabledOpacity)
+                .opacity(isEnabled ? 1 : MacPointer.disabledOpacity)
                 .animation(MacPointer.highlightAnimation, value: hovering)
                 .animation(MacPointer.highlightAnimation, value: configuration.isPressed)
         }
@@ -452,8 +455,8 @@ struct InlineLinkButtonStyle: ButtonStyle {
 
         private var opacity: Double {
             // Disabled dims rather than staying full-strength — see
-            // `pointerDisabledOpacity`.
-            guard isEnabled else { return pointerDisabledOpacity }
+            // `MacPointer.disabledOpacity`.
+            guard isEnabled else { return MacPointer.disabledOpacity }
             if configuration.isPressed { return 0.6 }
             return hovering ? 0.78 : 1
         }
@@ -487,7 +490,7 @@ struct PrimaryCTAButtonStyle: ButtonStyle {
                 .brightness(brightness)
                 .onHover { hovering = $0 }
                 // Restores the dimming `.plain` gave these call sites for free.
-                .opacity(isEnabled ? 1 : pointerDisabledOpacity)
+                .opacity(isEnabled ? 1 : MacPointer.disabledOpacity)
                 .animation(MacPointer.highlightAnimation, value: hovering)
                 .animation(MacPointer.highlightAnimation, value: configuration.isPressed)
         }
@@ -525,7 +528,7 @@ struct ChoiceCardButtonStyle: ButtonStyle {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .overlay {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(pointerHighlightFill(
+                        .fill(MacPointer.highlightFill(
                             hovering: hovering,
                             pressed: configuration.isPressed,
                             enabled: isEnabled
@@ -535,7 +538,7 @@ struct ChoiceCardButtonStyle: ButtonStyle {
                 .contentShape(Rectangle())
                 .onHover { hovering = $0 }
                 // Restores the dimming `.plain` gave these call sites for free.
-                .opacity(isEnabled ? 1 : pointerDisabledOpacity)
+                .opacity(isEnabled ? 1 : MacPointer.disabledOpacity)
                 .animation(MacPointer.highlightAnimation, value: hovering)
                 .animation(MacPointer.highlightAnimation, value: configuration.isPressed)
         }
@@ -969,7 +972,7 @@ private struct SettingsRowLink: ViewModifier {
             .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .leading)
             .overlay {
                 RoundedRectangle(cornerRadius: washCornerRadius, style: .continuous)
-                    .fill(pointerHighlightFill(hovering: hovering, pressed: false, enabled: isEnabled))
+                    .fill(MacPointer.highlightFill(hovering: hovering, pressed: false, enabled: isEnabled))
                     .allowsHitTesting(false)
             }
             .contentShape(Rectangle())
@@ -979,7 +982,7 @@ private struct SettingsRowLink: ViewModifier {
             // only this — see `settingsCardRowControl`.
             .modifier(RowActionTap(action: action))
             .onHover { hovering = $0 }
-            .opacity(isEnabled ? 1 : pointerDisabledOpacity)
+            .opacity(isEnabled ? 1 : MacPointer.disabledOpacity)
             .animation(MacPointer.highlightAnimation, value: hovering)
     }
 }
@@ -1033,7 +1036,7 @@ private struct PointerHoverWash: ViewModifier {
         content
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(pointerHighlightFill(hovering: hovering, pressed: false, enabled: isEnabled))
+                    .fill(MacPointer.highlightFill(hovering: hovering, pressed: false, enabled: isEnabled))
                     .allowsHitTesting(false)
             }
             .contentShape(Rectangle())

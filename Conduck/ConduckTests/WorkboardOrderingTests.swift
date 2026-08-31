@@ -180,7 +180,7 @@ final class WorkboardOrderingTests: XCTestCase {
 
     private func item(
         title: String,
-        state: WorkboardItemState,
+        state: WorkItemState,
         boardOrder: Int64?,
         isPinned: Bool = false
     ) -> WorkboardItemSnapshot {

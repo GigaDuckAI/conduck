@@ -336,8 +336,12 @@ struct WorkboardDetailView: View {
                 Divider().overlay(AppColors.borderSubtle)
 
                 if let markdown = run.resultMarkdown, !markdown.isEmpty {
+                    // `.equatable()` is what makes the conformance load-bearing:
+                    // an unrelated detail-body invalidation then cannot re-parse
+                    // the reply or re-touch Textual's selection layer mid-drag.
+                    // Mirrors Chat's `AgentMarkdownBody`.
                     WorkboardMarkdownBody(text: markdown)
-                        .textual.textSelection(.enabled)
+                        .equatable()
                 } else if let failure = run.failureMessage, !failure.isEmpty {
                     Text(verbatim: failure)
                         .font(.body)
@@ -370,7 +374,15 @@ struct WorkboardDetailView: View {
                                 )
                             } label: {
                                 HStack(spacing: 10) {
-                                    Image(systemName: attachment.isImage ? "photo" : "doc.fill")
+                                    // `AttachmentChipStyle` maps text and code
+                                    // types only, so an image routed through it
+                                    // would come back as a document.
+                                    Image(systemName: attachment.isImage
+                                        ? "photo"
+                                        : AttachmentChipStyle.symbol(
+                                            forMimeType: attachment.mimeType,
+                                            filename: attachment.filename
+                                        ))
                                         .foregroundStyle(AppColors.brandTeal)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(verbatim: attachment.filename ?? String(
@@ -534,10 +546,12 @@ struct WorkboardDetailView: View {
         }
     }
 
+    /// Reads the coarse per-project flag rather than the composer text itself:
+    /// this runs in the detail body, and observing the draft dictionary would
+    /// re-parse the result markdown and rebuild the run timeline on every
+    /// keystroke in the pinned composer.
     private func canReviewAndSend(_ item: WorkboardItemSnapshot) -> Bool {
-        item.isReadyToSend || !WorkboardWorkspaceCaptureLogic.normalizedThought(
-            viewModel.workspaceComposerDraft(for: item.id)
-        ).isEmpty
+        item.isReadyToSend || viewModel.hasComposerDraft(for: item.id)
     }
 
     private func detailAction(
@@ -608,15 +622,15 @@ struct WorkboardDetailView: View {
                         Divider().overlay(AppColors.borderSubtle)
                         VStack(alignment: .leading, spacing: 6) {
                             Text(LocalizedStringResource(
-                                "workboard.editor.reviewBy.title",
-                                defaultValue: "Remind me to review"
+                                "workboard.editor.reviewBy.date",
+                                defaultValue: "Review by"
                             ))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.brandAmber)
                             Label {
                                 Text(reviewBy, format: .dateTime.weekday(.wide).month(.wide).day().hour().minute())
                             } icon: {
-                                Image(systemName: "bell.fill")
+                                Image(systemName: "calendar")
                             }
                             .font(.body)
                             .foregroundStyle(reviewBy < Date() && item.state != .done ? AppColors.error : AppColors.textPrimary)
@@ -692,7 +706,7 @@ struct WorkboardDetailView: View {
         state == .failed || state == .cancelled ? AppColors.error : AppColors.brandTeal
     }
 
-    private func actionHeading(_ state: WorkboardItemState) -> LocalizedStringResource {
+    private func actionHeading(_ state: WorkItemState) -> LocalizedStringResource {
         switch state {
         case .draft:
             return LocalizedStringResource("workboard.detail.action.draft", defaultValue: "Ready when you are")
@@ -803,6 +817,7 @@ private struct WorkboardMarkdownBody: View, Equatable {
         StructuredText(markdown: text)
             .foregroundStyle(AppColors.textPrimary)
             .appliesUntrustedMarkdownPolicy()
+            .textual.textSelection(.enabled)
     }
 }
 

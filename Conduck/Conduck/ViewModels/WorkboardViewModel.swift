@@ -16,45 +16,6 @@ import SwiftUI
 
 // MARK: - Presentation snapshots
 
-enum WorkboardItemState: String, CaseIterable, Codable, Hashable, Sendable {
-    case draft
-    case waiting
-    case review
-    case done
-
-    var title: LocalizedStringResource {
-        switch self {
-        case .draft:
-            return LocalizedStringResource("workboard.state.draft", defaultValue: "Draft")
-        case .waiting:
-            return LocalizedStringResource("workboard.state.waiting", defaultValue: "Waiting")
-        case .review:
-            return LocalizedStringResource("workboard.state.review", defaultValue: "Review")
-        case .done:
-            return LocalizedStringResource("workboard.state.done", defaultValue: "Done")
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .draft: return "square.and.pencil"
-        case .waiting: return "hourglass"
-        case .review: return "sparkle.magnifyingglass"
-        case .done: return "checkmark.circle.fill"
-        }
-    }
-
-    /// Human-attention order, independent from persistence ordering.
-    nonisolated var attentionRank: Int {
-        switch self {
-        case .review: return 0
-        case .waiting: return 1
-        case .draft: return 2
-        case .done: return 3
-        }
-    }
-}
-
 enum WorkboardMaterialKind: String, CaseIterable, Codable, Hashable, Sendable {
     case image
     case file
@@ -235,7 +196,7 @@ struct WorkboardItemSnapshot: Identifiable, Hashable, Sendable {
     var desiredResult: String
     var constraints: String
     var reviewBy: Date?
-    var state: WorkboardItemState
+    var state: WorkItemState
     var materials: [WorkboardMaterialSnapshot]
     var runs: [WorkboardRunSnapshot]
     var isPinned: Bool
@@ -247,6 +208,13 @@ struct WorkboardItemSnapshot: Identifiable, Hashable, Sendable {
     var revision: Int64
     var lastSentRevision: Int64?
     var wasCapturedExternally: Bool
+    /// Haystack for the sidebar search field, joined once here rather than per
+    /// filter pass: every keystroke re-derives the visible board, and the joined
+    /// text includes each run's full prompt and reply. Stored verbatim — the
+    /// matcher folds case, diacritics and width on BOTH operands, so a stored
+    /// lowercase copy would buy nothing and cost a second allocation of the
+    /// board's entire text.
+    let searchCorpus: String
 
     init(
         id: UUID = UUID(),
@@ -256,7 +224,7 @@ struct WorkboardItemSnapshot: Identifiable, Hashable, Sendable {
         desiredResult: String = "",
         constraints: String = "",
         reviewBy: Date? = nil,
-        state: WorkboardItemState = .draft,
+        state: WorkItemState = .draft,
         materials: [WorkboardMaterialSnapshot] = [],
         runs: [WorkboardRunSnapshot] = [],
         isPinned: Bool = false,
@@ -284,6 +252,14 @@ struct WorkboardItemSnapshot: Identifiable, Hashable, Sendable {
         self.revision = revision
         self.lastSentRevision = lastSentRevision
         self.wasCapturedExternally = wasCapturedExternally
+        let materialText = materials.flatMap { [$0.name, $0.detail ?? "", $0.textContent ?? ""] }
+        let runText = runs.flatMap {
+            [$0.gatewayName, $0.resultMarkdown ?? "", $0.failureMessage ?? "", $0.sentPrompt]
+        }
+        self.searchCorpus = ([title, objective, context, desiredResult, constraints]
+            + materialText
+            + runText)
+            .joined(separator: "\n")
     }
 
     var displayTitle: String {
@@ -360,6 +336,9 @@ struct WorkboardEditDraft: Hashable, Sendable {
             || !desiredResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !constraints.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !materials.isEmpty
+            // A set review-by date is deliberate input: without this, a
+            // date-only new draft blocks swipe-dismiss yet saves nothing.
+            || reviewBy != nil
     }
 
     var isReadyToSend: Bool {
@@ -391,41 +370,29 @@ enum WorkboardGatewayCapability: String, Hashable, Sendable {
     case files
 }
 
-enum WorkboardGatewayAvailability: Hashable, Sendable {
-    case ready
-    case configured(String)
-    case limited(String)
-    case unavailable(String)
-
-    var isUsable: Bool {
-        if case .unavailable = self { return false }
-        return true
-    }
-}
-
 struct WorkboardGatewayChoice: Identifiable, Hashable, Sendable {
     var id: String { ref.rawString }
     var ref: RemoteAgentRef
     var name: String
     var detail: String
     var capabilities: Set<WorkboardGatewayCapability>
-    var availability: WorkboardGatewayAvailability
-    var isRecommended: Bool
+    /// A gateway reaches the roster only once it is configured on this device,
+    /// so this is a plain status line, never a reachability verdict: the send
+    /// itself is the only thing that proves the endpoint answers.
+    var configurationStatus: String
 
     init(
         ref: RemoteAgentRef,
         name: String,
         detail: String,
         capabilities: Set<WorkboardGatewayCapability> = [.text],
-        availability: WorkboardGatewayAvailability = .ready,
-        isRecommended: Bool = false
+        configurationStatus: String = ""
     ) {
         self.ref = ref
         self.name = name
         self.detail = detail
         self.capabilities = capabilities.union([.text])
-        self.availability = availability
-        self.isRecommended = isRecommended
+        self.configurationStatus = configurationStatus
     }
 
     func supports(_ material: WorkboardMaterialSnapshot) -> Bool {
@@ -679,12 +646,24 @@ enum WorkboardPresentationLogic {
         let needle = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return items
             .filter(filter.includes)
-            .filter { needle.isEmpty || searchCorpus(for: $0).localizedStandardContains(needle) }
+            .filter { matches($0, needle: needle) }
             .sorted(by: attentionSort)
     }
 
+    /// Answers the emptiness question without materializing or sorting the board.
+    /// The overview asks it on every pass purely to choose between the canvas and
+    /// the empty state, and the corpus scan is the expensive half.
+    nonisolated static func hasVisibleItems(
+        _ items: [WorkboardItemSnapshot],
+        filter: WorkboardFilter,
+        searchText: String
+    ) -> Bool {
+        let needle = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return items.contains { filter.includes($0) && matches($0, needle: needle) }
+    }
+
     nonisolated static func items(
-        in state: WorkboardItemState,
+        in state: WorkItemState,
         from items: [WorkboardItemSnapshot]
     ) -> [WorkboardItemSnapshot] {
         items.filter { $0.state == state }.sorted(by: attentionSort)
@@ -701,8 +680,16 @@ enum WorkboardPresentationLogic {
         let needle = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return items
             .filter(filter.includes)
-            .filter { needle.isEmpty || searchCorpus(for: $0).localizedStandardContains(needle) }
+            .filter { matches($0, needle: needle) }
             .sorted(by: projectStripSort)
+    }
+
+    /// `searchCorpus` is joined once, at snapshot time, so a keystroke never
+    /// re-derives it. `localizedStandardContains` folds case, diacritics and
+    /// width on both sides in the reader's own locale, so the haystack is stored
+    /// exactly as written.
+    nonisolated static func matches(_ item: WorkboardItemSnapshot, needle: String) -> Bool {
+        needle.isEmpty || item.searchCorpus.localizedStandardContains(needle)
     }
 
     nonisolated static func projectStripSort(
@@ -745,15 +732,6 @@ enum WorkboardPresentationLogic {
         return lhs.id.uuidString < rhs.id.uuidString
     }
 
-    nonisolated static func searchCorpus(for item: WorkboardItemSnapshot) -> String {
-        let materials = item.materials.flatMap { [$0.name, $0.detail ?? "", $0.textContent ?? ""] }
-        let runs = item.runs.flatMap {
-            [$0.gatewayName, $0.resultMarkdown ?? "", $0.failureMessage ?? "", $0.sentPrompt]
-        }
-        return ([item.title, item.objective, item.context, item.desiredResult, item.constraints] + materials + runs)
-            .joined(separator: "\n")
-    }
-
     nonisolated static func briefing(from items: [WorkboardItemSnapshot], now: Date = Date()) -> WorkboardBriefingSnapshot {
         let needsYou = Self.items(in: .review, from: items)
         let waiting = Self.items(in: .waiting, from: items)
@@ -762,7 +740,7 @@ enum WorkboardPresentationLogic {
         // counts remain complete and come from the canonical deterministic builder.
         let drafts = Array(allDrafts.prefix(3))
         let failureCount = needsYou.filter { $0.latestRun?.state == .failed }.count
-        let canonicalBriefing = WorkboardBriefingBuilder.build(
+        let spokenText = WorkboardBriefingBuilder.build(
             from: WorkboardBriefingFacts(
                 repliesToReview: max(0, needsYou.count - failureCount),
                 failuresToReview: failureCount,
@@ -775,7 +753,7 @@ enum WorkboardPresentationLogic {
             needsYou: needsYou,
             waiting: waiting,
             drafts: drafts,
-            spokenText: canonicalBriefing.spokenText
+            spokenText: spokenText
         )
     }
 }
@@ -955,92 +933,15 @@ final class WorkboardViewModel {
         var deleteItem: @MainActor (UUID) async throws -> Void
         var duplicateItem: @MainActor (UUID) async throws -> WorkboardItemSnapshot
         var reorderItems: @MainActor (WorkItemBoardReorder) async throws -> [WorkboardItemSnapshot]
-        var setState: @MainActor (UUID, WorkboardItemState) async throws -> WorkboardItemSnapshot
+        var setState: @MainActor (UUID, WorkItemState) async throws -> WorkboardItemSnapshot
         var acknowledgeRun: @MainActor (UUID, UUID, String) async throws -> WorkboardItemSnapshot
         var dispatch: @MainActor (WorkboardDispatchRequest) async throws -> WorkboardDispatchReceipt
         var openConversation: @MainActor (UUID) -> Void
         var openMaterial: @MainActor (WorkboardMaterialSnapshot) -> Void
         var openGatewaySettings: @MainActor () -> Void
-        var scheduleReviewReminder: @MainActor (
-            UUID,
-            Date
-        ) async -> WorkboardReviewReminderScheduleResult
-        var cancelReviewReminder: @MainActor (UUID) async -> Void
-        var captureVoice: (@MainActor () async throws -> String)?
         var shapeDraft: (@MainActor (WorkboardEditDraft) async throws -> WorkboardEditDraft)?
         var readBriefingAloud: (@MainActor (String) async -> Void)?
         var stopBriefingAloud: (@MainActor () -> Void)?
-
-        init(
-            loadItems: @escaping @MainActor () async throws -> [WorkboardItemSnapshot],
-            loadGateways: @escaping @MainActor () async throws -> ([WorkboardGatewayChoice], [CustomGateway]),
-            saveDraft: @escaping @MainActor (WorkboardEditDraft) async throws -> WorkboardItemSnapshot,
-            saveDraftAsCopy: @escaping @MainActor (WorkboardEditDraft) async throws -> WorkboardItemSnapshot,
-            importMaterial: @escaping @MainActor (
-                UUID,
-                Int64,
-                WorkboardMaterialImport,
-                @escaping @Sendable (Double) -> Void
-            ) async throws -> WorkboardItemSnapshot,
-            removeMaterial: @escaping @MainActor (UUID, Int64, UUID) async throws -> WorkboardItemSnapshot,
-            replaceMaterial: @escaping @MainActor (
-                UUID,
-                Int64,
-                UUID,
-                WorkboardMaterialImport,
-                @escaping @Sendable (Double) -> Void
-            ) async throws -> WorkboardItemSnapshot,
-            deleteItem: @escaping @MainActor (UUID) async throws -> Void,
-            duplicateItem: @escaping @MainActor (UUID) async throws -> WorkboardItemSnapshot,
-            setState: @escaping @MainActor (UUID, WorkboardItemState) async throws -> WorkboardItemSnapshot,
-            acknowledgeRun: @escaping @MainActor (UUID, UUID, String) async throws -> WorkboardItemSnapshot,
-            dispatch: @escaping @MainActor (WorkboardDispatchRequest) async throws -> WorkboardDispatchReceipt,
-            openConversation: @escaping @MainActor (UUID) -> Void,
-            openMaterial: @escaping @MainActor (WorkboardMaterialSnapshot) -> Void,
-            openGatewaySettings: @escaping @MainActor () -> Void,
-            scheduleReviewReminder: @escaping @MainActor (
-                UUID,
-                Date
-            ) async -> WorkboardReviewReminderScheduleResult = { itemID, date in
-                await WorkboardReviewReminderScheduler.shared.scheduleFromUserAction(
-                    itemID: itemID,
-                    at: date
-                )
-            },
-            cancelReviewReminder: @escaping @MainActor (UUID) async -> Void = { itemID in
-                await WorkboardReviewReminderScheduler.shared.cancel(itemID: itemID)
-            },
-            captureVoice: (@MainActor () async throws -> String)? = nil,
-            shapeDraft: (@MainActor (WorkboardEditDraft) async throws -> WorkboardEditDraft)? = nil,
-            readBriefingAloud: (@MainActor (String) async -> Void)? = nil,
-            stopBriefingAloud: (@MainActor () -> Void)? = nil,
-            reorderItems: @escaping @MainActor (
-                WorkItemBoardReorder
-            ) async throws -> [WorkboardItemSnapshot] = { _ in [] }
-        ) {
-            self.loadItems = loadItems
-            self.loadGateways = loadGateways
-            self.saveDraft = saveDraft
-            self.saveDraftAsCopy = saveDraftAsCopy
-            self.importMaterial = importMaterial
-            self.removeMaterial = removeMaterial
-            self.replaceMaterial = replaceMaterial
-            self.deleteItem = deleteItem
-            self.duplicateItem = duplicateItem
-            self.reorderItems = reorderItems
-            self.setState = setState
-            self.acknowledgeRun = acknowledgeRun
-            self.dispatch = dispatch
-            self.openConversation = openConversation
-            self.openMaterial = openMaterial
-            self.openGatewaySettings = openGatewaySettings
-            self.scheduleReviewReminder = scheduleReviewReminder
-            self.cancelReviewReminder = cancelReviewReminder
-            self.captureVoice = captureVoice
-            self.shapeDraft = shapeDraft
-            self.readBriefingAloud = readBriefingAloud
-            self.stopBriefingAloud = stopBriefingAloud
-        }
     }
 
     private let dependencies: Dependencies
@@ -1050,9 +951,14 @@ final class WorkboardViewModel {
     var customGateways: [CustomGateway] = []
     var isLoading = false
     var loadError: String?
-    var searchText = ""
+    /// What the search field shows. Write it through `updateSearchText` so the
+    /// board keeps filtering off `appliedSearchText` instead of re-deriving every
+    /// projection over the full corpus on each keystroke.
+    private(set) var searchText = ""
+    /// The needle the board actually filters on, trailing `searchText` by
+    /// `searchDebounce` while the person is still typing.
+    private(set) var appliedSearchText = ""
     var filter: WorkboardFilter = .open
-    var prefersColumns = true
     var isReorderingBoard = false
     var selectedItemID: UUID?
     /// A canvas identity that has not written a Core Data row yet. New Work is
@@ -1073,13 +979,16 @@ final class WorkboardViewModel {
     /// detail view means switching projects or collapsing the split view never
     /// discards half-written work.
     var workspaceComposerDrafts: [UUID: String] = [:]
+    /// Projects whose composer holds text that would survive normalization.
+    /// The detail view's send affordance reads this instead of the draft
+    /// dictionary, so a keystroke cannot invalidate the result card and the
+    /// whole run timeline beside it.
+    private(set) var nonEmptyComposerDrafts: Set<UUID> = []
     var editorSavedAt: Date?
     var editorSuggestion: WorkboardEditDraft?
     var editorConflict: WorkboardEditorConflict?
     var isShapingDraft = false
-    var isCapturingVoice = false
     var voiceCaptureTarget: WorkboardVoiceTarget?
-    var isUpdatingReviewReminder = false
 
     var preflightItemID: UUID?
     var selectedGatewayID: String?
@@ -1097,6 +1006,11 @@ final class WorkboardViewModel {
     @ObservationIgnored private var editorWasPersisted = false
     @ObservationIgnored private var loadRequestedWhileLoading = false
     @ObservationIgnored private var workspaceMutationWaiters: [WorkspaceMutationWaiter] = []
+    @ObservationIgnored private var searchDebounceTask: Task<Void, Never>?
+
+    /// Long enough to swallow a burst of typing, short enough that the board
+    /// still feels like it is filtering as you type.
+    private static let searchDebounce = Duration.milliseconds(150)
 
     private struct WorkspaceMutationWaiter {
         let itemID: UUID
@@ -1108,11 +1022,32 @@ final class WorkboardViewModel {
     }
 
     var visibleItems: [WorkboardItemSnapshot] {
-        WorkboardPresentationLogic.visibleItems(items, filter: filter, searchText: searchText)
+        WorkboardPresentationLogic.visibleItems(items, filter: filter, searchText: appliedSearchText)
     }
 
     var projectStripItems: [WorkboardItemSnapshot] {
-        WorkboardPresentationLogic.projectStripItems(items, filter: filter, searchText: searchText)
+        WorkboardPresentationLogic.projectStripItems(items, filter: filter, searchText: appliedSearchText)
+    }
+
+    var hasVisibleItems: Bool {
+        WorkboardPresentationLogic.hasVisibleItems(items, filter: filter, searchText: appliedSearchText)
+    }
+
+    /// The one write path for the search field. Clearing applies immediately —
+    /// the person is on their way somewhere else, not still narrowing.
+    func updateSearchText(_ value: String) {
+        guard value != searchText else { return }
+        searchText = value
+        searchDebounceTask?.cancel()
+        guard !value.isEmpty else {
+            appliedSearchText = ""
+            return
+        }
+        searchDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.searchDebounce)
+            guard !Task.isCancelled, let self else { return }
+            self.appliedSearchText = self.searchText
+        }
     }
 
     var selectedItem: WorkboardItemSnapshot? {
@@ -1134,16 +1069,12 @@ final class WorkboardViewModel {
     }
 
     var canShapeDraft: Bool { dependencies.shapeDraft != nil }
-    /// Voice is a complete first-party capture surface. The optional dependency
-    /// remains available to deterministic previews/tests, but production uses
-    /// the interactive recorder sheet so the person explicitly starts/stops.
-    var canCaptureVoice: Bool { true }
     var canReadBriefing: Bool { dependencies.readBriefingAloud != nil }
 
-    func isImportingIntoWorkspace(_ itemID: UUID) -> Bool {
-        // Every capture mutation is serialized because each success advances an
-        // optimistic owner revision. Disable capture everywhere, not only on the
-        // project that owns the current progress indicator.
+    /// Every capture mutation is serialized because each success advances an
+    /// optimistic owner revision, so capture is disabled board-wide rather than
+    /// only on the project that owns the current progress indicator.
+    var isCapturingIntoAnyWorkspace: Bool {
         workspaceMutationItemID != nil || workspaceImportState != nil
     }
 
@@ -1157,6 +1088,15 @@ final class WorkboardViewModel {
         } else {
             workspaceComposerDrafts[itemID] = value
         }
+        if WorkboardWorkspaceCaptureLogic.normalizedThought(value).isEmpty {
+            nonEmptyComposerDrafts.remove(itemID)
+        } else {
+            nonEmptyComposerDrafts.insert(itemID)
+        }
+    }
+
+    func hasComposerDraft(for itemID: UUID) -> Bool {
+        nonEmptyComposerDrafts.contains(itemID)
     }
 
     /// Opens the quick capture canvas without persisting anything. This is the
@@ -1171,29 +1111,9 @@ final class WorkboardViewModel {
     func cancelProvisionalWorkspace() {
         if let provisionalWorkspaceID {
             workspaceComposerDrafts.removeValue(forKey: provisionalWorkspaceID)
+            nonEmptyComposerDrafts.remove(provisionalWorkspaceID)
         }
         provisionalWorkspaceID = nil
-    }
-
-    /// Creates the lightest possible project and opens its capture canvas. The
-    /// structured editor remains an optional refinement step, never the price of
-    /// jotting down a first thought or dropping a first file.
-    @discardableResult
-    func createWorkspace(id: UUID = UUID()) async -> WorkboardItemSnapshot? {
-        if let existing = item(withID: id) {
-            selectedItemID = id
-            return existing
-        }
-        do {
-            let saved = try await dependencies.saveDraft(WorkboardEditDraft(id: id))
-            upsert(saved)
-            provisionalWorkspaceID = nil
-            selectedItemID = saved.id
-            return saved
-        } catch {
-            presentWorkspaceCaptureFailure(error)
-            return nil
-        }
     }
 
     func load() async {
@@ -1262,93 +1182,6 @@ final class WorkboardViewModel {
             guard !Task.isCancelled else { return }
             _ = await self?.saveEditorNow(showFailure: true)
         }
-    }
-
-    func setReviewReminderEnabled(_ enabled: Bool) async {
-        guard !isUpdatingReviewReminder else { return }
-        if enabled {
-            guard editingDraft.isMeaningful || editorWasPersisted else {
-                notice = WorkboardNotice(
-                    kind: .information,
-                    title: LocalizedStringResource(
-                        "workboard.reminder.needsBrief.title",
-                        defaultValue: "Add the brief first"
-                    ),
-                    message: String(localized: LocalizedStringResource(
-                        "workboard.reminder.needsBrief.message",
-                        defaultValue: "Write what you want to review, then turn on the reminder."
-                    ))
-                )
-                return
-            }
-            let proposed = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-            await persistAndScheduleReviewReminder(proposed, revertingTo: nil)
-        } else {
-            let previous = editingDraft.reviewBy
-            guard previous != nil else { return }
-            isUpdatingReviewReminder = true
-            editingDraft.reviewBy = nil
-            guard await saveEditorNow(showFailure: true) else {
-                editingDraft.reviewBy = previous
-                isUpdatingReviewReminder = false
-                return
-            }
-            await dependencies.cancelReviewReminder(editingDraft.id)
-            isUpdatingReviewReminder = false
-        }
-    }
-
-    func setReviewReminderDate(_ date: Date) async {
-        guard !isUpdatingReviewReminder,
-              let previous = editingDraft.reviewBy,
-              date != previous else { return }
-        await persistAndScheduleReviewReminder(date, revertingTo: previous)
-    }
-
-    private func persistAndScheduleReviewReminder(
-        _ date: Date,
-        revertingTo previous: Date?
-    ) async {
-        isUpdatingReviewReminder = true
-        editingDraft.reviewBy = date
-        guard await saveEditorNow(showFailure: true) else {
-            editingDraft.reviewBy = previous
-            isUpdatingReviewReminder = false
-            return
-        }
-        let result = await dependencies.scheduleReviewReminder(editingDraft.id, date)
-        guard result == .scheduled else {
-            editingDraft.reviewBy = previous
-            _ = await saveEditorNow(showFailure: true)
-            if previous == nil {
-                await dependencies.cancelReviewReminder(editingDraft.id)
-            }
-            let denied = result == .notAuthorized
-            notice = WorkboardNotice(
-                kind: .information,
-                title: denied
-                    ? LocalizedStringResource(
-                        "workboard.reminder.permission.title",
-                        defaultValue: "Reminders are off"
-                    )
-                    : LocalizedStringResource(
-                        "workboard.reminder.failed.title",
-                        defaultValue: "Reminder not scheduled"
-                    ),
-                message: String(localized: denied
-                    ? LocalizedStringResource(
-                        "workboard.reminder.permission.message",
-                        defaultValue: "Allow notifications for Conduck in System Settings, then try again. The brief was saved without a reminder."
-                    )
-                    : LocalizedStringResource(
-                        "workboard.reminder.failed.message",
-                        defaultValue: "The system could not add that reminder. The brief was saved without changing its reminder."
-                    ))
-            )
-            isUpdatingReviewReminder = false
-            return
-        }
-        isUpdatingReviewReminder = false
     }
 
     @discardableResult
@@ -1863,34 +1696,7 @@ final class WorkboardViewModel {
         next.continuation.resume()
     }
 
-    func captureVoice(into target: WorkboardVoiceTarget) async {
-        guard let captureVoice = dependencies.captureVoice, !isCapturingVoice else { return }
-        isCapturingVoice = true
-        do {
-            let transcript = try await captureVoice().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !transcript.isEmpty else {
-                isCapturingVoice = false
-                return
-            }
-            switch target {
-            case .objective:
-                editingDraft.objective = appending(transcript, to: editingDraft.objective)
-            case .context:
-                editingDraft.context = appending(transcript, to: editingDraft.context)
-            }
-            noteEditorChanged()
-        } catch {
-            notice = WorkboardNotice(
-                kind: .error,
-                title: LocalizedStringResource("workboard.voice.failed.title", defaultValue: "Voice capture stopped"),
-                message: error.localizedDescription
-            )
-        }
-        isCapturingVoice = false
-    }
-
     func presentVoiceCapture(for target: WorkboardVoiceTarget) {
-        guard !isCapturingVoice else { return }
         voiceCaptureTarget = target
     }
 
@@ -1960,7 +1766,6 @@ final class WorkboardViewModel {
     }
 
     func selectGateway(_ gateway: WorkboardGatewayChoice) {
-        guard gateway.availability.isUsable else { return }
         selectedGatewayID = gateway.id
     }
 
@@ -1997,8 +1802,7 @@ final class WorkboardViewModel {
     func dispatchPreflight() async {
         guard !isDispatching,
               let item = preflightItem,
-              let gateway = selectedGateway,
-              gateway.availability.isUsable else { return }
+              let gateway = selectedGateway else { return }
         isDispatching = true
         let request = WorkboardDispatchRequest(
             itemID: item.id,
@@ -2059,15 +1863,6 @@ final class WorkboardViewModel {
                 message: error.localizedDescription
             )
         }
-    }
-
-    func canMoveItem(_ itemID: UUID, direction: WorkboardMoveDirection) -> Bool {
-        WorkboardBoardOrdering.request(
-            moving: itemID,
-            direction: direction,
-            in: items,
-            visibleItemIDs: Set(projectStripItems.map(\.id))
-        ) != nil
     }
 
     /// Reorder a card in the sketch's global project strip. The planner admits
@@ -2141,7 +1936,7 @@ final class WorkboardViewModel {
         }
     }
 
-    func transition(_ item: WorkboardItemSnapshot, to state: WorkboardItemState) async {
+    func transition(_ item: WorkboardItemSnapshot, to state: WorkItemState) async {
         do {
             upsert(try await dependencies.setState(item.id, state))
         } catch {
@@ -2207,12 +2002,20 @@ final class WorkboardViewModel {
         isReadingBriefing = false
     }
 
+    /// Adopts a snapshot returned by one operation without letting it undo a
+    /// newer read. A dispatch receipt is built from the value the store held at
+    /// prepare time and can land after a corrective `load()`; dropping it when
+    /// the board already holds a strictly newer revision keeps the late receipt
+    /// from resurrecting the stale card. Equal revisions still adopt the
+    /// incoming value — both describe the same `updatedAt`, and the operation's
+    /// own result carries facts the store cannot report yet.
     private func upsert(_ item: WorkboardItemSnapshot) {
-        if let index = items.firstIndex(where: { $0.id == item.id }) {
-            items[index] = item
-        } else {
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else {
             items.append(item)
+            return
         }
+        guard items[index].revision <= item.revision else { return }
+        items[index] = item
     }
 
     /// Material persistence advances the owner's optimistic revision before the

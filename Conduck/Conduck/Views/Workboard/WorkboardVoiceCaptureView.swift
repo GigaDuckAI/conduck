@@ -113,17 +113,32 @@ struct WorkboardVoiceCaptureView: View {
                 ))
                 .font(.title2.weight(.semibold))
                 TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                    Text(Self.elapsed(from: startedAt, to: context.date))
-                        .font(.system(.title3, design: .monospaced, weight: .medium))
-                        .foregroundStyle(AppColors.textSecondary)
-                        .accessibilityLabel(Text(LocalizedStringResource(
-                            "workboard.voice.elapsed",
-                            defaultValue: "Recording time"
-                        )))
-                        .accessibilityValue(Text(verbatim: Self.elapsed(
-                            from: startedAt,
-                            to: context.date
-                        )))
+                    let elapsed = max(0, min(
+                        context.date.timeIntervalSince(startedAt),
+                        Constants.maxAudioDuration
+                    ))
+                    // The recorder hard-stops at the cap, so the same warning
+                    // window Chat shows has to reach this sheet too.
+                    let isNearCap = elapsed
+                        >= Constants.maxAudioDuration - Constants.maxAudioDurationWarningOffset
+                    VStack(spacing: 4) {
+                        Text(Self.elapsed(elapsed))
+                            .font(.system(.title3, design: .monospaced, weight: .medium))
+                            .foregroundStyle(isNearCap ? AppColors.warning : AppColors.textSecondary)
+                            .accessibilityLabel(Text(LocalizedStringResource(
+                                "workboard.voice.elapsed",
+                                defaultValue: "Recording time"
+                            )))
+                            .accessibilityValue(Text(verbatim: Self.elapsed(elapsed)))
+                        Text(LocalizedStringResource(
+                            "recording.oneMinuteLeft",
+                            defaultValue: "1 min left"
+                        ))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(AppColors.warning)
+                        .opacity(isNearCap ? 1 : 0)
+                        .accessibilityHidden(!isNearCap)
+                    }
                 }
             case .processing:
                 Text(LocalizedStringResource(
@@ -292,9 +307,11 @@ struct WorkboardVoiceCaptureView: View {
         onCancel()
     }
 
-    private static func elapsed(from start: Date, to now: Date) -> String {
-        let seconds = max(0, Int(now.timeIntervalSince(start)))
-        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    /// Same `m:ss` shape the shared `RecordingStatusIndicator` renders, so one
+    /// capture never reads differently in Work than it does in a conversation.
+    private static func elapsed(_ interval: TimeInterval) -> String {
+        let seconds = Int(max(0, interval))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
 

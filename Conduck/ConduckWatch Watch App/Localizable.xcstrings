@@ -40,10 +40,10 @@
         }
       }
     },
-    "Add ${thought} to Workboard" : {
+    "Add ${thought} to Work" : {
 
     },
-    "Add to Workboard" : {
+    "Add to Work" : {
 
     },
     "Answering…" : {
@@ -1241,6 +1241,17 @@
         }
       }
     },
+    "intent.workboardCapture.error.tooLong" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That’s too long to add to Work. Shorten it, then try again."
+          }
+        }
+      }
+    },
     "intent.workboardCapture.thought" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -1258,7 +1269,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Add to Workboard"
+            "value" : "Add to Work"
           }
         }
       }

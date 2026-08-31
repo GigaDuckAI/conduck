@@ -28,8 +28,8 @@ import XCTest
 final class ComposerDropBatchTests: XCTestCase {
 
     private func session(count: Int,
-                         destination: ComposerMountIdentity = .newChat) -> DropSession {
-        DropSession(destination: destination, count: count)
+                         destination: ComposerMountIdentity = .newChat) -> DropSession<ResolvedDropItem> {
+        DropSession<ResolvedDropItem>(destination: destination, count: count)
     }
 
     private func ownedFile(_ name: String) -> DroppedFileSource {

@@ -101,7 +101,8 @@ actor ShareTargetsSnapshotWriter {
     ///     colorHex / monogram / configured=true, all pre-resolved here.
     ///   - recentConversations: the most-recent conversations (cap 12) → the flat
     ///     RecentConversation (id / label / backendRef / lastActivityAt).
-    ///   - recentWorkItems: a bounded most-recent-first list of open Work items.
+    ///   - recentWorkItems: a bounded most-recent-first list of open Work items,
+    ///     read as id/title/date summaries only (no materials, runs or vault).
     private func buildSnapshot() async -> ShareTargetsSnapshot {
         // One customs roster read drives both the metadata + palette resolution
         // (built-in refs ignore it; customs key on it).
@@ -134,7 +135,11 @@ actor ShareTargetsSnapshotWriter {
 
         let recents = (try? await store.fetchRecentForPicker(limit: 12)) ?? []
         let recentConversations = Self.filterRecents(recents, configuredRefStrings: configuredRefStrings)
-        let workItems = (try? await store.fetchWorkItems()) ?? []
+        // Bounded store-side read: this runs on every `.conversationsDidChange`,
+        // so the picker's handful of rows must never cost a whole-board fetch.
+        let workItems = (try? await store.fetchRecentWorkItemSummaries(
+            limit: Self.maximumRecentWorkItems
+        )) ?? []
         let recentWorkItems = Self.makeRecentWorkItems(workItems)
 
         return ShareTargetsSnapshot(
@@ -147,16 +152,15 @@ actor ShareTargetsSnapshotWriter {
     }
 
     /// Pure projection for tests and for keeping the publication rule explicit:
-    /// Done items never enter the extension snapshot, ordering is true modified
-    /// recency (independent of the board's pinned grouping), and the payload is
-    /// bounded before it crosses the process boundary.
+    /// ordering is true modified recency (independent of the board's pinned
+    /// grouping) and the payload is bounded before it crosses the process
+    /// boundary. Done items are excluded by the store read that feeds this.
     nonisolated static func makeRecentWorkItems(
-        _ items: [WorkItemRecord],
+        _ items: [WorkItemSummary],
         limit: Int = maximumRecentWorkItems
     ) -> [ShareTargetsSnapshot.RecentWorkItem] {
         guard limit > 0 else { return [] }
         return items
-            .filter { $0.state != .done }
             .sorted { lhs, rhs in
                 if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
                 return lhs.id.uuidString < rhs.id.uuidString
@@ -165,7 +169,7 @@ actor ShareTargetsSnapshotWriter {
             .map { item in
                 ShareTargetsSnapshot.RecentWorkItem(
                     id: item.id,
-                    title: item.content.title.trimmingCharacters(in: .whitespacesAndNewlines),
+                    title: item.title.trimmingCharacters(in: .whitespacesAndNewlines),
                     modifiedAt: item.updatedAt
                 )
             }

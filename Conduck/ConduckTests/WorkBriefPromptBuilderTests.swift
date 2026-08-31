@@ -3,7 +3,8 @@
 // ConduckTests
 // WorkBriefPromptBuilderTests.swift
 //
-// Golden contracts for the exact preview/snapshot/gateway prompt and the
+// Golden contracts for the exact preview/snapshot/gateway prompt, the one
+// stored-material -> packet mapping both sides of that prompt consume, and the
 // deterministic, fact-only Workboard briefing.
 
 import XCTest
@@ -76,30 +77,184 @@ final class WorkBriefPromptBuilderTests: XCTestCase {
         XCTAssertTrue(WorkBriefPromptBuilder.isSubstantive(title: " ", objective: "", context: "", constraints: "", desiredResult: "", materialCount: 1))
     }
 
+    func testPacketFromRecordOmitsAnEmptyFileSizeAndKeepsARealOne() {
+        let empty = WorkBriefFixtures.record(
+            kind: .file,
+            filename: "empty.txt",
+            mimeType: "text/plain",
+            byteSize: 0
+        )
+        let sized = WorkBriefFixtures.record(
+            kind: .file,
+            filename: "rates.pdf",
+            mimeType: "application/pdf",
+            byteSize: 42
+        )
+
+        XCTAssertNil(
+            WorkBriefMaterialPacket(record: empty).byteSize,
+            "zero is a valid empty file, and the preview never prints a size for one"
+        )
+        XCTAssertEqual(WorkBriefMaterialPacket(record: sized).byteSize, 42)
+    }
+
+    func testPacketLabelFallsThroughTitleFilenameHostThenKind() {
+        let titled = WorkBriefFixtures.record(kind: .file, title: "DHL rate card", filename: "rates.pdf")
+        let named = WorkBriefFixtures.record(kind: .file, title: "  \n ", filename: "rates.pdf")
+        let hosted = WorkBriefFixtures.record(kind: .link, title: " ", urlString: "https://example.com/pricing")
+        let bare = WorkBriefFixtures.record(kind: .image, title: " ", hasPayload: true)
+
+        XCTAssertEqual(WorkBriefMaterialPacket(record: titled).label, "DHL rate card")
+        XCTAssertEqual(WorkBriefMaterialPacket(record: named).label, "rates.pdf",
+                       "a whitespace-only title is not a name")
+        XCTAssertEqual(WorkBriefMaterialPacket(record: hosted).label, "example.com")
+        XCTAssertEqual(WorkBriefMaterialPacket(record: bare).label,
+                       String(localized: "workboard.material.image", defaultValue: "Image"))
+    }
+
+    func testPacketKindResolvesAnUnknownRecordByItsPayloadEvidence() {
+        let filed = WorkBriefFixtures.record(kind: .unknown, filename: "mystery.bin", hasPayload: false)
+        let carried = WorkBriefFixtures.record(kind: .unknown, hasPayload: true)
+        let bare = WorkBriefFixtures.record(kind: .unknown, hasPayload: false)
+        let spoken = WorkBriefFixtures.record(kind: .transcript, title: "Voice note")
+
+        XCTAssertEqual(WorkBriefMaterialPacket(record: filed).kind, .file)
+        XCTAssertEqual(WorkBriefMaterialPacket(record: carried).kind, .file)
+        XCTAssertEqual(WorkBriefMaterialPacket(record: bare).kind, .note)
+        XCTAssertEqual(WorkBriefMaterialPacket(record: spoken).kind, .note)
+    }
+
     func testBriefingUsesOneDeterministicFactPacket() {
-        let briefing = WorkboardBriefingBuilder.build(from: .init(
+        let spoken = WorkboardBriefingBuilder.build(from: .init(
             repliesToReview: 2,
-            failuresToReview: 1,
+            failuresToReview: 5,
             waiting: 3,
             drafts: 4
         ))
 
-        XCTAssertEqual(briefing.rows.map(\.count), [2, 1, 3, 4])
         XCTAssertEqual(
-            briefing.spokenText,
-            "Workboard update: 2 replies to review, 1 send needing attention, 3 requests waiting for replies, and 4 prepared drafts."
+            spoken,
+            "Workboard update: 2 replies to review, 5 sends needing attention, 3 requests waiting for replies, and 4 prepared drafts."
+        )
+    }
+
+    /// The singular lives in the catalog's `one` plural variation rather than in
+    /// a Swift branch, and `en` is the SOURCE catalog Siri speaks — not a
+    /// translation. Nothing else in the tree contains these four strings, so
+    /// without this case a deleted or mistyped `one` block ships a green suite
+    /// and Siri saying "1 replies to review".
+    func testBriefingSpeaksTheCatalogsSingularForACountOfOne() {
+        XCTAssertEqual(
+            WorkboardBriefingBuilder.build(from: .init(
+                repliesToReview: 1,
+                failuresToReview: 1,
+                waiting: 1,
+                drafts: 1
+            )),
+            "Workboard update: 1 reply to review, 1 send needing attention, 1 request waiting for a reply, and 1 prepared draft."
+        )
+    }
+
+    /// A zero count must DROP out of the sentence rather than be spoken as "0",
+    /// and the kinds that survive must keep their declared order.
+    func testBriefingSuppressesZeroCountsAndKeepsKindOrder() {
+        XCTAssertEqual(
+            WorkboardBriefingBuilder.build(from: .init(
+                repliesToReview: 2,
+                failuresToReview: 0,
+                waiting: 3,
+                drafts: 0
+            )),
+            "Workboard update: 2 replies to review and 3 requests waiting for replies."
+        )
+
+        XCTAssertEqual(
+            WorkboardBriefingBuilder.build(from: .init(
+                repliesToReview: 0,
+                failuresToReview: 0,
+                waiting: 0,
+                drafts: 4
+            )),
+            "Workboard update: 4 prepared drafts."
         )
     }
 
     func testEmptyBriefingDoesNotInventWork() {
-        let briefing = WorkboardBriefingBuilder.build(from: .init(
+        let spoken = WorkboardBriefingBuilder.build(from: .init(
             repliesToReview: -1,
             failuresToReview: 0,
             waiting: 0,
             drafts: 0
         ))
 
-        XCTAssertTrue(briefing.rows.isEmpty)
-        XCTAssertEqual(briefing.spokenText, "Your Workboard is clear. There is nothing open right now.")
+        XCTAssertEqual(spoken, "Your Workboard is clear. There is nothing open right now.")
+    }
+}
+
+/// Shared record fixtures plus the snapshot the PREVIEW composes from, built by
+/// calling the app's own record -> presentation mapping
+/// (`WorkboardLiveRepository.presentationKind` / `.materialName`) rather than a
+/// transcription of it. That is what makes the byte-identity test in
+/// `WorkboardDispatchCoordinatorTests` meaningful: the send boundary refuses any
+/// brief whose final prompt differs from the previewed one by a byte, so the two
+/// derivations pinned against each other must be the two the app actually runs.
+enum WorkBriefFixtures {
+    static let workItemID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+    static let timestamp = Date(timeIntervalSinceReferenceDate: 700_000)
+
+    static func record(
+        id: UUID = UUID(),
+        kind: WorkMaterialKind,
+        title: String = "",
+        textContent: String? = nil,
+        urlString: String? = nil,
+        filename: String? = nil,
+        mimeType: String? = nil,
+        byteSize: Int64 = 0,
+        hasPayload: Bool = true,
+        sequence: Int = 0
+    ) -> WorkMaterialRecord {
+        WorkMaterialRecord(
+            id: id,
+            workItemID: workItemID,
+            kind: kind,
+            title: title,
+            caption: "",
+            textContent: textContent,
+            urlString: urlString,
+            filename: filename,
+            mimeType: mimeType,
+            thumbnailData: nil,
+            width: nil,
+            height: nil,
+            byteSize: byteSize,
+            hasPayload: hasPayload,
+            storageMode: hasPayload ? .localVault : .metadataOnly,
+            availability: hasPayload ? .availableLocally : .metadataOnly,
+            localVaultKey: hasPayload ? "vault-\(id.uuidString)" : nil,
+            sourceDevice: nil,
+            sequence: sequence,
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+    }
+
+    /// Mirrors the field assignment of `WorkboardLiveRepository.materialSnapshot`
+    /// for the fields the prompt reads, but the two decisions that can drift —
+    /// kind and name — are taken by calling the repository itself.
+    static func previewSnapshot(_ record: WorkMaterialRecord) -> WorkboardMaterialSnapshot {
+        WorkboardMaterialSnapshot(
+            id: record.id,
+            kind: WorkboardLiveRepository.presentationKind(record),
+            name: WorkboardLiveRepository.materialName(record),
+            textContent: record.textContent,
+            urlString: record.urlString,
+            mimeType: record.mimeType,
+            byteCount: record.byteSize > 0 ? record.byteSize : nil,
+            availability: .available,
+            sequence: record.sequence,
+            createdAt: record.createdAt,
+            revision: 0
+        )
     }
 }

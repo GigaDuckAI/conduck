@@ -438,47 +438,22 @@ struct ConversationThreadView: View {
     }
 
     private var activeGatewaySheet: Binding<Bool> {
-        Binding(
-            get: { workbenchDestinationIsActive && viewModel.showingGatewaySheet },
-            set: { isPresented in
-                if !isPresented || workbenchDestinationIsActive {
-                    viewModel.showingGatewaySheet = isPresented
-                }
-            }
-        )
+        // Local @Bindable bridge — the VM is held as a plain `let` (see its doc).
+        @Bindable var viewModel = viewModel
+        return $viewModel.showingGatewaySheet.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeFileSetup: Binding<Bool> {
-        Binding(
-            get: { workbenchDestinationIsActive && showingFileSetup },
-            set: { isPresented in
-                if !isPresented || workbenchDestinationIsActive {
-                    showingFileSetup = isPresented
-                }
-            }
-        )
+        $showingFileSetup.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeRefusalReview: Binding<OutputRefusalReview?> {
-        Binding(
-            get: { workbenchDestinationIsActive ? reviewingRefusals : nil },
-            set: { review in
-                if review == nil || workbenchDestinationIsActive {
-                    reviewingRefusals = review
-                }
-            }
-        )
+        $reviewingRefusals.gated(by: workbenchDestinationIsActive)
     }
 
     private var activePreviewURL: Binding<URL?> {
-        Binding(
-            get: { workbenchDestinationIsActive ? filePreview.previewURL : nil },
-            set: { url in
-                if url == nil || workbenchDestinationIsActive {
-                    filePreview.previewURL = url
-                }
-            }
-        )
+        @Bindable var filePreview = filePreview
+        return $filePreview.previewURL.gated(by: workbenchDestinationIsActive)
     }
 
     private func dismissTransientChatUI() {

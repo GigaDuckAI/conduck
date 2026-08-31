@@ -103,6 +103,14 @@ struct MainWindowView: View {
     /// `.onAppear`, which SwiftUI re-fires) so it stays stable across re-render.
     @State private var hostMascot = MascotShuffleBag.next()
 
+    /// The sidebar footer's Retina app icon, resolved once at `@State` creation.
+    /// `highResAppIcon` copies an `NSImage` and resizes the copy on every call,
+    /// and this view's body is the WHOLE window: it re-runs on every sidebar
+    /// collapse/expand frame-starting state write, every search keystroke and
+    /// every section switch. `NSApp.applicationIconImage` is never reassigned at
+    /// runtime, so there is nothing to invalidate the cached copy.
+    @State private var footerAppIcon = highResAppIcon(size: 32)
+
     /// Sidebar search text. Owned here (NOT by `ConversationListView`'s native
     /// `.searchable`, which iOS forces into the nav-bar area rather than inline
     /// in the column) and passed down via `externalSearchText` so the custom
@@ -134,6 +142,26 @@ struct MainWindowView: View {
     @SceneStorage("workboard.showsOverview") private var workboardShowsOverview = true
     @State private var workboardEmptyWorkspaceID = UUID()
     @State private var workboardPreferredCompactColumn = NavigationSplitViewColumn.sidebar
+    /// Keeps Work's columns mounted for the tail of the dissolve after Work is
+    /// hidden, so the crossfade still has a layer to fade out. Set by the
+    /// `.task(id:)` on the split view below, never written directly.
+    @State private var keepsWorkLayerMounted = false
+    /// Turns the ENTER dissolve on, one update after Work's columns mount.
+    ///
+    /// Work's layer is conditionally mounted, and a view inserted with no
+    /// transition renders at its FINAL value — so a layer inserted in the same
+    /// update that activates it appears fully opaque and cuts over Chat's
+    /// fade-out. Mounting still reads the destination directly, so the layer is
+    /// present at opacity 0 for one update; flipping this in the `.task(id:)`
+    /// below then makes activation an animatable 0 -> 1 change, which is the
+    /// only thing `WorkbenchDestinationLayerModifier` can dissolve. Set by that
+    /// task, never written directly.
+    ///
+    /// It is a permission, not the answer: `workLayerIsShowing` re-gates it on
+    /// the live destination, so a hold this task never got to clear cannot show
+    /// Work over Chat.
+    @State private var workLayerIsVisible = false
+    private static let workLayerIdentity = "workbench.destination.work"
 
     /// The Settings modal. Triggered by the footer menu, ⌘,, the
     /// `.openSettingsWindow` bus, and the menu-bar "Settings…" item (via the
@@ -220,7 +248,7 @@ struct MainWindowView: View {
 
     /// Loads still in flight for the current drop. Object identity is the
     /// generation guard: cancelling it makes every late callback a no-op.
-    @State private var dropSession: DropSession?
+    @State private var dropSession: DropSession<ResolvedDropItem>?
     /// Retained so a still-running load can be cancelled on teardown.
     @State private var dropLoadProgresses: [Progress] = []
     /// Watchdogs that fail a slot whose provider never calls back.
@@ -289,9 +317,8 @@ struct MainWindowView: View {
     @ViewBuilder
     private var splitView: some View {
         if let personalWorkbenchModel {
-            workboardExperience(for: personalWorkbenchModel).presentationHost {
-                persistentSplitView
-            }
+            persistentSplitView
+                .modifier(workboardExperience(for: personalWorkbenchModel).presentationModifier)
         } else {
             persistentSplitView
         }
@@ -434,6 +461,28 @@ struct MainWindowView: View {
                 .sharedBackgroundVisibility(.hidden)
             }
         }
+        // Hold Work's columns for the tail of the dissolve after Work is hidden,
+        // then drop them. `.task(id:)` cancels a pending unmount if Work comes
+        // back first, so a fast Work → Chats → Work round trip never unmounts,
+        // and a cancelled hold cannot wedge: the id is the destination itself,
+        // so whichever value it settles on re-runs this to completion. It also
+        // runs AFTER the update that mounted those columns, which is what gives
+        // the enter dissolve a frame at opacity 0 to fade up from.
+        //
+        // The hold comes from the layer modifier so it always outlasts the fade.
+        .task(id: workDestinationIsActive) {
+            if workDestinationIsActive {
+                keepsWorkLayerMounted = true
+                workLayerIsVisible = true
+                return
+            }
+            workLayerIsVisible = false
+            try? await Task.sleep(
+                for: WorkbenchDestinationLayerModifier.mountHold(reduceMotion: reduceMotion)
+            )
+            guard !Task.isCancelled else { return }
+            keepsWorkLayerMounted = false
+        }
     }
 
     private func workbenchSectionPicker(
@@ -451,8 +500,42 @@ struct MainWindowView: View {
         personalWorkbenchModel?.router.destination == .work
     }
 
+    /// What the Work layer's PIXELS follow, as distinct from
+    /// `workDestinationIsActive`, which hit testing, accessibility and draw
+    /// order follow immediately. Entering trails the destination by one update
+    /// (see `workLayerIsVisible`) so the fade has something to fade from;
+    /// leaving falls on the destination change itself, because Work is already
+    /// mounted and needs no lead-in.
+    ///
+    /// The `workDestinationIsActive` conjunct is the safety half: a Settings
+    /// mode swap can unmount this split mid-transition and cancel the task that
+    /// would have cleared `workLayerIsVisible`, and on the way back Work would
+    /// otherwise mount fully opaque over Chat for a frame.
+    private var workLayerIsShowing: Bool {
+        workDestinationIsActive && workLayerIsVisible
+    }
+
+    /// The exact complement, so both layers change opacity in the SAME update
+    /// and the dissolve is symmetric entering and leaving. Deriving Chat's
+    /// pixels from the destination instead would start its fade one update
+    /// ahead of Work's on the way in.
+    private var chatLayerIsShowing: Bool {
+        !workLayerIsShowing
+    }
+
     private var chatDestinationIsActive: Bool {
         !workDestinationIsActive
+    }
+
+    /// Chat stays mounted for its whole session — it owns a selected thread, an
+    /// unsent composer, a live recorder and a parked drop batch. Work owns none
+    /// of that inside its columns: selection, composer text and every sheet live
+    /// on the view model or on the persistent split view above, and deactivating
+    /// Work already discards its transient capture UI. So Work's columns are
+    /// mounted only while they are on screen (plus the dissolve's tail), and
+    /// hidden Chat never pays to lay out a second full column tree.
+    private var mountsWorkLayer: Bool {
+        workDestinationIsActive || keepsWorkLayerMounted
     }
 
     private func workboardExperience(
@@ -480,16 +563,22 @@ struct MainWindowView: View {
                 .environment(\.workbenchDestinationIsActive, chatDestinationIsActive)
                 .workbenchDestinationLayer(
                     isActive: chatDestinationIsActive,
+                    isVisible: chatLayerIsShowing,
                     reduceMotion: reduceMotion
                 )
 
-            if let personalWorkbenchModel {
-                workboardExperience(for: personalWorkbenchModel).sidebarContent
+            if let personalWorkbenchModel, mountsWorkLayer {
+                workboardExperience(for: personalWorkbenchModel).sidebarColumn
                     .environment(\.workbenchDestinationIsActive, workDestinationIsActive)
                     .workbenchDestinationLayer(
                         isActive: workDestinationIsActive,
+                        isVisible: workLayerIsShowing,
                         reduceMotion: reduceMotion
                     )
+                    // A constant identity for the gated layer: mounting and
+                    // unmounting it must never let the ZStack reindex Chat's
+                    // column, which would remount the conversation list.
+                    .id(Self.workLayerIdentity)
             }
         }
     }
@@ -501,16 +590,21 @@ struct MainWindowView: View {
                 .environment(\.workbenchDestinationIsActive, chatDestinationIsActive)
                 .workbenchDestinationLayer(
                     isActive: chatDestinationIsActive,
+                    isVisible: chatLayerIsShowing,
                     reduceMotion: reduceMotion
                 )
 
             if let personalWorkbenchModel {
-                workboardExperience(for: personalWorkbenchModel).detailContent
-                    .environment(\.workbenchDestinationIsActive, workDestinationIsActive)
-                    .workbenchDestinationLayer(
-                        isActive: workDestinationIsActive,
-                        reduceMotion: reduceMotion
-                    )
+                if mountsWorkLayer {
+                    workboardExperience(for: personalWorkbenchModel).detailColumn
+                        .environment(\.workbenchDestinationIsActive, workDestinationIsActive)
+                        .workbenchDestinationLayer(
+                            isActive: workDestinationIsActive,
+                            isVisible: workLayerIsShowing,
+                            reduceMotion: reduceMotion
+                        )
+                        .id(Self.workLayerIdentity)
+                }
 
                 if workDestinationIsActive {
                     Button {
@@ -564,12 +658,10 @@ struct MainWindowView: View {
                 splitView
             }
         }
-        // Drop the "Conduck" window title in BOTH modes (was scoped to splitView,
-        // which is absent in settings mode → title would otherwise reappear).
-        // Window menu name stays. macOS 15+.
-        .modifier(WorkbenchWindowTitleRemovalModifier(
-            isActive: personalWorkbenchModel != nil || workbenchDestinationIsActive
-        ))
+        // Drop the "Conduck" window title in BOTH modes: Settings REPLACES the
+        // split view, so a removal scoped to the split view would let the title
+        // reappear there. Window menu name stays. macOS 15+.
+        .toolbar(removing: .title)
         .background {
             LinearGradient(
                 colors: [AppColors.gradientStart, AppColors.gradientEnd],
@@ -899,9 +991,18 @@ struct MainWindowView: View {
     /// `hasAnyConfiguredGateway`, never the quick lane's default-scoped flag: the
     /// picker below seeds itself to a gateway that can actually send, so the
     /// stored default not being one of them is no reason to blank the title bar.
+    ///
+    /// Chat's alone: Work binds a gateway at Review & Send and says so on the
+    /// board, so a title-bar pill there would name a gateway Work will not use.
+    /// The gate is on the CONTENT rather than on the `ToolbarItem` in
+    /// `persistentSplitView` — declaring and undeclaring the principal item
+    /// re-lays out the bar, and this window's whole arrangement rests on the
+    /// toolbar keeping one identity across the section switch. An empty
+    /// principal slot is already the unconfigured-device case, so it costs the
+    /// layout nothing new.
     @ViewBuilder
     private var gatewayToolbarContent: some View {
-        if coordinator.hasAnyConfiguredGateway {
+        if chatDestinationIsActive, coordinator.hasAnyConfiguredGateway {
             if let vm = coordinator.windowViewModel {
                 // Clone is now FOLDED into the centered gateway pill: when the
                 // thread is clone-eligible (bound, has turns, gateway available,
@@ -985,7 +1086,7 @@ struct MainWindowView: View {
                 showingSettings = true
             } label: {
                 HStack(spacing: 10) {
-                    Image(nsImage: highResAppIcon(size: 32))
+                    Image(nsImage: footerAppIcon)
                         .resizable()
                         .interpolation(.high)
                         .frame(width: 32, height: 32)
@@ -1446,7 +1547,10 @@ struct MainWindowView: View {
         }
         guard !routed.isEmpty else { return false }
 
-        let session = DropSession(destination: currentMountIdentity, count: routed.count)
+        let session = DropSession<ResolvedDropItem>(
+            destination: currentMountIdentity,
+            count: routed.count
+        )
         dropSession = session
         for (index, entry) in routed.enumerated() {
             startDropLoad(entry.0, route: entry.1, index: index, session: session)
@@ -1458,7 +1562,7 @@ struct MainWindowView: View {
     private func startDropLoad(_ provider: NSItemProvider,
                                route: DropProviderRoute,
                                index: Int,
-                               session: DropSession) {
+                               session: DropSession<ResolvedDropItem>) {
         let typeIdentifier = route == .fileURL
             ? UTType.fileURL.identifier
             : UTType.image.identifier
@@ -1511,7 +1615,7 @@ struct MainWindowView: View {
     @MainActor
     private func finishDropSlot(_ index: Int,
                                 with item: ResolvedDropItem,
-                                session: DropSession) {
+                                session: DropSession<ResolvedDropItem>) {
         // A result for a session that is no longer ours (navigation cancelled
         // it, or it already completed) owns a temp nothing else knows about.
         guard dropSession === session else {
@@ -1802,16 +1906,4 @@ private struct WindowThreadVisibilityReporter: ViewModifier {
     }
 }
 
-private struct WorkbenchWindowTitleRemovalModifier: ViewModifier {
-    let isActive: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if isActive {
-            content.toolbar(removing: .title)
-        } else {
-            content
-        }
-    }
-}
 #endif

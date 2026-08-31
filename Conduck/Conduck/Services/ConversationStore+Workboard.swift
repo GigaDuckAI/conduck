@@ -5,10 +5,10 @@
 //
 // Private-CloudKit persistence for the personal Agent Workboard: editable
 // briefs and materials, immutable dispatch snapshots, state derived from the
-// exact linked conversation turn, full-text in-app search, and the one atomic
-// prepare-for-transport boundary. Workboard rows use UUID foreign keys instead
-// of Core Data relationships so deleting a card never deletes the conversation
-// it created, and deleting a conversation never destroys the audit snapshot.
+// exact linked conversation turn, and the one atomic prepare-for-transport
+// boundary. Workboard rows use UUID foreign keys instead of Core Data
+// relationships so deleting a card never deletes the conversation it created,
+// and deleting a conversation never destroys the audit snapshot.
 // No method here performs network I/O or silently chooses a gateway.
 
 import Foundation
@@ -40,7 +40,7 @@ extension ConversationStore {
             let row = NSEntityDescription.insertNewObject(forEntityName: "WorkItem", into: context)
             row.setValue(draft.id, forKey: "id")
             row.setValue(draft.captureEnvelopeID, forKey: "captureEnvelopeID")
-            Self.apply(draft.content, to: row)
+            try Self.apply(draft.content, to: row)
             row.setValue(draft.createdAt, forKey: "createdAt")
             row.setValue(draft.createdAt, forKey: "updatedAt")
             try context.save()
@@ -53,11 +53,46 @@ extension ConversationStore {
         return record
     }
 
-    func fetchWorkItems(matching query: String = "") async throws -> [WorkItemRecord] {
-        let records = try await fetchWorkItems(itemID: nil, captureEnvelopeID: nil)
-        let tokens = Self.workSearchTokens(query)
-        guard !tokens.isEmpty else { return records }
-        return records.filter { Self.matchesWorkSearch($0, tokens: tokens) }
+    func fetchWorkItems() async throws -> [WorkItemRecord] {
+        try await fetchWorkItems(itemID: nil, captureEnvelopeID: nil)
+    }
+
+    /// Bounded read for the cross-process share-targets snapshot: open cards
+    /// only, most recently modified first. It deliberately touches neither
+    /// materials, runs, linked messages nor the asset vault, because the writer
+    /// rebuilds on the app's hottest notification bus to publish a handful of
+    /// picker rows.
+    func fetchRecentWorkItemSummaries(limit: Int) async throws -> [WorkItemSummary] {
+        guard limit > 0 else { return [] }
+        try await ensureLoaded()
+        let context = newReadContext()
+        return try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkItem")
+            // Only an explicit human completion produces Done, so this is the
+            // exact predicate form of "not Done" without projecting any run.
+            request.predicate = NSPredicate(format: "completedAt == nil")
+            request.sortDescriptors = [
+                NSSortDescriptor(key: "updatedAt", ascending: false),
+                NSSortDescriptor(key: "id", ascending: true),
+            ]
+            // CloudKit cannot enforce uniqueness, so one logical card can import
+            // as several physical rows. Over-fetch, then keep the first row of
+            // each id — the same newest-wins choice the full projection makes.
+            request.fetchLimit = limit * 4
+            var seen: Set<UUID> = []
+            var summaries: [WorkItemSummary] = []
+            for row in try context.fetch(request) {
+                guard let id = row.value(forKey: "id") as? UUID,
+                      seen.insert(id).inserted else { continue }
+                summaries.append(WorkItemSummary(
+                    id: id,
+                    title: row.value(forKey: "title") as? String ?? "",
+                    updatedAt: row.value(forKey: "updatedAt") as? Date ?? .distantPast
+                ))
+                if summaries.count == limit { break }
+            }
+            return summaries
+        }
     }
 
     func fetchWorkItem(id: UUID) async throws -> WorkItemRecord? {
@@ -218,12 +253,25 @@ extension ConversationStore {
         }
         let messageText = persistedMessage.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let isUser = persistedMessage.role == "user"
+        // The composer caps nothing, so a pasted log or document is an ordinary
+        // user turn — while a brief field is bounded and `createWorkItem` refuses
+        // anything past it. An oversized turn therefore goes into a material,
+        // exactly where an agent reply already goes, instead of failing the whole
+        // capture with a length error the person never saw coming.
+        let objectiveFitsOneBriefField =
+            messageText.count <= WorkItemContentLimits.maximumFieldCharacters
+        let capturesMessageAsMaterial = !isUser || !objectiveFitsOneBriefField
         let inferred = WorkboardWorkspaceCaptureLogic.title(for: messageText)
         let title: String
         let objective: String
         if isUser {
             title = inferred.isEmpty ? conversationTitle : inferred
-            objective = messageText
+            objective = objectiveFitsOneBriefField
+                ? messageText
+                : String(
+                    localized: "workboard.chatCapture.longMessageObjective",
+                    defaultValue: "Continue working from the captured message."
+                )
         } else {
             title = String.localizedStringWithFormat(
                 String(localized: "workboard.chatCapture.followUpTitle", defaultValue: "Follow up: %@"),
@@ -259,13 +307,15 @@ extension ConversationStore {
         var referencedOnly = 0
         var failed = 0
 
-        if !isUser, !messageText.isEmpty, !existingIDs.contains(persistedMessage.id) {
+        if capturesMessageAsMaterial, !messageText.isEmpty, !existingIDs.contains(persistedMessage.id) {
             do {
                 _ = try await addWorkMaterial(
                     WorkMaterialDraft(
                         id: persistedMessage.id,
                         kind: .note,
-                        title: String(localized: "workboard.chatCapture.response", defaultValue: "Chat response"),
+                        title: isUser
+                            ? String(localized: "workboard.chatCapture.message", defaultValue: "Chat message")
+                            : String(localized: "workboard.chatCapture.response", defaultValue: "Chat response"),
                         textContent: messageText,
                         sequence: 0,
                         storageMode: .metadataOnly,
@@ -282,7 +332,9 @@ extension ConversationStore {
         }
 
         let payloads = try await loadLocalAttachmentPayloads(for: persistedMessage.id)
-        let baseSequence = isUser ? 0 : 1
+        // Sequence 0 belongs to the turn's own text whenever it became a
+        // material; attachments follow it.
+        let baseSequence = capturesMessageAsMaterial ? 1 : 0
         for (offset, attachment) in persistedMessage.attachments.sorted(by: { $0.sequence < $1.sequence }).enumerated() {
             guard !existingIDs.contains(attachment.id) else { continue }
             let name = attachment.filename
@@ -375,7 +427,7 @@ extension ConversationStore {
         let changed = try await context.perform { [context] in
             guard let row = try Self.workItemRow(id: id, in: context) else { return false }
             guard Self.content(of: row) != content else { return false }
-            Self.apply(content, to: row)
+            try Self.apply(content, to: row)
             row.setValue(Date(), forKey: "updatedAt")
             try context.save()
             return true
@@ -422,7 +474,7 @@ extension ConversationStore {
 
                 var didChange = false
                 if Self.content(of: row) != content {
-                    Self.apply(content, to: row)
+                    try Self.apply(content, to: row)
                     didChange = true
                 }
                 for (index, materialID) in orderedMaterialIDs.enumerated() {
@@ -454,7 +506,7 @@ extension ConversationStore {
             }
             let row = NSEntityDescription.insertNewObject(forEntityName: "WorkItem", into: context)
             row.setValue(id, forKey: "id")
-            Self.apply(content, to: row)
+            try Self.apply(content, to: row)
             row.setValue(createdAt, forKey: "createdAt")
             row.setValue(createdAt, forKey: "updatedAt")
             try context.save()
@@ -487,36 +539,6 @@ extension ConversationStore {
             guard existing != completedAt else { return false }
             row.setValue(completedAt, forKey: "completedAt")
             row.setValue(Date(), forKey: "updatedAt")
-            try context.save()
-            return true
-        }
-        if changed { await postDidChange() }
-        return try await fetchWorkItem(id: id)
-    }
-
-    /// Acknowledge every terminal result currently visible for this card. The
-    /// result identity is resolved and written in ONE Core Data transaction;
-    /// a failure that re-mints its attempt id afterwards re-arms Review.
-    @discardableResult
-    func acknowledgeWorkItemReview(id: UUID, at acknowledgedAt: Date = Date()) async throws -> WorkItemRecord? {
-        try await ensureLoaded()
-        let context = newWriteContext()
-        let changed = try await context.perform { [context] in
-            guard try Self.workItemRow(id: id, in: context) != nil else { return false }
-            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkDispatch")
-            request.predicate = NSPredicate(format: "workItemID == %@", id as CVarArg)
-            var changed = false
-            for dispatch in try context.fetch(request) {
-                let activity = try Self.workDispatchActivity(for: dispatch, in: context)
-                guard let resultKey = activity.resultKey else { continue }
-                guard dispatch.value(forKey: "reviewAcknowledgedResultKey") as? String != resultKey else {
-                    continue
-                }
-                dispatch.setValue(resultKey, forKey: "reviewAcknowledgedResultKey")
-                dispatch.setValue(acknowledgedAt, forKey: "reviewAcknowledgedAt")
-                changed = true
-            }
-            guard changed else { return false }
             try context.save()
             return true
         }
@@ -575,32 +597,67 @@ extension ConversationStore {
 
         do {
             for material in source.materials {
-                let payload = try await loadWorkMaterialPayload(id: material.id)
-                if material.storageMode == .syncedPayload, payload == nil {
-                    throw WorkboardStoreError.materialPayloadUnavailable
+                func draft(payload: Data?) -> WorkMaterialDraft {
+                    WorkMaterialDraft(
+                        kind: material.kind,
+                        title: material.title,
+                        caption: material.caption,
+                        textContent: material.textContent,
+                        urlString: material.urlString,
+                        filename: material.filename,
+                        mimeType: material.mimeType,
+                        payload: payload,
+                        thumbnailData: material.thumbnailData,
+                        width: material.width,
+                        height: material.height,
+                        byteSize: material.byteSize,
+                        sequence: material.sequence,
+                        storageMode: material.storageMode,
+                        sourceDevice: material.sourceDevice,
+                        createdAt: createdAt
+                    )
                 }
-                if material.availability == .availableLocally, payload == nil {
-                    throw WorkboardStoreError.materialPayloadUnavailable
+
+                switch material.storageMode {
+                case .metadataOnly:
+                    _ = try await insertWorkMaterial(
+                        draft(payload: nil),
+                        to: duplicate.id,
+                        storageMode: .metadataOnly,
+                        byteSize: material.byteSize,
+                        newVaultKey: nil,
+                        expectedOwnerRevision: nil
+                    )
+                case .syncedPayload:
+                    guard let payload = try await loadWorkMaterialPayload(id: material.id) else {
+                        throw WorkboardStoreError.materialPayloadUnavailable
+                    }
+                    _ = try await insertWorkMaterial(
+                        draft(payload: payload),
+                        to: duplicate.id,
+                        storageMode: .syncedPayload,
+                        byteSize: Int64(payload.count),
+                        newVaultKey: nil,
+                        expectedOwnerRevision: nil
+                    )
+                case .localVault:
+                    // Disk-level copy: a card holding a large file must not be
+                    // duplicated through an in-memory round trip, and the copy
+                    // owns its own leaf so deleting either card is independent.
+                    var copied: WorkAssetVault.StoredFile?
+                    if let key = material.localVaultKey,
+                       material.availability == .availableLocally {
+                        copied = try await workAssetVault.copy(key: key)
+                    }
+                    _ = try await insertWorkMaterial(
+                        draft(payload: nil),
+                        to: duplicate.id,
+                        storageMode: .localVault,
+                        byteSize: copied?.byteCount ?? material.byteSize,
+                        newVaultKey: copied?.key,
+                        expectedOwnerRevision: nil
+                    )
                 }
-                let draft = WorkMaterialDraft(
-                    kind: material.kind,
-                    title: material.title,
-                    caption: material.caption,
-                    textContent: material.textContent,
-                    urlString: material.urlString,
-                    filename: material.filename,
-                    mimeType: material.mimeType,
-                    payload: payload,
-                    thumbnailData: material.thumbnailData,
-                    width: material.width,
-                    height: material.height,
-                    byteSize: material.byteSize,
-                    sequence: material.sequence,
-                    storageMode: material.storageMode,
-                    sourceDevice: material.sourceDevice,
-                    createdAt: createdAt
-                )
-                _ = try await addWorkMaterial(draft, to: duplicate.id)
             }
         } catch {
             // The duplicate has never escaped this method. Remove the partial
@@ -680,56 +737,20 @@ extension ConversationStore {
         var stagedVaultKey: String?
 
         if let sourceFileURL {
-            let reportedSize = sourceFileByteSize ?? draft.byteSize ?? -1
-            if WorkAssetVault.shouldMirror(byteCount: reportedSize) {
-                let scoped = sourceFileURL.startAccessingSecurityScopedResource()
-                defer { if scoped { sourceFileURL.stopAccessingSecurityScopedResource() } }
-                let payload = try Data(contentsOf: sourceFileURL, options: [.mappedIfSafe])
-                byteSize = Int64(payload.count)
-                storageMode = .syncedPayload
-                preparedDraft = WorkMaterialDraft(
-                    id: draft.id,
-                    kind: draft.kind,
-                    title: draft.title,
-                    caption: draft.caption,
-                    textContent: draft.textContent,
-                    urlString: draft.urlString,
-                    filename: draft.filename,
-                    mimeType: draft.mimeType,
-                    payload: payload,
-                    thumbnailData: draft.thumbnailData,
-                    width: draft.width,
-                    height: draft.height,
-                    byteSize: byteSize,
-                    sequence: draft.sequence,
-                    storageMode: .syncedPayload,
-                    sourceDevice: draft.sourceDevice,
-                    createdAt: draft.createdAt
-                )
-                onProgress(1)
-            } else {
-                let storedFile = try await workAssetVault.storeFileStreaming(
-                    at: sourceFileURL,
-                    id: UUID(),
-                    suggestedExtension: draft.filename.map { ($0 as NSString).pathExtension },
-                    expectedByteCount: reportedSize,
-                    onProgress: onProgress
-                )
-                stagedVaultKey = storedFile.key
-                byteSize = storedFile.byteCount
-                storageMode = .localVault
-                preparedDraft = draft
-            }
+            let storedFile = try await workAssetVault.storeFileStreaming(
+                at: sourceFileURL,
+                id: UUID(),
+                suggestedExtension: draft.filename.map { ($0 as NSString).pathExtension },
+                expectedByteCount: sourceFileByteSize ?? draft.byteSize ?? -1,
+                onProgress: onProgress
+            )
+            stagedVaultKey = storedFile.key
+            byteSize = storedFile.byteCount
+            storageMode = .localVault
+            preparedDraft = draft
         } else {
             byteSize = draft.byteSize ?? Int64(draft.payload?.count ?? 0)
-            if draft.payload == nil {
-                storageMode = draft.storageMode
-            } else if draft.storageMode == .localVault
-                        || !WorkAssetVault.shouldMirror(byteCount: byteSize) {
-                storageMode = .localVault
-            } else {
-                storageMode = .syncedPayload
-            }
+            storageMode = draft.payload == nil ? draft.storageMode : .localVault
             preparedDraft = draft
             if storageMode == .localVault, let payload = draft.payload {
                 stagedVaultKey = try await workAssetVault.store(
@@ -765,7 +786,7 @@ extension ConversationStore {
                 )
                 owner.setValue(itemDraft.id, forKey: "id")
                 owner.setValue(itemDraft.captureEnvelopeID, forKey: "captureEnvelopeID")
-                Self.apply(itemDraft.content, to: owner)
+                try Self.apply(itemDraft.content, to: owner)
                 owner.setValue(itemDraft.createdAt, forKey: "createdAt")
                 owner.setValue(now, forKey: "updatedAt")
 
@@ -797,9 +818,9 @@ extension ConversationStore {
         return record
     }
 
-    /// Add a material and update the parent card in one Core Data save. Large
-    /// payloads automatically move to the explicit device-local vault; their
-    /// row syncs metadata + availability instead of over-promising a CloudKit asset.
+    /// Add a material and update the parent card in one Core Data save. Payload
+    /// bytes go to the explicit device-local vault; their row syncs metadata +
+    /// availability instead of over-promising a CloudKit asset.
     func addWorkMaterial(
         _ draft: WorkMaterialDraft,
         to workItemID: UUID,
@@ -815,14 +836,8 @@ extension ConversationStore {
         }
 
         let byteSize = draft.byteSize ?? Int64(draft.payload?.count ?? 0)
-        let storageMode: WorkMaterialStorageMode
-        if draft.payload == nil {
-            storageMode = draft.storageMode
-        } else if draft.storageMode == .localVault || !WorkAssetVault.shouldMirror(byteCount: byteSize) {
-            storageMode = .localVault
-        } else {
-            storageMode = .syncedPayload
-        }
+        let storageMode: WorkMaterialStorageMode = draft.payload == nil
+            ? draft.storageMode : .localVault
 
         var newVaultKey: String?
         if storageMode == .localVault, let payload = draft.payload {
@@ -854,36 +869,6 @@ extension ConversationStore {
         expectedOwnerRevision: Int64? = nil,
         onProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> WorkMaterialRecord {
-        if WorkAssetVault.shouldMirror(byteCount: byteSize) {
-            let scoped = sourceURL.startAccessingSecurityScopedResource()
-            defer { if scoped { sourceURL.stopAccessingSecurityScopedResource() } }
-            let payload = try Data(contentsOf: sourceURL, options: [.mappedIfSafe])
-            let mirroredDraft = WorkMaterialDraft(
-                id: draft.id,
-                kind: draft.kind,
-                title: draft.title,
-                caption: draft.caption,
-                textContent: draft.textContent,
-                urlString: draft.urlString,
-                filename: draft.filename,
-                mimeType: draft.mimeType,
-                payload: payload,
-                thumbnailData: draft.thumbnailData,
-                width: draft.width,
-                height: draft.height,
-                byteSize: byteSize,
-                sequence: draft.sequence,
-                sourceDevice: draft.sourceDevice,
-                createdAt: draft.createdAt
-            )
-            onProgress(1)
-            return try await addWorkMaterial(
-                mirroredDraft,
-                to: workItemID,
-                expectedOwnerRevision: expectedOwnerRevision
-            )
-        }
-
         try await ensureLoaded()
         if let existing = try await fetchWorkMaterial(id: draft.id) {
             guard existing.workItemID == workItemID else {
@@ -967,148 +952,8 @@ extension ConversationStore {
         return record
     }
 
-    /// Metadata-only edit; payload bytes and storage provenance cannot be lost by
-    /// an autosave. `replaceWorkMaterialPayload` owns that explicit transition.
-    func updateWorkMaterial(id: UUID, edit: WorkMaterialEdit) async throws -> WorkMaterialRecord? {
-        try await ensureLoaded()
-        let context = newWriteContext()
-        let outcome = try await context.perform { [context] () -> (Bool, UUID?) in
-            guard let row = try Self.workMaterialRow(id: id, in: context) else {
-                return (false, nil)
-            }
-            let storageMode = WorkMaterialStorageMode(
-                stored: row.value(forKey: "storageMode") as? String
-            )
-            var persistedEdit = edit
-            persistedEdit.textContent = Self.workboardSyncedTextContent(
-                kind: edit.kind,
-                storageMode: storageMode,
-                proposed: edit.textContent
-            )
-            let existing = Self.materialEdit(of: row)
-            guard existing != persistedEdit else {
-                return (false, row.value(forKey: "workItemID") as? UUID)
-            }
-            row.setValue(persistedEdit.kind.rawValue, forKey: "kind")
-            row.setValue(persistedEdit.title, forKey: "title")
-            row.setValue(persistedEdit.caption, forKey: "caption")
-            row.setValue(persistedEdit.textContent, forKey: "textContent")
-            row.setValue(persistedEdit.urlString, forKey: "urlString")
-            row.setValue(persistedEdit.filename, forKey: "filename")
-            row.setValue(persistedEdit.mimeType, forKey: "mimeType")
-            row.setValue(
-                storageMode == .syncedPayload ? persistedEdit.thumbnailData : nil,
-                forKey: "thumbnailData"
-            )
-            row.setValue(persistedEdit.width.map { NSNumber(value: Int32(clamping: $0)) }, forKey: "width")
-            row.setValue(persistedEdit.height.map { NSNumber(value: Int32(clamping: $0)) }, forKey: "height")
-            row.setValue(NSNumber(value: Int32(clamping: persistedEdit.sequence)), forKey: "sequence")
-            let now = Date()
-            row.setValue(now, forKey: "updatedAt")
-            let ownerID = row.value(forKey: "workItemID") as? UUID
-            if let ownerID, let item = try Self.workItemRow(id: ownerID, in: context) {
-                item.setValue(now, forKey: "updatedAt")
-            }
-            try context.save()
-            return (true, ownerID)
-        }
-        if outcome.0 { await postDidChange() }
-        return try await fetchWorkMaterial(id: id)
-    }
-
-    /// Replace payload bytes and choose their safe storage lane from size. The
-    /// new vault file is published before the row points at it; on save failure
-    /// it is removed, and the old key is removed only after the save commits.
-    func replaceWorkMaterialPayload(
-        id: UUID,
-        data: Data,
-        sourceDevice: String?,
-        expectedOwnerRevision: Int64? = nil,
-        forceLocal: Bool = false,
-        replacementFilename: String? = nil,
-        replacementMIMEType: String? = nil,
-        replacementTextContent: String? = nil,
-        replacementThumbnailData: Data? = nil,
-        updatesReplacementMetadata: Bool = false
-    ) async throws -> WorkMaterialRecord? {
-        try await ensureLoaded()
-        guard let existing = try await fetchWorkMaterial(id: id) else { return nil }
-        let byteSize = Int64(data.count)
-        let storageMode: WorkMaterialStorageMode =
-            (forceLocal || !WorkAssetVault.shouldMirror(byteCount: byteSize))
-            ? .localVault : .syncedPayload
-        var newKey: String?
-        if storageMode == .localVault {
-            newKey = try await workAssetVault.store(
-                data,
-                id: UUID(),
-                suggestedExtension: existing.filename.map { ($0 as NSString).pathExtension }
-            )
-        }
-
-        let context = newWriteContext()
-        let oldKey: String?
-        do {
-            oldKey = try await context.perform { [context] in
-                guard let row = try Self.workMaterialRow(id: id, in: context) else {
-                    throw WorkboardStoreError.materialNotFound
-                }
-                if let expectedOwnerRevision {
-                    guard let ownerID = row.value(forKey: "workItemID") as? UUID,
-                          let owner = try Self.workItemRow(id: ownerID, in: context),
-                          let ownerUpdatedAt = owner.value(forKey: "updatedAt") as? Date,
-                          Self.workRevision(for: ownerUpdatedAt) == expectedOwnerRevision else {
-                        throw WorkboardStoreError.staleRevision
-                    }
-                }
-                let oldKey = row.value(forKey: "localVaultKey") as? String
-                row.setValue(storageMode == .syncedPayload ? data : nil, forKey: "payload")
-                row.setValue(storageMode.rawValue, forKey: "storageMode")
-                row.setValue(newKey, forKey: "localVaultKey")
-                row.setValue(sourceDevice, forKey: "sourceDevice")
-                row.setValue(NSNumber(value: byteSize), forKey: "byteSize")
-                if updatesReplacementMetadata {
-                    if let replacementFilename {
-                        row.setValue(replacementFilename, forKey: "filename")
-                    }
-                    if let replacementMIMEType {
-                        row.setValue(replacementMIMEType, forKey: "mimeType")
-                    }
-                    let kind = WorkMaterialKind(stored: row.value(forKey: "kind") as? String)
-                    row.setValue(
-                        Self.workboardSyncedTextContent(
-                            kind: kind,
-                            storageMode: storageMode,
-                            proposed: replacementTextContent
-                        ),
-                        forKey: "textContent"
-                    )
-                    row.setValue(
-                        storageMode == .syncedPayload ? replacementThumbnailData : nil,
-                        forKey: "thumbnailData"
-                    )
-                }
-                let now = Date()
-                row.setValue(now, forKey: "updatedAt")
-                if let ownerID = row.value(forKey: "workItemID") as? UUID,
-                   let owner = try Self.workItemRow(id: ownerID, in: context) {
-                    owner.setValue(now, forKey: "updatedAt")
-                }
-                try context.save()
-                return oldKey
-            }
-        } catch {
-            if let newKey { try? await workAssetVault.remove(newKey) }
-            throw error
-        }
-        if let newKey { await workAssetVault.markReferenced(newKey) }
-        if let oldKey, oldKey != newKey { try? await workAssetVault.remove(oldKey) }
-        await postDidChange()
-        return try await fetchWorkMaterial(id: id)
-    }
-
     /// Reattach a file in place without changing material identity, order,
-    /// caption or title. Large files stream to a new vault key; the old payload
+    /// caption or title. Files stream to a new vault key; the old payload
     /// remains authoritative until the owner-revision CAS commits.
     func replaceWorkMaterialPayloadFile(
         id: UUID,
@@ -1116,30 +961,10 @@ extension ConversationStore {
         byteSize: Int64,
         filename: String?,
         mimeType: String?,
-        textContent: String?,
-        thumbnailData: Data?,
         sourceDevice: String?,
         expectedOwnerRevision: Int64,
         onProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> WorkMaterialRecord? {
-        if WorkAssetVault.shouldMirror(byteCount: byteSize) {
-            let scoped = sourceURL.startAccessingSecurityScopedResource()
-            defer { if scoped { sourceURL.stopAccessingSecurityScopedResource() } }
-            let data = try Data(contentsOf: sourceURL, options: [.mappedIfSafe])
-            onProgress(1)
-            return try await replaceWorkMaterialPayload(
-                id: id,
-                data: data,
-                sourceDevice: sourceDevice,
-                expectedOwnerRevision: expectedOwnerRevision,
-                replacementFilename: filename,
-                replacementMIMEType: mimeType,
-                replacementTextContent: textContent,
-                replacementThumbnailData: thumbnailData,
-                updatesReplacementMetadata: true
-            )
-        }
-
         try await ensureLoaded()
         let storedFile = try await workAssetVault.storeFileStreaming(
             at: sourceURL,
@@ -1170,6 +995,9 @@ extension ConversationStore {
                 row.setValue(NSNumber(value: storedFile.byteCount), forKey: "byteSize")
                 if let filename { row.setValue(filename, forKey: "filename") }
                 if let mimeType { row.setValue(mimeType, forKey: "mimeType") }
+                // Extracts and previews are user file content; the reattached
+                // payload is device-local, so neither is carried into the
+                // synced row.
                 row.setValue(nil, forKey: "textContent")
                 row.setValue(nil, forKey: "thumbnailData")
                 let now = Date()
@@ -1186,40 +1014,6 @@ extension ConversationStore {
         if let oldKey, oldKey != newKey { try? await workAssetVault.remove(oldKey) }
         await postDidChange()
         return try await fetchWorkMaterial(id: id)
-    }
-
-    func reorderWorkMaterials(workItemID: UUID, orderedIDs: [UUID]) async throws {
-        try await ensureLoaded()
-        let context = newWriteContext()
-        let changed = try await context.perform { [context] in
-            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
-            request.predicate = NSPredicate(format: "workItemID == %@", workItemID as CVarArg)
-            let rows = try context.fetch(request)
-            var rowsByID: [UUID: [NSManagedObject]] = [:]
-            for row in rows {
-                guard let id = row.value(forKey: "id") as? UUID else { continue }
-                rowsByID[id, default: []].append(row)
-            }
-            var changed = false
-            for (index, id) in orderedIDs.enumerated() {
-                guard let matchingRows = rowsByID[id] else { continue }
-                let next = Int32(clamping: index)
-                for row in matchingRows {
-                    let current = (row.value(forKey: "sequence") as? NSNumber)?.int32Value
-                    guard current != next else { continue }
-                    row.setValue(NSNumber(value: next), forKey: "sequence")
-                    row.setValue(Date(), forKey: "updatedAt")
-                    changed = true
-                }
-            }
-            guard changed else { return false }
-            if let item = try Self.workItemRow(id: workItemID, in: context) {
-                item.setValue(Date(), forKey: "updatedAt")
-            }
-            try context.save()
-            return true
-        }
-        if changed { await postDidChange() }
     }
 
     func deleteWorkMaterial(
@@ -1432,10 +1226,11 @@ extension ConversationStore {
     // MARK: - Atomic dispatch preparation
 
     /// Atomically freeze the exact approved brief, create its gateway-bound
-    /// conversation, append the initial `sending` user turn + attachment copies,
-    /// and reopen/point the work item. The returned `created` flag is the crash /
-    /// retry guard: a repeated caller-owned dispatch id returns existing rows and
-    /// must not trigger transport again. This method itself performs NO network I/O.
+    /// conversation, append the initial retryable user turn + attachment copies,
+    /// stamp the run as dispatched, and reopen/point the work item. A dispatch id
+    /// that already exists is refused with `identifierCollision`, so a replayed
+    /// preparation can never authorize a second attempt. This method itself
+    /// performs NO network I/O.
     func prepareWorkDispatch(_ preparation: WorkDispatchPreparation) async throws -> PreparedWorkDispatch {
         let snapshotData: Data
         do {
@@ -1449,35 +1244,9 @@ extension ConversationStore {
             throw WorkboardStoreError.itemNotFound
         }
         let context = newWriteContext()
-        let transaction = try await context.perform { [context] () -> (Bool, ConversationRecord, MessageRecord, Date) in
-            if let existingDispatch = try Self.workDispatchRow(id: preparation.dispatchID, in: context) {
-                guard existingDispatch.value(forKey: "workItemID") as? UUID == preparation.workItemID,
-                      existingDispatch.value(forKey: "conversationID") as? UUID == preparation.conversationID,
-                      existingDispatch.value(forKey: "userMessageID") as? UUID == preparation.userMessageID,
-                      existingDispatch.value(forKey: "gatewayRef") as? String == preparation.gatewayRef,
-                      existingDispatch.value(forKey: "gatewayNameSnapshot") as? String == preparation.gatewayName,
-                      existingDispatch.value(forKey: "titleSnapshot") as? String == preparation.briefSnapshot.title,
-                      existingDispatch.value(forKey: "promptSnapshot") as? String == preparation.canonicalPrompt,
-                      existingDispatch.value(forKey: "briefSnapshotData") as? Data == snapshotData,
-                      existingDispatch.value(forKey: "deliveryAttemptID") as? UUID == preparation.deliveryAttemptID,
-                      let conversation = try Self.conversationRow(id: preparation.conversationID, in: context),
-                      let message = try Self.messageRow(id: preparation.userMessageID, in: context),
-                      conversation.value(forKey: "backend") as? String == preparation.gatewayRef,
-                      message.value(forKey: "role") as? String == "user",
-                      message.value(forKey: "text") as? String == preparation.canonicalPrompt,
-                      message.value(forKey: "sourceDevice") as? String == preparation.sourceDevice,
-                      message.value(forKey: "fileTransferLaneID") as? String == preparation.fileTransferLaneID,
-                      Self.workAttachments(on: message, match: preparation.attachments) else {
-                    throw WorkboardStoreError.identifierCollision
-                }
-                let createdAt = existingDispatch.value(forKey: "createdAt") as? Date
-                    ?? preparation.preparedAt
-                return (
-                    false,
-                    ConversationRecord(managedObject: conversation),
-                    MessageRecord(managedObject: message),
-                    createdAt
-                )
+        let transaction = try await context.perform { [context] () -> (ConversationRecord, MessageRecord, Date) in
+            guard try Self.workDispatchRow(id: preparation.dispatchID, in: context) == nil else {
+                throw WorkboardStoreError.identifierCollision
             }
 
             guard let item = try Self.workItemRow(id: preparation.workItemID, in: context) else {
@@ -1553,9 +1322,11 @@ extension ConversationStore {
             message.setValue(preparation.canonicalPrompt, forKey: "text")
             message.setValue(messageCreatedAt, forKey: "createdAt")
             message.setValue(preparation.sourceDevice, forKey: "sourceDevice")
-            // Prepared, not dispatched. The existing retry pipeline owns the
-            // failed→sending compare-and-set and therefore the one network
-            // attempt; this transaction must not pre-claim it as in flight.
+            // The existing retry pipeline owns the failed→sending compare-and-set
+            // and therefore the one network attempt; this transaction must not
+            // pre-claim it as in flight. Until retry claims it the run is a
+            // reviewable failure, which is the honest fail-closed reading of a
+            // turn that is persisted but was never handed to transport.
             message.setValue("failed", forKey: "status")
             message.setValue(preparation.deliveryAttemptID, forKey: "deliveryAttemptID")
             message.setValue(preparation.fileTransferLaneID, forKey: "fileTransferLaneID")
@@ -1587,7 +1358,12 @@ extension ConversationStore {
             dispatch.setValue(preparation.canonicalPrompt, forKey: "promptSnapshot")
             dispatch.setValue(snapshotData, forKey: "briefSnapshotData")
             dispatch.setValue(messageCreatedAt, forKey: "createdAt")
-            dispatch.setValue(nil, forKey: "dispatchedAt")
+            // Stamped in the same save that persists the turn. A run whose rows
+            // committed has crossed the dispatch boundary whatever happens to the
+            // process next, so a kill before retry claims the turn leaves a
+            // reviewable run reply correlation can still link — never a card
+            // stranded in a state nothing retries.
+            dispatch.setValue(messageCreatedAt, forKey: "dispatchedAt")
 
             item.setValue(preparation.dispatchID, forKey: "currentDispatchID")
             item.setValue(nil, forKey: "completedAt")
@@ -1599,14 +1375,13 @@ extension ConversationStore {
 
             try context.save()
             return (
-                true,
                 ConversationRecord(managedObject: conversation),
                 MessageRecord(managedObject: message),
                 messageCreatedAt
             )
         }
 
-        if transaction.0 { await postDidChange() }
+        await postDidChange()
         let fallbackDispatch = WorkDispatchRecord(
             id: preparation.dispatchID,
             workItemID: preparation.workItemID,
@@ -1617,15 +1392,18 @@ extension ConversationStore {
             titleSnapshot: preparation.briefSnapshot.title,
             promptSnapshot: preparation.canonicalPrompt,
             briefSnapshot: preparation.briefSnapshot,
-            createdAt: transaction.3,
-            dispatchedAt: nil,
+            createdAt: transaction.2,
+            dispatchedAt: transaction.2,
             reviewAcknowledgedAt: nil,
             reviewAcknowledgedResultKey: nil,
             conversationRemovedAt: nil,
-            activity: .prepared
+            activity: .failed(
+                messageID: preparation.userMessageID,
+                attemptID: preparation.deliveryAttemptID
+            )
         )
         let fallbackUpdatedAt = Date(timeIntervalSinceReferenceDate: max(
-            transaction.3.timeIntervalSinceReferenceDate,
+            transaction.2.timeIntervalSinceReferenceDate,
             pretransactionItem.updatedAt.timeIntervalSinceReferenceDate.nextUp
         ))
         let fallbackDispatches = pretransactionItem.dispatches.filter {
@@ -1651,40 +1429,30 @@ extension ConversationStore {
         let dispatch = item.dispatches.first(where: { $0.id == preparation.dispatchID })
             ?? fallbackDispatch
         return PreparedWorkDispatch(
-            created: transaction.0,
             workItem: item,
             dispatch: dispatch,
-            conversation: transaction.1,
-            message: transaction.2
+            conversation: transaction.0,
+            message: transaction.1
         )
-    }
-
-    /// Cross the persisted dispatch boundary immediately before invoking the
-    /// existing retry pipeline. Preparing stays Draft; once this stamp lands,
-    /// retry's failed→sending CAS makes the card Waiting and sent/failed makes it
-    /// Review. Repeated calls keep the first stamp so history cannot drift.
-    @discardableResult
-    func markWorkDispatchStarted(id: UUID, at startedAt: Date = Date()) async throws -> Bool {
-        try await ensureLoaded()
-        let context = newWriteContext()
-        let changed = try await context.perform { [context] in
-            guard let dispatch = try Self.workDispatchRow(id: id, in: context) else {
-                throw WorkboardStoreError.dispatchNotFound
-            }
-            guard dispatch.value(forKey: "dispatchedAt") as? Date == nil else { return false }
-            dispatch.setValue(startedAt, forKey: "dispatchedAt")
-            try context.save()
-            return true
-        }
-        if changed { await postDidChange() }
-        return changed
     }
 
     // MARK: - Fetch + projection
 
+    /// One row, one vault probe. This sits on the material import/read-back hot
+    /// path and is called once per image on every board load, so it must never
+    /// project the whole board to answer a single id.
     private func fetchWorkMaterial(id: UUID) async throws -> WorkMaterialRecord? {
-        let records = try await fetchWorkItems(itemID: nil, captureEnvelopeID: nil)
-        return records.lazy.flatMap(\.materials).first { $0.id == id }
+        try await ensureLoaded()
+        let context = newReadContext()
+        let stored = try await context.perform { [context] () -> StoredWorkMaterial? in
+            try Self.workMaterialRow(id: id, in: context).map(StoredWorkMaterial.init)
+        }
+        guard let stored else { return nil }
+        var availableLocalKeys: Set<String> = []
+        if let key = stored.localVaultKey, await workAssetVault.contains(key) {
+            availableLocalKeys.insert(key)
+        }
+        return stored.record(availableLocalKeys: availableLocalKeys)
     }
 
     private func fetchWorkItems(
@@ -1885,7 +1653,14 @@ extension ConversationStore {
     private static func workMaterialRow(id: UUID, in context: NSManagedObjectContext) throws -> NSManagedObject? {
         let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
         request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
-        request.sortDescriptors = [NSSortDescriptor(key: "updatedAt", ascending: false)]
+        // Same newest-wins ordering `deduplicatedWorkMaterials` applies, so a
+        // single-row read and the full projection agree on which physical row of
+        // a CloudKit-duplicated material is canonical.
+        request.sortDescriptors = [
+            NSSortDescriptor(key: "updatedAt", ascending: false),
+            NSSortDescriptor(key: "createdAt", ascending: false),
+            NSSortDescriptor(key: "title", ascending: false),
+        ]
         request.fetchLimit = 1
         return try context.fetch(request).first
     }
@@ -1924,7 +1699,23 @@ extension ConversationStore {
         )
     }
 
-    private static func apply(_ content: WorkItemContent, to row: NSManagedObject) {
+    /// Single write boundary for editable brief content, so every ingress —
+    /// editor, share drain, Shortcuts/Siri — is held to the same field bound.
+    /// An unattended writer can pipe a whole document into one field; refusing
+    /// is honest, whereas truncating silently discards the user's text.
+    private static func apply(_ content: WorkItemContent, to row: NSManagedObject) throws {
+        let bounded = [
+            content.title,
+            content.objective,
+            content.context,
+            content.desiredOutcome,
+            content.constraints,
+        ]
+        guard bounded.allSatisfy({
+            $0.count <= WorkItemContentLimits.maximumFieldCharacters
+        }) else {
+            throw WorkboardStoreError.contentTooLong
+        }
         let previousPinned = (row.value(forKey: "isPinned") as? NSNumber)?.boolValue ?? false
         if previousPinned != content.isPinned,
            row.value(forKey: "boardOrder") != nil {
@@ -1988,30 +1779,6 @@ extension ConversationStore {
 
     private static func workRevision(for date: Date) -> Int64 {
         Int64(bitPattern: date.timeIntervalSinceReferenceDate.bitPattern)
-    }
-
-    private static func materialEdit(of row: NSManagedObject) -> WorkMaterialEdit {
-        let kind = WorkMaterialKind(stored: row.value(forKey: "kind") as? String)
-        let storageMode = WorkMaterialStorageMode(
-            stored: row.value(forKey: "storageMode") as? String
-        )
-        return WorkMaterialEdit(
-            kind: kind,
-            title: row.value(forKey: "title") as? String ?? "",
-            caption: row.value(forKey: "caption") as? String ?? "",
-            textContent: workboardSyncedTextContent(
-                kind: kind,
-                storageMode: storageMode,
-                proposed: row.value(forKey: "textContent") as? String
-            ),
-            urlString: row.value(forKey: "urlString") as? String,
-            filename: row.value(forKey: "filename") as? String,
-            mimeType: row.value(forKey: "mimeType") as? String,
-            thumbnailData: row.value(forKey: "thumbnailData") as? Data,
-            width: (row.value(forKey: "width") as? NSNumber)?.intValue,
-            height: (row.value(forKey: "height") as? NSNumber)?.intValue,
-            sequence: (row.value(forKey: "sequence") as? NSNumber)?.intValue ?? 0
-        )
     }
 
     /// `textContent` is part of the CloudKit-mirrored row. Notes/transcripts may
@@ -2127,46 +1894,6 @@ extension ConversationStore {
         default:
             return .waiting
         }
-    }
-
-    // MARK: - Search
-
-    private static func workSearchTokens(_ query: String) -> [String] {
-        normalizedWorkSearch(query)
-            .split(whereSeparator: \.isWhitespace)
-            .map(String.init)
-    }
-
-    private static func matchesWorkSearch(_ item: WorkItemRecord, tokens: [String]) -> Bool {
-        var fields = [
-            item.content.title,
-            item.content.objective,
-            item.content.context,
-            item.content.desiredOutcome,
-            item.content.constraints,
-        ]
-        for material in item.materials {
-            fields += [
-                material.title,
-                material.caption,
-                material.textContent ?? "",
-                material.urlString ?? "",
-                material.filename ?? "",
-            ]
-        }
-        for dispatch in item.dispatches {
-            fields += [
-                dispatch.titleSnapshot,
-                dispatch.promptSnapshot,
-                dispatch.gatewayNameSnapshot,
-            ]
-        }
-        let haystack = normalizedWorkSearch(fields.joined(separator: "\n"))
-        return tokens.allSatisfy(haystack.contains)
-    }
-
-    private static func normalizedWorkSearch(_ value: String) -> String {
-        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 
     private static func workSnapshotEncoder() -> JSONEncoder {

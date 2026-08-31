@@ -276,6 +276,7 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
             replaceMaterial: { _, _, _, _, _ in throw TestError.unexpectedCall },
             deleteItem: { _ in throw TestError.unexpectedCall },
             duplicateItem: { _ in throw TestError.unexpectedCall },
+            reorderItems: { _ in throw TestError.unexpectedCall },
             setState: { _, _ in throw TestError.unexpectedCall },
             acknowledgeRun: { _, _, _ in throw TestError.unexpectedCall },
             dispatch: { _ in throw TestError.unexpectedCall },
@@ -324,6 +325,7 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
             replaceMaterial: { _, _, _, _, _ in throw TestError.unexpectedCall },
             deleteItem: { _ in throw TestError.unexpectedCall },
             duplicateItem: { _ in throw TestError.unexpectedCall },
+            reorderItems: { _ in throw TestError.unexpectedCall },
             setState: { _, _ in throw TestError.unexpectedCall },
             acknowledgeRun: { _, _, _ in throw TestError.unexpectedCall },
             dispatch: { _ in throw TestError.unexpectedCall },
@@ -423,6 +425,7 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
             replaceMaterial: { _, _, _, _, _ in throw TestError.unexpectedCall },
             deleteItem: { _ in throw TestError.unexpectedCall },
             duplicateItem: { _ in throw TestError.unexpectedCall },
+            reorderItems: { _ in throw TestError.unexpectedCall },
             setState: { _, _ in throw TestError.unexpectedCall },
             acknowledgeRun: { _, _, _ in throw TestError.unexpectedCall },
             dispatch: { [harness] _ in

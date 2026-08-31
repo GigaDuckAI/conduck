@@ -30,7 +30,7 @@ struct BriefWorkboardIntent: AppIntent {
         let items = try await ConversationStore.shared.fetchWorkItems()
         let review = items.filter { $0.state == .review }
         let failures = review.filter { $0.latestDispatch?.activity.isFailure == true }.count
-        let briefing = WorkboardBriefingBuilder.build(
+        let spokenText = WorkboardBriefingBuilder.build(
             from: WorkboardBriefingFacts(
                 repliesToReview: max(0, review.count - failures),
                 failuresToReview: failures,
@@ -39,8 +39,8 @@ struct BriefWorkboardIntent: AppIntent {
             )
         )
         return .result(
-            value: briefing.spokenText,
-            dialog: IntentDialog(stringLiteral: briefing.spokenText)
+            value: spokenText,
+            dialog: IntentDialog(stringLiteral: spokenText)
         )
     }
 }

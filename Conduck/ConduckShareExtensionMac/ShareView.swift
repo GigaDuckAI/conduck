@@ -94,11 +94,18 @@ enum WorkboardCommitFailure: Hashable, Identifiable, Sendable {
     case unavailable
     case tooLarge
     case empty
+    /// Something in the share is not a regular file — a folder, a package
+    /// document such as `.rtfd` or `.pages`, or a symlink.
+    case unsupportedItem
+    /// The assembled capture violates the durable envelope contract, so the
+    /// same share can never publish however often it is replayed.
+    case invalidContent
 
     var id: Self { self }
 
     /// Only a transient filesystem failure can improve when replayed unchanged.
-    /// Size and empty-input failures require the person to change the share.
+    /// Size, empty-input, unsupported-item, and contract failures all require
+    /// the person to change the share.
     var allowsRetry: Bool {
         if case .unavailable = self { return true }
         return false
@@ -944,6 +951,10 @@ struct ShareView: View {
             return Strings.workboardErrorTooLarge
         case .empty:
             return Strings.workboardErrorEmpty
+        case .unsupportedItem:
+            return Strings.workboardErrorUnsupportedItem
+        case .invalidContent:
+            return Strings.workboardErrorInvalidContent
         }
     }
 
@@ -1047,6 +1058,12 @@ struct ShareView: View {
         static let workboardErrorEmpty = String(localized: "share.work.error.empty",
             defaultValue: "There’s nothing to add yet. Add a message or include at least one shared item, then try again.",
             comment: "Actionable empty Workboard capture failure message")
+        static let workboardErrorUnsupportedItem = String(localized: "share.work.error.unsupportedItem",
+            defaultValue: "Folders and package documents can’t be added to Work. Share the files inside them instead.",
+            comment: "Non-retryable failure message when a shared item is not a regular file")
+        static let workboardErrorInvalidContent = String(localized: "share.work.error.invalidContent",
+            defaultValue: "Something in this share can’t be saved to Work. Share it a different way, or share fewer items.",
+            comment: "Non-retryable failure message when a share breaks the Work capture contract")
         static let retry = String(localized: "share.retry",
             defaultValue: "Try Again",
             comment: "Retry button after a Share Extension persistence failure")

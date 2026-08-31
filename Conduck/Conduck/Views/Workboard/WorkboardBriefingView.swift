@@ -153,7 +153,7 @@ struct WorkboardBriefingView: View {
 
     @ViewBuilder
     private func briefingGroup(
-        state: WorkboardItemState,
+        state: WorkItemState,
         items: [WorkboardItemSnapshot]
     ) -> some View {
         if !items.isEmpty {
@@ -185,7 +185,7 @@ struct WorkboardBriefingView: View {
                                     Label {
                                         Text(reviewBy, format: .relative(presentation: .named))
                                     } icon: {
-                                        Image(systemName: "bell")
+                                        Image(systemName: "calendar")
                                     }
                                     .font(.caption)
                                     .foregroundStyle(reviewBy < Date() ? AppColors.error : AppColors.textTertiary)

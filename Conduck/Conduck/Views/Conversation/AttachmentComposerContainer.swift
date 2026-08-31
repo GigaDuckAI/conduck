@@ -241,52 +241,23 @@ struct AttachmentComposerContainer: View {
     }
 
     private var activePhotosPickerPresentation: Binding<Bool> {
-        activePresentationBinding(
-            get: { coordinator.showingPhotosPicker },
-            set: { coordinator.showingPhotosPicker = $0 }
-        )
+        $coordinator.showingPhotosPicker.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeFileImporterPresentation: Binding<Bool> {
-        activePresentationBinding(
-            get: { coordinator.showingFileImporter },
-            set: { coordinator.showingFileImporter = $0 }
-        )
+        $coordinator.showingFileImporter.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeSetupGuidePresentation: Binding<Bool> {
-        activePresentationBinding(
-            get: { showingSetupGuide },
-            set: { showingSetupGuide = $0 }
-        )
+        $showingSetupGuide.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeCameraPresentation: Binding<Bool> {
-        activePresentationBinding(
-            get: { coordinator.showingCamera },
-            set: { coordinator.showingCamera = $0 }
-        )
+        $coordinator.showingCamera.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeCameraDeniedPresentation: Binding<Bool> {
-        activePresentationBinding(
-            get: { coordinator.showingCameraDeniedAlert },
-            set: { coordinator.showingCameraDeniedAlert = $0 }
-        )
-    }
-
-    private func activePresentationBinding(
-        get: @escaping () -> Bool,
-        set: @escaping (Bool) -> Void
-    ) -> Binding<Bool> {
-        Binding(
-            get: { workbenchDestinationIsActive && get() },
-            set: { value in
-                // Always accept dismissal. Only the active destination may
-                // originate a presentation.
-                if !value || workbenchDestinationIsActive { set(value) }
-            }
-        )
+        $coordinator.showingCameraDeniedAlert.gated(by: workbenchDestinationIsActive)
     }
 
     /// The setup-sheet title — the bound gateway's display name (resolved via the

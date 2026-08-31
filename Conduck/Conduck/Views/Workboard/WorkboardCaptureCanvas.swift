@@ -105,7 +105,7 @@ struct WorkboardCaptureCanvas: View {
     #endif
 
     private var isImporting: Bool {
-        viewModel.isImportingIntoWorkspace(item.id)
+        viewModel.isCapturingIntoAnyWorkspace
     }
 
     var body: some View {
@@ -192,26 +192,17 @@ struct WorkboardCaptureCanvas: View {
             ))
         }
         #endif
-        .alert(item: activeLargeImportConfirmation) { confirmation in
-            Alert(
-                title: Text(LocalizedStringResource(
-                    "workboard.material.large.confirm.title",
-                    defaultValue: "Add large files?"
-                )),
-                message: Text(verbatim: confirmation.message),
-                primaryButton: .default(Text(LocalizedStringResource(
-                    "workboard.material.large.confirm.add",
-                    defaultValue: "Add to Work"
-                ))) {
-                    largeImportConfirmation = nil
-                    Task { await importResolvedBatch(confirmation.batch) }
-                },
-                secondaryButton: .cancel {
-                    largeImportConfirmation = nil
-                    reclaim(confirmation.batch)
-                }
-            )
-        }
+        .workboardLargeImportAlert(
+            item: activeLargeImportConfirmation,
+            onConfirm: { confirmation in
+                largeImportConfirmation = nil
+                Task { await importResolvedBatch(confirmation.batch) }
+            },
+            onCancel: { confirmation in
+                largeImportConfirmation = nil
+                WorkboardImportMapping.reclaim(confirmation.batch)
+            }
+        )
         .onDisappear {
             dismissTransientCaptureUI()
         }
@@ -221,56 +212,34 @@ struct WorkboardCaptureCanvas: View {
     }
 
     private var activeFileImporterIsPresented: Binding<Bool> {
-        activePresentation($showsFileImporter)
+        $showsFileImporter.gated(by: workbenchDestinationIsActive)
     }
 
     private var activePhotoPickerIsPresented: Binding<Bool> {
-        activePresentation($showsPhotoPicker)
+        $showsPhotoPicker.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeVoiceCaptureIsPresented: Binding<Bool> {
-        activePresentation($showsVoiceCapture)
+        $showsVoiceCapture.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeMaterialComposer: Binding<WorkboardMaterialComposerKind?> {
-        activePresentation($materialComposer)
+        $materialComposer.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeLargeImportConfirmation: Binding<WorkboardWorkspaceLargeImportConfirmation?> {
-        activePresentation($largeImportConfirmation)
+        $largeImportConfirmation.gated(by: workbenchDestinationIsActive)
     }
 
     #if os(iOS)
     private var activeCameraIsPresented: Binding<Bool> {
-        activePresentation($showsCamera)
+        $showsCamera.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeCameraDeniedIsPresented: Binding<Bool> {
-        activePresentation($showsCameraDeniedAlert)
+        $showsCameraDeniedAlert.gated(by: workbenchDestinationIsActive)
     }
     #endif
-
-    private func activePresentation(_ binding: Binding<Bool>) -> Binding<Bool> {
-        Binding(
-            get: { workbenchDestinationIsActive && binding.wrappedValue },
-            set: { newValue in
-                if !newValue || workbenchDestinationIsActive {
-                    binding.wrappedValue = newValue
-                }
-            }
-        )
-    }
-
-    private func activePresentation<Value>(_ binding: Binding<Value?>) -> Binding<Value?> {
-        Binding(
-            get: { workbenchDestinationIsActive ? binding.wrappedValue : nil },
-            set: { newValue in
-                if newValue == nil || workbenchDestinationIsActive {
-                    binding.wrappedValue = newValue
-                }
-            }
-        )
-    }
 
     private func dismissTransientCaptureUI() {
         if showsPhotoPicker { showsPhotoPicker = false }
@@ -284,7 +253,7 @@ struct WorkboardCaptureCanvas: View {
         if showsCameraDeniedAlert { showsCameraDeniedAlert = false }
         #endif
         if let confirmation = largeImportConfirmation {
-            reclaim(confirmation.batch)
+            WorkboardImportMapping.reclaim(confirmation.batch)
             largeImportConfirmation = nil
         }
         if reviewTask != nil {
@@ -471,15 +440,6 @@ struct WorkboardCaptureCanvas: View {
         }
     }
 
-    @ViewBuilder
-    private var composer: some View {
-        if mode == .composer {
-            compactComposer
-        } else {
-            expandedComposer
-        }
-    }
-
     /// The pinned composer follows the sketch's single-row capture bar. The
     /// full source canvas already exposes Review & Send, and the detail toolbar
     /// owns that deliberate boundary, so it is not repeated below the keyboard.
@@ -517,8 +477,9 @@ struct WorkboardCaptureCanvas: View {
     }
 
     private var attachmentMenu: some View {
-        AttachmentMenu(
-            onPickLibrary: {
+        WorkboardMaterialActions(
+            presentation: .menu,
+            onPickPhotos: {
                 guard workbenchDestinationIsActive else { return }
                 showsPhotoPicker = true
             },
@@ -527,10 +488,13 @@ struct WorkboardCaptureCanvas: View {
                 guard workbenchDestinationIsActive else { return }
                 showsFileImporter = true
             },
-            purpose: .work,
             onAddLink: {
                 guard workbenchDestinationIsActive else { return }
                 materialComposer = .link
+            },
+            onAddNote: {
+                guard workbenchDestinationIsActive else { return }
+                materialComposer = .note
             },
             iconPointSize: attachmentIconPointSize,
             iconFrame: composerControlDiameter
@@ -543,29 +507,18 @@ struct WorkboardCaptureCanvas: View {
     }
 
     private func composerField(lineLimit: ClosedRange<Int>) -> some View {
-        ZStack(alignment: .topLeading) {
-            if composerText.isEmpty {
-                Text(destination.composerPrompt)
-                .font(.body)
-                .foregroundStyle(AppColors.textTertiary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 11)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-            TextField("", text: composerTextBinding, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.body)
-                .foregroundStyle(AppColors.textPrimary)
-                .lineLimit(lineLimit)
-                .focused($composerFocused)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .accessibilityLabel(Text(LocalizedStringResource(
-                    "workboard.workspace.composer.accessibilityLabel",
-                    defaultValue: "Work thought"
-                )))
-        }
+        TextField(
+            String(localized: destination.composerPrompt),
+            text: composerTextBinding,
+            axis: .vertical
+        )
+        .textFieldStyle(.plain)
+        .font(.body)
+        .foregroundStyle(AppColors.textPrimary)
+        .lineLimit(lineLimit)
+        .focused($composerFocused)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, minHeight: WorkboardMetrics.touchTarget)
         .background(AppColors.backgroundSecondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
@@ -776,7 +729,7 @@ struct WorkboardCaptureCanvas: View {
 
     private func importPhotos(_ selection: [PhotosPickerItem]) async {
         defer { photoSelection = [] }
-        guard !viewModel.isImportingIntoWorkspace(item.id) else { return }
+        guard !viewModel.isCapturingIntoAnyWorkspace else { return }
         var items: [WorkboardResolvedImportItem] = []
         var failures = 0
         for (offset, pickerItem) in selection.enumerated() {
@@ -892,89 +845,14 @@ struct WorkboardCaptureCanvas: View {
 
     @MainActor
     private func importResolvedBatch(_ batch: WorkboardResolvedImportBatch) async {
-        var imports: [WorkboardMaterialImport] = []
-        var securityScopedURLs: [URL] = []
-        for item in batch.items {
-            switch item {
-            case .image(let data, let name):
-                imports.append(WorkboardMaterialImport(
-                    kind: .image,
-                    name: name,
-                    mimeType: ImageFormatSniffer.sniff(data).mime,
-                    data: data,
-                    byteCount: Int64(data.count)
-                ))
-            case .imageFile(let url, let name, let mimeType, let byteCount):
-                imports.append(WorkboardMaterialImport(
-                    kind: .image,
-                    name: name,
-                    detail: ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file),
-                    mimeType: mimeType,
-                    fileURL: url,
-                    byteCount: byteCount
-                ))
-            case .file(let url, let name, let mimeType, let byteCount, let isAppOwned):
-                if !isAppOwned, url.startAccessingSecurityScopedResource() {
-                    securityScopedURLs.append(url)
-                }
-                imports.append(WorkboardMaterialImport(
-                    kind: Self.materialKind(filename: name, mimeType: mimeType),
-                    name: name,
-                    detail: byteCount.map {
-                        ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
-                    },
-                    mimeType: mimeType,
-                    fileURL: url,
-                    byteCount: byteCount
-                ))
-            case .text(let value):
-                let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if WorkCaptureEnvelope.isAcceptedWebURL(clean) {
-                    let host = URLComponents(string: clean)?.host ?? clean
-                    imports.append(WorkboardMaterialImport(
-                        kind: .link,
-                        name: host,
-                        detail: host,
-                        textContent: clean,
-                        urlString: clean
-                    ))
-                } else if !clean.isEmpty {
-                    imports.append(WorkboardMaterialImport(
-                        kind: .note,
-                        name: WorkboardWorkspaceCaptureLogic.noteTitle(for: clean),
-                        textContent: clean
-                    ))
-                }
-            }
-        }
-
+        let mapped = WorkboardImportMapping.imports(from: batch)
         await viewModel.importWorkspaceMaterials(
-            imports,
+            mapped.imports,
             to: item.id,
             additionalFailureCount: batch.failedCount
         )
-        for url in securityScopedURLs { url.stopAccessingSecurityScopedResource() }
-        reclaim(batch)
-    }
-
-    nonisolated private static func materialKind(
-        filename: String,
-        mimeType: String?
-    ) -> WorkboardMaterialKind {
-        if let mimeType,
-           let type = UTType(mimeType: mimeType),
-           type.conforms(to: .image) {
-            return .image
-        }
-        if let type = UTType(filenameExtension: (filename as NSString).pathExtension),
-           type.conforms(to: .image) {
-            return .image
-        }
-        return .file
-    }
-
-    private func reclaim(_ batch: WorkboardResolvedImportBatch) {
-        for url in batch.appOwnedURLs { try? FileManager.default.removeItem(at: url) }
+        for url in mapped.scopedURLs { url.stopAccessingSecurityScopedResource() }
+        WorkboardImportMapping.reclaim(batch)
     }
 
     private func newestMaterialFirst(_ lhs: WorkboardMaterialSnapshot, _ rhs: WorkboardMaterialSnapshot) -> Bool {
@@ -1016,13 +894,13 @@ private struct WorkboardPaneDropModifier: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     @State private var isDropTargeted = false
-    @State private var dropSession: WorkboardDropLoadSession?
+    @State private var dropSession: DropSession<WorkboardResolvedDropSlot>?
     @State private var dropProgresses: [Progress] = []
     @State private var dropTimeoutTasks: [Task<Void, Never>] = []
     @State private var largeImportConfirmation: WorkboardWorkspaceLargeImportConfirmation?
 
     private var isImporting: Bool {
-        viewModel.isImportingIntoWorkspace(itemID) || dropSession != nil
+        viewModel.isCapturingIntoAnyWorkspace || dropSession != nil
     }
 
     func body(content: Content) -> some View {
@@ -1039,26 +917,17 @@ private struct WorkboardPaneDropModifier: ViewModifier {
                 isTargeted: $isDropTargeted,
                 perform: handleDrop
             )
-            .alert(item: activeLargeImportConfirmation) { confirmation in
-                Alert(
-                    title: Text(LocalizedStringResource(
-                        "workboard.material.large.confirm.title",
-                        defaultValue: "Add large files?"
-                    )),
-                    message: Text(verbatim: confirmation.message),
-                    primaryButton: .default(Text(LocalizedStringResource(
-                        "workboard.material.large.confirm.add",
-                        defaultValue: "Add to Work"
-                    ))) {
-                        largeImportConfirmation = nil
-                        Task { await importResolvedBatch(confirmation.batch) }
-                    },
-                    secondaryButton: .cancel {
-                        largeImportConfirmation = nil
-                        reclaim(confirmation.batch)
-                    }
-                )
-            }
+            .workboardLargeImportAlert(
+                item: activeLargeImportConfirmation,
+                onConfirm: { confirmation in
+                    largeImportConfirmation = nil
+                    Task { await importResolvedBatch(confirmation.batch) }
+                },
+                onCancel: { confirmation in
+                    largeImportConfirmation = nil
+                    WorkboardImportMapping.reclaim(confirmation.batch)
+                }
+            )
             .onChange(of: itemID) { _, _ in cancelDropWork() }
             .onChange(of: workbenchDestinationIsActive) { _, isActive in
                 if !isActive { cancelDropWork() }
@@ -1068,14 +937,7 @@ private struct WorkboardPaneDropModifier: ViewModifier {
     }
 
     private var activeLargeImportConfirmation: Binding<WorkboardWorkspaceLargeImportConfirmation?> {
-        Binding(
-            get: { workbenchDestinationIsActive ? largeImportConfirmation : nil },
-            set: { confirmation in
-                if confirmation == nil || workbenchDestinationIsActive {
-                    largeImportConfirmation = confirmation
-                }
-            }
-        )
+        $largeImportConfirmation.gated(by: workbenchDestinationIsActive)
     }
 
     private var dropOverlay: some View {
@@ -1131,7 +993,7 @@ private struct WorkboardPaneDropModifier: ViewModifier {
             return !providers.isEmpty
         }
 
-        let session = WorkboardDropLoadSession(
+        let session = DropSession<WorkboardResolvedDropSlot>(
             count: routed.count,
             initialFailureCount: providers.count - routed.count
         )
@@ -1146,7 +1008,7 @@ private struct WorkboardPaneDropModifier: ViewModifier {
         _ provider: NSItemProvider,
         route: WorkboardDropProviderRoute,
         index: Int,
-        session: WorkboardDropLoadSession
+        session: DropSession<WorkboardResolvedDropSlot>
     ) {
         let progress: Progress
         switch route {
@@ -1236,7 +1098,7 @@ private struct WorkboardPaneDropModifier: ViewModifier {
     private func finishDropSlot(
         _ index: Int,
         with result: WorkboardResolvedDropSlot,
-        session: WorkboardDropLoadSession
+        session: DropSession<WorkboardResolvedDropSlot>
     ) {
         guard dropSession === session else {
             reclaim(result)
@@ -1257,80 +1119,14 @@ private struct WorkboardPaneDropModifier: ViewModifier {
 
     @MainActor
     private func importResolvedBatch(_ batch: WorkboardResolvedImportBatch) async {
-        var imports: [WorkboardMaterialImport] = []
-        for item in batch.items {
-            switch item {
-            case .image(let data, let name):
-                imports.append(WorkboardMaterialImport(
-                    kind: .image,
-                    name: name,
-                    mimeType: ImageFormatSniffer.sniff(data).mime,
-                    data: data,
-                    byteCount: Int64(data.count)
-                ))
-            case .imageFile(let url, let name, let mimeType, let byteCount):
-                imports.append(WorkboardMaterialImport(
-                    kind: .image,
-                    name: name,
-                    detail: ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file),
-                    mimeType: mimeType,
-                    fileURL: url,
-                    byteCount: byteCount
-                ))
-            case .file(let url, let name, let mimeType, let byteCount, _):
-                imports.append(WorkboardMaterialImport(
-                    kind: Self.materialKind(filename: name, mimeType: mimeType),
-                    name: name,
-                    detail: byteCount.map {
-                        ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
-                    },
-                    mimeType: mimeType,
-                    fileURL: url,
-                    byteCount: byteCount
-                ))
-            case .text(let value):
-                let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if WorkCaptureEnvelope.isAcceptedWebURL(clean) {
-                    let host = URLComponents(string: clean)?.host ?? clean
-                    imports.append(WorkboardMaterialImport(
-                        kind: .link,
-                        name: host,
-                        detail: host,
-                        textContent: clean,
-                        urlString: clean
-                    ))
-                } else if !clean.isEmpty {
-                    imports.append(WorkboardMaterialImport(
-                        kind: .note,
-                        name: WorkboardWorkspaceCaptureLogic.noteTitle(for: clean),
-                        textContent: clean
-                    ))
-                }
-            }
-        }
-
+        let mapped = WorkboardImportMapping.imports(from: batch)
         await viewModel.importWorkspaceMaterials(
-            imports,
+            mapped.imports,
             to: itemID,
             additionalFailureCount: batch.failedCount
         )
-        reclaim(batch)
-    }
-
-    nonisolated private static func materialKind(
-        filename: String,
-        mimeType: String?
-    ) -> WorkboardMaterialKind {
-        if let mimeType,
-           let type = UTType(mimeType: mimeType),
-           type.conforms(to: .image) {
-            return .image
-        }
-        if let type = UTType(filenameExtension: (filename as NSString).pathExtension),
-           type.conforms(to: .image) {
-            return .image
-        }
-        return .file
+        for url in mapped.scopedURLs { url.stopAccessingSecurityScopedResource() }
+        WorkboardImportMapping.reclaim(batch)
     }
 
     private func cancelDropWork() {
@@ -1341,7 +1137,7 @@ private struct WorkboardPaneDropModifier: ViewModifier {
         }
         dropSession = nil
         if let confirmation = largeImportConfirmation {
-            reclaim(confirmation.batch)
+            WorkboardImportMapping.reclaim(confirmation.batch)
             largeImportConfirmation = nil
         }
         isDropTargeted = false
@@ -1354,19 +1150,8 @@ private struct WorkboardPaneDropModifier: ViewModifier {
     }
 
     private func reclaim(_ result: WorkboardResolvedDropSlot) {
-        guard case .value(let item) = result else { return }
-        switch item {
-        case .imageFile(let url, _, _, _):
-            try? FileManager.default.removeItem(at: url)
-        case .file(let url, _, _, _, let appOwned) where appOwned:
-            try? FileManager.default.removeItem(at: url)
-        case .image, .file, .text:
-            break
-        }
-    }
-
-    private func reclaim(_ batch: WorkboardResolvedImportBatch) {
-        for url in batch.appOwnedURLs { try? FileManager.default.removeItem(at: url) }
+        guard let url = result.reclaimable else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 }
 
@@ -1453,9 +1238,9 @@ private struct WorkboardSourceCard: View {
     }
 
     private var sourceArtworkPlaceholder: some View {
-        Image(systemName: material.kind.systemImage)
+        Image(systemName: WorkboardMaterialIcon.symbol(for: material))
             .font(.title3)
-            .foregroundStyle(material.kind == .link ? AppColors.guidedSetupBlue : AppColors.brandAmber)
+            .foregroundStyle(WorkboardMaterialIcon.tint(for: material))
             .frame(width: 38, height: 38)
             .background(AppColors.backgroundSecondary, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .accessibilityHidden(true)
@@ -1482,6 +1267,10 @@ private struct WorkboardSourceCard: View {
     }
 }
 
+/// Work accepts two representations Chat does not — a dragged web URL and a
+/// dragged text selection, which become link and note materials. The file-vs-image
+/// precedence is NOT re-derived here: it carries a size guard that lives only on
+/// the file path, so it stays the one decision in `ComposerDropRouting.route`.
 private enum WorkboardDropProviderRoute: Equatable {
     case fileURL
     case imageData
@@ -1489,16 +1278,22 @@ private enum WorkboardDropProviderRoute: Equatable {
     case plainText
 
     init?(provider: NSItemProvider) {
-        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+        switch ComposerDropRouting.route(
+            hasFileURL: provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
+            canLoadImage: provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+        ) {
+        case .fileURL:
             self = .fileURL
-        } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+        case .imageData:
             self = .imageData
-        } else if provider.canLoadObject(ofClass: NSURL.self) {
-            self = .webURL
-        } else if provider.canLoadObject(ofClass: NSString.self) {
-            self = .plainText
-        } else {
-            return nil
+        case .unsupported:
+            if provider.canLoadObject(ofClass: NSURL.self) {
+                self = .webURL
+            } else if provider.canLoadObject(ofClass: NSString.self) {
+                self = .plainText
+            } else {
+                return nil
+            }
         }
     }
 }
@@ -1521,9 +1316,55 @@ private enum WorkboardResolvedImportItem: Sendable {
     case text(String)
 }
 
+private extension WorkboardResolvedImportItem {
+    /// The app-owned temp this item carries. A user-owned URL and raw bytes own
+    /// nothing the app may delete.
+    var appOwnedURL: URL? {
+        switch self {
+        case .imageFile(let url, _, _, _): return url
+        case .file(let url, _, _, _, true): return url
+        case .image, .file, .text: return nil
+        }
+    }
+}
+
 private enum WorkboardResolvedDropSlot: Sendable {
     case value(WorkboardResolvedImportItem)
     case failed
+}
+
+extension WorkboardResolvedDropSlot: DropSessionItem {
+    /// Providers this drop refused before the session started. They never get a
+    /// slot, but they still count as failures in the report the import raises.
+    typealias Context = Int
+
+    var reclaimable: URL? {
+        guard case .value(let item) = self else { return nil }
+        return item.appOwnedURL
+    }
+}
+
+private extension DropSession where Item == WorkboardResolvedDropSlot {
+    var initialFailureCount: Int { context }
+
+    convenience init(count: Int, initialFailureCount: Int) {
+        self.init(context: max(0, initialFailureCount), count: count)
+    }
+
+    /// Take the finished batch exactly once, splitting resolved items from
+    /// failures and folding in the providers refused before the session began.
+    func takeBatch() -> WorkboardResolvedImportBatch? {
+        guard let slots = takeItems() else { return nil }
+        var items: [WorkboardResolvedImportItem] = []
+        var failures = initialFailureCount
+        for slot in slots {
+            switch slot {
+            case .value(let item): items.append(item)
+            case .failed: failures += 1
+            }
+        }
+        return WorkboardResolvedImportBatch(items: items, failedCount: failures)
+    }
 }
 
 private struct WorkboardResolvedImportBatch: Sendable {
@@ -1554,99 +1395,97 @@ private struct WorkboardResolvedImportBatch: Sendable {
     }
 
     var appOwnedURLs: [URL] {
-        items.compactMap { item in
-            switch item {
-            case .imageFile(let url, _, _, _): return url
-            case .file(let url, _, _, _, true): return url
-            case .image, .file, .text: return nil
-            }
-        }
+        items.compactMap(\.appOwnedURL)
     }
 }
 
-@MainActor
-private final class WorkboardDropLoadSession {
-    private var slots: [WorkboardResolvedDropSlot?]
-    private let initialFailureCount: Int
-    private var isDead = false
-
-    init(count: Int, initialFailureCount: Int = 0) {
-        precondition(count > 0)
-        slots = Array(repeating: nil, count: count)
-        self.initialFailureCount = max(0, initialFailureCount)
-    }
-
-    var isFinished: Bool { isDead }
-
-    enum Resolution {
-        case accepted
-        case rejected(orphan: URL?)
-    }
-
-    func resolve(index: Int, with result: WorkboardResolvedDropSlot) -> Resolution {
-        let orphan = Self.appOwnedURL(in: result)
-        guard !isDead, slots.indices.contains(index), slots[index] == nil else {
-            return .rejected(orphan: orphan)
-        }
-        slots[index] = result
-        return .accepted
-    }
-
-    func takeBatch() -> WorkboardResolvedImportBatch? {
-        guard !isDead, slots.allSatisfy({ $0 != nil }) else { return nil }
-        isDead = true
-        var items: [WorkboardResolvedImportItem] = []
-        var failures = initialFailureCount
-        for slot in slots.compactMap({ $0 }) {
-            switch slot {
-            case .value(let item): items.append(item)
-            case .failed: failures += 1
-            }
-        }
-        return WorkboardResolvedImportBatch(items: items, failedCount: failures)
-    }
-
-    func cancel() -> [URL] {
-        guard !isDead else { return [] }
-        isDead = true
-        return slots.compactMap { $0.flatMap(Self.appOwnedURL) }
-    }
-
-    private static func appOwnedURL(in result: WorkboardResolvedDropSlot) -> URL? {
-        guard case .value(let item) = result else { return nil }
-        switch item {
-        case .imageFile(let url, _, _, _): return url
-        case .file(let url, _, _, _, true): return url
-        case .image, .file, .text: return nil
-        }
-    }
-}
-
-private struct WorkboardWorkspaceLargeImportConfirmation: Identifiable {
+private struct WorkboardWorkspaceLargeImportConfirmation: WorkboardLargeImportConfirming {
     let id = UUID()
     let batch: WorkboardResolvedImportBatch
 
-    var message: String {
-        let largeByteCounts = batch.largeItemByteCounts
-        let largeBytes = largeByteCounts.reduce(Int64(0), +)
-        let largeCount = largeByteCounts.count
-        let formattedSize = ByteCountFormatter.string(fromByteCount: largeBytes, countStyle: .file)
-        if largeCount == 1 {
-            return String.localizedStringWithFormat(
-                String(localized: LocalizedStringResource(
-                    "workboard.material.large.confirm.message.one",
-                    defaultValue: "One large file (%@) is stored only on this device and may take a moment to copy now or send later."
-                )),
-                formattedSize
-            )
+    var largeItemByteCounts: [Int64] { batch.largeItemByteCounts }
+}
+
+/// One mapping from a resolved batch to Work material, shared by the picker and
+/// the pane-wide drop. Security scopes it opens are RETURNED rather than closed
+/// here: a scoped URL must stay open until the caller's import has finished
+/// reading the bytes.
+private enum WorkboardImportMapping {
+    static func imports(
+        from batch: WorkboardResolvedImportBatch
+    ) -> (imports: [WorkboardMaterialImport], scopedURLs: [URL]) {
+        var imports: [WorkboardMaterialImport] = []
+        var scopedURLs: [URL] = []
+        for item in batch.items {
+            switch item {
+            case .image(let data, let name):
+                imports.append(WorkboardMaterialImport(
+                    kind: .image,
+                    name: name,
+                    mimeType: ImageFormatSniffer.sniff(data).mime,
+                    data: data,
+                    byteCount: Int64(data.count)
+                ))
+            case .imageFile(let url, let name, let mimeType, let byteCount):
+                imports.append(WorkboardMaterialImport(
+                    kind: .image,
+                    name: name,
+                    detail: ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file),
+                    mimeType: mimeType,
+                    fileURL: url,
+                    byteCount: byteCount
+                ))
+            case .file(let url, let name, let mimeType, let byteCount, let isAppOwned):
+                if !isAppOwned, url.startAccessingSecurityScopedResource() {
+                    scopedURLs.append(url)
+                }
+                imports.append(WorkboardMaterialImport(
+                    kind: materialKind(filename: name, mimeType: mimeType),
+                    name: name,
+                    detail: byteCount.map {
+                        ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+                    },
+                    mimeType: mimeType,
+                    fileURL: url,
+                    byteCount: byteCount
+                ))
+            case .text(let value):
+                let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if WorkCaptureEnvelope.isAcceptedWebURL(clean) {
+                    let host = URLComponents(string: clean)?.host ?? clean
+                    imports.append(WorkboardMaterialImport(
+                        kind: .link,
+                        name: host,
+                        detail: host,
+                        textContent: clean,
+                        urlString: clean
+                    ))
+                } else if !clean.isEmpty {
+                    imports.append(WorkboardMaterialImport(
+                        kind: .note,
+                        name: WorkboardWorkspaceCaptureLogic.noteTitle(for: clean),
+                        textContent: clean
+                    ))
+                }
+            }
         }
-        return String.localizedStringWithFormat(
-            String(localized: LocalizedStringResource(
-                "workboard.material.large.confirm.message",
-                defaultValue: "%1$lld large files (%2$@) are stored only on this device and may take a moment to copy now or send later."
-            )),
-            Int64(largeCount),
-            formattedSize
-        )
+        return (imports, scopedURLs)
+    }
+
+    static func materialKind(filename: String, mimeType: String?) -> WorkboardMaterialKind {
+        if let mimeType,
+           let type = UTType(mimeType: mimeType),
+           type.conforms(to: .image) {
+            return .image
+        }
+        if let type = UTType(filenameExtension: (filename as NSString).pathExtension),
+           type.conforms(to: .image) {
+            return .image
+        }
+        return .file
+    }
+
+    static func reclaim(_ batch: WorkboardResolvedImportBatch) {
+        for url in batch.appOwnedURLs { try? FileManager.default.removeItem(at: url) }
     }
 }

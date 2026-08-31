@@ -38,11 +38,13 @@ struct WorkboardView: View {
     }
 }
 
-/// The Work surface split into reusable column content. macOS mounts these two
-/// columns inside the app's one persistent split-view shell, while iPad and
-/// iPhone continue to use this type's standalone `body`. Keeping the bindings
-/// outside the columns means switching Work / Chats never destroys the selected
-/// project, provisional canvas, or sidebar state.
+/// The Work surface split into three reusable pieces: two column views and one
+/// presentation modifier. macOS mounts them inside the app's one persistent
+/// split-view shell, while iPad and iPhone use this type's standalone `body`.
+/// Everything durable — selected project, overview flag, provisional canvas id,
+/// sidebar column preference — is a binding owned by the HOST and every sheet
+/// rides the presentation modifier, so the columns themselves hold nothing that
+/// hiding or unmounting them would lose.
 struct WorkboardExperience: View {
     @Bindable var viewModel: WorkboardViewModel
 
@@ -57,26 +59,86 @@ struct WorkboardExperience: View {
     let reduceMotion: Bool
 
     var body: some View {
-        presentationHost {
-            NavigationSplitView(
-                columnVisibility: $columnVisibility,
-                preferredCompactColumn: $preferredCompactColumn
-            ) {
-                sidebarContent
-                    .navigationSplitViewColumnWidth(min: 260, ideal: 280, max: 320)
-            } detail: {
-                detailContent
-            }
-            .environment(\.workbenchDestinationIsActive, isActive)
+        NavigationSplitView(
+            columnVisibility: $columnVisibility,
+            preferredCompactColumn: $preferredCompactColumn
+        ) {
+            sidebarColumn
+                .navigationSplitViewColumnWidth(min: 260, ideal: 280, max: 320)
+        } detail: {
+            detailColumn
         }
+        .environment(\.workbenchDestinationIsActive, isActive)
+        .modifier(presentationModifier)
     }
 
-    func presentationHost<Content: View>(
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        content()
-            .task {
-                await viewModel.load()
+    /// Work's two columns and its presentation chain are handed to the host as
+    /// VALUES, never inlined into the host's own body. Each therefore gets its
+    /// own Observation scope: a `searchText` keystroke or a `workspaceStatus`
+    /// toast invalidates only the node that read it. macOS mounts these three
+    /// pieces inside the persistent window shell, where the host's body is the
+    /// entire window and would otherwise rebuild Chat's sidebar and transcript
+    /// on every Work state change.
+    var sidebarColumn: WorkboardSidebarColumn {
+        WorkboardSidebarColumn(
+            viewModel: viewModel,
+            showsOverview: $showsOverview,
+            preferredCompactColumn: $preferredCompactColumn,
+            isActive: isActive,
+            showsSidebarToolbar: showsSidebarToolbar
+        )
+    }
+
+    var detailColumn: WorkboardDetailColumn {
+        WorkboardDetailColumn(
+            viewModel: viewModel,
+            showsOverview: $showsOverview,
+            emptyWorkspaceID: $emptyWorkspaceID,
+            preferredCompactColumn: $preferredCompactColumn,
+            isActive: isActive
+        )
+    }
+
+    var presentationModifier: WorkboardPresentationModifier {
+        WorkboardPresentationModifier(
+            viewModel: viewModel,
+            showsOverview: $showsOverview,
+            emptyWorkspaceID: $emptyWorkspaceID,
+            preferredCompactColumn: $preferredCompactColumn,
+            isActive: isActive,
+            horizontalSizeClass: horizontalSizeClass,
+            reduceMotion: reduceMotion
+        )
+    }
+}
+
+/// Work's durable presentation chain — the board load's follow-up selection, the
+/// editor/preflight/briefing sheets, the autosave toast and both confirmations.
+/// It rides the host's persistent shell rather than either column, so hiding or
+/// unmounting Work's pixels can never cancel an in-flight editor flush or
+/// re-anchor a sheet.
+struct WorkboardPresentationModifier: ViewModifier {
+    let viewModel: WorkboardViewModel
+
+    @Binding var showsOverview: Bool
+    @Binding var emptyWorkspaceID: UUID
+    @Binding var preferredCompactColumn: NavigationSplitViewColumn
+
+    let isActive: Bool
+    let horizontalSizeClass: UserInterfaceSizeClass?
+    let reduceMotion: Bool
+
+    /// The board's first load is owned by `WorkCaptureRefreshCoordinator`, which
+    /// may run long after this modifier mounts (Work defers its load while it is
+    /// hidden). Landing the initial wide selection on the load's completion keeps
+    /// the old `.task` behaviour without a second load owner.
+    @State private var hasAppliedInitialSelection = false
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: viewModel.isLoading) { _, isLoading in
+                guard !isLoading, !hasAppliedInitialSelection, viewModel.loadError == nil else { return }
+                hasAppliedInitialSelection = true
                 selectInitialWideItemIfNeeded()
             }
             .onChange(of: horizontalSizeClass) { _, _ in
@@ -193,12 +255,178 @@ struct WorkboardExperience: View {
             }
     }
 
-    var sidebarContent: some View {
+    private func openItem(_ item: WorkboardItemSnapshot) {
+        openWorkboardItem(
+            item,
+            viewModel: viewModel,
+            showsOverview: $showsOverview,
+            preferredCompactColumn: $preferredCompactColumn
+        )
+    }
+
+    private func selectInitialWideItemIfNeeded() {
+        guard horizontalSizeClass != .compact,
+              !showsOverview,
+              viewModel.provisionalWorkspaceID == nil,
+              viewModel.selectedItemID == nil else { return }
+        viewModel.selectedItemID = viewModel.items
+            .filter { $0.state != .done }
+            .sorted(by: WorkboardPresentationLogic.attentionSort)
+            .first?.id
+    }
+
+    private var confirmationIsPresented: Binding<Bool> {
+        Binding(
+            get: { viewModel.confirmation != nil },
+            set: { isPresented in
+                if !isPresented { viewModel.confirmation = nil }
+            }
+        )
+        .gated(by: isActive)
+    }
+
+    private var activeEditorIsPresented: Binding<Bool> {
+        Binding(
+            get: { isActive && viewModel.editorPresented },
+            set: { isPresented in
+                // A destination change makes the gated getter false. SwiftUI
+                // may echo that false back through the binding before the last
+                // editor change notification is delivered. Keep the durable
+                // presentation bit until `dismissTransientPresentations()` has
+                // flushed the draft; ordinary user dismissals still write while
+                // Work is active.
+                guard isActive else { return }
+                viewModel.editorPresented = isPresented
+            }
+        )
+    }
+
+    private var activeBriefingPresentation: Binding<WorkboardBriefingSnapshot?> {
+        @Bindable var viewModel = viewModel
+        return $viewModel.briefing.gated(by: isActive)
+    }
+
+    private var activeNoticePresentation: Binding<WorkboardNotice?> {
+        Binding(
+            get: { isActive ? viewModel.notice : nil },
+            set: { notice in
+                // The deactivation helper clears the old alert itself before
+                // awaiting the editor flush. Ignore a delayed dismissal write
+                // from that old alert while hidden, or it can erase the newer
+                // "Draft not saved" notice produced by the flush.
+                guard isActive else { return }
+                viewModel.notice = notice
+            }
+        )
+    }
+
+    private var preflightIsPresented: Binding<Bool> {
+        Binding(
+            get: { viewModel.preflightItemID != nil },
+            set: { isPresented in
+                guard !isPresented else { return }
+                viewModel.preflightItemID = nil
+                viewModel.selectedGatewayID = nil
+                viewModel.excludedMaterialIDs = []
+            }
+        )
+        .gated(by: isActive)
+    }
+
+    @MainActor
+    private func dismissTransientPresentations() async {
+        if viewModel.confirmation != nil { viewModel.confirmation = nil }
+        if viewModel.briefing != nil { viewModel.briefing = nil }
+        // Clear an older notice before saving, but never clear a failure raised
+        // by this final flush: if a route hides Work while the editor is dirty,
+        // the editor and its error must both be waiting when the person returns.
+        if viewModel.notice != nil { viewModel.notice = nil }
+        if viewModel.preflightItemID != nil { viewModel.preflightItemID = nil }
+        if viewModel.selectedGatewayID != nil { viewModel.selectedGatewayID = nil }
+        if !viewModel.excludedMaterialIDs.isEmpty { viewModel.excludedMaterialIDs = [] }
+
+        guard viewModel.editorPresented else { return }
+        // The editor is durable context, unlike the confirmations and dispatch
+        // sheets above. Flush it while hidden, then leave the presentation bit
+        // intact so a quick Chat -> Work round trip cannot be closed by this
+        // older async task after the person has resumed editing.
+        _ = await viewModel.saveEditorNow(showFailure: true)
+    }
+
+    private var confirmationTitle: String {
+        guard let confirmation = viewModel.confirmation else { return "" }
+        switch confirmation.kind {
+        case .duplicate:
+            return String(localized: LocalizedStringResource(
+                "workboard.confirm.duplicate.title",
+                defaultValue: "Duplicate this brief?"
+            ))
+        case .delete:
+            return String(localized: LocalizedStringResource(
+                "workboard.confirm.delete.title",
+                defaultValue: "Delete this brief?"
+            ))
+        }
+    }
+
+    private func confirmationMessage(_ confirmation: WorkboardConfirmation) -> String {
+        switch confirmation.kind {
+        case .duplicate:
+            return String.localizedStringWithFormat(
+                String(localized: LocalizedStringResource(
+                    "workboard.confirm.duplicate.message",
+                    defaultValue: "A new private draft will be created from “%@”. Sent runs are not copied."
+                )),
+                confirmation.itemTitle
+            )
+        case .delete:
+            return String.localizedStringWithFormat(
+                String(localized: LocalizedStringResource(
+                    "workboard.confirm.delete.message",
+                    defaultValue: "“%@” will be removed from your private iCloud board. Its existing conversations stay in Chat."
+                )),
+                confirmation.itemTitle
+            )
+        }
+    }
+}
+
+/// The three writes every "open this project" affordance performs — sidebar row,
+/// canvas card and briefing sheet — in one place so they cannot drift apart.
+@MainActor
+private func openWorkboardItem(
+    _ item: WorkboardItemSnapshot,
+    viewModel: WorkboardViewModel,
+    showsOverview: Binding<Bool>,
+    preferredCompactColumn: Binding<NavigationSplitViewColumn>
+) {
+    viewModel.briefing = nil
+    viewModel.cancelProvisionalWorkspace()
+    showsOverview.wrappedValue = false
+    viewModel.selectedItemID = item.id
+    preferredCompactColumn.wrappedValue = .detail
+}
+
+/// Work's project sidebar as its own view node: search text, filter and the
+/// item list are read HERE, so a keystroke invalidates this column alone.
+struct WorkboardSidebarColumn: View {
+    @Bindable var viewModel: WorkboardViewModel
+
+    @Binding var showsOverview: Bool
+    @Binding var preferredCompactColumn: NavigationSplitViewColumn
+
+    let isActive: Bool
+    let showsSidebarToolbar: Bool
+
+    var body: some View {
         let visibleItems = viewModel.visibleItems
         let activeItemCount = viewModel.items.lazy.filter { $0.state != .done }.count
         return VStack(spacing: 0) {
             SidebarSearchField(
-                text: $viewModel.searchText,
+                text: Binding(
+                    get: { viewModel.searchText },
+                    set: { viewModel.updateSearchText($0) }
+                ),
                 prompt: LocalizedStringResource(
                     "workboard.search.prompt",
                     defaultValue: "Search work, sources and replies"
@@ -249,7 +477,7 @@ struct WorkboardExperience: View {
                 defaultValue: "Shows the attention overview for every project"
             )))
 
-            ForEach(sidebarStates, id: \.self) { state in
+            ForEach(WorkItemState.attentionOrder, id: \.self) { state in
                 let stateItems = WorkboardPresentationLogic.items(
                     in: state,
                     from: visibleItems
@@ -320,142 +548,6 @@ struct WorkboardExperience: View {
         }
         .safeAreaInset(edge: .bottom) { sidebarFooter }
         .background(AppColors.background)
-    }
-
-    @ViewBuilder
-    var detailContent: some View {
-        if viewModel.isLoading, viewModel.items.isEmpty {
-            VStack(spacing: 14) {
-                ProgressView()
-                    .controlSize(.large)
-                    .tint(AppColors.brandAmber)
-                Text(LocalizedStringResource(
-                    "workboard.loading",
-                    defaultValue: "Opening your private work…"
-                ))
-                .font(.subheadline)
-                .foregroundStyle(AppColors.textSecondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(AppColors.background.ignoresSafeArea())
-        } else if let loadError = viewModel.loadError, viewModel.items.isEmpty {
-            WorkboardEmptyState(
-                title: LocalizedStringResource(
-                    "workboard.load.failed.title",
-                    defaultValue: "Work couldn’t open"
-                ),
-                message: LocalizedStringResource(
-                    "workboard.load.failed.message",
-                    defaultValue: "Your projects stay private and unchanged. Try opening them again."
-                ),
-                actionTitle: LocalizedStringResource(
-                    "workboard.load.retry",
-                    defaultValue: "Try Again"
-                )
-            ) {
-                viewModel.loadError = nil
-                Task { await viewModel.load() }
-            }
-            .accessibilityValue(Text(verbatim: loadError))
-            .background(AppColors.background.ignoresSafeArea())
-        } else if let item = viewModel.selectedItem {
-            WorkboardDetailView(
-                viewModel: viewModel,
-                itemID: item.id,
-                newWorkspaceID: emptyWorkspaceID
-            )
-                .id(item.id)
-        } else if let provisionalID = viewModel.provisionalWorkspaceID {
-            captureWorkspace(
-                id: provisionalID,
-                title: LocalizedStringResource(
-                    "workboard.workspace.new.title",
-                    defaultValue: "New Work"
-                ),
-                message: LocalizedStringResource(
-                    "workboard.workspace.new.message",
-                    defaultValue: "Start loosely. Add a thought or drop source material; the project is created only when there is something to keep."
-                )
-            )
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                captureBar(itemID: provisionalID, destination: .newWork)
-            }
-            .workboardPaneDropDestination(
-                viewModel: viewModel,
-                itemID: provisionalID,
-                destination: .newWork
-            )
-        } else {
-            overview
-        }
-    }
-
-    @ViewBuilder
-    private var overview: some View {
-        Group {
-            if viewModel.items.isEmpty || viewModel.visibleItems.isEmpty {
-                emptyBoard
-            } else {
-                WorkboardProjectCanvas(
-                    viewModel: viewModel,
-                    onOpen: openItem,
-                    onNew: beginNewWorkspace
-                )
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppColors.background.ignoresSafeArea())
-        .workbenchNavigationTitle(
-            Text(LocalizedStringResource(
-                "workboard.overview.title",
-                defaultValue: "All Work"
-            )),
-            isActive: isActive
-        )
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            captureBar(itemID: emptyWorkspaceID, destination: .newWork)
-        }
-        .workboardPaneDropDestination(
-            viewModel: viewModel,
-            itemID: emptyWorkspaceID,
-            destination: .newWork
-        )
-    }
-
-    private var emptyBoard: some View {
-        Group {
-            if viewModel.items.isEmpty {
-                captureWorkspace(
-                    id: emptyWorkspaceID,
-                    title: LocalizedStringResource(
-                        "workboard.empty.title",
-                        defaultValue: "Start with a thought, file or screenshot"
-                    ),
-                    message: LocalizedStringResource(
-                        "workboard.empty.message",
-                        defaultValue: "Collect thoughts, screenshots, files and links here. Nothing leaves Conduck until you review the exact brief and choose a gateway."
-                    )
-                )
-            } else {
-                WorkboardEmptyState(
-                    title: LocalizedStringResource(
-                        "workboard.empty.filtered.title",
-                        defaultValue: "No work matches"
-                    ),
-                    message: LocalizedStringResource(
-                        "workboard.empty.filtered.message",
-                        defaultValue: "Try a different search or show all work. Search stays inside your private board."
-                    ),
-                    actionTitle: LocalizedStringResource(
-                        "workboard.empty.filtered.action",
-                        defaultValue: "Clear Search and Filters"
-                    )
-                ) {
-                    viewModel.searchText = ""
-                    viewModel.filter = .all
-                }
-            }
-        }
     }
 
     @ToolbarContentBuilder
@@ -557,30 +649,169 @@ struct WorkboardExperience: View {
         .padding(.vertical, 8)
         .background(.bar)
     }
+}
+
+/// Work's canvas column as its own view node, for the same reason as the
+/// sidebar: the selected project, the overview's filtered strip and the load
+/// state are read HERE rather than in whichever shell mounts the column.
+struct WorkboardDetailColumn: View {
+    @Bindable var viewModel: WorkboardViewModel
+
+    @Binding var showsOverview: Bool
+    @Binding var emptyWorkspaceID: UUID
+    @Binding var preferredCompactColumn: NavigationSplitViewColumn
+
+    let isActive: Bool
+
+    @ViewBuilder
+    var body: some View {
+        if viewModel.isLoading, viewModel.items.isEmpty {
+            VStack(spacing: 14) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(AppColors.brandAmber)
+                Text(LocalizedStringResource(
+                    "workboard.loading",
+                    defaultValue: "Opening your private work…"
+                ))
+                .font(.subheadline)
+                .foregroundStyle(AppColors.textSecondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(AppColors.background.ignoresSafeArea())
+        } else if let loadError = viewModel.loadError, viewModel.items.isEmpty {
+            WorkboardEmptyState(
+                title: LocalizedStringResource(
+                    "workboard.load.failed.title",
+                    defaultValue: "Work couldn’t open"
+                ),
+                message: LocalizedStringResource(
+                    "workboard.load.failed.message",
+                    defaultValue: "Your projects stay private and unchanged. Try opening them again."
+                ),
+                actionTitle: LocalizedStringResource(
+                    "workboard.load.retry",
+                    defaultValue: "Try Again"
+                )
+            ) {
+                viewModel.loadError = nil
+                Task { await viewModel.load() }
+            }
+            .accessibilityValue(Text(verbatim: loadError))
+            .background(AppColors.background.ignoresSafeArea())
+        } else if let item = viewModel.selectedItem {
+            WorkboardDetailView(
+                viewModel: viewModel,
+                itemID: item.id,
+                newWorkspaceID: emptyWorkspaceID
+            )
+                .id(item.id)
+        } else if let provisionalID = viewModel.provisionalWorkspaceID {
+            captureWorkspace(
+                id: provisionalID,
+                title: LocalizedStringResource(
+                    "workboard.workspace.new.title",
+                    defaultValue: "New Work"
+                ),
+                message: LocalizedStringResource(
+                    "workboard.workspace.new.message",
+                    defaultValue: "Start loosely. Add a thought or drop source material; the project is created only when there is something to keep."
+                )
+            )
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                captureBar(itemID: provisionalID, destination: .newWork)
+            }
+            .workboardPaneDropDestination(
+                viewModel: viewModel,
+                itemID: provisionalID,
+                destination: .newWork
+            )
+        } else {
+            overview
+        }
+    }
+
+    @ViewBuilder
+    private var overview: some View {
+        Group {
+            if !viewModel.hasVisibleItems {
+                emptyBoard
+            } else {
+                WorkboardProjectCanvas(
+                    viewModel: viewModel,
+                    onOpen: openItem,
+                    onNew: beginNewWorkspace
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AppColors.background.ignoresSafeArea())
+        .workbenchNavigationTitle(
+            Text(LocalizedStringResource(
+                "workboard.overview.title",
+                defaultValue: "All Work"
+            )),
+            isActive: isActive
+        )
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            captureBar(itemID: emptyWorkspaceID, destination: .newWork)
+        }
+        .workboardPaneDropDestination(
+            viewModel: viewModel,
+            itemID: emptyWorkspaceID,
+            destination: .newWork
+        )
+    }
+
+    private var emptyBoard: some View {
+        Group {
+            if viewModel.items.isEmpty {
+                captureWorkspace(
+                    id: emptyWorkspaceID,
+                    title: LocalizedStringResource(
+                        "workboard.empty.title",
+                        defaultValue: "Start with a thought, file or screenshot"
+                    ),
+                    message: LocalizedStringResource(
+                        "workboard.empty.message",
+                        defaultValue: "Collect thoughts, screenshots, files and links here. Nothing leaves Conduck until you review the exact brief and choose a gateway."
+                    )
+                )
+            } else {
+                WorkboardEmptyState(
+                    title: LocalizedStringResource(
+                        "workboard.empty.filtered.title",
+                        defaultValue: "No work matches"
+                    ),
+                    message: LocalizedStringResource(
+                        "workboard.empty.filtered.message",
+                        defaultValue: "Try a different search or show all work. Search stays inside your private board."
+                    ),
+                    actionTitle: LocalizedStringResource(
+                        "workboard.empty.filtered.action",
+                        defaultValue: "Clear Search and Filters"
+                    )
+                ) {
+                    viewModel.updateSearchText("")
+                    viewModel.filter = .all
+                }
+            }
+        }
+    }
 
     private func openItem(_ item: WorkboardItemSnapshot) {
-        viewModel.briefing = nil
-        viewModel.cancelProvisionalWorkspace()
-        showsOverview = false
-        viewModel.selectedItemID = item.id
-        preferredCompactColumn = .detail
+        openWorkboardItem(
+            item,
+            viewModel: viewModel,
+            showsOverview: $showsOverview,
+            preferredCompactColumn: $preferredCompactColumn
+        )
     }
 
     private func beginNewWorkspace() {
         showsOverview = false
         viewModel.beginWorkspace()
         preferredCompactColumn = .detail
-    }
-
-    private func selectInitialWideItemIfNeeded() {
-        guard horizontalSizeClass != .compact,
-              !showsOverview,
-              viewModel.provisionalWorkspaceID == nil,
-              viewModel.selectedItemID == nil else { return }
-        viewModel.selectedItemID = viewModel.items
-            .filter { $0.state != .done }
-            .sorted(by: WorkboardPresentationLogic.attentionSort)
-            .first?.id
     }
 
     private func captureWorkspace(
@@ -628,137 +859,10 @@ struct WorkboardExperience: View {
         .padding(.vertical, 8)
         .background(.ultraThinMaterial)
     }
-
-    private var sidebarStates: [WorkboardItemState] {
-        [.review, .waiting, .draft, .done]
-    }
-
-    private var confirmationIsPresented: Binding<Bool> {
-        Binding(
-            get: { isActive && viewModel.confirmation != nil },
-            set: { isPresented in
-                if !isPresented || isActive {
-                    viewModel.confirmation = isPresented ? viewModel.confirmation : nil
-                }
-            }
-        )
-    }
-
-    private var activeEditorIsPresented: Binding<Bool> {
-        Binding(
-            get: { isActive && viewModel.editorPresented },
-            set: { isPresented in
-                // A destination change makes the gated getter false. SwiftUI
-                // may echo that false back through the binding before the last
-                // editor change notification is delivered. Keep the durable
-                // presentation bit until `dismissTransientPresentations()` has
-                // flushed the draft; ordinary user dismissals still write while
-                // Work is active.
-                guard isActive else { return }
-                viewModel.editorPresented = isPresented
-            }
-        )
-    }
-
-    private var activeBriefingPresentation: Binding<WorkboardBriefingSnapshot?> {
-        Binding(
-            get: { isActive ? viewModel.briefing : nil },
-            set: { briefing in
-                if briefing == nil || isActive {
-                    viewModel.briefing = briefing
-                }
-            }
-        )
-    }
-
-    private var activeNoticePresentation: Binding<WorkboardNotice?> {
-        Binding(
-            get: { isActive ? viewModel.notice : nil },
-            set: { notice in
-                // The deactivation helper clears the old alert itself before
-                // awaiting the editor flush. Ignore a delayed dismissal write
-                // from that old alert while hidden, or it can erase the newer
-                // "Draft not saved" notice produced by the flush.
-                guard isActive else { return }
-                viewModel.notice = notice
-            }
-        )
-    }
-
-    private var preflightIsPresented: Binding<Bool> {
-        Binding(
-            get: { isActive && viewModel.preflightItemID != nil },
-            set: { isPresented in
-                if !isPresented || isActive {
-                    guard !isPresented else { return }
-                    viewModel.preflightItemID = nil
-                    viewModel.selectedGatewayID = nil
-                    viewModel.excludedMaterialIDs = []
-                }
-            }
-        )
-    }
-
-    @MainActor
-    private func dismissTransientPresentations() async {
-        if viewModel.confirmation != nil { viewModel.confirmation = nil }
-        if viewModel.briefing != nil { viewModel.briefing = nil }
-        // Clear an older notice before saving, but never clear a failure raised
-        // by this final flush: if a route hides Work while the editor is dirty,
-        // the editor and its error must both be waiting when the person returns.
-        if viewModel.notice != nil { viewModel.notice = nil }
-        if viewModel.preflightItemID != nil { viewModel.preflightItemID = nil }
-        if viewModel.selectedGatewayID != nil { viewModel.selectedGatewayID = nil }
-        if !viewModel.excludedMaterialIDs.isEmpty { viewModel.excludedMaterialIDs = [] }
-
-        guard viewModel.editorPresented else { return }
-        // The editor is durable context, unlike the confirmations and dispatch
-        // sheets above. Flush it while hidden, then leave the presentation bit
-        // intact so a quick Chat -> Work round trip cannot be closed by this
-        // older async task after the person has resumed editing.
-        _ = await viewModel.saveEditorNow(showFailure: true)
-    }
-
-    private var confirmationTitle: String {
-        guard let confirmation = viewModel.confirmation else { return "" }
-        switch confirmation.kind {
-        case .duplicate:
-            return String(localized: LocalizedStringResource(
-                "workboard.confirm.duplicate.title",
-                defaultValue: "Duplicate this brief?"
-            ))
-        case .delete:
-            return String(localized: LocalizedStringResource(
-                "workboard.confirm.delete.title",
-                defaultValue: "Delete this brief?"
-            ))
-        }
-    }
-
-    private func confirmationMessage(_ confirmation: WorkboardConfirmation) -> String {
-        switch confirmation.kind {
-        case .duplicate:
-            return String.localizedStringWithFormat(
-                String(localized: LocalizedStringResource(
-                    "workboard.confirm.duplicate.message",
-                    defaultValue: "A new private draft will be created from “%@”. Sent runs are not copied."
-                )),
-                confirmation.itemTitle
-            )
-        case .delete:
-            return String.localizedStringWithFormat(
-                String(localized: LocalizedStringResource(
-                    "workboard.confirm.delete.message",
-                    defaultValue: "“%@” will be removed from your private iCloud board. Its existing conversations stay in Chat."
-                )),
-                confirmation.itemTitle
-            )
-        }
-    }
 }
 
 private struct WorkboardSidebarSectionHeader: View {
-    let state: WorkboardItemState
+    let state: WorkItemState
     let count: Int
 
     var body: some View {
@@ -867,7 +971,9 @@ private struct WorkboardProjectCanvas: View {
 
                 captureLanding
 
-                if !viewModel.searchText.isEmpty {
+                // Reads the APPLIED needle, not the field: the canvas body must
+                // not rebuild the strip on every character.
+                if !viewModel.appliedSearchText.isEmpty {
                     Label(
                         LocalizedStringResource(
                             "workboard.search.private",
@@ -921,9 +1027,14 @@ private struct WorkboardProjectCanvas: View {
                     }
 
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        // This shelf IS the move planner's cohort — same pin
+                        // group, same `projectStripSort` order — so a neighbour
+                        // index test answers exactly what planning a move would.
                         WorkboardReorderCard(
                             viewModel: viewModel,
                             item: item,
+                            canMoveEarlier: index > 0,
+                            canMoveLater: index + 1 < items.count,
                             onOpen: { onOpen(item) }
                         )
 
@@ -1111,6 +1222,8 @@ private struct WorkboardProjectDropRail: View {
 private struct WorkboardReorderCard: View {
     @Bindable var viewModel: WorkboardViewModel
     let item: WorkboardItemSnapshot
+    let canMoveEarlier: Bool
+    let canMoveLater: Bool
     let onOpen: () -> Void
 
     @State private var isDropTargeted = false
@@ -1118,7 +1231,6 @@ private struct WorkboardReorderCard: View {
     var body: some View {
         WorkboardCard(
             item: item,
-            compact: true,
             onOpen: onOpen,
             onDuplicate: { viewModel.requestDuplicate(item) },
             onDelete: { viewModel.requestDelete(item) },
@@ -1154,238 +1266,12 @@ private struct WorkboardReorderCard: View {
     }
 
     private var moveEarlierAction: (() -> Void)? {
-        guard viewModel.canMoveItem(item.id, direction: .earlier) else { return nil }
+        guard canMoveEarlier else { return nil }
         return { Task { await viewModel.moveItem(item.id, direction: .earlier) } }
     }
 
     private var moveLaterAction: (() -> Void)? {
-        guard viewModel.canMoveItem(item.id, direction: .later) else { return nil }
+        guard canMoveLater else { return nil }
         return { Task { await viewModel.moveItem(item.id, direction: .later) } }
-    }
-}
-
-private struct WorkboardAttentionList: View {
-    @Bindable var viewModel: WorkboardViewModel
-    let onOpen: (WorkboardItemSnapshot) -> Void
-
-    private let attentionOrder: [WorkboardItemState] = [.review, .waiting, .draft, .done]
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: WorkboardMetrics.generousSpacing) {
-                WorkboardFocusStrip(viewModel: viewModel)
-
-                ForEach(attentionOrder, id: \.self) { state in
-                    let items = WorkboardPresentationLogic.items(
-                        in: state,
-                        from: viewModel.visibleItems
-                    )
-                    if !items.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            WorkboardSectionHeader(
-                                state: state,
-                                count: items.count,
-                                subtitle: sectionSubtitle(state)
-                            )
-                            ForEach(items) { item in
-                                WorkboardCard(
-                                    item: item,
-                                    compact: true,
-                                    onOpen: { onOpen(item) },
-                                    onDuplicate: { viewModel.requestDuplicate(item) },
-                                    onDelete: { viewModel.requestDelete(item) }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if !viewModel.searchText.isEmpty {
-                    Label(
-                        LocalizedStringResource(
-                            "workboard.search.private",
-                            defaultValue: "Search runs only across your private Workboard"
-                        ),
-                        systemImage: "lock.fill"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textTertiary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.top, 8)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 18)
-            .frame(maxWidth: 720)
-            .frame(maxWidth: .infinity)
-        }
-        .scrollDismissesKeyboard(.interactively)
-    }
-
-    private func sectionSubtitle(_ state: WorkboardItemState) -> LocalizedStringResource? {
-        switch state {
-        case .review:
-            return LocalizedStringResource("workboard.group.needsYou.subtitle", defaultValue: "Results and send issues")
-        case .waiting:
-            return LocalizedStringResource("workboard.group.waiting.subtitle", defaultValue: "Requests in progress")
-        case .draft:
-            return LocalizedStringResource("workboard.group.drafts.subtitle", defaultValue: "Not sent")
-        case .done:
-            return LocalizedStringResource("workboard.group.done.subtitle", defaultValue: "Closed by you")
-        }
-    }
-}
-
-private struct WorkboardColumnCanvas: View {
-    @Bindable var viewModel: WorkboardViewModel
-    let onOpen: (WorkboardItemSnapshot) -> Void
-
-    private let laneOrder: [WorkboardItemState] = [.review, .waiting, .draft, .done]
-
-    var body: some View {
-        ScrollView([.horizontal, .vertical]) {
-            VStack(alignment: .leading, spacing: 18) {
-                WorkboardFocusStrip(viewModel: viewModel)
-                    .frame(maxWidth: 760)
-
-                HStack(alignment: .top, spacing: 16) {
-                    ForEach(visibleLanes, id: \.self) { state in
-                        column(state)
-                    }
-                }
-            }
-            .padding(22)
-        }
-        .scrollDismissesKeyboard(.interactively)
-    }
-
-    private var visibleLanes: [WorkboardItemState] {
-        let lanes = laneOrder.filter { state in
-            viewModel.visibleItems.contains { $0.state == state }
-        }
-        return lanes.isEmpty ? laneOrder : lanes
-    }
-
-    private func column(_ state: WorkboardItemState) -> some View {
-        let items = WorkboardPresentationLogic.items(in: state, from: viewModel.visibleItems)
-        return VStack(alignment: .leading, spacing: 12) {
-            WorkboardSectionHeader(state: state, count: items.count)
-                .padding(.horizontal, 4)
-            LazyVStack(spacing: 12) {
-                ForEach(items) { item in
-                    WorkboardCard(
-                        item: item,
-                        compact: false,
-                        onOpen: { onOpen(item) },
-                        onDuplicate: { viewModel.requestDuplicate(item) },
-                        onDelete: { viewModel.requestDelete(item) }
-                    )
-                }
-                if items.isEmpty {
-                    Text(LocalizedStringResource(
-                        "workboard.column.empty",
-                        defaultValue: "Nothing here"
-                    ))
-                    .font(.subheadline)
-                    .foregroundStyle(AppColors.textTertiary)
-                    .frame(maxWidth: .infinity, minHeight: 96)
-                    .background(AppColors.cardBackground.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-            }
-        }
-        .padding(12)
-        .frame(width: WorkboardMetrics.boardColumnWidth, alignment: .top)
-        .background(state.tint.opacity(0.045), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(state.tint.opacity(0.12), lineWidth: 1)
-        }
-    }
-}
-
-private struct WorkboardFocusStrip: View {
-    @Bindable var viewModel: WorkboardViewModel
-
-    var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 10) {
-                focusButton(
-                    state: .review,
-                    filter: .needsYou,
-                    count: viewModel.items.filter { $0.state == .review }.count
-                )
-                focusButton(
-                    state: .waiting,
-                    filter: .waiting,
-                    count: viewModel.items.filter { $0.state == .waiting }.count
-                )
-                focusButton(
-                    state: .draft,
-                    filter: .drafts,
-                    count: viewModel.items.filter { $0.state == .draft }.count
-                )
-                Button {
-                    viewModel.filter = .open
-                } label: {
-                    Label(
-                        LocalizedStringResource("workboard.focus.allOpen", defaultValue: "All Open"),
-                        systemImage: "rectangle.stack"
-                    )
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(viewModel.filter == .open ? AppColors.background : AppColors.textSecondary)
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: WorkboardMetrics.touchTarget)
-                    .background(
-                        viewModel.filter == .open ? AppColors.textPrimary : AppColors.cardBackground,
-                        in: Capsule()
-                    )
-                    .overlay { Capsule().stroke(AppColors.borderSubtle, lineWidth: 1) }
-                }
-                .choiceCardButton(cornerRadius: 22)
-                .accessibilityAddTraits(viewModel.filter == .open ? .isSelected : [])
-            }
-        }
-        .scrollIndicators(.hidden)
-        .accessibilityLabel(Text(LocalizedStringResource(
-            "workboard.focus.accessibility",
-            defaultValue: "Workboard focus filters"
-        )))
-    }
-
-    private func focusButton(
-        state: WorkboardItemState,
-        filter: WorkboardFilter,
-        count: Int
-    ) -> some View {
-        Button {
-            viewModel.filter = filter
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: state.systemImage)
-                    .accessibilityHidden(true)
-                Text(state.attentionTitle)
-                Text(count, format: .number)
-                    .font(.caption.weight(.bold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(state.tint.opacity(viewModel.filter == filter ? 0.22 : 0.12), in: Capsule())
-            }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(viewModel.filter == filter ? AppColors.background : state.tint)
-            .padding(.horizontal, 14)
-            .frame(minHeight: WorkboardMetrics.touchTarget)
-            .background(viewModel.filter == filter ? state.tint : AppColors.cardBackground, in: Capsule())
-            .overlay { Capsule().stroke(state.tint.opacity(0.32), lineWidth: 1) }
-        }
-        .choiceCardButton(cornerRadius: 22)
-        .accessibilityAddTraits(viewModel.filter == filter ? .isSelected : [])
-        .accessibilityLabel(Text(String.localizedStringWithFormat(
-            String(localized: LocalizedStringResource(
-                "workboard.focus.accessibility.count",
-                defaultValue: "%1$@, %2$lld"
-            )),
-            String(localized: state.attentionTitle),
-            Int64(count)
-        )))
     }
 }

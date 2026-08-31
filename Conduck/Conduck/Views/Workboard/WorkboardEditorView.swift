@@ -17,6 +17,7 @@ struct WorkboardEditorView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var photoSelection: [PhotosPickerItem] = []
+    @State private var showsPhotoPicker = false
     @State private var showsFileImporter = false
     @State private var materialComposer: WorkboardMaterialComposerKind?
     @State private var materialPendingRemoval: WorkboardMaterialSnapshot?
@@ -29,6 +30,10 @@ struct WorkboardEditorView: View {
     @State private var materialMutationTask: Task<Void, Never>?
     @State private var showsCloseFailure = false
     @FocusState private var focusedField: WorkboardEditorField?
+    #if os(iOS)
+    @State private var showsCamera = false
+    @State private var showsCameraDeniedAlert = false
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -40,7 +45,7 @@ struct WorkboardEditorView: View {
                     contextBlock
                     desiredResultBlock
                     constraintsBlock
-                    reviewReminderBlock
+                    reviewByBlock
                     materialsBlock
                     privacyFooter
                 }
@@ -107,6 +112,12 @@ struct WorkboardEditorView: View {
                 defaultValue: "Conduck could not save the latest edits. Try again, keep editing, or discard only the changes that are not yet saved."
             ))
         }
+        .photosPicker(
+            isPresented: $showsPhotoPicker,
+            selection: $photoSelection,
+            maxSelectionCount: 12,
+            matching: .images
+        )
         .onChange(of: photoSelection) { _, newItems in
             guard !newItems.isEmpty else { return }
             startPhotoImports(newItems)
@@ -201,26 +212,39 @@ struct WorkboardEditorView: View {
                 }
             )
         }
-        .alert(item: $largeFileConfirmation) { confirmation in
-            Alert(
-                title: Text(LocalizedStringResource(
-                    "workboard.material.large.confirm.title",
-                    defaultValue: "Add large files?"
-                )),
-                message: Text(verbatim: confirmation.message),
-                primaryButton: .default(Text(LocalizedStringResource(
-                    "workboard.material.large.confirm.add",
-                    defaultValue: "Add to Work"
-                ))) {
-                    startFileImports(
-                        confirmation.files,
-                        replacing: confirmation.replacingMaterial,
-                        in: confirmation.itemID
-                    )
-                },
-                secondaryButton: .cancel()
+        .workboardLargeImportAlert(
+            item: $largeFileConfirmation,
+            onConfirm: { confirmation in
+                startFileImports(
+                    confirmation.files,
+                    replacing: confirmation.replacingMaterial,
+                    in: confirmation.itemID
+                )
+            },
+            onCancel: { _ in }
+        )
+        #if os(iOS)
+        .fullScreenCover(isPresented: $showsCamera) {
+            CameraPicker(
+                onCapture: importCameraPhoto,
+                onDismiss: { showsCamera = false }
             )
         }
+        .alert(
+            LocalizedStringResource("composer.camera.deniedTitle", defaultValue: "Camera access is off"),
+            isPresented: $showsCameraDeniedAlert
+        ) {
+            Button(LocalizedStringResource("composer.camera.openSettings", defaultValue: "Open Settings")) {
+                CameraPermission.openSettings()
+            }
+            Button(LocalizedStringResource("composer.camera.cancel", defaultValue: "Cancel"), role: .cancel) { }
+        } message: {
+            Text(LocalizedStringResource(
+                "composer.camera.deniedMessage",
+                defaultValue: "Allow camera access in Settings to take a photo."
+            ))
+        }
+        #endif
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: viewModel.editingDraft.materials)
         .onDisappear {
             cancelEditorTransients()
@@ -410,62 +434,50 @@ struct WorkboardEditorView: View {
         )
     }
 
-    private var reviewReminderBlock: some View {
+    private var reviewByBlock: some View {
         WorkboardSurface {
             VStack(alignment: .leading, spacing: 12) {
-                Toggle(isOn: reviewReminderEnabled) {
+                Toggle(isOn: reviewByEnabled) {
                     Label {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(LocalizedStringResource(
-                                "workboard.editor.reviewBy.title",
-                                defaultValue: "Remind me to review"
-                            ))
-                            .font(.headline)
+                            Text(reviewByLabel)
+                                .font(.headline)
                             Text(LocalizedStringResource(
                                 "workboard.editor.reviewBy.caption",
-                                defaultValue: "A private board reminder. The date is also preserved in the approved brief snapshot."
+                                defaultValue: "A private board date. It is also preserved in the approved brief snapshot."
                             ))
                             .font(.caption)
                             .foregroundStyle(AppColors.textTertiary)
                         }
                     } icon: {
-                        Image(systemName: "bell.badge")
+                        Image(systemName: "calendar")
                             .foregroundStyle(AppColors.brandAmber)
                     }
                 }
                 .toggleStyle(.switch)
                 .tint(AppColors.brandAmber)
-                .disabled(viewModel.isUpdatingReviewReminder)
-
-                if viewModel.isUpdatingReviewReminder {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text(LocalizedStringResource(
-                            "workboard.reminder.scheduling",
-                            defaultValue: "Checking the reminder…"
-                        ))
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textTertiary)
-                    }
-                }
 
                 if viewModel.editingDraft.reviewBy != nil {
                     Divider().overlay(AppColors.borderSubtle)
+                    // The label repeats the block heading on screen, so it is
+                    // hidden visually while VoiceOver still announces the field.
                     DatePicker(
-                        LocalizedStringResource(
-                            "workboard.editor.reviewBy.date",
-                            defaultValue: "Review by"
-                        ),
+                        reviewByLabel,
                         selection: reviewDate,
-                        in: Date()...,
                         displayedComponents: [.date, .hourAndMinute]
                     )
                     .datePickerStyle(.compact)
-                    .disabled(viewModel.isUpdatingReviewReminder)
+                    .labelsHidden()
                 }
             }
         }
+    }
+
+    private var reviewByLabel: LocalizedStringResource {
+        LocalizedStringResource(
+            "workboard.editor.reviewBy.date",
+            defaultValue: "Review by"
+        )
     }
 
     private var materialsBlock: some View {
@@ -636,66 +648,47 @@ struct WorkboardEditorView: View {
     }
 
     private var materialActions: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 9) {
-                PhotosPicker(
-                    selection: $photoSelection,
-                    maxSelectionCount: 12,
-                    matching: .images,
-                    photoLibrary: .shared()
-                ) {
-                    materialActionLabel(
-                        LocalizedStringResource("workboard.material.addPhotos", defaultValue: "Photos"),
-                        systemImage: "photo.on.rectangle.angled"
-                    )
-                }
-                .choiceCardButton(cornerRadius: WorkboardMetrics.touchTarget / 2)
+        WorkboardMaterialActions(
+            presentation: .row,
+            onPickPhotos: { showsPhotoPicker = true },
+            onTakePhoto: takePhoto,
+            onPickFiles: {
+                materialPendingReattachment = nil
+                showsFileImporter = true
+            },
+            onAddLink: { materialComposer = .link },
+            onAddNote: { materialComposer = .note }
+        )
+    }
 
-                Button {
-                    materialPendingReattachment = nil
-                    showsFileImporter = true
-                } label: {
-                    materialActionLabel(
-                        LocalizedStringResource("workboard.material.addFiles", defaultValue: "Files"),
-                        systemImage: "doc.badge.plus"
-                    )
-                }
-                .choiceCardButton(cornerRadius: WorkboardMetrics.touchTarget / 2)
-
-                Button {
-                    materialComposer = .link
-                } label: {
-                    materialActionLabel(
-                        LocalizedStringResource("workboard.material.addLink.short", defaultValue: "Link"),
-                        systemImage: "link.badge.plus"
-                    )
-                }
-                .choiceCardButton(cornerRadius: WorkboardMetrics.touchTarget / 2)
-
-                Button {
-                    materialComposer = .note
-                } label: {
-                    materialActionLabel(
-                        LocalizedStringResource("workboard.material.addNote.short", defaultValue: "Note"),
-                        systemImage: "note.text.badge.plus"
-                    )
-                }
-                .choiceCardButton(cornerRadius: WorkboardMetrics.touchTarget / 2)
-            }
+    private func takePhoto() {
+        #if os(iOS)
+        switch CameraPermission.current {
+        case .proceed: showsCamera = true
+        case .denied: showsCameraDeniedAlert = true
         }
-        .scrollIndicators(.hidden)
+        #endif
     }
 
-    private func materialActionLabel(_ title: LocalizedStringResource, systemImage: String) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(AppColors.textPrimary)
-            .padding(.horizontal, 13)
-            .frame(minHeight: WorkboardMetrics.touchTarget)
-            .background(AppColors.backgroundSecondary, in: Capsule())
-            .overlay { Capsule().stroke(AppColors.borderSubtle, lineWidth: 1) }
-            .contentShape(Capsule())
+    #if os(iOS)
+    private func importCameraPhoto(_ data: Data) {
+        showsCamera = false
+        guard !data.isEmpty else { return }
+        let name = String.localizedStringWithFormat(
+            String(localized: LocalizedStringResource(
+                "workboard.material.photo.defaultName",
+                defaultValue: "Photo %lld"
+            )),
+            Int64(viewModel.editingDraft.materials.count + 1)
+        )
+        startMaterialImport(WorkboardMaterialImport(
+            kind: .image,
+            name: name,
+            mimeType: ImageFormatSniffer.sniff(data).mime,
+            data: data
+        ))
     }
+    #endif
 
     @ViewBuilder
     private var privacyFooter: some View {
@@ -753,7 +746,6 @@ struct WorkboardEditorView: View {
                 !viewModel.editingDraft.isReadyToSend
                     || viewModel.editorIsSaving
                     || isImportingMaterials
-                    || viewModel.isCapturingVoice
             )
             .keyboardShortcut(.return, modifiers: [.command])
             .accessibilityHint(Text(LocalizedStringResource(
@@ -788,30 +780,48 @@ struct WorkboardEditorView: View {
         }
     }
 
-    @ViewBuilder
     private func voiceButton(target: WorkboardVoiceTarget) -> some View {
-        if viewModel.canCaptureVoice {
-            Button {
-                viewModel.presentVoiceCapture(for: target)
-            } label: {
-                Image(systemName: "mic.fill")
-            }
-            .frame(width: WorkboardMetrics.touchTarget, height: WorkboardMetrics.touchTarget)
-            .background(AppColors.backgroundSecondary, in: Circle())
-            .pointerIconButton(size: WorkboardMetrics.touchTarget, shape: .circle)
-            .disabled(viewModel.isCapturingVoice || viewModel.voiceCaptureTarget != nil)
-            .accessibilityLabel(Text(LocalizedStringResource(
+        CaptureCircleButton(
+            symbol: "mic.fill",
+            fillColor: AppColors.brandAmber,
+            diameter: voiceButtonDiameter,
+            glyphSize: voiceButtonGlyphSize,
+            isDisabled: viewModel.voiceCaptureTarget != nil,
+            accessibilityLabel: String(localized: LocalizedStringResource(
                 "workboard.voice.capture",
                 defaultValue: "Add by voice"
-            )))
-        }
+            )),
+            action: { viewModel.presentVoiceCapture(for: target) }
+        )
     }
 
-    private var reviewReminderEnabled: Binding<Bool> {
+    private var voiceButtonDiameter: CGFloat {
+        #if os(macOS)
+        32
+        #else
+        WorkboardMetrics.touchTarget
+        #endif
+    }
+
+    private var voiceButtonGlyphSize: CGFloat {
+        #if os(macOS)
+        14
+        #else
+        18
+        #endif
+    }
+
+    private var reviewByEnabled: Binding<Bool> {
         Binding(
             get: { viewModel.editingDraft.reviewBy != nil },
             set: { enabled in
-                Task { await viewModel.setReviewReminderEnabled(enabled) }
+                guard enabled else {
+                    viewModel.editingDraft.reviewBy = nil
+                    return
+                }
+                guard viewModel.editingDraft.reviewBy == nil else { return }
+                viewModel.editingDraft.reviewBy = Calendar.current
+                    .date(byAdding: .day, value: 1, to: Date()) ?? Date()
             }
         )
     }
@@ -819,9 +829,7 @@ struct WorkboardEditorView: View {
     private var reviewDate: Binding<Date> {
         Binding(
             get: { viewModel.editingDraft.reviewBy ?? Date() },
-            set: { date in
-                Task { await viewModel.setReviewReminderDate(date) }
-            }
+            set: { viewModel.editingDraft.reviewBy = $0 }
         )
     }
 
@@ -1014,7 +1022,7 @@ private struct WorkboardPickedFile: Hashable, Sendable {
     let mimeType: String?
 }
 
-private struct WorkboardLargeFileConfirmation: Identifiable {
+private struct WorkboardLargeFileConfirmation: WorkboardLargeImportConfirming {
     let id = UUID()
     let files: [WorkboardPickedFile]
     let replacingMaterial: WorkboardMaterialSnapshot?
@@ -1030,27 +1038,8 @@ private struct WorkboardLargeFileConfirmation: Identifiable {
         self.itemID = itemID
     }
 
-    var message: String {
-        let large = files.filter { $0.byteCount > Int64(Constants.fileTransferSoftConfirmBytes) }
-        let total = large.reduce(Int64(0)) { $0 + max(0, $1.byteCount) }
-        let formattedSize = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
-        if large.count == 1 {
-            return String.localizedStringWithFormat(
-                String(localized: LocalizedStringResource(
-                    "workboard.material.large.confirm.message.one",
-                    defaultValue: "One large file (%@) is stored only on this device and may take time to copy now or send later."
-                )),
-                formattedSize
-            )
-        }
-        return String.localizedStringWithFormat(
-            String(localized: LocalizedStringResource(
-                "workboard.material.large.confirm.message",
-                defaultValue: "%1$lld large files (%2$@) are stored only on this device and may take time to copy now or send later."
-            )),
-            Int64(large.count),
-            formattedSize
-        )
+    var largeItemByteCounts: [Int64] {
+        files.map(\.byteCount).filter { $0 > Int64(Constants.fileTransferSoftConfirmBytes) }
     }
 }
 

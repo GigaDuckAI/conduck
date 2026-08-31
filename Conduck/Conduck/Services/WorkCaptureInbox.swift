@@ -12,6 +12,7 @@
 // crash-stranded claims to the pending queue and sweeps only abandoned temp data.
 
 import Foundation
+import os
 
 /// Bridges the share extensions' best-effort Darwin notification into the
 /// process-local notification already consumed by `PersonalWorkbenchView`.
@@ -137,6 +138,11 @@ actor WorkCaptureInbox {
             self.encounteredFilesystemFailure = encounteredFilesystemFailure
         }
     }
+
+    private nonisolated static let log = Logger(
+        subsystem: Constants.identityNamespace,
+        category: "WorkCaptureInbox"
+    )
 
     private let baseURL: URL
     private let fileManager: FileManager
@@ -339,10 +345,16 @@ actor WorkCaptureInbox {
                 return Claim(token: token, envelope: envelope, directoryURL: claimed)
             } catch let error as InboxError {
                 switch error {
-                case .invalidEnvelope:
+                case .invalidEnvelope(_, let reason):
                     // Only a deterministic wire/containment violation is
-                    // destructive. If removal itself fails, leave the directory
-                    // in processing for reconciliation and surface the I/O fault.
+                    // destructive. The reason is logged before the bytes go: it
+                    // is the only forensic record of what a person shared and
+                    // never received, and the capture id ties it to the queue.
+                    Self.log.error(
+                        "Discarding malformed Work capture \(id.uuidString, privacy: .public): \(reason.rawValue, privacy: .public)"
+                    )
+                    // If removal itself fails, leave the directory in processing
+                    // for reconciliation and surface the I/O fault.
                     do {
                         try fileManager.removeItem(at: claimed)
                     } catch {

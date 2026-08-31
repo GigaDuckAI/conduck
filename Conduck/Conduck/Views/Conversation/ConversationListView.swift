@@ -356,20 +356,8 @@ struct ConversationListView: View {
     }
 
     private var activeDeleteAllConfirmation: Binding<Bool> {
-        Binding(
-            get: {
-                workbenchDestinationIsActive
-                    && (externalDeleteAllConfirmation?.wrappedValue ?? showDeleteAllConfirmation)
-            },
-            set: { isPresented in
-                guard !isPresented || workbenchDestinationIsActive else { return }
-                if let externalDeleteAllConfirmation {
-                    externalDeleteAllConfirmation.wrappedValue = isPresented
-                } else {
-                    showDeleteAllConfirmation = isPresented
-                }
-            }
-        )
+        (externalDeleteAllConfirmation ?? $showDeleteAllConfirmation)
+            .gated(by: workbenchDestinationIsActive)
     }
 
     // MARK: - Content search (Tier 2)
