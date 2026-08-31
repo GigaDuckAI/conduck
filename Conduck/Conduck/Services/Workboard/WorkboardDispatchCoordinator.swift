@@ -324,7 +324,9 @@ final class WorkboardDispatchCoordinator {
                 result.attachments.append(draft)
                 attachmentSequence += 1
 
-            case .file:
+            // A voice note travels as its recording. The transcript rides the
+            // same material's text, so sending the file never drops the words.
+            case .file, .audio:
                 let filename = Self.safeFilename(material, fallback: "file.dat")
                 let localURL: URL
                 let materializedTemporaryURL: URL?

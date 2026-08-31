@@ -98,7 +98,7 @@ extension WorkBriefMaterialPacket {
     static func packetKind(for record: WorkMaterialRecord) -> Kind {
         switch record.kind {
         case .image: return .image
-        case .file: return .file
+        case .file, .audio: return .file
         case .link: return .link
         case .note, .transcript: return .note
         case .unknown: return record.filename != nil || record.hasPayload ? .file : .note

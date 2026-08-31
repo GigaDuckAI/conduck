@@ -8,7 +8,10 @@
 // relationship-free, and cannot alter any shipped conversation entity. Binary
 // material/snapshot fields stay external assets so a rich card does not inflate
 // every list fetch. v15 adds exactly one presentation column, so an account
-// that never resized a card carries nothing new.
+// that never resized a card carries nothing new. v16 splits the model into two
+// CloudKit configurations so payload blobs live in a store the Watch never
+// mounts, and a shipped default-configuration store must open as `Core`
+// untouched.
 
 import XCTest
 import CoreData
@@ -16,21 +19,22 @@ import CoreData
 
 final class WorkboardModelMigrationTests: XCTestCase {
     private var storeURL: URL!
+    private var blobStoreURL: URL!
 
     override func setUp() {
         super.setUp()
-        storeURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("conversations-workboard-\(UUID().uuidString).sqlite")
+        let root = FileManager.default.temporaryDirectory
+        let stem = "conversations-workboard-\(UUID().uuidString)"
+        storeURL = root.appendingPathComponent("\(stem).sqlite")
+        blobStoreURL = root.appendingPathComponent("\(stem)-blobs.sqlite")
     }
 
     override func tearDown() {
-        if let storeURL {
-            let fm = FileManager.default
-            try? fm.removeItem(at: storeURL)
-            try? fm.removeItem(at: storeURL.deletingPathExtension().appendingPathExtension("sqlite-wal"))
-            try? fm.removeItem(at: storeURL.deletingPathExtension().appendingPathExtension("sqlite-shm"))
+        for url in [storeURL, blobStoreURL].compactMap({ $0 }) {
+            removeStoreFiles(at: url)
         }
         storeURL = nil
+        blobStoreURL = nil
         super.tearDown()
     }
 
@@ -233,6 +237,199 @@ final class WorkboardModelMigrationTests: XCTestCase {
         }
     }
 
+    func testV16AddsOnlyTheBlobEntityAndTwoCloudKitConfigurations() throws {
+        let v15 = try requiredModel(named: "Conversations 15.mom")
+        let v16 = try requiredModel(named: "Conversations 16.mom")
+        let existing = Set(v15.entitiesByName.keys)
+        XCTAssertEqual(
+            Set(v16.entitiesByName.keys).subtracting(existing),
+            ["WorkMaterialBlob"],
+            "byte sync adds the blob entity and nothing else"
+        )
+        XCTAssertTrue(
+            existing.isSubset(of: Set(v16.entitiesByName.keys)),
+            "v16 must not drop a shipped entity"
+        )
+
+        for entityName in existing {
+            let before = try XCTUnwrap(v15.entitiesByName[entityName])
+            let after = try XCTUnwrap(v16.entitiesByName[entityName])
+            XCTAssertEqual(Set(after.attributesByName.keys), Set(before.attributesByName.keys),
+                           "v16 must not mutate shipped \(entityName) columns")
+            XCTAssertEqual(Set(after.relationshipsByName.keys), Set(before.relationshipsByName.keys),
+                           "v16 must not mutate shipped \(entityName) relationships")
+            XCTAssertEqual(
+                after.versionHash, before.versionHash,
+                "adding an entity and configurations must leave \(entityName) migration-free"
+            )
+        }
+
+        XCTAssertTrue(
+            v15.configurations.filter { $0 != "PF_DEFAULT_CONFIGURATION_NAME" }.isEmpty,
+            "the shipped store is a default-configuration store"
+        )
+        XCTAssertEqual(
+            Set(v16.configurations).subtracting(["PF_DEFAULT_CONFIGURATION_NAME"]),
+            ["Core", "Blobs"]
+        )
+        XCTAssertEqual(
+            Set((v16.entities(forConfigurationName: "Core") ?? []).compactMap(\.name)),
+            existing,
+            "Core carries exactly the entities the shipped store already holds"
+        )
+        XCTAssertEqual(
+            Set((v16.entities(forConfigurationName: "Blobs") ?? []).compactMap(\.name)),
+            ["WorkMaterialBlob"],
+            "the Watch excludes payloads by never mounting this store"
+        )
+
+        let blob = try XCTUnwrap(v16.entitiesByName["WorkMaterialBlob"])
+        XCTAssertTrue(blob.relationshipsByName.isEmpty,
+                      "Core Data forbids a relationship across configurations; the key is a UUID")
+        XCTAssertTrue(blob.uniquenessConstraints.isEmpty,
+                      "CloudKit mirrored models cannot carry unique constraints")
+        XCTAssertEqual(
+            Set(blob.attributesByName.keys),
+            ["materialID", "payload", "byteSize", "contentHash", "createdAt", "updatedAt"]
+        )
+        for attribute in blob.attributesByName.values {
+            XCTAssertTrue(attribute.isOptional, "WorkMaterialBlob.\(attribute.name) must be optional")
+            XCTAssertNil(attribute.defaultValue,
+                         "an imported blob may not have WorkMaterialBlob.\(attribute.name) invented")
+        }
+        let payload = try XCTUnwrap(blob.attributesByName["payload"])
+        XCTAssertEqual(payload.attributeType, .binaryDataAttributeType)
+        XCTAssertTrue(payload.allowsExternalBinaryDataStorage,
+                      "payload bytes ride CloudKit as an asset, not inside the record")
+        XCTAssertEqual(
+            try XCTUnwrap(blob.attributesByName["byteSize"]).attributeType,
+            .integer64AttributeType
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(blob.attributesByName["materialID"]).attributeType,
+            .UUIDAttributeType
+        )
+    }
+
+    func testV15SQLiteReopensAsCoreInV16BesideAWritableBlobStore() async throws {
+        let v15 = try requiredModel(named: "Conversations 15.mom")
+        let v16 = try requiredModel(named: "Conversations 16.mom")
+        let itemID = UUID()
+        let materialID = UUID()
+        let thumbnail = Data(repeating: 0xA5, count: 400_000)
+
+        do {
+            let container = try await loadStore(model: v15)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let item = NSEntityDescription.insertNewObject(forEntityName: "WorkItem", into: context)
+                item.setValue(itemID, forKey: "id")
+                item.setValue("Captured before byte sync", forKey: "title")
+                item.setValue(Date(timeIntervalSince1970: 1_800_000_000), forKey: "createdAt")
+                item.setValue(Date(timeIntervalSince1970: 1_800_000_000), forKey: "updatedAt")
+
+                let material = NSEntityDescription.insertNewObject(
+                    forEntityName: "WorkMaterial", into: context
+                )
+                material.setValue(materialID, forKey: "id")
+                material.setValue(itemID, forKey: "workItemID")
+                material.setValue("image", forKey: "kind")
+                material.setValue("Screenshot", forKey: "title")
+                material.setValue("localVault", forKey: "storageMode")
+                material.setValue("large", forKey: "cardSize")
+                material.setValue(thumbnail, forKey: "thumbnailData")
+                material.setValue(NSNumber(value: Int64(2_048)), forKey: "byteSize")
+                material.setValue(Date(timeIntervalSince1970: 1_800_000_001), forKey: "createdAt")
+                material.setValue(Date(timeIntervalSince1970: 1_800_000_001), forKey: "updatedAt")
+                try context.save()
+            }
+            try unload(container)
+        }
+
+        let payload = Data(repeating: 0x5A, count: 5 * 1024 * 1024)
+        do {
+            let container = try await loadCoreAndBlobStores(model: v16)
+            let coordinator = container.persistentStoreCoordinator
+            XCTAssertEqual(coordinator.persistentStores.count, 2,
+                           "a mis-pointed configuration mounts silently; count the stores")
+            let mounted = Dictionary(
+                uniqueKeysWithValues: coordinator.persistentStores.map {
+                    ($0.configurationName, $0.url?.lastPathComponent)
+                }
+            )
+            XCTAssertEqual(mounted["Core"], storeURL.lastPathComponent,
+                           "Core must keep the shipped file; a new URL would strand every row")
+            XCTAssertEqual(mounted["Blobs"], blobStoreURL.lastPathComponent)
+
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+                request.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
+                let material = try XCTUnwrap(context.fetch(request).first)
+                XCTAssertEqual(material.value(forKey: "title") as? String, "Screenshot")
+                XCTAssertEqual(material.value(forKey: "cardSize") as? String, "large")
+                XCTAssertEqual(material.value(forKey: "thumbnailData") as? Data, thumbnail)
+                XCTAssertEqual(
+                    material.value(forKey: "updatedAt") as? Date,
+                    Date(timeIntervalSince1970: 1_800_000_001),
+                    "opening under a named configuration may not move a revision-bearing timestamp"
+                )
+                XCTAssertEqual(
+                    try context.count(for: NSFetchRequest(entityName: "WorkMaterialBlob")), 0
+                )
+
+                let blob = NSEntityDescription.insertNewObject(
+                    forEntityName: "WorkMaterialBlob", into: context
+                )
+                blob.setValue(materialID, forKey: "materialID")
+                blob.setValue(payload, forKey: "payload")
+                blob.setValue(NSNumber(value: Int64(payload.count)), forKey: "byteSize")
+                blob.setValue("sha256-fixture", forKey: "contentHash")
+                blob.setValue(Date(timeIntervalSince1970: 1_800_000_002), forKey: "createdAt")
+                blob.setValue(Date(timeIntervalSince1970: 1_800_000_002), forKey: "updatedAt")
+                material.setValue("syncedPayload", forKey: "storageMode")
+                // Both stores commit from one save; Core Data routes each row by
+                // configuration membership, so no explicit store assignment.
+                try context.save()
+
+                XCTAssertEqual(blob.objectID.persistentStore?.url, self.blobStoreURL)
+                XCTAssertEqual(material.objectID.persistentStore?.url, self.storeURL)
+            }
+            try unload(container)
+        }
+
+        let container = try await loadCoreAndBlobStores(model: v16)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterialBlob")
+            request.predicate = NSPredicate(format: "materialID == %@", materialID as CVarArg)
+            let blob = try XCTUnwrap(context.fetch(request).first)
+            XCTAssertEqual(blob.value(forKey: "payload") as? Data, payload,
+                           "an external payload must survive close and reopen whole")
+            XCTAssertEqual((blob.value(forKey: "byteSize") as? NSNumber)?.int64Value,
+                           Int64(payload.count))
+
+            let materialRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            materialRequest.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
+            let material = try XCTUnwrap(context.fetch(materialRequest).first)
+            XCTAssertEqual(material.value(forKey: "storageMode") as? String, "syncedPayload")
+            XCTAssertNil(material.value(forKey: "payload"),
+                         "synced bytes live in the blob row; the material column stays unwritten")
+
+            // Availability resolves from metadata alone — projecting payload here
+            // would load every byte on every board refresh.
+            let projection = NSFetchRequest<NSDictionary>(entityName: "WorkMaterialBlob")
+            projection.resultType = .dictionaryResultType
+            projection.propertiesToFetch = ["materialID", "byteSize", "contentHash", "updatedAt"]
+            let rows = try context.fetch(projection)
+            XCTAssertEqual(rows.count, 1)
+            let row = try XCTUnwrap(rows.first)
+            XCTAssertEqual(row["contentHash"] as? String, "sha256-fixture")
+            XCTAssertNil(row["payload"])
+        }
+        try unload(container)
+    }
+
     private func requiredModel(named name: String) throws -> NSManagedObjectModel {
         let bundles = [Bundle.main, Bundle(for: Self.self)]
         return try XCTUnwrap(
@@ -260,5 +457,52 @@ final class WorkboardModelMigrationTests: XCTestCase {
         await fulfillment(of: [loaded], timeout: 15)
         if let loadError { throw loadError }
         return container
+    }
+
+    /// The production topology: one coordinator, the shipped file mounted as
+    /// `Core` and a sibling file mounted as `Blobs`.
+    private func loadCoreAndBlobStores(
+        model: NSManagedObjectModel
+    ) async throws -> NSPersistentContainer {
+        let container = NSPersistentContainer(name: "Conversations", managedObjectModel: model)
+        let core = NSPersistentStoreDescription(url: storeURL)
+        core.configuration = "Core"
+        let blobs = NSPersistentStoreDescription(url: blobStoreURL)
+        blobs.configuration = "Blobs"
+        for description in [core, blobs] {
+            description.shouldMigrateStoreAutomatically = true
+            description.shouldInferMappingModelAutomatically = true
+        }
+        container.persistentStoreDescriptions = [core, blobs]
+        let loaded = expectation(description: "stores loaded")
+        loaded.expectedFulfillmentCount = 2
+        var loadErrors: [Error] = []
+        container.loadPersistentStores { _, error in
+            if let error { loadErrors.append(error) }
+            loaded.fulfill()
+        }
+        await fulfillment(of: [loaded], timeout: 30)
+        if let first = loadErrors.first { throw first }
+        return container
+    }
+
+    private func unload(_ container: NSPersistentContainer) throws {
+        for store in container.persistentStoreCoordinator.persistentStores {
+            try container.persistentStoreCoordinator.remove(store)
+        }
+    }
+
+    /// External binary payloads live in a `_SUPPORT` directory beside each
+    /// store, so a per-store cleanup has to take four paths, not one.
+    private func removeStoreFiles(at url: URL) {
+        let fm = FileManager.default
+        let stem = url.deletingPathExtension()
+        try? fm.removeItem(at: url)
+        try? fm.removeItem(at: stem.appendingPathExtension("sqlite-wal"))
+        try? fm.removeItem(at: stem.appendingPathExtension("sqlite-shm"))
+        try? fm.removeItem(
+            at: url.deletingLastPathComponent()
+                .appendingPathComponent(".\(stem.lastPathComponent)_SUPPORT")
+        )
     }
 }

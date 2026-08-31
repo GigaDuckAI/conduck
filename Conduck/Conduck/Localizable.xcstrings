@@ -23718,6 +23718,17 @@
         }
       }
     },
+    "workboard.material.syncPending" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Waiting for iCloud…"
+          }
+        }
+      }
+    },
     "workboard.material.unavailableHere" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {

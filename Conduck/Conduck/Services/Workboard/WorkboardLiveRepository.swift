@@ -392,7 +392,10 @@ final class WorkboardLiveRepository {
             return .available
         case .availableLocally:
             return .localOnly
-        case .unavailableOnThisDevice:
+        case .unavailableOnThisDevice, .syncedPending:
+            // Bytes that have not landed yet fail closed: the card is visible
+            // provenance, and nothing may be sent from a payload this device
+            // cannot read.
             return .unavailableOnThisDevice
         case .metadataOnly:
             // Notes and links intentionally have no binary payload. A binary
@@ -400,7 +403,7 @@ final class WorkboardLiveRepository {
             switch record.kind {
             case .note, .link, .transcript:
                 return .available
-            case .image, .file, .unknown:
+            case .image, .file, .audio, .unknown:
                 return .unavailableOnThisDevice
             }
         }
@@ -438,6 +441,11 @@ final class WorkboardLiveRepository {
             parts.append(String(
                 localized: "workboard.material.unavailableHere",
                 defaultValue: "Reattach on this device before sending"
+            ))
+        case .syncedPending:
+            parts.append(String(
+                localized: "workboard.material.syncPending",
+                defaultValue: "Waiting for iCloud…"
             ))
         case .metadataOnly, .synced:
             break

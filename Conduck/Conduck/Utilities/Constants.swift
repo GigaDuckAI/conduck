@@ -2086,6 +2086,31 @@ enum Constants {
     /// `sharedInboxDirectoryName` (the writer actor reads it off the main actor).
     nonisolated static let shareTargetsSnapshotFileName = "share-targets.json"
 
+    // MARK: - Work desk
+
+    /// The one Work desk every capture lands on. Work is a single surface, so
+    /// the row that owns every material has a compile-time identity instead of
+    /// a minted one: a capture from a headless intent, the Watch, or the share
+    /// inbox can name the desk without first reading the store, and a replay
+    /// after a crash names the same desk it named before. CloudKit can import
+    /// several physical rows under this id; the board unions their materials
+    /// and never deletes a row, so a duplicate is invisible rather than lossy.
+    ///
+    /// `nonisolated` because the store and drainer actors resolve the desk off
+    /// the main actor. The Watch target mirrors this literal locally (it does
+    /// not compile the store extension); a drift-guard test compares the two.
+    nonisolated static let workboardDeskItemID =
+        UUID(uuidString: "DE5C0000-0000-4000-A000-000000000001")!
+
+    /// Largest material payload (bytes) that rides private CloudKit as a synced
+    /// blob. Anything above stays in the device-local vault and offers reattach.
+    ///
+    /// Deliberately below the only published CKAsset figure — an archived 50 MB
+    /// Web Services limit — because Apple documents no current maximum for a
+    /// native `CKAsset`. Tunable: raise it only on real-device evidence that
+    /// larger blobs export and import reliably, never on inference.
+    nonisolated static let workboardSyncCeilingBytes: Int64 = 30 * 1024 * 1024
+
     // MARK: - KVS Schema (diagnostic only)
 
     /// KVS schema version key. Diagnostic-only forward-compat —

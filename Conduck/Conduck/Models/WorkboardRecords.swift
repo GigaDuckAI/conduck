@@ -348,7 +348,11 @@ nonisolated enum WorkMaterialKind: String, CaseIterable, Codable, Sendable, Hash
     case link
     case image
     case file
-    /// A transcript captured by voice. Audio itself is not retained.
+    /// A voice recording kept as playable bytes. Its transcript, when speech
+    /// recognition produces one, lands in `textContent` on this same material,
+    /// so a failed transcription costs the words and never the recording.
+    case audio
+    /// A transcript captured by voice, carrying no recording of its own.
     case transcript
     /// Forward-compatible fallback for a kind this build cannot render richly.
     case unknown
@@ -409,6 +413,11 @@ nonisolated enum WorkMaterialAvailability: String, Codable, Sendable, Hashable {
     case synced
     case availableLocally
     case unavailableOnThisDevice
+    /// The row names synced bytes whose blob has not landed on this device yet.
+    /// CloudKit materializes a material and its blob independently, so this is
+    /// an ordinary arrival gap, not damage. It fails closed — the card renders
+    /// from its metadata but cannot open, play or dispatch until bytes arrive.
+    case syncedPending
 }
 
 /// Creation request. File/image content stays in the device-local vault; only
@@ -550,6 +559,49 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+}
+
+/// Metadata of one synced payload blob, projected without its bytes. The blob
+/// lives in its own CloudKit-mirrored store, keyed to its material by UUID
+/// rather than by a relationship — the two stores hold different entities and
+/// Core Data forbids a relationship across configurations.
+///
+/// A blob row arrives independently of the material row it belongs to, in
+/// either order, and a crash can leave one without the other. `isComplete` is
+/// therefore the only thing that licenses reading bytes: an imported row whose
+/// hash or size is still absent is an arrival in progress, not a payload.
+nonisolated struct WorkMaterialBlobRecord: Identifiable, Sendable, Hashable {
+    /// The material this payload belongs to. It is also the record's identity:
+    /// duplicate blobs for one material are a legal transient state that the
+    /// newest complete row resolves, so the material id — not a blob id — is
+    /// what every reader looks up.
+    var id: UUID { materialID }
+    let materialID: UUID
+    let byteSize: Int64
+    /// Content hash of the exact bytes stored. A replayed capture whose hash
+    /// disagrees with the stored row is a stale blob to replace, not a match.
+    let contentHash: String
+    let createdAt: Date
+    let updatedAt: Date
+
+    init(
+        materialID: UUID,
+        byteSize: Int64,
+        contentHash: String,
+        createdAt: Date,
+        updatedAt: Date
+    ) {
+        self.materialID = materialID
+        self.byteSize = byteSize
+        self.contentHash = contentHash
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    /// Whether the row proves a whole payload landed. Both facts are written in
+    /// the same save as the bytes, so their presence is what distinguishes a
+    /// finished blob from a partially materialized import.
+    var isComplete: Bool { byteSize > 0 && !contentHash.isEmpty }
 }
 
 /// Payload + metadata loaded only at the dispatch/preview boundary.
