@@ -600,16 +600,7 @@ struct iOSMessageComposerBar: View {
                 regularTrailingButton
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(AppColors.cardBackgroundElevated)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(AppColors.border, lineWidth: 1)
-                )
-        )
+        .composerCardChrome()
         // The whole card is a focus target — the editable `TextField` is only as
         // tall as its text (a thin strip at the top), so the card's padding, the
         // gap above the control row, and the side margins were dead zones where a
@@ -630,8 +621,7 @@ struct iOSMessageComposerBar: View {
                 .onTapGesture { fieldFocused = true }
                 .accessibilityHidden(true)
         )
-        .frame(maxWidth: Constants.Layout.chatContentWidth)
-        .frame(maxWidth: .infinity, alignment: .center)
+        .composerReadableWidth()
     }
 
     /// Filled-glyph symbol for the regular-layout persistent mic.

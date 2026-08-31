@@ -447,19 +447,6 @@ struct MainWindowView: View {
             // via `gatewayPillBackground`. Suppress the system glass so that pill
             // isn't double-wrapped.
             .sharedBackgroundVisibility(.hidden)
-
-            // The section switch belongs to this persistent split rather than
-            // the outer workbench host. It therefore stays mounted in exactly
-            // one detail-side slot while Work / Chats change, but disappears
-            // with the split when full-window Settings replaces it.
-            if let personalWorkbenchModel {
-                ToolbarItem(placement: .primaryAction) {
-                    workbenchSectionPicker(for: personalWorkbenchModel)
-                }
-                // The control draws one continuous filled container itself.
-                // Suppress AppKit's extra glass capsule around that container.
-                .sharedBackgroundVisibility(.hidden)
-            }
         }
         // Hold Work's columns for the tail of the dissolve after Work is hidden,
         // then drop them. `.task(id:)` cancels a pending unmount if Work comes
@@ -618,6 +605,34 @@ struct MainWindowView: View {
                     .opacity(0)
                     .accessibilityHidden(true)
                 }
+
+                // The section switch belongs to this persistent split rather
+                // than the outer workbench host: it stays mounted in exactly one
+                // detail-side slot while Work / Chats change, and disappears
+                // with the split when full-window Settings replaces it.
+                //
+                // WHY a zero-size host declared LAST rather than a
+                // `ToolbarItem` on the split view itself: toolbar items are
+                // collected in view-tree order, and an item declared on the
+                // split view lands BEFORE anything Chat's own tree declares —
+                // which puts Chat's conditional Copy-conversation button to the
+                // RIGHT of this control and drags it 45pt sideways every time
+                // that button comes or goes. Declared here, after the Chat
+                // layer, this is the trailing-most item in the content region
+                // and nothing Chat does can move it. Measured, macOS 26.5,
+                // 900pt window: x 732–892 in BOTH sections, one item identity
+                // across the switch.
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            workbenchSectionPicker(for: personalWorkbenchModel)
+                        }
+                        // The control draws one continuous filled container
+                        // itself. Suppress AppKit's extra glass capsule around
+                        // that container.
+                        .sharedBackgroundVisibility(.hidden)
+                    }
             }
         }
     }
@@ -997,12 +1012,24 @@ struct MainWindowView: View {
     /// The gate is on the CONTENT rather than on the `ToolbarItem` in
     /// `persistentSplitView` — declaring and undeclaring the principal item
     /// re-lays out the bar, and this window's whole arrangement rests on the
-    /// toolbar keeping one identity across the section switch. An empty
-    /// principal slot is already the unconfigured-device case, so it costs the
-    /// layout nothing new.
+    /// toolbar keeping one identity across the section switch.
+    ///
+    /// WHY the content must never resolve to `EmptyView`: a principal item whose
+    /// content is empty produces no `NSToolbarItem` at all, and the pair of
+    /// flexible spaces AppKit puts around a principal item is the ONLY thing
+    /// holding the `.primaryAction` group — the Chats/Work control — against the
+    /// window's trailing edge. Drop the item and that group falls back to the
+    /// leading edge of the content region, so the section control jumps to the
+    /// left of the divider the moment Work is shown or no gateway is configured.
+    /// The zero-area placeholder keeps the item, the spaces and the arrangement
+    /// identical in both sections.
     @ViewBuilder
     private var gatewayToolbarContent: some View {
-        if chatDestinationIsActive, coordinator.hasAnyConfiguredGateway {
+        if !chatDestinationIsActive || !coordinator.hasAnyConfiguredGateway {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityHidden(true)
+        } else {
             if let vm = coordinator.windowViewModel {
                 // Clone is now FOLDED into the centered gateway pill: when the
                 // thread is clone-eligible (bound, has turns, gateway available,
@@ -1688,7 +1715,7 @@ struct MainWindowView: View {
             voiceRecoveryRow
                 .frame(maxWidth: Constants.Layout.chatContentWidth)
                 .frame(maxWidth: .infinity)
-            // Composer caps itself to the same readable column, centered.
+            // Composer sits on the same readable column as the thread, centered.
             MessageComposerBar(
                 viewModel: vm,
                 onSendText: sendTypedText,
@@ -1708,8 +1735,10 @@ struct MainWindowView: View {
             // conversation its own mount so A → B runs A's onDisappear/deferred
             // teardown instead of carrying A's tiles into B.
             .id(ComposerMountIdentity.conversation(vm.conversationID))
-            .frame(maxWidth: Constants.Layout.chatContentWidth)
-            .frame(maxWidth: .infinity)
+            // The cap wraps the WHOLE bar, so the bar's own 16/12 inset is spent
+            // inside the column and the card lands one bar-inset narrower than it.
+            // Work's pinned bar reproduces this chain position exactly.
+            .composerReadableWidth()
         }
     }
 

@@ -21712,17 +21712,6 @@
         }
       }
     },
-    "workboard.action.editNextVersion" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Edit Next Version"
-          }
-        }
-      }
-    },
     "workboard.action.failed.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -21730,28 +21719,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Couldn’t update the board"
-          }
-        }
-      }
-    },
-    "workboard.action.keepWorking" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Keep Working"
-          }
-        }
-      }
-    },
-    "workboard.action.markDone" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Mark Done"
           }
         }
       }
@@ -21774,39 +21741,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Move Later"
-          }
-        }
-      }
-    },
-    "workboard.action.openConversation" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Conversation"
-          }
-        }
-      }
-    },
-    "workboard.action.reopen" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Reopen"
-          }
-        }
-      }
-    },
-    "workboard.action.sendAgain" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Send Again"
           }
         }
       }
@@ -22596,204 +22530,6 @@
         }
       }
     },
-    "workboard.detail.action.done" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Closed by you"
-          }
-        }
-      }
-    },
-    "workboard.detail.action.draft" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Ready when you are"
-          }
-        }
-      }
-    },
-    "workboard.detail.action.review" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "You decide what happens next"
-          }
-        }
-      }
-    },
-    "workboard.detail.action.waiting" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This run is still in progress"
-          }
-        }
-      }
-    },
-    "workboard.detail.brief.edit" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Edit Brief"
-          }
-        }
-      }
-    },
-    "workboard.detail.brief.empty" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No brief yet"
-          }
-        }
-      }
-    },
-    "workboard.detail.divergence.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The run timeline preserves exactly what was sent. Editing this brief only changes the next run."
-          }
-        }
-      }
-    },
-    "workboard.detail.divergence.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This brief has a newer version"
-          }
-        }
-      }
-    },
-    "workboard.detail.failure.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This run needs attention"
-          }
-        }
-      }
-    },
-    "workboard.detail.result.from" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "From %@"
-          }
-        }
-      }
-    },
-    "workboard.detail.result.output" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Generated output"
-          }
-        }
-      }
-    },
-    "workboard.detail.result.output.hint" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Opens this output in its conversation"
-          }
-        }
-      }
-    },
-    "workboard.detail.result.outputs" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Outputs"
-          }
-        }
-      }
-    },
-    "workboard.detail.result.syncing" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The result is still syncing to this device."
-          }
-        }
-      }
-    },
-    "workboard.detail.result.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Result ready for review"
-          }
-        }
-      }
-    },
-    "workboard.detail.review.requirement" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Before sending, open the brief and describe what needs doing."
-          }
-        }
-      }
-    },
-    "workboard.detail.timeline.sentVersion" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Sent version"
-          }
-        }
-      }
-    },
-    "workboard.detail.timeline.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Run Timeline"
-          }
-        }
-      }
-    },
     "workboard.dispatch.failed.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22801,28 +22537,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Nothing was sent"
-          }
-        }
-      }
-    },
-    "workboard.done.locked.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Reopen it before adding thoughts or materials so completed work never changes silently."
-          }
-        }
-      }
-    },
-    "workboard.done.locked.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This work is complete"
           }
         }
       }

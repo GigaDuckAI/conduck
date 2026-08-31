@@ -75,6 +75,7 @@ struct WorkboardCaptureCanvas: View {
     var destination: WorkboardCaptureDestination
 
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     init(
         viewModel: WorkboardViewModel,
@@ -111,7 +112,7 @@ struct WorkboardCaptureCanvas: View {
     var body: some View {
         Group {
             if mode == .composer {
-                compactComposer
+                pinnedComposer
             } else {
                 WorkboardSurface {
                     VStack(alignment: .leading, spacing: 14) {
@@ -353,16 +354,95 @@ struct WorkboardCaptureCanvas: View {
         showsFileImporter = true
     }
 
-    /// The pinned composer follows the sketch's single-row capture bar. The
-    /// full source canvas already exposes Review & Send, and the detail toolbar
-    /// owns that deliberate boundary, so it is not repeated below the keyboard.
-    private var compactComposer: some View {
-        HStack(alignment: .bottom, spacing: 7) {
+    /// Work's pinned bar IS Chat's composer card — same chrome, same compact
+    /// docked row — with Work's wiring behind it (text becomes a note, attach
+    /// imports material, the mic captures a thought). The outer 16/12 is the
+    /// bar's inset around the card; the card's own inset comes from
+    /// `composerCardChrome()`, exactly as in Chat.
+    ///
+    /// The column is CHAT's — `composerReadableWidth()`, never the board's
+    /// `contentMaxWidth` — and it is applied at the SAME point in the chain as
+    /// Chat's own bar applies it on that platform, because the two Chat bars put
+    /// it in different places and the card width follows the position:
+    /// - macOS — `MainWindowView` caps the padded bar, so the cap goes AFTER the
+    ///   16/12 inset here too and the card lands one bar-inset narrower.
+    /// - iOS — `iOSMessageComposerBar.regularLayout` caps the CARD, inside the
+    ///   inset, so the cap goes on `composerCard`. The compact docked row takes no
+    ///   cap at all, exactly as in Chat's `compactLayout`.
+    ///
+    /// The host's material band is unaffected: the modifier's second frame
+    /// re-expands to `.infinity`, so the band still reaches both window edges even
+    /// though the card inside it does not.
+    private var pinnedComposer: some View {
+        Group {
+            if usesComposerCard {
+                #if os(macOS)
+                composerCard
+                #else
+                composerCard.composerReadableWidth()
+                #endif
+            } else {
+                compactComposerRow
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        #if os(macOS)
+        .composerReadableWidth()
+        #endif
+    }
+
+    /// The same rule Chat's iOS composer uses (`usesRegularLayout`): a card on
+    /// macOS and wide iPad, a docked single row everywhere narrower. Reading it
+    /// from one place keeps the layout and the field's chrome from disagreeing.
+    private var usesComposerCard: Bool {
+        #if os(macOS)
+        true
+        #else
+        horizontalSizeClass == .regular && DeviceCapabilities.isiPad
+        #endif
+    }
+
+    private var composerCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            composerField(lineLimit: composerLineLimit, inCard: true)
+
+            HStack(spacing: 10) {
+                attachmentMenu
+                Spacer(minLength: 8)
+                voiceButton
+                addThoughtButton
+            }
+        }
+        .composerCardChrome()
+        // Chat's focus assist, verbatim: the field is only as tall as its text,
+        // so the card's padding is a dead zone unless a BEHIND-content hit layer
+        // claims it. Never `.overlay` — that would steal clicks from the field
+        // and the buttons — and hidden from accessibility so VoiceOver hears one
+        // field rather than an unlabeled phantom element.
+        .background(
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { composerFocused = true }
+                .accessibilityHidden(true)
+        )
+    }
+
+    private var compactComposerRow: some View {
+        HStack(alignment: .bottom, spacing: 8) {
             attachmentMenu
-            composerField(lineLimit: 1...4)
+            composerField(lineLimit: composerLineLimit)
             voiceButton
             addThoughtButton
         }
+    }
+
+    private var composerLineLimit: ClosedRange<Int> {
+        #if os(macOS)
+        1...12
+        #else
+        1...6
+        #endif
     }
 
     private var expandedComposer: some View {
@@ -411,7 +491,13 @@ struct WorkboardCaptureCanvas: View {
         )))
     }
 
-    private func composerField(lineLimit: ClosedRange<Int>) -> some View {
+    /// `inCard` suppresses the field's own fill, inset and stroke: inside the
+    /// composer card that chrome would read as a card in a card, which is the
+    /// same reason Chat's iOS field clears its fill in the regular layout.
+    private func composerField(
+        lineLimit: ClosedRange<Int>,
+        inCard: Bool = false
+    ) -> some View {
         TextField(
             String(localized: destination.composerPrompt),
             text: composerTextBinding,
@@ -422,13 +508,21 @@ struct WorkboardCaptureCanvas: View {
         .foregroundStyle(AppColors.textPrimary)
         .lineLimit(lineLimit)
         .focused($composerFocused)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, minHeight: WorkboardMetrics.touchTarget)
-        .background(AppColors.backgroundSecondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, inCard ? 0 : 12)
+        .padding(.vertical, inCard ? 0 : 10)
+        .frame(maxWidth: .infinity, minHeight: inCard ? nil : WorkboardMetrics.touchTarget)
+        .background(
+            inCard ? Color.clear : AppColors.backgroundSecondary,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(composerFocused ? AppColors.brandAmber.opacity(0.65) : AppColors.borderSubtle, lineWidth: 1)
+            if !inCard {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(
+                        composerFocused ? AppColors.brandAmber.opacity(0.65) : AppColors.borderSubtle,
+                        lineWidth: 1
+                    )
+            }
         }
     }
 

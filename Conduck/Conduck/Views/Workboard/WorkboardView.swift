@@ -771,11 +771,7 @@ struct WorkboardDetailColumn: View {
             .accessibilityValue(Text(verbatim: loadError))
             .background(AppColors.background.ignoresSafeArea())
         } else if let item = viewModel.selectedItem {
-            WorkboardDetailView(
-                viewModel: viewModel,
-                itemID: item.id,
-                newWorkspaceID: emptyWorkspaceID
-            )
+            WorkboardDetailView(viewModel: viewModel, itemID: item.id)
                 .id(item.id)
         } else if let provisionalID = viewModel.provisionalWorkspaceID {
             captureWorkspace(
@@ -926,8 +922,9 @@ struct WorkboardDetailColumn: View {
             mode: .composer,
             destination: destination
         )
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        // The bar owns its own inset (Chat's 16/12). Only the full-bleed
+        // material belongs to the host: the board scrolls UNDER this inset, so
+        // the band has to reach both window edges even though the card does not.
         .background(.ultraThinMaterial)
     }
 }

@@ -3,20 +3,16 @@
 // Conduck
 // WorkboardDetailView.swift
 //
-// Result-first Workboard detail. Replies and failures appear before the original
-// brief, followed by human review actions and an immutable run timeline. A
-// transport result can request attention but only the person can mark the
-// objective Done.
+// The desk. One project's board and nothing that competes with it: the recent
+// work strip to move between projects, the project's name, the card board, and
+// the pinned composer. Run state, results and dispatch live on the view model
+// and its sheets; this surface neither reports nor triggers them.
 
 import SwiftUI
-import Textual
 
 struct WorkboardDetailView: View {
     @Bindable var viewModel: WorkboardViewModel
     let itemID: UUID
-    /// Parent-owned scratch identity survives detail reconstruction and section
-    /// switches, so a half-written Done -> New Work thought never gets stranded.
-    let newWorkspaceID: UUID
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
@@ -24,12 +20,12 @@ struct WorkboardDetailView: View {
     var body: some View {
         Group {
             if let item = viewModel.item(withID: itemID) {
-                let captureItem = item.state == .done
-                    ? WorkboardItemSnapshot(id: newWorkspaceID)
-                    : item
-                let captureDestination: WorkboardCaptureDestination = item.state == .done
-                    ? .newWork
-                    : .existingWork(item.displayTitle)
+                // Composer, attach menu and pane-wide drop all write into the
+                // project whose board is on screen, finished included. Retargeting
+                // a `.done` desk at a hidden new project would contradict the board
+                // it is pinned under, and with no send on this surface there is
+                // nothing a retarget would protect.
+                let captureDestination = WorkboardCaptureDestination.existingWork(item.displayTitle)
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: WorkboardMetrics.generousSpacing) {
@@ -40,28 +36,14 @@ struct WorkboardDetailView: View {
                             )
                         }
                         header(item)
-                        if item.hasChangesSinceLastSend {
-                            divergenceBanner
-                        }
-                        if let result = reviewResult(item) {
-                            resultCard(result, item: item)
-                        }
-                        if item.state == .done {
-                            completedCaptureLock(item)
-                        } else {
-                            WorkboardCaptureCanvas(
-                                viewModel: viewModel,
-                                item: item,
-                                mode: .sources
-                            )
-                        }
-                        actionDeck(item)
-                        if !item.runs.isEmpty {
-                            runTimeline(item)
-                        }
+                        WorkboardCaptureCanvas(
+                            viewModel: viewModel,
+                            item: item,
+                            mode: .sources
+                        )
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 22)
+                    .padding(.horizontal, WorkboardMetrics.standardSpacing)
+                    .padding(.vertical, WorkboardMetrics.generousSpacing)
                     .frame(maxWidth: WorkboardMetrics.contentMaxWidth)
                     .frame(maxWidth: .infinity)
                 }
@@ -69,17 +51,19 @@ struct WorkboardDetailView: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     WorkboardCaptureCanvas(
                         viewModel: viewModel,
-                        item: captureItem,
+                        item: item,
                         mode: .composer,
                         destination: captureDestination
                     )
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    // The bar owns its own inset (Chat's 16/12). Only the
+                    // full-bleed material belongs here: the board scrolls UNDER
+                    // this inset, so the band has to reach both window edges
+                    // even though the card inside it does not.
                     .background(.ultraThinMaterial)
                 }
                 .workboardPaneDropDestination(
                     viewModel: viewModel,
-                    itemID: captureItem.id,
+                    itemID: item.id,
                     destination: captureDestination
                 )
                 .background(AppColors.background.ignoresSafeArea())
@@ -104,159 +88,28 @@ struct WorkboardDetailView: View {
         }
     }
 
-    private func completedCaptureLock(_ item: WorkboardItemSnapshot) -> some View {
-        WorkboardSurface {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 14) {
-                    completedLockCopy
-                    Spacer(minLength: 12)
-                    reopenButton(item)
-                }
-
-                VStack(alignment: .leading, spacing: 14) {
-                    completedLockCopy
-                    reopenButton(item)
-                        .frame(maxWidth: .infinity)
-                }
-            }
-        }
-    }
-
-    private var completedLockCopy: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: "checkmark.seal.fill")
-                .font(.title2)
-                .foregroundStyle(AppColors.brandTeal)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringResource(
-                    "workboard.done.locked.title",
-                    defaultValue: "This work is complete"
-                ))
-                .font(.headline)
-                .foregroundStyle(AppColors.textEmphasis)
-                .accessibilityAddTraits(.isHeader)
-                Text(LocalizedStringResource(
-                    "workboard.done.locked.message",
-                    defaultValue: "Reopen it before adding thoughts or materials so completed work never changes silently."
-                ))
-                .font(.subheadline)
-                .foregroundStyle(AppColors.textSecondary)
-            }
-        }
-    }
-
-    private func reopenButton(_ item: WorkboardItemSnapshot) -> some View {
-        Button {
-            Task { await viewModel.transition(item, to: .draft) }
-        } label: {
-            Label(
-                LocalizedStringResource("workboard.action.reopen", defaultValue: "Reopen"),
-                systemImage: "arrow.uturn.backward.circle"
-            )
-            .frame(maxWidth: .infinity, minHeight: WorkboardMetrics.touchTarget)
-        }
-        .primaryCTAButton()
-    }
-
+    /// What the project is called, and the one control that still changes it.
+    /// The pinned/captured chips stay because they describe the project itself,
+    /// not a run.
     private func header(_ item: WorkboardItemSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 9) {
-                    horizontalStatusLabels(item)
-                    Spacer(minLength: 8)
-                    modifiedLabel(item)
-                    projectMenu(item)
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                Text(verbatim: item.displayTitle)
+                    .font(.largeTitle.weight(.bold))
+                    .foregroundStyle(AppColors.textEmphasis)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 8)
+                projectMenu(item)
+            }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    WorkboardStateBadge(state: item.state)
+            if item.wasCapturedExternally || item.isPinned {
+                HStack(spacing: 12) {
                     if item.wasCapturedExternally { capturedLabel }
                     if item.isPinned { pinnedLabel }
-                    HStack(spacing: 8) {
-                        modifiedLabel(item)
-                        projectMenu(item)
-                    }
                 }
             }
-
-            Text(verbatim: item.displayTitle)
-                .font(.largeTitle.weight(.bold))
-                .foregroundStyle(AppColors.textEmphasis)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityAddTraits(.isHeader)
-
-            briefLine(item)
         }
-    }
-
-    /// The board surface carries no brief document any more, so the one place
-    /// the objective still shows is this compact line — with the way to write
-    /// it standing right beside it, including when there is nothing yet.
-    private func briefLine(_ item: WorkboardItemSnapshot) -> some View {
-        let objective = item.objective.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ViewThatFits(in: .horizontal) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                objectiveText(objective)
-                editBriefButton(item)
-                Spacer(minLength: 0)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                objectiveText(objective)
-                editBriefButton(item)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func objectiveText(_ objective: String) -> some View {
-        if objective.isEmpty {
-            Text(LocalizedStringResource(
-                "workboard.detail.brief.empty",
-                defaultValue: "No brief yet"
-            ))
-            .font(.title3)
-            .foregroundStyle(AppColors.textTertiary)
-        } else {
-            Text(verbatim: objective)
-                .font(.title3)
-                .foregroundStyle(AppColors.textSecondary)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    /// Offered in every state, `.done` included: this is the only route to the
-    /// context, constraints, desired result and review date, so gating it would
-    /// leave four authored fields stored but unreadable once work is finished.
-    private func editBriefButton(_ item: WorkboardItemSnapshot) -> some View {
-        Button {
-            viewModel.showEditor(for: item, focusing: .objective)
-        } label: {
-            Label(
-                LocalizedStringResource(
-                    "workboard.detail.brief.edit",
-                    defaultValue: "Edit Brief"
-                ),
-                systemImage: "square.and.pencil"
-            )
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(AppColors.textPrimary)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 34)
-            .background(AppColors.backgroundSecondary, in: Capsule())
-            .overlay { Capsule().strokeBorder(AppColors.borderSubtle, lineWidth: 1) }
-            .contentShape(Capsule())
-        }
-        .choiceCardButton(cornerRadius: 17)
-        .disabled(!workbenchDestinationIsActive)
-    }
-
-    @ViewBuilder
-    private func horizontalStatusLabels(_ item: WorkboardItemSnapshot) -> some View {
-        WorkboardStateBadge(state: item.state)
-        if item.wasCapturedExternally { capturedLabel }
-        if item.isPinned { pinnedLabel }
     }
 
     private var capturedLabel: some View {
@@ -277,25 +130,24 @@ struct WorkboardDetailView: View {
         .foregroundStyle(AppColors.brandAmber)
     }
 
-    private func modifiedLabel(_ item: WorkboardItemSnapshot) -> some View {
-        Text(item.modifiedAt, format: .relative(presentation: .named))
-            .font(.caption)
-            .foregroundStyle(AppColors.textTertiary)
-    }
-
+    /// The desk's only project-level control. Edit is offered in EVERY state,
+    /// `.done` included: the editor is now the sole route to the title, the
+    /// objective, the pin and the rest of the brief, so gating it by state
+    /// would leave a finished project unrenameable and its fields unreadable.
     private func projectMenu(_ item: WorkboardItemSnapshot) -> some View {
         Menu {
-            if item.state != .done {
-                Button {
-                    viewModel.showEditor(for: item)
-                } label: {
-                    Label(
-                        LocalizedStringResource("common.edit", defaultValue: "Edit"),
-                        systemImage: "square.and.pencil"
-                    )
-                }
-                Divider()
+            Button {
+                viewModel.showEditor(for: item)
+            } label: {
+                Label(
+                    LocalizedStringResource("common.edit", defaultValue: "Edit"),
+                    systemImage: "square.and.pencil"
+                )
             }
+            // The editor is the only route to the title, objective, brief fields
+            // and pin, so it keeps a keyboard route on macOS.
+            .keyboardShortcut("e", modifiers: .command)
+            Divider()
             Button {
                 viewModel.requestDuplicate(item)
             } label: {
@@ -329,384 +181,6 @@ struct WorkboardDetailView: View {
             "workboard.project.more",
             defaultValue: "More project actions"
         )))
-    }
-
-    private var divergenceBanner: some View {
-        WorkboardSurface {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.title3)
-                    .foregroundStyle(AppColors.warning)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(LocalizedStringResource(
-                        "workboard.detail.divergence.title",
-                        defaultValue: "This brief has a newer version"
-                    ))
-                    .font(.headline)
-                    .foregroundStyle(AppColors.textPrimary)
-                    Text(LocalizedStringResource(
-                        "workboard.detail.divergence.message",
-                        defaultValue: "The run timeline preserves exactly what was sent. Editing this brief only changes the next run."
-                    ))
-                    .font(.subheadline)
-                    .foregroundStyle(AppColors.textSecondary)
-                }
-            }
-        }
-    }
-
-    private func resultCard(_ run: WorkboardRunSnapshot, item: WorkboardItemSnapshot) -> some View {
-        WorkboardSurface {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 12) {
-                    ZStack {
-                        Circle()
-                            .fill(resultTint(run.state).opacity(0.14))
-                        Image(systemName: run.state.systemImage)
-                            .foregroundStyle(resultTint(run.state))
-                    }
-                    .frame(width: 42, height: 42)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(run.state == .failed
-                            ? LocalizedStringResource("workboard.detail.failure.title", defaultValue: "This run needs attention")
-                            : LocalizedStringResource("workboard.detail.result.title", defaultValue: "Result ready for review"))
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(AppColors.textEmphasis)
-                            .accessibilityAddTraits(.isHeader)
-                        Text(String.localizedStringWithFormat(
-                            String(localized: LocalizedStringResource(
-                                "workboard.detail.result.from",
-                                defaultValue: "From %@"
-                            )),
-                            run.gatewayName
-                        ))
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textTertiary)
-                    }
-                    Spacer(minLength: 8)
-                    if let finishedAt = run.finishedAt {
-                        Text(finishedAt, format: .relative(presentation: .named))
-                            .font(.caption)
-                            .foregroundStyle(AppColors.textTertiary)
-                    }
-                }
-
-                Divider().overlay(AppColors.borderSubtle)
-
-                if let markdown = run.resultMarkdown, !markdown.isEmpty {
-                    // `.equatable()` is what makes the conformance load-bearing:
-                    // an unrelated detail-body invalidation then cannot re-parse
-                    // the reply or re-touch Textual's selection layer mid-drag.
-                    // Mirrors Chat's `AgentMarkdownBody`.
-                    WorkboardMarkdownBody(text: markdown)
-                        .equatable()
-                } else if let failure = run.failureMessage, !failure.isEmpty {
-                    Text(verbatim: failure)
-                        .font(.body)
-                        .foregroundStyle(AppColors.textPrimary)
-                        .textSelection(.enabled)
-                } else {
-                    Text(LocalizedStringResource(
-                        "workboard.detail.result.syncing",
-                        defaultValue: "The result is still syncing to this device."
-                    ))
-                    .font(.subheadline)
-                    .foregroundStyle(AppColors.textTertiary)
-                }
-
-                if !run.resultAttachments.isEmpty {
-                    Divider().overlay(AppColors.borderSubtle)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(LocalizedStringResource(
-                            "workboard.detail.result.outputs",
-                            defaultValue: "Outputs"
-                        ))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppColors.textSecondary)
-
-                        ForEach(run.resultAttachments) { attachment in
-                            Button {
-                                guard let conversationID = run.conversationID else { return }
-                                viewModel.openConversation(
-                                    for: itemWithRun(item, conversationID: conversationID)
-                                )
-                            } label: {
-                                HStack(spacing: 10) {
-                                    // `AttachmentChipStyle` maps text and code
-                                    // types only, so an image routed through it
-                                    // would come back as a document.
-                                    Image(systemName: attachment.isImage
-                                        ? "photo"
-                                        : AttachmentChipStyle.symbol(
-                                            forMimeType: attachment.mimeType,
-                                            filename: attachment.filename
-                                        ))
-                                        .foregroundStyle(AppColors.brandTeal)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(verbatim: attachment.filename ?? String(
-                                            localized: "workboard.detail.result.output",
-                                            defaultValue: "Generated output"
-                                        ))
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(AppColors.textPrimary)
-                                        if attachment.byteSize > 0 {
-                                            Text(ByteCountFormatter.string(
-                                                fromByteCount: Int64(attachment.byteSize),
-                                                countStyle: .file
-                                            ))
-                                            .font(.caption)
-                                            .foregroundStyle(AppColors.textTertiary)
-                                        }
-                                    }
-                                    Spacer(minLength: 8)
-                                    Image(systemName: "arrow.up.right")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(AppColors.textTertiary)
-                                }
-                                .padding(10)
-                                .background(AppColors.backgroundSecondary, in: RoundedRectangle(cornerRadius: 10))
-                            }
-                            .choiceCardButton(cornerRadius: 10)
-                            .disabled(run.conversationID == nil)
-                            .accessibilityHint(LocalizedStringResource(
-                                "workboard.detail.result.output.hint",
-                                defaultValue: "Opens this output in its conversation"
-                            ))
-                        }
-                    }
-                }
-            }
-        }
-        .overlay(alignment: .leading) {
-            Capsule()
-                .fill(resultTint(run.state))
-                .frame(width: 4)
-                .padding(.vertical, 13)
-        }
-    }
-
-    private func actionDeck(_ item: WorkboardItemSnapshot) -> some View {
-        WorkboardSurface {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(actionHeading(item.state))
-                    .font(.headline)
-                    .foregroundStyle(AppColors.textPrimary)
-                    .accessibilityAddTraits(.isHeader)
-
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { actionButtons(item) }
-                    VStack(spacing: 10) { actionButtons(item) }
-                }
-
-                // Reads the brief gate, not the send gate: a composer draft
-                // enables the button (it flushes, then opens the brief focused
-                // on the objective) without making the requirement untrue.
-                if item.state == .draft, !item.isReadyToSend {
-                    Label(
-                        LocalizedStringResource(
-                            "workboard.detail.review.requirement",
-                            defaultValue: "Before sending, open the brief and describe what needs doing."
-                        ),
-                        systemImage: "text.bubble"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textTertiary)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func actionButtons(_ item: WorkboardItemSnapshot) -> some View {
-        switch item.state {
-        case .draft:
-            detailAction(
-                LocalizedStringResource("workboard.editor.reviewAndSend", defaultValue: "Review & Send…"),
-                systemImage: "checkmark.shield",
-                primary: true
-            ) {
-                Task { await viewModel.reviewWorkspaceAndSend(itemID: item.id) }
-            }
-            .disabled(!workbenchDestinationIsActive || !canReviewAndSend(item))
-            .keyboardShortcut(.return, modifiers: [.command, .shift])
-            detailAction(
-                LocalizedStringResource("common.edit", defaultValue: "Edit"),
-                systemImage: "square.and.pencil"
-            ) {
-                viewModel.showEditor(for: item)
-            }
-            .disabled(!workbenchDestinationIsActive)
-            .keyboardShortcut("e", modifiers: .command)
-
-        case .waiting:
-            if item.latestRun?.conversationID != nil {
-                detailAction(
-                    LocalizedStringResource("workboard.action.openConversation", defaultValue: "Open Conversation"),
-                    systemImage: "bubble.left.and.bubble.right",
-                    primary: true
-                ) {
-                    viewModel.openConversation(for: item)
-                }
-            }
-            detailAction(
-                LocalizedStringResource("workboard.action.editNextVersion", defaultValue: "Edit Next Version"),
-                systemImage: "square.and.pencil"
-            ) {
-                viewModel.showEditor(for: item)
-            }
-
-        case .review:
-            if let reviewRun = reviewResult(item) {
-                if reviewRun.state == .replied {
-                    detailAction(
-                        LocalizedStringResource("workboard.action.markDone", defaultValue: "Mark Done"),
-                        systemImage: "checkmark.circle.fill",
-                        primary: true
-                    ) {
-                        Task { await viewModel.completeWorkspace(itemID: item.id) }
-                    }
-                } else {
-                    detailAction(
-                        LocalizedStringResource("workboard.action.sendAgain", defaultValue: "Send Again"),
-                        systemImage: "paperplane.fill",
-                        primary: true
-                    ) {
-                        Task { await viewModel.reviewWorkspaceAndSend(itemID: item.id) }
-                    }
-                }
-                if reviewRun.canAcknowledgeReview {
-                    detailAction(
-                        LocalizedStringResource("workboard.action.keepWorking", defaultValue: "Keep Working"),
-                        systemImage: "arrow.uturn.backward.circle"
-                    ) {
-                        Task { await viewModel.acknowledge(reviewRun, in: item) }
-                    }
-                }
-            }
-            if reviewResult(item)?.conversationID != nil {
-                detailAction(
-                    LocalizedStringResource("workboard.action.openConversation", defaultValue: "Open Conversation"),
-                    systemImage: "bubble.left.and.bubble.right"
-                ) {
-                    if let run = reviewResult(item), let conversationID = run.conversationID {
-                        viewModel.openConversation(for: itemWithRun(item, conversationID: conversationID))
-                    }
-                }
-            }
-
-        case .done:
-            if item.latestRun?.conversationID != nil {
-                detailAction(
-                    LocalizedStringResource("workboard.action.openConversation", defaultValue: "Open Conversation"),
-                    systemImage: "bubble.left.and.bubble.right",
-                    primary: true
-                ) {
-                    viewModel.openConversation(for: item)
-                }
-            }
-        }
-    }
-
-    /// Reads the coarse per-project flag rather than the composer text itself:
-    /// this runs in the detail body, and observing the draft dictionary would
-    /// re-parse the result markdown and rebuild the run timeline on every
-    /// keystroke in the pinned composer.
-    private func canReviewAndSend(_ item: WorkboardItemSnapshot) -> Bool {
-        item.isReadyToSend || viewModel.hasComposerDraft(for: item.id)
-    }
-
-    private func detailAction(
-        _ title: LocalizedStringResource,
-        systemImage: String,
-        primary: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(primary ? AppColors.background : AppColors.textPrimary)
-                .padding(.horizontal, 15)
-                .frame(maxWidth: .infinity, minHeight: WorkboardMetrics.touchTarget)
-                .background(
-                    primary ? AppColors.brandAmber : AppColors.backgroundSecondary,
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
-                .overlay {
-                    if !primary {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(AppColors.borderSubtle, lineWidth: 1)
-                    }
-                }
-                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-        .modifier(WorkboardActionButtonModifier(primary: primary))
-    }
-
-    private func runTimeline(_ item: WorkboardItemSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(LocalizedStringResource(
-                "workboard.detail.timeline.title",
-                defaultValue: "Run Timeline"
-            ))
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(AppColors.textEmphasis)
-            .accessibilityAddTraits(.isHeader)
-
-            VStack(spacing: 0) {
-                ForEach(Array(item.runs.sorted { $0.startedAt > $1.startedAt }.enumerated()), id: \.element.id) { index, run in
-                    WorkboardRunTimelineRow(
-                        run: run,
-                        customGateways: viewModel.customGateways,
-                        isLast: index == item.runs.count - 1,
-                        onOpenConversation: run.conversationID.map { conversationID in
-                            { viewModel.openConversation(for: itemWithRun(item, conversationID: conversationID)) }
-                        }
-                    )
-                }
-            }
-        }
-    }
-
-    private func itemWithRun(_ item: WorkboardItemSnapshot, conversationID: UUID) -> WorkboardItemSnapshot {
-        // The view model's public open action follows `latestRun`; timeline rows
-        // need their own historical conversation. Build a transient presentation
-        // copy with that run latest without touching persistence.
-        var copy = item
-        if let run = item.runs.first(where: { $0.conversationID == conversationID }) {
-            copy.runs = [run]
-        }
-        return copy
-    }
-
-    private func reviewResult(_ item: WorkboardItemSnapshot) -> WorkboardRunSnapshot? {
-        let terminal = item.runs.filter {
-            $0.state == .replied || $0.state == .failed || $0.state == .cancelled
-        }
-        let candidates = terminal.contains(where: \.needsReview)
-            ? terminal.filter(\.needsReview)
-            : terminal
-        return candidates.max {
-            ($0.finishedAt ?? $0.startedAt, $0.id.uuidString)
-                < ($1.finishedAt ?? $1.startedAt, $1.id.uuidString)
-        }
-    }
-
-    private func resultTint(_ state: WorkboardRunState) -> Color {
-        state == .failed || state == .cancelled ? AppColors.error : AppColors.brandTeal
-    }
-
-    private func actionHeading(_ state: WorkItemState) -> LocalizedStringResource {
-        switch state {
-        case .draft:
-            return LocalizedStringResource("workboard.detail.action.draft", defaultValue: "Ready when you are")
-        case .waiting:
-            return LocalizedStringResource("workboard.detail.action.waiting", defaultValue: "This run is still in progress")
-        case .review:
-            return LocalizedStringResource("workboard.detail.action.review", defaultValue: "You decide what happens next")
-        case .done:
-            return LocalizedStringResource("workboard.detail.action.done", defaultValue: "Closed by you")
-        }
     }
 }
 
@@ -785,143 +259,5 @@ private struct WorkboardRecentWorkStrip: View {
             "workboard.workspace.recent",
             defaultValue: "Recent open work"
         )))
-    }
-}
-
-private struct WorkboardActionButtonModifier: ViewModifier {
-    let primary: Bool
-
-    func body(content: Content) -> some View {
-        if primary {
-            content.primaryCTAButton()
-        } else {
-            content.choiceCardButton(cornerRadius: 12)
-        }
-    }
-}
-
-private struct WorkboardMarkdownBody: View, Equatable {
-    let text: String
-
-    var body: some View {
-        StructuredText(markdown: text)
-            .foregroundStyle(AppColors.textPrimary)
-            .appliesUntrustedMarkdownPolicy()
-            .textual.textSelection(.enabled)
-    }
-}
-
-private struct WorkboardRunTimelineRow: View {
-    let run: WorkboardRunSnapshot
-    let customGateways: [CustomGateway]
-    let isLast: Bool
-    let onOpenConversation: (() -> Void)?
-
-    @State private var showsSentVersion = false
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(spacing: 0) {
-                ZStack {
-                    Circle()
-                        .fill(tint.opacity(0.16))
-                    Image(systemName: run.state.systemImage)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(tint)
-                }
-                .frame(width: 32, height: 32)
-                if !isLast {
-                    Rectangle()
-                        .fill(AppColors.borderSubtle)
-                        .frame(width: 2)
-                        .frame(minHeight: 98)
-                }
-            }
-
-            WorkboardSurface {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .top, spacing: 10) {
-                        GatewayBadge(ref: run.gatewayRef, customs: customGateways, diameter: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(run.state.title)
-                                .font(.headline)
-                                .foregroundStyle(AppColors.textPrimary)
-                            Text(verbatim: run.gatewayName)
-                                .font(.caption)
-                                .foregroundStyle(AppColors.textTertiary)
-                        }
-                        Spacer(minLength: 8)
-                        Text(run.startedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
-                            .font(.caption)
-                            .foregroundStyle(AppColors.textTertiary)
-                    }
-
-                    if let failure = run.failureMessage, !failure.isEmpty {
-                        Text(verbatim: failure)
-                            .font(.subheadline)
-                            .foregroundStyle(AppColors.error)
-                    }
-
-                    DisclosureGroup(
-                        isExpanded: $showsSentVersion,
-                        content: {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text(verbatim: run.sentPrompt)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(AppColors.textSecondary)
-                                    .textSelection(.enabled)
-                                if !run.includedMaterialNames.isEmpty {
-                                    Divider().overlay(AppColors.borderSubtle)
-                                    ForEach(run.includedMaterialNames, id: \.self) { name in
-                                        Label {
-                                            Text(verbatim: name)
-                                        } icon: {
-                                            Image(systemName: "paperclip")
-                                        }
-                                        .font(.caption)
-                                        .foregroundStyle(AppColors.textTertiary)
-                                    }
-                                }
-                            }
-                            .padding(.top, 8)
-                        },
-                        label: {
-                            Text(LocalizedStringResource(
-                                "workboard.detail.timeline.sentVersion",
-                                defaultValue: "Sent version"
-                            ))
-                            .font(.subheadline.weight(.semibold))
-                        }
-                    )
-                    .tint(AppColors.brandAmber)
-
-                    if let onOpenConversation {
-                        Button(action: onOpenConversation) {
-                            Label(
-                                LocalizedStringResource(
-                                    "workboard.action.openConversation",
-                                    defaultValue: "Open Conversation"
-                                ),
-                                systemImage: "arrow.up.right"
-                            )
-                            .font(.subheadline.weight(.semibold))
-                            .frame(minHeight: WorkboardMetrics.touchTarget)
-                        }
-                        .settingsRowButton()
-                    }
-                }
-            }
-            .padding(.bottom, isLast ? 0 : 12)
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    private var tint: Color {
-        switch run.state {
-        case .sending, .waiting: return AppColors.brandTeal
-        case .replied: return AppColors.success
-        case .failed: return AppColors.error
-        case .cancelled: return AppColors.textTertiary
-        }
     }
 }

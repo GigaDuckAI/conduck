@@ -1034,6 +1034,11 @@ struct PersonalWorkbenchView<Chats: View>: View {
             )
             .environment(\.personalWorkbenchModel, model)
         #else
+        // Two declarations, one per layer, and NOT collapsible into the single
+        // zero-size host macOS uses: each layer here owns its own
+        // `NavigationSplitView`, so each has its own navigation bar and there is
+        // no shared bar for one item to sit in. A host declared as a ZStack
+        // sibling would sit outside both containers and render no item at all.
         ZStack {
             WorkboardView(viewModel: model.workboardViewModel)
                 .environment(
