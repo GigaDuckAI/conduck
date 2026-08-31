@@ -18,6 +18,7 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
     private final class Harness {
         var item: WorkboardItemSnapshot
         var savedDrafts: [WorkboardEditDraft] = []
+        var pinWrites: [(expectedPinned: Bool, isPinned: Bool)] = []
         var importedNames: [String] = []
         var importExpectedRevisions: [Int64] = []
         var failingImportNames: Set<String> = []
@@ -186,7 +187,10 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         XCTAssertEqual(harness.dispatchCount, 0)
     }
 
-    func testReviewAndSendWithoutABriefOpensTheEditorOnTheObjective() async {
+    // The next two guard the dormant draft path, not an editor UI: no surface
+    // presents a brief form any more, so what they hold is the refusal — an
+    // unwritten objective raises a focus request and never reaches preflight.
+    func testReviewAndSendWithoutABriefRaisesAFocusRequestWithoutReachingPreflight() async {
         let item = WorkboardItemSnapshot(title: "Launch plan", objective: "", revision: 4)
         let harness = Harness(item: item)
         let viewModel = makeViewModel(harness: harness)
@@ -198,7 +202,6 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
 
         XCTAssertFalse(opened)
         XCTAssertNil(viewModel.preflightItemID, "an unwritten brief never reaches preflight")
-        XCTAssertTrue(viewModel.editorPresented)
         XCTAssertEqual(viewModel.editingDraft.id, item.id)
         XCTAssertEqual(viewModel.consumeEditorFocusRequest(), .objective)
         XCTAssertNil(viewModel.editorFocusRequest, "the request is consumed exactly once")
@@ -206,7 +209,7 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         XCTAssertEqual(harness.importedNames, ["One more thought"])
     }
 
-    func testEditorReviewAndSendWithoutAnObjectiveRaisesAFocusRequest() async {
+    func testEditorReviewAndSendWithoutAnObjectiveRaisesAFocusRequestWithoutReachingPreflight() async {
         let item = WorkboardItemSnapshot(title: "Launch plan", objective: "", revision: 4)
         let harness = Harness(item: item)
         let viewModel = makeViewModel(harness: harness)
@@ -216,7 +219,6 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         await viewModel.reviewEditorAndSend()
 
         XCTAssertEqual(viewModel.editorFocusRequest, .objective)
-        XCTAssertTrue(viewModel.editorPresented)
         XCTAssertNil(viewModel.preflightItemID)
     }
 
@@ -407,7 +409,9 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         XCTAssertEqual(gate.expectedRevisions, [0, 1])
     }
 
-    func testAutosavePersistsKeystrokesMadeWhilePreviousSaveIsSuspended() async {
+    /// `saveEditorNow`'s re-save loop, which the dormant draft path still owns:
+    /// there is no autosave debounce and no editor to schedule one.
+    func testSuspendedSaveStillPersistsLaterKeystrokes() async {
         let item = WorkboardItemSnapshot(
             title: "Launch",
             objective: "Original",
@@ -455,6 +459,124 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         XCTAssertEqual(viewModel.editingDraft.objective, "Second edit while saving")
         XCTAssertFalse(viewModel.editorHasUnsavedChanges)
         XCTAssertEqual(viewModel.item(withID: item.id)?.objective, "Second edit while saving")
+    }
+
+    // MARK: - Project actions on the sidebar row
+
+    func testRenamingAProjectWritesOnlyTheTitleThroughTheDraftStorePath() async {
+        let item = WorkboardItemSnapshot(
+            title: "Launch plan",
+            objective: "Compare the two plans",
+            context: "Notes from Tuesday",
+            isPinned: true,
+            revision: 7
+        )
+        let harness = Harness(item: item)
+        let viewModel = makeViewModel(harness: harness)
+        viewModel.items = [item]
+
+        viewModel.requestRename(item)
+        XCTAssertEqual(viewModel.renameDraftTitle, "Launch plan", "the field opens on the stored name")
+        viewModel.renameDraftTitle = "  Finish the workboard  "
+        let renamed = await viewModel.commitRename()
+
+        XCTAssertTrue(renamed)
+        XCTAssertEqual(harness.savedDrafts.count, 1, "rename is one write, not a whole-brief resave")
+        let draft = harness.savedDrafts[0]
+        XCTAssertEqual(draft.title, "Finish the workboard")
+        XCTAssertEqual(draft.objective, "Compare the two plans", "every other field is carried through untouched")
+        XCTAssertEqual(draft.context, "Notes from Tuesday")
+        XCTAssertTrue(draft.isPinned)
+        XCTAssertEqual(draft.baseRevision, 7, "the write CASes on the revision the person was looking at")
+        XCTAssertEqual(viewModel.item(withID: item.id)?.title, "Finish the workboard")
+        XCTAssertNil(viewModel.renameRequest)
+        XCTAssertEqual(viewModel.renameDraftTitle, "")
+    }
+
+    func testRenamingToTheSameNameWritesNothing() async {
+        let item = WorkboardItemSnapshot(title: "Launch plan", revision: 7)
+        let harness = Harness(item: item)
+        let viewModel = makeViewModel(harness: harness)
+        viewModel.items = [item]
+
+        viewModel.requestRename(item)
+        viewModel.renameDraftTitle = "   Launch plan   "
+        let renamed = await viewModel.commitRename()
+
+        XCTAssertFalse(renamed)
+        XCTAssertTrue(harness.savedDrafts.isEmpty)
+        XCTAssertNil(viewModel.renameRequest)
+    }
+
+    func testPinningAndUnpinningNeverTouchesTheBriefOrItsRevision() async {
+        let item = WorkboardItemSnapshot(
+            title: "Launch plan",
+            objective: "Compare the two plans",
+            isPinned: false,
+            revision: 7,
+            lastSentRevision: 7
+        )
+        let harness = Harness(item: item)
+        let viewModel = makeViewModel(harness: harness)
+        viewModel.items = [item]
+
+        let pinned = await viewModel.setPinned(true, for: item.id)
+        XCTAssertTrue(pinned)
+        XCTAssertTrue(harness.savedDrafts.isEmpty, "pin is a board fact, never a brief write")
+        XCTAssertEqual(harness.pinWrites.count, 1)
+        XCTAssertEqual(harness.pinWrites.last?.expectedPinned, false, "it CASes on the pin the person saw")
+        XCTAssertEqual(harness.pinWrites.last?.isPinned, true)
+        XCTAssertEqual(viewModel.item(withID: item.id)?.isPinned, true)
+        XCTAssertEqual(viewModel.item(withID: item.id)?.revision, 7, "the brief revision is untouched")
+        XCTAssertEqual(
+            viewModel.item(withID: item.id)?.hasChangesSinceLastSend,
+            false,
+            "a sent brief must not read as changed because a row was pinned"
+        )
+
+        let unpinned = await viewModel.setPinned(false, for: item.id)
+        XCTAssertTrue(unpinned)
+        XCTAssertEqual(harness.pinWrites.count, 2)
+        XCTAssertEqual(harness.pinWrites.last?.expectedPinned, true)
+        XCTAssertEqual(harness.pinWrites.last?.isPinned, false)
+        XCTAssertEqual(viewModel.item(withID: item.id)?.isPinned, false)
+        XCTAssertTrue(harness.savedDrafts.isEmpty)
+
+        let unchanged = await viewModel.setPinned(false, for: item.id)
+        XCTAssertTrue(unchanged, "pinning to the state it already holds writes nothing")
+        XCTAssertEqual(harness.pinWrites.count, 2)
+    }
+
+    func testPinningAnItemTheBoardNoLongerHoldsIsASilentRefusal() async {
+        let harness = Harness(item: WorkboardItemSnapshot(title: "Launch plan"))
+        let viewModel = makeViewModel(harness: harness)
+        viewModel.items = []
+
+        let wrote = await viewModel.setPinned(true, for: UUID())
+        XCTAssertFalse(wrote)
+        XCTAssertTrue(harness.pinWrites.isEmpty)
+        // A swipe on a row that has just vanished must not shout.
+        XCTAssertNil(viewModel.notice)
+    }
+
+    func testRenamingAnItemTheBoardNoLongerHoldsReportsTheFailure() async {
+        let item = WorkboardItemSnapshot(title: "Launch plan", revision: 7)
+        let harness = Harness(item: item)
+        let viewModel = makeViewModel(harness: harness)
+        viewModel.items = [item]
+
+        viewModel.requestRename(item)
+        viewModel.renameDraftTitle = "Finish the workboard"
+        // The project leaves the board while the alert is open — deleted on
+        // another device and swept by a sync.
+        viewModel.items = []
+        let renamed = await viewModel.commitRename()
+
+        XCTAssertFalse(renamed)
+        XCTAssertTrue(harness.savedDrafts.isEmpty)
+        // The alert is already gone: without this the old name simply stays.
+        XCTAssertEqual(viewModel.notice?.kind, .error)
+        XCTAssertNil(viewModel.renameRequest)
     }
 
     private func waitUntil(
@@ -558,7 +680,14 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
             },
             openConversation: { _ in },
             openMaterial: { _ in },
-            openGatewaySettings: {}
+            openGatewaySettings: {},
+            setPinned: { [harness] _, expectedPinned, isPinned in
+                harness.pinWrites.append((expectedPinned, isPinned))
+                // The store path writes no timestamp, so the revision the board
+                // holds is unchanged. The double must not invent one.
+                harness.item.isPinned = isPinned
+                return harness.item
+            }
         ))
     }
 }

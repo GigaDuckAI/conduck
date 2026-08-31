@@ -1132,6 +1132,56 @@ extension ConversationStore {
         if changed { await postDidChange() }
     }
 
+    /// Pin or unpin one project. Pin is a fact about the board, never about the
+    /// brief: it is absent from every prompt and dispatch snapshot, so this
+    /// writes NO `updatedAt`. That is the whole contract — the brief revision is
+    /// derived from `updatedAt`, so stamping it would raise "Changed after this
+    /// was sent" on an untouched brief and invalidate an approved preflight
+    /// because somebody pinned a row. The compare-and-save is therefore on the
+    /// pin the person saw, exactly as `reorderWorkItems` CASes on rank tokens.
+    /// Board rank belongs to one pin cohort, so the destination cohort assigns
+    /// position afresh. Every physical row is written, because CloudKit can
+    /// merge one logical project into several and whichever row wins the
+    /// canonical read must report the pin the person chose.
+    func setWorkItemPinned(
+        id: UUID,
+        expectedPinned: Bool,
+        isPinned: Bool
+    ) async throws -> WorkItemRecord {
+        try await ensureLoaded()
+        let context = newWriteContext()
+        let changed = try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkItem")
+            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+            request.sortDescriptors = [NSSortDescriptor(key: "updatedAt", ascending: false)]
+            let rows = try context.fetch(request)
+            guard let canonical = rows.first else {
+                throw WorkboardStoreError.itemNotFound
+            }
+            func pinned(_ row: NSManagedObject) -> Bool {
+                (row.value(forKey: "isPinned") as? NSNumber)?.boolValue ?? false
+            }
+            // Replay success is checked before the expectation. A caller
+            // retrying after losing the response must not read its own write
+            // back as a conflict.
+            if rows.allSatisfy({ pinned($0) == isPinned }) { return false }
+            guard pinned(canonical) == expectedPinned else {
+                throw WorkboardStoreError.staleRevision
+            }
+            for row in rows {
+                row.setValue(NSNumber(value: isPinned), forKey: "isPinned")
+                row.setValue(nil, forKey: "boardOrder")
+            }
+            try context.save()
+            return true
+        }
+        if changed { await postDidChange() }
+        guard let record = try await fetchWorkItem(id: id) else {
+            throw WorkboardStoreError.itemNotFound
+        }
+        return record
+    }
+
     func loadWorkMaterial(id: UUID) async throws -> LoadedWorkMaterial? {
         guard let record = try await fetchWorkMaterial(id: id) else { return nil }
         return LoadedWorkMaterial(record: record, payload: try await loadWorkMaterialPayload(id: id))

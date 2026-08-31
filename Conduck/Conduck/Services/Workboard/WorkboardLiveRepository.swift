@@ -142,6 +142,13 @@ final class WorkboardLiveRepository {
                     materialID: materialID,
                     itemID: itemID
                 )
+            },
+            setPinned: { [self] itemID, expectedPinned, isPinned in
+                try await snapshot(for: store.setWorkItemPinned(
+                    id: itemID,
+                    expectedPinned: expectedPinned,
+                    isPinned: isPinned
+                ))
             }
         )
     }

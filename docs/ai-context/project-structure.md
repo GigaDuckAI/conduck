@@ -54,7 +54,7 @@ One target covers iPhone, iPad and Mac. The Mac build is a full Dock application
 | `ViewModels/` | The state that sits between views and services — conversation list and detail, the private Workboard presentation boundary, settings (split across several files by area), the diagnostics runner, the pairing import flow. |
 | `Views/` | SwiftUI, split by area below. |
 | `Views/Conversation/` | The message thread, the composer, and attachment handling — staging, previews, full-screen viewing. |
-| `Views/Workboard/` | The private pre-flight workbench — adaptive board/list, document editor, material shelf, exact dispatch preflight, result-first review timeline and deterministic briefing. |
+| `Views/Workboard/` | The private pre-flight workbench — adaptive board/list, the per-project card board with its pinned composer, the link/note material sheet, material shelf, exact dispatch preflight, result-first review timeline and deterministic briefing. |
 | `Views/Settings/` | The largest folder in the app. Every settings screen for every platform, plus the guided gateway-setup flow. iPhone/iPad and Mac have deliberately separate screen hierarchies here rather than one adaptive layout. |
 | `Views/Onboarding/` | The first-run flow, including the choice between a self-hosted gateway and a hosted model. |
 | `Views/Components/` | Small pieces shared across more than one screen. |

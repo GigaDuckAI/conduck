@@ -175,9 +175,60 @@ struct WorkboardSectionHeader: View {
     }
 }
 
+enum WorkboardProjectActionTitle {
+    static let rename = LocalizedStringResource("workboard.action.rename", defaultValue: "Rename")
+    static let pin = LocalizedStringResource("workboard.pin", defaultValue: "Pin")
+    static let unpin = LocalizedStringResource("workboard.unpin", defaultValue: "Unpin")
+    static let duplicate = LocalizedStringResource(
+        "workboard.action.duplicate",
+        defaultValue: "Duplicate Work"
+    )
+    static let delete = LocalizedStringResource("workboard.action.delete", defaultValue: "Delete Work")
+
+    static func pinToggle(isPinned: Bool) -> LocalizedStringResource {
+        isPinned ? unpin : pin
+    }
+}
+
+/// The one project action list. The sidebar row's context menu, the All Work
+/// card's and the Mac main menu all build from it, so a project offers the same
+/// four actions wherever the person reaches for it. Nothing is gated on
+/// lifecycle state: this is the only route to a project's name and pin, so a
+/// finished project must stay renameable.
+@ViewBuilder
+func workboardProjectActions(
+    isPinned: Bool,
+    renameShortcut: KeyboardShortcut? = nil,
+    onRename: @escaping () -> Void,
+    onTogglePin: @escaping () -> Void,
+    onDuplicate: @escaping () -> Void,
+    onDelete: @escaping () -> Void
+) -> some View {
+    Button(action: onRename) {
+        Label(WorkboardProjectActionTitle.rename, systemImage: "pencil")
+    }
+    .keyboardShortcut(renameShortcut)
+    Button(action: onTogglePin) {
+        Label(
+            WorkboardProjectActionTitle.pinToggle(isPinned: isPinned),
+            systemImage: isPinned ? "pin.slash" : "pin"
+        )
+    }
+    Divider()
+    Button(action: onDuplicate) {
+        Label(WorkboardProjectActionTitle.duplicate, systemImage: "plus.square.on.square")
+    }
+    Divider()
+    Button(role: .destructive, action: onDelete) {
+        Label(WorkboardProjectActionTitle.delete, systemImage: "trash")
+    }
+}
+
 struct WorkboardCard: View {
     let item: WorkboardItemSnapshot
     let onOpen: () -> Void
+    let onRename: () -> Void
+    let onTogglePin: () -> Void
     let onDuplicate: () -> Void
     let onDelete: () -> Void
     var onMoveEarlier: (() -> Void)? = nil
@@ -250,19 +301,13 @@ struct WorkboardCard: View {
         .choiceCardButton(cornerRadius: WorkboardMetrics.cardCornerRadius)
         .draggable(WorkboardCardDragPayload(itemID: item.id))
         .contextMenu {
-            Button(action: onDuplicate) {
-                Label(
-                    LocalizedStringResource("workboard.action.duplicate", defaultValue: "Duplicate Work"),
-                    systemImage: "plus.square.on.square"
-                )
-            }
-            Divider()
-            Button(role: .destructive, action: onDelete) {
-                Label(
-                    LocalizedStringResource("workboard.action.delete", defaultValue: "Delete Work"),
-                    systemImage: "trash"
-                )
-            }
+            workboardProjectActions(
+                isPinned: item.isPinned,
+                onRename: onRename,
+                onTogglePin: onTogglePin,
+                onDuplicate: onDuplicate,
+                onDelete: onDelete
+            )
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilitySummary)
@@ -270,16 +315,20 @@ struct WorkboardCard: View {
             "workboard.item.open.hint",
             defaultValue: "Opens the brief and its run history."
         )))
-        .accessibilityAction(named: Text(LocalizedStringResource(
-            "workboard.action.duplicate",
-            defaultValue: "Duplicate Work"
-        ))) {
+        // The card is one custom element, so every context-menu entry needs its
+        // own named action or VoiceOver cannot reach it at all.
+        .accessibilityAction(named: Text(WorkboardProjectActionTitle.rename)) {
+            onRename()
+        }
+        .accessibilityAction(
+            named: Text(WorkboardProjectActionTitle.pinToggle(isPinned: item.isPinned))
+        ) {
+            onTogglePin()
+        }
+        .accessibilityAction(named: Text(WorkboardProjectActionTitle.duplicate)) {
             onDuplicate()
         }
-        .accessibilityAction(named: Text(LocalizedStringResource(
-            "workboard.action.delete",
-            defaultValue: "Delete Work"
-        ))) {
+        .accessibilityAction(named: Text(WorkboardProjectActionTitle.delete)) {
             onDelete()
         }
         .accessibilityActions {
@@ -888,3 +937,66 @@ extension View {
         }
     }
 }
+
+#if os(macOS)
+/// What the main menu acts on: the project whose desk is on screen. The desk
+/// carries no project chrome and every row action lives in the Work sidebar,
+/// which the window's own toggle can collapse — so without this route a Mac
+/// window with a hidden sidebar offers no way at all to rename, pin, duplicate
+/// or delete the open project, and no keyboard route to any of them.
+struct WorkboardProjectCommandTarget: Equatable {
+    let viewModel: WorkboardViewModel
+    let item: WorkboardItemSnapshot
+
+    static func == (
+        lhs: WorkboardProjectCommandTarget,
+        rhs: WorkboardProjectCommandTarget
+    ) -> Bool {
+        lhs.viewModel === rhs.viewModel && lhs.item.id == rhs.item.id
+            && lhs.item.isPinned == rhs.item.isPinned
+    }
+}
+
+struct WorkboardProjectCommandTargetKey: FocusedValueKey {
+    typealias Value = WorkboardProjectCommandTarget
+}
+
+extension FocusedValues {
+    var workboardProjectCommandTarget: WorkboardProjectCommandTarget? {
+        get { self[WorkboardProjectCommandTargetKey.self] }
+        set { self[WorkboardProjectCommandTargetKey.self] = newValue }
+    }
+}
+
+struct WorkboardProjectCommands: Commands {
+    @FocusedValue(\.workboardProjectCommandTarget) private var target
+
+    var body: some Commands {
+        CommandMenu(String(localized: LocalizedStringResource(
+            "workboard.title",
+            defaultValue: "Work"
+        ))) {
+            workboardProjectActions(
+                isPinned: target?.item.isPinned ?? false,
+                renameShortcut: KeyboardShortcut("e", modifiers: .command),
+                onRename: { perform { $0.requestRename($1) } },
+                onTogglePin: {
+                    perform { viewModel, item in
+                        Task { await viewModel.setPinned(!item.isPinned, for: item.id) }
+                    }
+                },
+                onDuplicate: { perform { $0.requestDuplicate($1) } },
+                onDelete: { perform { $0.requestDelete($1) } }
+            )
+            .disabled(target == nil)
+        }
+    }
+
+    private func perform(
+        _ action: (WorkboardViewModel, WorkboardItemSnapshot) -> Void
+    ) {
+        guard let target else { return }
+        action(target.viewModel, target.item)
+    }
+}
+#endif

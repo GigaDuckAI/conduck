@@ -348,6 +348,10 @@ struct ConduckApp: App {
                 }
                 .keyboardShortcut("2", modifiers: .command)
             }
+            // Work's project actions live on the sidebar row, which this
+            // window's own toggle can collapse. This menu is the route that
+            // survives it, and the only keyboard route to any of them.
+            WorkboardProjectCommands()
         }
         // No `.defaultLaunchBehavior(.presented)` — under Option A launch is
         // always `.accessory` (quiet), so the default `.automatic` instantiates

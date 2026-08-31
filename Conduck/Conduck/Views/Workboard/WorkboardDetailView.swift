@@ -3,10 +3,11 @@
 // Conduck
 // WorkboardDetailView.swift
 //
-// The desk. One project's board and nothing that competes with it: the project's
-// name, the card board, and the pinned composer. Moving between projects and
-// starting a new one belong to the sidebar. Run state, results and dispatch live
-// on the view model and its sheets; this surface neither reports nor triggers them.
+// The desk. One project's board and nothing that competes with it: the card
+// board and the pinned composer. Naming, pinning, duplicating and deleting a
+// project belong to its sidebar row, alongside moving between projects and
+// starting a new one. Run state, results and dispatch live on the view model
+// and its sheets; this surface neither reports nor triggers them.
 
 import SwiftUI
 
@@ -27,14 +28,11 @@ struct WorkboardDetailView: View {
                 let captureDestination = WorkboardCaptureDestination.existingWork(item.displayTitle)
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: WorkboardMetrics.generousSpacing) {
-                        header(item)
-                        WorkboardCaptureCanvas(
-                            viewModel: viewModel,
-                            item: item,
-                            mode: .sources
-                        )
-                    }
+                    WorkboardCaptureCanvas(
+                        viewModel: viewModel,
+                        item: item,
+                        mode: .sources
+                    )
                     .padding(.horizontal, WorkboardMetrics.standardSpacing)
                     .padding(.vertical, WorkboardMetrics.generousSpacing)
                     .frame(maxWidth: WorkboardMetrics.contentMaxWidth)
@@ -65,6 +63,18 @@ struct WorkboardDetailView: View {
                     isActive: workbenchDestinationIsActive
                 )
                 .workboardInlineNavigationTitle()
+                #if os(macOS)
+                // The Mac main menu is the one project-action route no column
+                // can hide, so the desk publishes what it is showing. Only while
+                // Work is the on-screen destination: a mounted but hidden Work
+                // layer must not leave the menu acting on a project nobody sees.
+                .focusedSceneValue(
+                    \.workboardProjectCommandTarget,
+                    workbenchDestinationIsActive
+                        ? WorkboardProjectCommandTarget(viewModel: viewModel, item: item)
+                        : nil
+                )
+                #endif
             } else {
                 WorkboardEmptyState(
                     title: LocalizedStringResource(
@@ -79,100 +89,5 @@ struct WorkboardDetailView: View {
                 .background(AppColors.background.ignoresSafeArea())
             }
         }
-    }
-
-    /// What the project is called, and the one control that still changes it.
-    /// The pinned/captured chips stay because they describe the project itself,
-    /// not a run.
-    private func header(_ item: WorkboardItemSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
-                Text(verbatim: item.displayTitle)
-                    .font(.largeTitle.weight(.bold))
-                    .foregroundStyle(AppColors.textEmphasis)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: 8)
-                projectMenu(item)
-            }
-
-            if item.wasCapturedExternally || item.isPinned {
-                HStack(spacing: 12) {
-                    if item.wasCapturedExternally { capturedLabel }
-                    if item.isPinned { pinnedLabel }
-                }
-            }
-        }
-    }
-
-    private var capturedLabel: some View {
-        Label(
-            LocalizedStringResource("workboard.workspace.captured", defaultValue: "Captured"),
-            systemImage: "square.and.arrow.down"
-        )
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(AppColors.brandTeal)
-    }
-
-    private var pinnedLabel: some View {
-        Label(
-            LocalizedStringResource("workboard.item.pinned", defaultValue: "Pinned"),
-            systemImage: "pin.fill"
-        )
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(AppColors.brandAmber)
-    }
-
-    /// The desk's only project-level control. Edit is offered in EVERY state,
-    /// `.done` included: the editor is now the sole route to the title, the
-    /// objective, the pin and the rest of the brief, so gating it by state
-    /// would leave a finished project unrenameable and its fields unreadable.
-    private func projectMenu(_ item: WorkboardItemSnapshot) -> some View {
-        Menu {
-            Button {
-                viewModel.showEditor(for: item)
-            } label: {
-                Label(
-                    LocalizedStringResource("common.edit", defaultValue: "Edit"),
-                    systemImage: "square.and.pencil"
-                )
-            }
-            // The editor is the only route to the title, objective, brief fields
-            // and pin, so it keeps a keyboard route on macOS.
-            .keyboardShortcut("e", modifiers: .command)
-            Divider()
-            Button {
-                viewModel.requestDuplicate(item)
-            } label: {
-                Label(
-                    LocalizedStringResource("workboard.action.duplicate", defaultValue: "Duplicate Work"),
-                    systemImage: "plus.square.on.square"
-                )
-            }
-            Divider()
-            Button(role: .destructive) {
-                viewModel.requestDelete(item)
-            } label: {
-                Label(
-                    LocalizedStringResource("workboard.action.delete", defaultValue: "Delete Work"),
-                    systemImage: "trash"
-                )
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(AppColors.textSecondary)
-                .frame(width: WorkboardMetrics.touchTarget, height: WorkboardMetrics.touchTarget)
-                .contentShape(Circle())
-        }
-        .pointerIconButton(size: WorkboardMetrics.touchTarget, shape: .circle)
-        .help(String(localized: LocalizedStringResource(
-            "workboard.project.more.help",
-            defaultValue: "More project actions"
-        )))
-        .accessibilityLabel(Text(LocalizedStringResource(
-            "workboard.project.more",
-            defaultValue: "More project actions"
-        )))
     }
 }

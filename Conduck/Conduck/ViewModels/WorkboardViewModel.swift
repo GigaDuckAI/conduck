@@ -642,6 +642,14 @@ struct WorkboardConfirmation: Identifiable, Equatable {
     let itemTitle: String
 }
 
+/// A rename in flight. It carries the project's own id rather than a list index,
+/// so a sync landing between the right-click and the alert's Rename button can
+/// never retarget the write.
+struct WorkboardRenameRequest: Identifiable, Equatable {
+    let id: UUID
+    let originalTitle: String
+}
+
 // MARK: - Pure presentation logic
 
 enum WorkboardPresentationLogic {
@@ -1070,6 +1078,10 @@ final class WorkboardViewModel {
         /// `(itemID, materialID, size)`. Revision-neutral by contract: it must
         /// not stamp `updatedAt` on the material or its owner.
         var setMaterialCardSize: (@MainActor (UUID, UUID, WorkMaterialCardSize) async throws -> Void)?
+        /// `(itemID, expectedPinned, isPinned) -> refreshed item`. Revision-neutral
+        /// by the same contract, and it compares against the pin the person saw
+        /// rather than a revision, so pinning never reads as a brief edit.
+        var setPinned: (@MainActor (UUID, Bool, Bool) async throws -> WorkboardItemSnapshot)?
     }
 
     private let dependencies: Dependencies
@@ -1097,7 +1109,6 @@ final class WorkboardViewModel {
     var editorPresented = false
     var editingDraft = WorkboardEditDraft()
     var editorIsSaving = false
-    var materialImportProgress: Double?
     var workspaceImportState: WorkboardWorkspaceImportState?
     /// One visible capture mutation at a time. The queue is global because a
     /// single view model owns all optimistic WorkItem revisions and a person can
@@ -1112,14 +1123,12 @@ final class WorkboardViewModel {
     /// dictionary, so a keystroke cannot invalidate the result card and the
     /// whole run timeline beside it.
     private(set) var nonEmptyComposerDrafts: Set<UUID> = []
-    var editorSavedAt: Date?
     /// Set when the brief is opened because something needed a field the person
     /// has not written yet. The editor consumes it once and clears it.
     var editorFocusRequest: WorkboardEditorFocusTarget?
     var editorSuggestion: WorkboardEditDraft?
     var editorConflict: WorkboardEditorConflict?
     var isShapingDraft = false
-    var voiceCaptureTarget: WorkboardVoiceTarget?
 
     var preflightItemID: UUID?
     var selectedGatewayID: String?
@@ -1131,8 +1140,12 @@ final class WorkboardViewModel {
     var notice: WorkboardNotice?
     var workspaceStatus: WorkboardTransientStatus?
     var confirmation: WorkboardConfirmation?
+    var renameRequest: WorkboardRenameRequest?
+    /// What the rename alert's field holds. It lives here rather than in the
+    /// sidebar row so an unmounted row — a filter change, a sync, the split view
+    /// collapsing — cannot take a half-typed name down with it.
+    var renameDraftTitle = ""
 
-    @ObservationIgnored private var autosaveTask: Task<Void, Never>?
     @ObservationIgnored private var lastSavedFingerprint = ""
     @ObservationIgnored private var editorWasPersisted = false
     @ObservationIgnored private var loadRequestedWhileLoading = false
@@ -1284,26 +1297,13 @@ final class WorkboardViewModel {
         items.first { $0.id == id }
     }
 
-    func showNewEditor() {
-        autosaveTask?.cancel()
-        editingDraft = WorkboardEditDraft()
-        lastSavedFingerprint = editingDraft.contentFingerprint
-        editorWasPersisted = false
-        editorSavedAt = nil
-        editorSuggestion = nil
-        editorFocusRequest = nil
-        editorPresented = true
-    }
-
     func showEditor(
         for item: WorkboardItemSnapshot,
         focusing target: WorkboardEditorFocusTarget? = nil
     ) {
-        autosaveTask?.cancel()
         editingDraft = WorkboardEditDraft(item: item)
         lastSavedFingerprint = editingDraft.contentFingerprint
         editorWasPersisted = true
-        editorSavedAt = item.modifiedAt
         editorSuggestion = nil
         editorFocusRequest = target
         editorPresented = true
@@ -1316,20 +1316,8 @@ final class WorkboardViewModel {
         return editorFocusRequest
     }
 
-    func noteEditorChanged() {
-        guard editorPresented, editingDraft.contentFingerprint != lastSavedFingerprint else { return }
-        autosaveTask?.cancel()
-        guard editingDraft.isMeaningful || editorWasPersisted else { return }
-        autosaveTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(650))
-            guard !Task.isCancelled else { return }
-            _ = await self?.saveEditorNow(showFailure: true)
-        }
-    }
-
     @discardableResult
     func saveEditorNow(showFailure: Bool) async -> Bool {
-        autosaveTask?.cancel()
         guard !editorIsSaving else { return false }
         guard editingDraft.isMeaningful || editorWasPersisted else {
             lastSavedFingerprint = editingDraft.contentFingerprint
@@ -1354,7 +1342,6 @@ final class WorkboardViewModel {
                 }
                 lastSavedFingerprint = submittedFingerprint
                 editorWasPersisted = true
-                editorSavedAt = Date()
                 editorIsSaving = false
             } catch {
                 editorIsSaving = false
@@ -1376,23 +1363,6 @@ final class WorkboardViewModel {
         return true
     }
 
-    @discardableResult
-    func closeEditor() async -> Bool {
-        guard await saveEditorNow(showFailure: false) else { return false }
-        editorPresented = false
-        return true
-    }
-
-    /// Explicit escape hatch after a save failure. It abandons only the
-    /// in-memory edits; any prior autosave remains durable and untouched.
-    func discardUnsavedEditorChanges() {
-        autosaveTask?.cancel()
-        notice = nil
-        editorConflict = nil
-        editorSuggestion = nil
-        editorPresented = false
-    }
-
     func reviewEditorAndSend() async {
         guard editingDraft.isReadyToSend else {
             editorFocusRequest = .objective
@@ -1403,49 +1373,6 @@ final class WorkboardViewModel {
         editorPresented = false
         await Task.yield()
         await showPreflight(itemID: itemID)
-    }
-
-    func importMaterial(
-        _ materialImport: WorkboardMaterialImport,
-        into itemID: UUID
-    ) async {
-        // Pickers and PhotosUI can finish after their editor has disappeared.
-        // Bind every mutation to the brief that launched it; never consult a
-        // later editor's ID after an actor suspension.
-        guard editingDraft.id == itemID else { return }
-        guard await flushEditorBeforeMaterialMutation() else { return }
-        guard !Task.isCancelled, editingDraft.id == itemID else { return }
-        materialImportProgress = 0
-        defer {
-            if editingDraft.id == itemID { materialImportProgress = nil }
-        }
-        do {
-            let refreshed = try await dependencies.importMaterial(
-                itemID,
-                editingDraft.baseRevision,
-                materialImport
-            ) { progress in
-                Task { @MainActor [self] in
-                    guard self.editingDraft.id == itemID else { return }
-                    self.materialImportProgress = min(1, max(0, progress))
-                }
-            }
-            // The bytes are durable even if cancellation arrived while the
-            // repository call was completing. Refresh the card, but only adopt
-            // it into the editor when that editor still owns the same brief.
-            upsert(refreshed)
-            guard editingDraft.id == itemID else { return }
-            refreshEditorAfterMaterialMutation(refreshed)
-        } catch is CancellationError {
-            return
-        } catch {
-            guard !Task.isCancelled, editingDraft.id == itemID else { return }
-            notice = WorkboardNotice(
-                kind: .error,
-                title: LocalizedStringResource("workboard.material.import.failed.title", defaultValue: "Couldn’t add material"),
-                message: error.localizedDescription
-            )
-        }
     }
 
     /// Appends one chat-like thought without turning capture into execution.
@@ -1679,81 +1606,6 @@ final class WorkboardViewModel {
         )
     }
 
-    func removeMaterial(
-        _ material: WorkboardMaterialSnapshot,
-        from itemID: UUID
-    ) async {
-        guard editingDraft.id == itemID else { return }
-        guard await flushEditorBeforeMaterialMutation() else { return }
-        guard !Task.isCancelled, editingDraft.id == itemID else { return }
-        do {
-            let refreshed = try await dependencies.removeMaterial(
-                itemID,
-                editingDraft.baseRevision,
-                material.id
-            )
-            upsert(refreshed)
-            guard editingDraft.id == itemID else { return }
-            refreshEditorAfterMaterialMutation(refreshed)
-        } catch is CancellationError {
-            return
-        } catch {
-            guard !Task.isCancelled, editingDraft.id == itemID else { return }
-            notice = WorkboardNotice(
-                kind: .error,
-                title: LocalizedStringResource("workboard.material.remove.failed.title", defaultValue: "Couldn’t remove material"),
-                message: error.localizedDescription
-            )
-        }
-    }
-
-    func reattachMaterial(
-        _ material: WorkboardMaterialSnapshot,
-        with replacement: WorkboardMaterialImport,
-        in itemID: UUID
-    ) async {
-        guard editingDraft.id == itemID else { return }
-        guard await flushEditorBeforeMaterialMutation() else { return }
-        guard !Task.isCancelled, editingDraft.id == itemID else { return }
-        materialImportProgress = 0
-        defer {
-            if editingDraft.id == itemID { materialImportProgress = nil }
-        }
-        do {
-            let refreshed = try await dependencies.replaceMaterial(
-                itemID,
-                editingDraft.baseRevision,
-                material.id,
-                replacement
-            ) { progress in
-                Task { @MainActor [self] in
-                    guard self.editingDraft.id == itemID else { return }
-                    self.materialImportProgress = min(1, max(0, progress))
-                }
-            }
-            upsert(refreshed)
-            guard editingDraft.id == itemID else { return }
-            refreshEditorAfterMaterialMutation(refreshed)
-        } catch is CancellationError {
-            return
-        } catch {
-            guard !Task.isCancelled, editingDraft.id == itemID else { return }
-            if let repositoryError = error as? WorkboardLiveRepositoryError,
-               repositoryError == .staleDraft || repositoryError == .itemNotFound {
-                editorConflict = WorkboardEditorConflict(message: error.localizedDescription)
-                return
-            }
-            notice = WorkboardNotice(
-                kind: .error,
-                title: LocalizedStringResource(
-                    "workboard.material.reattach.failed.title",
-                    defaultValue: "Couldn’t reattach material"
-                ),
-                message: error.localizedDescription
-            )
-        }
-    }
-
     /// Reattaches a device-local source directly from the spatial workspace.
     /// It resolves the owner's latest revision immediately before mutation, so
     /// opening a picker never leaves a stale editor draft as hidden authority.
@@ -1821,23 +1673,6 @@ final class WorkboardViewModel {
         next.continuation.resume()
     }
 
-    func presentVoiceCapture(for target: WorkboardVoiceTarget) {
-        voiceCaptureTarget = target
-    }
-
-    func applyVoiceTranscript(_ rawTranscript: String, to target: WorkboardVoiceTarget) {
-        let transcript = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !transcript.isEmpty else { return }
-        switch target {
-        case .objective:
-            editingDraft.objective = appending(transcript, to: editingDraft.objective)
-        case .context:
-            editingDraft.context = appending(transcript, to: editingDraft.context)
-        }
-        voiceCaptureTarget = nil
-        noteEditorChanged()
-    }
-
     func shapeEditorDraft() async {
         guard let shapeDraft = dependencies.shapeDraft, !isShapingDraft else { return }
         isShapingDraft = true
@@ -1863,7 +1698,6 @@ final class WorkboardViewModel {
         editingDraft.desiredResult = suggestion.desiredResult
         editingDraft.constraints = suggestion.constraints
         editorSuggestion = nil
-        noteEditorChanged()
     }
 
     func showPreflight(itemID: UUID) async {
@@ -1965,6 +1799,96 @@ final class WorkboardViewModel {
 
     func requestDuplicate(_ item: WorkboardItemSnapshot) {
         confirmation = WorkboardConfirmation(kind: .duplicate, itemID: item.id, itemTitle: item.displayTitle)
+    }
+
+    /// Seeds the field with the STORED title, never `displayTitle`: a project
+    /// named only by its first thought must open the field empty rather than
+    /// invite the person to accept a name they never chose.
+    func requestRename(_ item: WorkboardItemSnapshot) {
+        renameDraftTitle = item.title
+        renameRequest = WorkboardRenameRequest(id: item.id, originalTitle: item.title)
+    }
+
+    /// A name is brief content, so it is written through `saveDraft` — the same
+    /// store write the brief itself uses, so the two can never persist a project
+    /// differently. It takes the capture lane and CASes on the project's own
+    /// revision exactly as a thought or a drop does, so renaming while an import
+    /// is in flight is serialized rather than refused as stale. Every way this
+    /// can fail says so: the alert is already gone by then, so a silent refusal
+    /// would leave the old name on screen with nothing to explain it.
+    @discardableResult
+    func commitRename() async -> Bool {
+        guard let request = renameRequest else { return false }
+        let title = renameDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        renameRequest = nil
+        renameDraftTitle = ""
+        guard title != request.originalTitle else { return false }
+        await acquireWorkspaceMutation(for: request.id)
+        defer { releaseWorkspaceMutation(for: request.id) }
+        guard let current = item(withID: request.id) else {
+            notice = WorkboardNotice(
+                kind: .error,
+                title: LocalizedStringResource(
+                    "workboard.action.failed.title",
+                    defaultValue: "Couldn’t update the board"
+                ),
+                message: String(localized: LocalizedStringResource(
+                    "workboard.item.missing.message",
+                    defaultValue: "It may have been deleted on another device."
+                ))
+            )
+            return false
+        }
+        var draft = WorkboardEditDraft(item: current)
+        draft.title = title
+        do {
+            upsert(try await dependencies.saveDraft(draft))
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            notice = WorkboardNotice(
+                kind: .error,
+                title: LocalizedStringResource(
+                    "workboard.action.failed.title",
+                    defaultValue: "Couldn’t update the board"
+                ),
+                message: error.localizedDescription
+            )
+            return false
+        }
+    }
+
+    /// Board footprint only, like a card resize: pin goes through its own
+    /// revision-neutral store path instead of the brief write, so a one-swipe
+    /// gesture can never make a sent brief look changed, invalidate an approved
+    /// preflight, or re-sort the lane by modification time. It still takes the
+    /// capture lane, because an import landing on the same project republishes
+    /// the whole snapshot. A row that has already left the board refuses in
+    /// silence — a swipe on something that just vanished must not shout.
+    @discardableResult
+    func setPinned(_ isPinned: Bool, for itemID: UUID) async -> Bool {
+        guard let setPinned = dependencies.setPinned else { return false }
+        await acquireWorkspaceMutation(for: itemID)
+        defer { releaseWorkspaceMutation(for: itemID) }
+        guard let current = item(withID: itemID) else { return false }
+        guard current.isPinned != isPinned else { return true }
+        do {
+            upsert(try await setPinned(itemID, current.isPinned, isPinned))
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            notice = WorkboardNotice(
+                kind: .error,
+                title: LocalizedStringResource(
+                    "workboard.action.failed.title",
+                    defaultValue: "Couldn’t update the board"
+                ),
+                message: error.localizedDescription
+            )
+            return false
+        }
     }
 
     func performConfirmation() async {
@@ -2347,16 +2271,6 @@ final class WorkboardViewModel {
         editingDraft = WorkboardEditDraft(item: item)
         lastSavedFingerprint = editingDraft.contentFingerprint
         editorWasPersisted = true
-        editorSavedAt = item.modifiedAt
-    }
-
-    private func flushEditorBeforeMaterialMutation() async -> Bool {
-        autosaveTask?.cancel()
-        while editorIsSaving {
-            guard !Task.isCancelled else { return false }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        return await saveEditorNow(showFailure: true)
     }
 
     func resolveEditorConflictBySavingCopy() async {
@@ -2387,7 +2301,6 @@ final class WorkboardViewModel {
                 editingDraft = WorkboardEditDraft(item: latest)
                 lastSavedFingerprint = editingDraft.contentFingerprint
                 editorWasPersisted = true
-                editorSavedAt = latest.modifiedAt
             } else {
                 editorPresented = false
                 selectedItemID = nil
@@ -2402,10 +2315,5 @@ final class WorkboardViewModel {
                 message: error.localizedDescription
             )
         }
-    }
-
-    private func appending(_ addition: String, to existing: String) -> String {
-        let clean = existing.trimmingCharacters(in: .whitespacesAndNewlines)
-        return clean.isEmpty ? addition : "\(clean)\n\n\(addition)"
     }
 }

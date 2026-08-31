@@ -113,10 +113,9 @@ struct WorkboardExperience: View {
 }
 
 /// Work's durable presentation chain — the board load's follow-up selection, the
-/// editor/preflight/briefing sheets, the autosave toast and both confirmations.
-/// It rides the host's persistent shell rather than either column, so hiding or
-/// unmounting Work's pixels can never cancel an in-flight editor flush or
-/// re-anchor a sheet.
+/// preflight/briefing sheets, the capture toast, the rename alert and both
+/// confirmations. It rides the host's persistent shell rather than either
+/// column, so hiding or unmounting Work's pixels can never re-anchor a sheet.
 struct WorkboardPresentationModifier: ViewModifier {
     let viewModel: WorkboardViewModel
 
@@ -175,12 +174,7 @@ struct WorkboardPresentationModifier: ViewModifier {
             }
             .onChange(of: isActive) { _, active in
                 guard !active else { return }
-                Task { @MainActor in
-                    await dismissTransientPresentations()
-                }
-            }
-            .sheet(isPresented: activeEditorIsPresented) {
-                WorkboardEditorView(viewModel: viewModel)
+                dismissTransientPresentations()
             }
             .sheet(isPresented: preflightIsPresented) {
                 if let itemID = viewModel.preflightItemID {
@@ -265,6 +259,35 @@ struct WorkboardPresentationModifier: ViewModifier {
             } message: { confirmation in
                 Text(verbatim: confirmationMessage(confirmation))
             }
+            .alert(
+                String(localized: LocalizedStringResource(
+                    "workboard.rename.title",
+                    defaultValue: "Rename Work"
+                )),
+                isPresented: renameIsPresented
+            ) {
+                TextField(
+                    String(localized: LocalizedStringResource(
+                        "workboard.rename.prompt",
+                        defaultValue: "Name"
+                    )),
+                    text: renameFieldText
+                )
+                Button(LocalizedStringResource("workboard.action.rename", defaultValue: "Rename")) {
+                    Task { await viewModel.commitRename() }
+                }
+                Button(
+                    LocalizedStringResource("common.cancel", defaultValue: "Cancel"),
+                    role: .cancel
+                ) {
+                    viewModel.renameRequest = nil
+                }
+            } message: {
+                Text(LocalizedStringResource(
+                    "workboard.rename.message",
+                    defaultValue: "Only the name changes. Cards, sources and replies stay where they are."
+                ))
+            }
     }
 
     private func openItem(_ item: WorkboardItemSnapshot) {
@@ -289,11 +312,11 @@ struct WorkboardPresentationModifier: ViewModifier {
     private var tutorialGate: WorkboardTutorialGate {
         WorkboardTutorialGate(
             isActive: isActive,
-            isBlocked: viewModel.editorPresented
-                || viewModel.preflightItemID != nil
+            isBlocked: viewModel.preflightItemID != nil
                 || viewModel.briefing != nil
                 || viewModel.notice != nil
                 || viewModel.confirmation != nil
+                || viewModel.renameRequest != nil
         )
     }
 
@@ -346,6 +369,30 @@ struct WorkboardPresentationModifier: ViewModifier {
             .first?.id
     }
 
+    /// Gated like every other Work presentation, but written out rather than
+    /// `.gated(by:)`: that wrapper lets a dismissal through while inactive, and
+    /// SwiftUI writes one as it tears this alert down on deactivation. This
+    /// alert holds a half-typed name, so ignoring that write is what brings the
+    /// typed text back with it when Work returns.
+    private var renameIsPresented: Binding<Bool> {
+        Binding(
+            get: { isActive && viewModel.renameRequest != nil },
+            set: { isPresented in
+                guard isActive else { return }
+                if !isPresented { viewModel.renameRequest = nil }
+            }
+        )
+    }
+
+    /// The field writes straight into the view model, so the half-typed name
+    /// survives the alert being torn down by a destination change.
+    private var renameFieldText: Binding<String> {
+        Binding(
+            get: { viewModel.renameDraftTitle },
+            set: { viewModel.renameDraftTitle = $0 }
+        )
+    }
+
     private var confirmationIsPresented: Binding<Bool> {
         Binding(
             get: { viewModel.confirmation != nil },
@@ -354,22 +401,6 @@ struct WorkboardPresentationModifier: ViewModifier {
             }
         )
         .gated(by: isActive)
-    }
-
-    private var activeEditorIsPresented: Binding<Bool> {
-        Binding(
-            get: { isActive && viewModel.editorPresented },
-            set: { isPresented in
-                // A destination change makes the gated getter false. SwiftUI
-                // may echo that false back through the binding before the last
-                // editor change notification is delivered. Keep the durable
-                // presentation bit until `dismissTransientPresentations()` has
-                // flushed the draft; ordinary user dismissals still write while
-                // Work is active.
-                guard isActive else { return }
-                viewModel.editorPresented = isPresented
-            }
-        )
     }
 
     private var activeBriefingPresentation: Binding<WorkboardBriefingSnapshot?> {
@@ -381,10 +412,10 @@ struct WorkboardPresentationModifier: ViewModifier {
         Binding(
             get: { isActive ? viewModel.notice : nil },
             set: { notice in
-                // The deactivation helper clears the old alert itself before
-                // awaiting the editor flush. Ignore a delayed dismissal write
-                // from that old alert while hidden, or it can erase the newer
-                // "Draft not saved" notice produced by the flush.
+                // The getter is gated, so a hidden Work still echoes a dismissal
+                // write from the alert it was showing when it left the screen.
+                // Ignore those: they would clear a notice raised after the
+                // switch, which the person has not read yet.
                 guard isActive else { return }
                 viewModel.notice = notice
             }
@@ -404,24 +435,18 @@ struct WorkboardPresentationModifier: ViewModifier {
         .gated(by: isActive)
     }
 
+    /// Everything cleared here is transient: none of it holds text the person
+    /// would lose. The rename request is deliberately NOT cleared — it carries a
+    /// half-typed name, and `renameIsPresented` is gated on `isActive`, so the
+    /// alert hides while Work is off screen and comes back with the typed text.
     @MainActor
-    private func dismissTransientPresentations() async {
+    private func dismissTransientPresentations() {
         if viewModel.confirmation != nil { viewModel.confirmation = nil }
         if viewModel.briefing != nil { viewModel.briefing = nil }
-        // Clear an older notice before saving, but never clear a failure raised
-        // by this final flush: if a route hides Work while the editor is dirty,
-        // the editor and its error must both be waiting when the person returns.
         if viewModel.notice != nil { viewModel.notice = nil }
         if viewModel.preflightItemID != nil { viewModel.preflightItemID = nil }
         if viewModel.selectedGatewayID != nil { viewModel.selectedGatewayID = nil }
         if !viewModel.excludedMaterialIDs.isEmpty { viewModel.excludedMaterialIDs = [] }
-
-        guard viewModel.editorPresented else { return }
-        // The editor is durable context, unlike the confirmations and dispatch
-        // sheets above. Flush it while hidden, then leave the presentation bit
-        // intact so a quick Chat -> Work round trip cannot be closed by this
-        // older async task after the person has resumed editing.
-        _ = await viewModel.saveEditorNow(showFailure: true)
     }
 
     private var confirmationTitle: String {
@@ -579,30 +604,32 @@ struct WorkboardSidebarColumn: View {
                                 WorkboardSidebarRow(item: item)
                             }
                             .tag(item.id)
-                            .contextMenu {
-                                Button {
-                                    viewModel.requestDuplicate(item)
-                                } label: {
-                                    Label(
-                                        LocalizedStringResource(
-                                            "workboard.action.duplicate",
-                                            defaultValue: "Duplicate Work"
-                                        ),
-                                        systemImage: "plus.square.on.square"
-                                    )
-                                }
+                            .contextMenu { projectActions(for: item) }
+                            #if os(iOS)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) {
                                     viewModel.requestDelete(item)
                                 } label: {
-                                    Label(
-                                        LocalizedStringResource(
-                                            "workboard.action.delete",
-                                            defaultValue: "Delete Work"
-                                        ),
-                                        systemImage: "trash"
-                                    )
+                                    Label(WorkboardProjectActionTitle.delete, systemImage: "trash")
+                                }
+                                Button {
+                                    viewModel.requestRename(item)
+                                } label: {
+                                    Label(WorkboardProjectActionTitle.rename, systemImage: "pencil")
                                 }
                             }
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                Button {
+                                    Task { await viewModel.setPinned(!item.isPinned, for: item.id) }
+                                } label: {
+                                    Label(
+                                        WorkboardProjectActionTitle.pinToggle(isPinned: item.isPinned),
+                                        systemImage: item.isPinned ? "pin.slash" : "pin"
+                                    )
+                                }
+                                .tint(AppColors.brandAmber)
+                            }
+                            #endif
                         }
                     } header: {
                         WorkboardSidebarSectionHeader(state: state, count: stateItems.count)
@@ -638,6 +665,22 @@ struct WorkboardSidebarColumn: View {
         }
         .safeAreaInset(edge: .bottom) { sidebarFooter }
         .background(AppColors.background)
+    }
+
+    /// Project-level actions on the project's own row: right-click on macOS,
+    /// long-press on iOS, and the trailing/leading swipes above. The desk itself
+    /// carries no project chrome, so on iOS this menu is the only route to a
+    /// project's name and pin; on macOS the Work main menu carries the same list
+    /// for a window whose sidebar is collapsed.
+    @ViewBuilder
+    private func projectActions(for item: WorkboardItemSnapshot) -> some View {
+        workboardProjectActions(
+            isPinned: item.isPinned,
+            onRename: { viewModel.requestRename(item) },
+            onTogglePin: { Task { await viewModel.setPinned(!item.isPinned, for: item.id) } },
+            onDuplicate: { viewModel.requestDuplicate(item) },
+            onDelete: { viewModel.requestDelete(item) }
+        )
     }
 
     @ToolbarContentBuilder
@@ -1227,6 +1270,8 @@ private struct WorkboardReorderCard: View {
         WorkboardCard(
             item: item,
             onOpen: onOpen,
+            onRename: { viewModel.requestRename(item) },
+            onTogglePin: { Task { await viewModel.setPinned(!item.isPinned, for: item.id) } },
             onDuplicate: { viewModel.requestDuplicate(item) },
             onDelete: { viewModel.requestDelete(item) },
             onMoveEarlier: moveEarlierAction,

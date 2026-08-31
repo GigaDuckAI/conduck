@@ -119,12 +119,12 @@ Capture never executes. A draft cannot reach a gateway until the person enters R
 - `Conduck/Conduck/Views/Components/WorkbenchDestinationGate.swift` — the environment flag naming the on-screen destination and the binding wrapper every gated presentation uses, so a hidden destination contributes no chrome and originates no sheet or picker.
 - `Conduck/Conduck/Views/Conversation/MainWindowView.swift` — macOS native split shell. Chat is always mounted; Work's columns mount while Work is active and stay for a short dissolve grace period after it deactivates.
 - `Conduck/Conduck/Views/Workboard/WorkboardView.swift` — `WorkboardSidebarColumn` (search, lifecycle filter, one section per `WorkItemState.attentionOrder` lane), `WorkboardDetailColumn` (loading/error/project/new-work/overview routing), `WorkboardProjectCanvas` (pinned and project shelves with drag rails), and `WorkboardPresentationModifier`, which owns every sheet, confirmation and toast on the always-mounted split view.
-- `Conduck/Conduck/Views/Workboard/WorkboardDetailView.swift` — lifecycle-specific project/result detail and run timeline.
+- `Conduck/Conduck/Views/Workboard/WorkboardDetailView.swift` — the desk: one project's card board and the pinned composer, and nothing else.
 
 ### Capture, editing, and preflight
 
 - `Conduck/Conduck/Views/Workboard/WorkboardCaptureCanvas.swift` — thoughts, voice, attachments, camera/photo/file/link capture and drag/drop.
-- `Conduck/Conduck/Views/Workboard/WorkboardEditorView.swift` — durable brief editor and conflict handling.
+- `Conduck/Conduck/Views/Workboard/WorkboardTextMaterialSheet.swift` — the link and note sheets the composer's attach menu presents.
 - `Conduck/Conduck/Views/Workboard/WorkboardDispatchSheet.swift` — gateway/material preflight and explicit send.
 - `Conduck/Conduck/Views/Workboard/WorkboardBriefingView.swift` — private deterministic overview.
 - `Conduck/Conduck/ViewModels/WorkboardViewModel.swift` — presentation state, autosave, capture, reordering, briefing, preflight and result actions.
