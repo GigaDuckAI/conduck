@@ -22134,17 +22134,6 @@
         }
       }
     },
-    "workboard.captureLanding.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Drop anything into Work"
-          }
-        }
-      }
-    },
     "workboard.chatCapture.action" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22834,17 +22823,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "No work matches"
-          }
-        }
-      }
-    },
-    "workboard.empty.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Nothing is sent to an AI until you review it."
           }
         }
       }
@@ -25280,17 +25258,6 @@
         }
       }
     },
-    "workboard.workspace.drop.accessibilityHint" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Opens the file picker. You can also drag items onto this project canvas."
-          }
-        }
-      }
-    },
     "workboard.workspace.drop.image" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -25342,17 +25309,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "A private draft is created only after the first item is safely stored. Nothing is sent."
-          }
-        }
-      }
-    },
-    "workboard.workspace.drop.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Drop anywhere, or choose files"
           }
         }
       }
@@ -25412,17 +25368,6 @@
         }
       }
     },
-    "workboard.workspace.new.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Add a thought or drop something in."
-          }
-        }
-      }
-    },
     "workboard.workspace.new.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -25430,17 +25375,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "New Work"
-          }
-        }
-      }
-    },
-    "workboard.workspace.recent" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Recent open work"
           }
         }
       }

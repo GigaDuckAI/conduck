@@ -113,26 +113,21 @@ struct WorkboardCaptureCanvas: View {
         Group {
             if mode == .composer {
                 pinnedComposer
-            } else {
+            } else if mode == .full {
                 WorkboardSurface {
                     VStack(alignment: .leading, spacing: 14) {
-                        importProgress
-                        if item.materials.isEmpty {
-                            dropTile
-                        } else {
-                            WorkboardMaterialBoard(
-                                viewModel: viewModel,
-                                item: item,
-                                onOpen: openMaterial,
-                                onReattach: beginReattachment
-                            )
-                        }
-                        if mode == .full {
-                            Divider().overlay(AppColors.borderSubtle)
-                            expandedComposer
-                        }
+                        boardStack
+                        Divider().overlay(AppColors.borderSubtle)
+                        expandedComposer
                     }
                 }
+            } else {
+                // No container around the cards: the WHOLE pane is the drop
+                // target, and a bordered surface would read as the one place a
+                // drop lands. An empty project therefore renders nothing here —
+                // the one-time tutorial teaches capture, the pane accepts it.
+                boardStack
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .fileImporter(
@@ -300,44 +295,22 @@ struct WorkboardCaptureCanvas: View {
         }
     }
 
-    /// The ghost tile an empty board shows in place of the old explainer. One
-    /// short line: everything it used to spell out is taught once by
-    /// `WorkboardTutorialView` and by the pane-wide drop itself.
-    private var dropTile: some View {
-        Button {
-            guard !isImporting else { return }
-            showsFileImporter = true
-        } label: {
-            VStack(spacing: 10) {
-                Image(systemName: "square.and.arrow.down.on.square")
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(AppColors.brandAmber)
-                Text(LocalizedStringResource(
-                    "workboard.workspace.drop.title",
-                    defaultValue: "Drop anywhere, or choose files"
-                ))
-                .font(.subheadline)
-                .foregroundStyle(AppColors.textSecondary)
-                .multilineTextAlignment(.center)
+    /// Import status plus the cards, and nothing else. An empty board draws no
+    /// placeholder: it is indistinguishable from the pane behind it, which is
+    /// what makes the whole pane read as the drop target.
+    @ViewBuilder
+    private var boardStack: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            importProgress
+            if !item.materials.isEmpty {
+                WorkboardMaterialBoard(
+                    viewModel: viewModel,
+                    item: item,
+                    onOpen: openMaterial,
+                    onReattach: beginReattachment
+                )
             }
-            .frame(maxWidth: .infinity, minHeight: 118)
-            .padding(.horizontal, 18)
-            .background(AppColors.backgroundSecondary.opacity(0.7), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .stroke(
-                        AppColors.borderSubtle,
-                        style: StrokeStyle(lineWidth: 1, dash: [7, 5])
-                    )
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
         }
-        .choiceCardButton(cornerRadius: 15)
-        .disabled(isImporting)
-        .accessibilityHint(Text(LocalizedStringResource(
-            "workboard.workspace.drop.accessibilityHint",
-            defaultValue: "Opens the file picker. You can also drag items onto this project canvas."
-        )))
     }
 
     private func openMaterial(_ material: WorkboardMaterialSnapshot) {

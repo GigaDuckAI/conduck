@@ -512,6 +512,25 @@ struct WorkboardSidebarColumn: View {
                 .padding(.bottom, 8)
 
             List(selection: $viewModel.selectedItemID) {
+            // macOS mounts Work inside the persistent window shell, which keeps
+            // Chat's toolbar and suppresses Work's own sidebar toolbar. Without
+            // this row that platform would have no VISIBLE New Work control while
+            // a project is open — only ⌘⇧N and the All Work canvas.
+            if !showsSidebarToolbar {
+                Button {
+                    showsOverview = false
+                    viewModel.beginWorkspace()
+                    preferredCompactColumn = .detail
+                } label: {
+                    Label(
+                        LocalizedStringResource("workboard.newBrief", defaultValue: "New Work"),
+                        systemImage: "plus.circle.fill"
+                    )
+                }
+                .settingsRowButton()
+                .listRowBackground(Color.clear)
+            }
+
             Button {
                 viewModel.cancelProvisionalWorkspace()
                 showsOverview = true
@@ -779,10 +798,6 @@ struct WorkboardDetailColumn: View {
                 title: LocalizedStringResource(
                     "workboard.workspace.new.title",
                     defaultValue: "New Work"
-                ),
-                message: LocalizedStringResource(
-                    "workboard.workspace.new.message",
-                    defaultValue: "Add a thought or drop something in."
                 )
             )
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -838,10 +853,6 @@ struct WorkboardDetailColumn: View {
                     title: LocalizedStringResource(
                         "workboard.empty.title",
                         defaultValue: "Start with a thought, file or screenshot"
-                    ),
-                    message: LocalizedStringResource(
-                        "workboard.empty.message",
-                        defaultValue: "Nothing is sent to an AI until you review it."
                     )
                 )
             } else {
@@ -881,21 +892,18 @@ struct WorkboardDetailColumn: View {
         preferredCompactColumn = .detail
     }
 
+    /// Title and board only. The standing "drop something in" line is gone from
+    /// every Work canvas: the one-time tutorial teaches capture once, and the
+    /// pane-wide drop target is the whole window surface, not a labelled box.
     private func captureWorkspace(
         id: UUID,
-        title: LocalizedStringResource,
-        message: LocalizedStringResource
+        title: LocalizedStringResource
     ) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(title)
-                        .font(.largeTitle.bold())
-                        .foregroundStyle(AppColors.textEmphasis)
-                    Text(message)
-                        .font(.body)
-                        .foregroundStyle(AppColors.textSecondary)
-                }
+                Text(title)
+                    .font(.largeTitle.bold())
+                    .foregroundStyle(AppColors.textEmphasis)
                 WorkboardCaptureCanvas(
                     viewModel: viewModel,
                     item: WorkboardItemSnapshot(id: id),
@@ -1037,8 +1045,6 @@ private struct WorkboardProjectCanvas: View {
                     includesNewWork: true
                 )
 
-                captureLanding
-
                 // Reads the APPLIED needle, not the field: the canvas body must
                 // not rebuild the strip on every character.
                 if !viewModel.appliedSearchText.isEmpty {
@@ -1162,43 +1168,6 @@ private struct WorkboardProjectCanvas: View {
             "workboard.projectShelf.new.hint",
             defaultValue: "Opens an empty private project canvas"
         )))
-    }
-
-    private var captureLanding: some View {
-        VStack(spacing: 15) {
-            ZStack {
-                Circle()
-                    .fill(AppColors.brandAmber.opacity(0.12))
-                    .frame(width: 68, height: 68)
-                Image(systemName: "square.and.arrow.down.on.square.fill")
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(AppColors.brandAmber)
-            }
-
-            VStack(spacing: 5) {
-                Text(LocalizedStringResource(
-                    "workboard.captureLanding.title",
-                    defaultValue: "Drop anything into Work"
-                ))
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(AppColors.textEmphasis)
-            }
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 28)
-        .frame(maxWidth: .infinity, minHeight: 180)
-        .background(AppColors.backgroundSecondary.opacity(0.48), in: RoundedRectangle(
-            cornerRadius: 20,
-            style: .continuous
-        ))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(
-                    AppColors.borderSubtle,
-                    style: StrokeStyle(lineWidth: 1, dash: [8, 6])
-                )
-        }
-        .accessibilityElement(children: .combine)
     }
 
 }

@@ -3,10 +3,10 @@
 // Conduck
 // WorkboardDetailView.swift
 //
-// The desk. One project's board and nothing that competes with it: the recent
-// work strip to move between projects, the project's name, the card board, and
-// the pinned composer. Run state, results and dispatch live on the view model
-// and its sheets; this surface neither reports nor triggers them.
+// The desk. One project's board and nothing that competes with it: the project's
+// name, the card board, and the pinned composer. Moving between projects and
+// starting a new one belong to the sidebar. Run state, results and dispatch live
+// on the view model and its sheets; this surface neither reports nor triggers them.
 
 import SwiftUI
 
@@ -14,7 +14,6 @@ struct WorkboardDetailView: View {
     @Bindable var viewModel: WorkboardViewModel
     let itemID: UUID
 
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
     var body: some View {
@@ -29,12 +28,6 @@ struct WorkboardDetailView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: WorkboardMetrics.generousSpacing) {
-                        if horizontalSizeClass != .compact {
-                            WorkboardRecentWorkStrip(
-                                viewModel: viewModel,
-                                selectedItemID: item.id
-                            )
-                        }
                         header(item)
                         WorkboardCaptureCanvas(
                             viewModel: viewModel,
@@ -180,84 +173,6 @@ struct WorkboardDetailView: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "workboard.project.more",
             defaultValue: "More project actions"
-        )))
-    }
-}
-
-private struct WorkboardRecentWorkStrip: View {
-    @Bindable var viewModel: WorkboardViewModel
-    let selectedItemID: UUID
-
-    private var visibleItems: [WorkboardItemSnapshot] {
-        let selected = viewModel.item(withID: selectedItemID)
-        let candidates = viewModel.items
-            .filter { $0.state != .done && $0.id != selectedItemID }
-            .sorted { lhs, rhs in
-                if lhs.isPinned != rhs.isPinned { return lhs.isPinned }
-                if lhs.modifiedAt != rhs.modifiedAt { return lhs.modifiedAt > rhs.modifiedAt }
-                return lhs.id.uuidString < rhs.id.uuidString
-            }
-        return ([selected].compactMap { $0 } + Array(candidates.prefix(4)))
-    }
-
-    var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 8) {
-                ForEach(visibleItems) { item in
-                    Button {
-                        viewModel.selectedItemID = item.id
-                    } label: {
-                        HStack(spacing: 7) {
-                            Circle()
-                                .fill(item.state.tint)
-                                .frame(width: 7, height: 7)
-                            Text(verbatim: item.displayTitle)
-                                .lineLimit(1)
-                            if item.isPinned {
-                                Image(systemName: "pin.fill")
-                                    .font(.caption2)
-                            }
-                        }
-                        .font(.subheadline.weight(item.id == selectedItemID ? .semibold : .medium))
-                        .foregroundStyle(item.id == selectedItemID ? AppColors.background : AppColors.textPrimary)
-                        .padding(.horizontal, 13)
-                        .frame(minHeight: WorkboardMetrics.touchTarget)
-                        .background(
-                            item.id == selectedItemID ? AppColors.textPrimary : AppColors.cardBackground,
-                            in: Capsule()
-                        )
-                        .overlay { Capsule().stroke(AppColors.borderSubtle, lineWidth: 1) }
-                        .contentShape(Capsule())
-                    }
-                    .choiceCardButton(cornerRadius: WorkboardMetrics.touchTarget / 2)
-                    .accessibilityLabel(Text(verbatim: item.displayTitle))
-                    .accessibilityValue(Text(item.state.title))
-                    .accessibilityAddTraits(item.id == selectedItemID ? .isSelected : [])
-                }
-
-                Button {
-                    viewModel.beginWorkspace()
-                } label: {
-                    Label(
-                        LocalizedStringResource(
-                            "workboard.newBrief",
-                            defaultValue: "New Work"
-                        ),
-                        systemImage: "plus"
-                    )
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 13)
-                    .frame(minHeight: WorkboardMetrics.touchTarget)
-                    .background(AppColors.backgroundSecondary, in: Capsule())
-                    .overlay { Capsule().stroke(AppColors.borderSubtle, lineWidth: 1) }
-                }
-                .choiceCardButton(cornerRadius: WorkboardMetrics.touchTarget / 2)
-            }
-        }
-        .scrollIndicators(.hidden)
-        .accessibilityLabel(Text(LocalizedStringResource(
-            "workboard.workspace.recent",
-            defaultValue: "Recent open work"
         )))
     }
 }
