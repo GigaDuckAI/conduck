@@ -1006,7 +1006,33 @@ enum Constants {
     /// own server, user-typed URL) OpenRouter is a third-party hosted backend
     /// with a known endpoint the user never types — see
     /// `RemoteAgentBackendMetadata` (`endpoint == .fixed`).
-    static let openRouterBaseURLString = "https://openrouter.ai/api"
+    nonisolated static let openRouterBaseURLString = "https://openrouter.ai/api"
+
+    /// The app URL OpenRouter attributes this client's traffic to — the value of
+    /// the REQUIRED `HTTP-Referer` header. On OpenRouter an app's URL IS its
+    /// identity: the public app page and the rankings row are keyed on it, so a
+    /// request without it is attributed to nobody. Derived from `websiteURL` so
+    /// the two can never name different origins; the trailing slash is dropped
+    /// because the header carries an ORIGIN, not a page. Constant app identity
+    /// only — nothing user-derived, nothing device-derived, so it stays inside
+    /// the no-telemetry posture.
+    static let openRouterAttributionReferer: String = {
+        var origin = websiteURL
+        while origin.hasSuffix("/") { origin.removeLast() }
+        return origin
+    }()
+
+    /// Display name OpenRouter shows on that app page (`X-OpenRouter-Title`).
+    /// The PRODUCT name, never the company name.
+    static let openRouterAttributionTitle = "Conduck"
+
+    /// `X-OpenRouter-Categories` — a comma-separated list drawn from
+    /// OpenRouter's OWN recognized vocabulary, which accepts at most TWO per
+    /// request and silently drops anything it does not recognize. Conduck is a
+    /// voice front end for the user's own agent (`personal-agent`) that also
+    /// carries ordinary conversational turns (`general-chat`). Keep this at two
+    /// recognized tokens; a third is discarded, not merged.
+    static let openRouterAttributionCategories = "personal-agent,general-chat"
 
     /// Context trim policy cap (`docs/ai-context/spec.md`). Under
     /// client-owned history `RemoteAgentClient` sends the active
@@ -1632,6 +1658,42 @@ enum Constants {
     /// OpenAI-compatible (`OpenAISpeechBody`, raw mp3 when `response_format:"mp3"`).
     static let openRouterTranscriptionsPath = "/v1/audio/transcriptions"
     static let openRouterSpeechPath = "/v1/audio/speech"
+
+    /// Per-request timeout for the ONE OAuth code-for-key exchange behind
+    /// "Sign in with OpenRouter". Longer than the 15 s Test-Connection budget
+    /// and much shorter than a converse hop: the user is watching a spinner
+    /// after having already approved in the browser, but the request is not
+    /// retryable — exchanging the code CREATES a real key, so a premature
+    /// timeout costs the user a stray key in their account rather than a free
+    /// second attempt. 30 s buys a slow network the room to answer once.
+    nonisolated static let openRouterOAuthExchangeTimeout: TimeInterval = 30
+
+    /// Upper bound on the authorization `code` accepted out of an OAuth
+    /// callback. The code is OPAQUE — no charset is imposed, because the
+    /// provider may change its encoding — so a length ceiling plus the
+    /// no-whitespace/no-control-character rule is the whole shape contract. It
+    /// exists to keep anything unbounded from a third party out of the exchange
+    /// body; OpenRouter's own codes are far shorter.
+    nonisolated static let openRouterOAuthMaxCodeLength = 512
+
+    /// OpenRouter's key-management console — "where do I get a key?". The
+    /// SINGLE home for this literal: the voice provider's `consoleURL` derives
+    /// from it. OpenRouter redirects this alias to whichever workspace URL its
+    /// key LIST currently lives at.
+    nonisolated static let openRouterKeysConsoleURLString = "https://openrouter.ai/keys"
+
+    /// Parent of OpenRouter's page for ONE key, addressed by that key's
+    /// lowercase SHA-256 hex (`OpenRouterOAuth.keySettingsURL(forKey:)` appends
+    /// it). This is the route a user follows to inspect or delete the key
+    /// "Sign in with OpenRouter" created for them.
+    ///
+    /// A SEPARATE literal from the console above rather than the console plus a
+    /// path component, because the two are different routes on OpenRouter's
+    /// site: the bare `/keys` alias resolves to the key list, and only
+    /// `/settings/keys/<hash>` resolves to a single key's page — `/keys/<hash>`
+    /// resolves to neither and would strand the user on a not-found page at the
+    /// one moment they need to delete a key.
+    nonisolated static let openRouterKeySettingsURLString = "https://openrouter.ai/settings/keys"
 
     /// Per-request timeout for the "Test Connection" probe
     /// (`timeoutIntervalForRequest`). 15 s is short on purpose — this is
