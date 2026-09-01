@@ -38,7 +38,8 @@ final class ConversationStoreAtomicWorkCaptureTests: XCTestCase {
         XCTAssertEqual(created.content.title, "Launch research")
         XCTAssertEqual(created.materials.map(\.id), [materialID])
         XCTAssertEqual(created.materials.first?.workItemID, itemID)
-        XCTAssertEqual(created.materials.first?.availability, .availableLocally)
+        XCTAssertEqual(created.materials.first?.availability, .synced,
+                       "a file within the sync ceiling rides private CloudKit")
         let loadedPayload = try await store.loadWorkMaterialPayload(id: materialID)
         XCTAssertEqual(loadedPayload, payload)
 

@@ -400,6 +400,18 @@
         }
       }
     },
+    "share.work.desk.detail" : {
+      "comment" : "Explains where a Work capture lands, in place of a destination picker",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Everything you share is added to your Work desk."
+          }
+        }
+      }
+    },
     "share.work.error.empty" : {
       "comment" : "Actionable empty Workboard capture failure message",
       "extractionState" : "extracted_with_value",
@@ -484,54 +496,6 @@
         }
       }
     },
-    "share.work.new" : {
-      "comment" : "Destination that creates a new inert Work draft",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "New Work"
-          }
-        }
-      }
-    },
-    "share.work.new.detail" : {
-      "comment" : "Subtitle for the New Work destination",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Start a new draft"
-          }
-        }
-      }
-    },
-    "share.work.section.destination" : {
-      "comment" : "Section title above the New Work destination",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Destination"
-          }
-        }
-      }
-    },
-    "share.work.section.recent" : {
-      "comment" : "Section title above recent open Work destinations",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Recent Work"
-          }
-        }
-      }
-    },
     "share.work.title" : {
       "comment" : "Share Extension title while saving an inert Work draft",
       "extractionState" : "extracted_with_value",
@@ -540,18 +504,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Add to Work"
-          }
-        }
-      }
-    },
-    "share.work.untitled" : {
-      "comment" : "Fallback title for an open Work destination without a title",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Untitled Work"
           }
         }
       }

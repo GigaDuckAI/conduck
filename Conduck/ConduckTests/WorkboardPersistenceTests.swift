@@ -45,7 +45,8 @@ final class WorkboardPersistenceTests: XCTestCase {
         )
         XCTAssertEqual(material.availability, .availableLocally)
         XCTAssertEqual(material.storageMode, .localVault,
-                       "file bytes stay off the CloudKit model, even when small")
+                       "the non-desk owner mint stays on the device-local lane; "
+                       + "only a desk capture asks WorkMaterialStoragePolicy")
         XCTAssertNil(material.textContent,
                      "an extract of a local file must not enter the mirrored material row")
         let loadedPayload = try await store.loadWorkMaterialPayload(id: material.id)

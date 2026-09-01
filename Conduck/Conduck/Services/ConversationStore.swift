@@ -1169,6 +1169,25 @@ actor ConversationStore {
         case attemptAlreadyTerminal
     }
 
+    /// The persistent stores did not mount in the topology this build asked
+    /// for. Deliberately NOT a `StoreError`: those are verdicts about rows,
+    /// reached long after a successful load and switched over exhaustively by
+    /// the turn-landing path. This one aborts the load itself.
+    ///
+    /// WHY IT HAS TO EXIST. A mis-pointed `configuration` does not error. Core
+    /// Data validates only the entities the named configuration lists, so
+    /// opening the conversations file as `Blobs` succeeds silently and presents
+    /// an empty payload table — after which every payload row is written into
+    /// the wrong sqlite, and no reader downstream is in a position to notice.
+    /// The load is the only place that can catch a forked topology.
+    struct StoreTopologyMismatch: Error, CustomStringConvertible {
+        let expected: [String]
+        let mounted: [String]
+        var description: String {
+            "persistent store topology mismatch — expected \(expected), mounted \(mounted)"
+        }
+    }
+
     /// One output-detector result to reconcile transactionally.
     /// `expectedLaneID` is a mandatory compare-and-set guard: attachments and
     /// the conclusive marker may be written only while the persisted reply
@@ -1214,6 +1233,31 @@ actor ConversationStore {
     // method is lost.
     private let container: NSPersistentContainer
 
+    /// The shipped sqlite. NEVER rename it: every row an existing account owns
+    /// lives in this file, and a new name opens an empty store beside it.
+    private static let coreStoreFilename = "Conversations.sqlite"
+
+    /// The payload store — a sibling file in the same directory as the Core
+    /// store. Its external binaries land in `.ConversationBlobs_SUPPORT/`
+    /// beside it rather than in the Core store's `_SUPPORT` directory, so
+    /// anything that copies, backs up or wipes the store handles TWO of them.
+    private static let blobStoreFilename = "ConversationBlobs.sqlite"
+
+    /// Model configuration names (`Conversations 16`). `Core` carries exactly
+    /// the entities the shipped default-configuration store already held —
+    /// their version hashes are unchanged, so it opens migration-free — and
+    /// `Blobs` carries `WorkMaterialBlob` alone.
+    private static let coreConfigurationName = "Core"
+    private static let blobsConfigurationName = "Blobs"
+
+    #if CONDUCK_TESTING
+    /// True only for the `init(inMemory:storeURL:)` seam. The `ForTesting`
+    /// entry points at the end of this file refuse a store this flag does not
+    /// cover, so a signed suite run can never read or write the founder's real
+    /// App Group data.
+    private let isIsolatedTestStore: Bool
+    #endif
+
     /// One-shot store-load task. Created by the first `ensureLoaded()` caller;
     /// every concurrent / later caller awaits this SAME task (single-flight).
     /// A failed task is sticky — its error rethrows to every subsequent
@@ -1250,6 +1294,9 @@ actor ConversationStore {
 
     /// Production init — App Group on-disk store.
     private init() {
+        #if CONDUCK_TESTING
+        self.isIsolatedTestStore = false
+        #endif
         #if !os(watchOS)
         self.workAssetVault = .shared
         #endif
@@ -1265,10 +1312,18 @@ actor ConversationStore {
         // persistence-sensitive QA flows still behave like the shipping app.
         if QAMode.isScreenshotMode {
             let container = NSPersistentContainer(name: "Conversations")
-            if let description = container.persistentStoreDescriptions.first {
-                description.type = NSInMemoryStoreType
-                description.url = URL(fileURLWithPath: "/dev/null")
-                ConversationStore.configureSyncOptions(on: description, cloudKit: false)
+            if let core = container.persistentStoreDescriptions.first {
+                core.type = NSInMemoryStoreType
+                core.url = URL(fileURLWithPath: "/dev/null")
+                // Same two-store topology as production, in memory: a seeded
+                // card whose bytes ride the payload store has somewhere to put
+                // them, and a marketing capture exercises the shape the app
+                // actually ships rather than a single-store simplification.
+                container.persistentStoreDescriptions = ConversationStore.storeDescriptions(
+                    core: core,
+                    blobStoreURL: ConversationStore.siblingBlobStoreURL(besideCore: core.url),
+                    cloudKit: false
+                )
             }
             self.container = container
             return
@@ -1298,18 +1353,24 @@ actor ConversationStore {
             ? NSPersistentCloudKitContainer(name: "Conversations")
             : NSPersistentContainer(name: "Conversations")
 
-        if let description = container.persistentStoreDescriptions.first {
+        if let core = container.persistentStoreDescriptions.first {
             // App Group store location (CRITICAL — see file header). The
             // headless Shortcut / App Intent runs in its own process and must
             // write this same sqlite. Fall back to the default location only
             // if the container URL is nil (mis-provisioned App Group); we log
             // and continue rather than crash so a dev build still runs.
+            let blobStoreURL: URL?
             if let groupURL = FileManager.default.containerURL(
                 forSecurityApplicationGroupIdentifier: Constants.appGroupID
             ) {
-                description.url = groupURL.appendingPathComponent("Conversations.sqlite")
+                core.url = groupURL.appendingPathComponent(ConversationStore.coreStoreFilename)
+                // Both files come off THIS ONE lookup. `scripts/check-storage-seam.sh`
+                // allowlists App Group container queries by file, so a second
+                // query — even to the same directory — is a seam change.
+                blobStoreURL = groupURL.appendingPathComponent(ConversationStore.blobStoreFilename)
             } else {
                 NSLog("[ConversationStore] App Group container URL is nil for \(Constants.appGroupID); falling back to default store location.")
+                blobStoreURL = ConversationStore.siblingBlobStoreURL(besideCore: core.url)
             }
 
             // CloudKit mirroring fatal-asserts (EXC_BREAKPOINT in
@@ -1318,7 +1379,11 @@ actor ConversationStore {
             // the Simulator nor an unsigned build is where CloudKit sync is
             // verified — that's a signed, real-device founder gate — so both run
             // local-only, matching the test seam.
-            ConversationStore.configureSyncOptions(on: description, cloudKit: cloudKitUsable)
+            container.persistentStoreDescriptions = ConversationStore.storeDescriptions(
+                core: core,
+                blobStoreURL: blobStoreURL,
+                cloudKit: cloudKitUsable
+            )
             if !cloudKitUsable {
                 NSLog("[ConversationStore] CloudKit mirroring off (Simulator, or a build without the iCloud container entitlement) — conversations stay local to this device.")
             }
@@ -1345,6 +1410,9 @@ actor ConversationStore {
     /// on-disk variant. The store is driven only through base-class API, so no
     /// CloudKit method is lost; tests are local-only by definition.
     init(inMemory: Bool = false, storeURL: URL? = nil) {
+        #if CONDUCK_TESTING
+        self.isIsolatedTestStore = true
+        #endif
         #if !os(watchOS)
         self.workAssetVault = WorkAssetVault(
             baseURL: FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -1355,15 +1423,22 @@ actor ConversationStore {
         #endif
         let container = NSPersistentContainer(name: "Conversations")
 
-        if let description = container.persistentStoreDescriptions.first {
+        if let core = container.persistentStoreDescriptions.first {
             if inMemory {
-                description.type = NSInMemoryStoreType
-                description.url = URL(fileURLWithPath: "/dev/null")
+                core.type = NSInMemoryStoreType
+                core.url = URL(fileURLWithPath: "/dev/null")
             } else if let storeURL {
-                description.url = storeURL
+                core.url = storeURL
             }
             // Tests are local-only by definition — never attach CloudKit (cloudKit: false).
-            ConversationStore.configureSyncOptions(on: description, cloudKit: false)
+            // The payload store is mounted here too: a seam that mounted one
+            // store would exercise a topology the app never runs, and a blob
+            // insert would fail on a store nothing had loaded.
+            container.persistentStoreDescriptions = ConversationStore.storeDescriptions(
+                core: core,
+                blobStoreURL: ConversationStore.siblingBlobStoreURL(besideCore: core.url),
+                cloudKit: false
+            )
         }
 
         self.container = container
@@ -1390,6 +1465,71 @@ actor ConversationStore {
             true as NSNumber,
             forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey
         )
+    }
+
+    /// Every description this container mounts, built in ONE place so the
+    /// production store, the screenshot store and the test seam cannot drift
+    /// apart. `Core` keeps the shipped sqlite; `Blobs` is a sibling file
+    /// carrying `WorkMaterialBlob` alone. Both run through
+    /// `configureSyncOptions` identically — a mirrored store without history
+    /// tracking exports nothing, so an asymmetry there would sync metadata and
+    /// silently strand the bytes.
+    ///
+    /// **The Watch never mounts `Blobs`, and that omission IS the payload
+    /// exclusion.** The wrist compiles this same file, has no `WorkAssetVault`
+    /// (`#if !os(watchOS)`) to fall back on and no eviction path for bytes it
+    /// cannot use, so a payload store it never loads is a payload store
+    /// CloudKit never fills. Materials still mirror; their bytes read as
+    /// pending there.
+    private static func storeDescriptions(
+        core: NSPersistentStoreDescription,
+        blobStoreURL: URL?,
+        cloudKit: Bool
+    ) -> [NSPersistentStoreDescription] {
+        core.configuration = coreConfigurationName
+        configureSyncOptions(on: core, cloudKit: cloudKit)
+        #if os(watchOS)
+        return [core]
+        #else
+        guard let blobStoreURL else { return [core] }
+        let blobs = NSPersistentStoreDescription(url: blobStoreURL)
+        // The payload store follows the Core store's type, so an in-memory
+        // seam stays entirely in memory: a SQLite sibling beside an in-memory
+        // Core would outlive the process that owns it.
+        blobs.type = core.type
+        blobs.configuration = blobsConfigurationName
+        configureSyncOptions(on: blobs, cloudKit: cloudKit)
+        return [core, blobs]
+        #endif
+    }
+
+    /// The payload store's file for a store whose directory is not the App
+    /// Group container: the Core file's own name with `-Blobs` appended,
+    /// beside it. Derived from the Core URL rather than looked up, so no
+    /// second App Group query appears (`scripts/check-storage-seam.sh`
+    /// allowlists those by file). The in-memory placeholder `/dev/null` yields
+    /// `/dev/null-Blobs` — inert for a store that never touches disk, and
+    /// distinct, which is what lets the coordinator tell the two apart.
+    private static func siblingBlobStoreURL(besideCore coreURL: URL?) -> URL? {
+        guard let coreURL else { return nil }
+        let sibling = coreURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("\(coreURL.deletingPathExtension().lastPathComponent)-Blobs")
+        let pathExtension = coreURL.pathExtension
+        return pathExtension.isEmpty ? sibling : sibling.appendingPathExtension(pathExtension)
+    }
+
+    /// `configuration@file` — the pairing a topology assertion compares. File
+    /// NAME only: Core Data can hand back a resolved path (`/private/var/…`)
+    /// for a URL handed in unresolved (`/var/…`), so comparing whole URLs
+    /// would fail on a temp directory rather than on a real mismatch.
+    private static func storeIdentity(of description: NSPersistentStoreDescription) -> String {
+        let configuration = description.configuration ?? "PF_DEFAULT_CONFIGURATION_NAME"
+        return "\(configuration)@\(description.url?.lastPathComponent ?? "-")"
+    }
+
+    private static func storeIdentity(of store: NSPersistentStore) -> String {
+        "\(store.configurationName)@\(store.url?.lastPathComponent ?? "-")"
     }
 
     // MARK: - Lifecycle
@@ -1464,6 +1604,22 @@ actor ConversationStore {
                 }
                 if let result { continuation.resume(with: result) }
             }
+        }
+
+        // Every description landed without error — which is NOT the same as
+        // landing where it was pointed. Core Data validates only the entities
+        // a named configuration lists, so a Blobs description aimed at the
+        // conversations file opens it silently and presents an empty payload
+        // table; every payload row would then be written into the wrong sqlite
+        // with nothing downstream in a position to notice. Compare what
+        // mounted against what was asked for, and fail the load on a
+        // mismatch — a store this build cannot describe is not one it may use.
+        let expectedStores = descriptions.map(Self.storeIdentity(of:)).sorted()
+        let mountedStores = container.persistentStoreCoordinator.persistentStores
+            .map(Self.storeIdentity(of:))
+            .sorted()
+        guard expectedStores == mountedStores else {
+            throw StoreTopologyMismatch(expected: expectedStores, mounted: mountedStores)
         }
 
         // One-time milestone: what the first-touch store load (sqlite open +
@@ -4295,6 +4451,168 @@ actor ConversationStore {
                 row.setValue(stamp, forKey: "createdAt")
             }
             try? context.save()
+        }
+    }
+
+    /// One mounted persistent store, reduced to the facts a topology assertion
+    /// needs.
+    struct MountedStoreForTesting: Sendable, Hashable {
+        let configuration: String
+        let url: URL?
+    }
+
+    /// TEST SEAM — the stores the coordinator actually mounted, in load order.
+    ///
+    /// WHY IT HAS TO EXIST. `performLoad` refuses a mismatched topology, but a
+    /// test that only asserts "the load did not throw" cannot tell a two-store
+    /// mount from a one-store mount — and that split IS the Watch's payload
+    /// exclusion. The container is private by design (every read and write in
+    /// the app goes through this actor), so the pairing is otherwise
+    /// unobservable.
+    ///
+    /// Gated on the isolated test store for the same reason every seam here is:
+    /// nothing may reach the founder's real App Group data from a signed run.
+    func _mountedStoresForTesting() async throws -> [MountedStoreForTesting] {
+        guard isIsolatedTestStore else { return [] }
+        try await ensureLoaded()
+        return container.persistentStoreCoordinator.persistentStores.map {
+            MountedStoreForTesting(configuration: $0.configurationName, url: $0.url)
+        }
+    }
+
+    /// Which physical file each row of one cross-store write landed in.
+    struct MaterialBlobStoresForTesting: Sendable {
+        let materialStoreURL: URL?
+        let blobStoreURL: URL?
+    }
+
+    /// TEST SEAM — insert one `WorkMaterial` and one `WorkMaterialBlob` in a
+    /// SINGLE `context.save()`, with NO `context.assign(_:to:)`, and report the
+    /// file each row landed in.
+    ///
+    /// WHY IT HAS TO EXIST. Automatic routing by configuration membership is
+    /// the property the two-store design rests on: if it did not hold, every
+    /// write would need an explicit store assignment and one missed call would
+    /// put payload bytes into the conversations file — silently, per the
+    /// hazard `StoreTopologyMismatch` documents. `objectID.persistentStore` is
+    /// the only proof of where a row physically landed, and it is unreachable
+    /// from outside this actor.
+    func _writeMaterialAndBlobForTesting(
+        materialID: UUID,
+        title: String,
+        payload: Data
+    ) async throws -> MaterialBlobStoresForTesting {
+        guard isIsolatedTestStore else {
+            return MaterialBlobStoresForTesting(materialStoreURL: nil, blobStoreURL: nil)
+        }
+        try await ensureLoaded()
+        let context = newWriteContext()
+        return try await context.perform { [context] in
+            let now = Date()
+            let material = NSEntityDescription.insertNewObject(
+                forEntityName: "WorkMaterial", into: context
+            )
+            material.setValue(materialID, forKey: "id")
+            material.setValue(title, forKey: "title")
+            material.setValue("file", forKey: "kind")
+            material.setValue("syncedPayload", forKey: "storageMode")
+            material.setValue(NSNumber(value: Int64(payload.count)), forKey: "byteSize")
+            material.setValue(now, forKey: "createdAt")
+            material.setValue(now, forKey: "updatedAt")
+
+            let blob = NSEntityDescription.insertNewObject(
+                forEntityName: "WorkMaterialBlob", into: context
+            )
+            blob.setValue(materialID, forKey: "materialID")
+            blob.setValue(payload, forKey: "payload")
+            blob.setValue(NSNumber(value: Int64(payload.count)), forKey: "byteSize")
+            blob.setValue("test-fixture-hash", forKey: "contentHash")
+            blob.setValue(now, forKey: "createdAt")
+            blob.setValue(now, forKey: "updatedAt")
+
+            // ONE save, NO assignment — Core Data routes each row by the
+            // configuration its entity belongs to.
+            try context.save()
+            return MaterialBlobStoresForTesting(
+                materialStoreURL: material.objectID.persistentStore?.url,
+                blobStoreURL: blob.objectID.persistentStore?.url
+            )
+        }
+    }
+
+    /// What the two stores hold for one material id.
+    struct MaterialBlobSnapshotForTesting: Sendable {
+        let materialTitle: String?
+        let materialStorageMode: String?
+        let blobRowCount: Int
+        let blobByteSize: Int64?
+        let blobContentHash: String?
+        /// Nil unless the caller asked for it — a ceiling-sized payload has no
+        /// business crossing the actor boundary merely to be counted.
+        let blobPayload: Data?
+    }
+
+    /// TEST SEAM — read back what each store holds for one material, so a
+    /// close/reopen or a deleted payload file can be asserted from outside.
+    ///
+    /// WHY IT HAS TO EXIST. Losing the payload sqlite is SURVIVABLE but
+    /// silent: the Core row keeps `storageMode == "syncedPayload"` with no blob
+    /// behind it, which is exactly the state the availability projection must
+    /// render as pending rather than crash on. Proving Core survived while
+    /// Blobs came back empty needs both halves read through one store instance.
+    func _materialAndBlobForTesting(
+        materialID: UUID,
+        includingPayload: Bool = true
+    ) async throws -> MaterialBlobSnapshotForTesting {
+        guard isIsolatedTestStore else {
+            return MaterialBlobSnapshotForTesting(
+                materialTitle: nil,
+                materialStorageMode: nil,
+                blobRowCount: 0,
+                blobByteSize: nil,
+                blobContentHash: nil,
+                blobPayload: nil
+            )
+        }
+        try await ensureLoaded()
+        let context = newReadContext()
+        return try await context.perform { [context] in
+            let materialRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            materialRequest.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
+            materialRequest.fetchLimit = 1
+            let material = try context.fetch(materialRequest).first
+
+            let blobRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterialBlob")
+            blobRequest.predicate = NSPredicate(format: "materialID == %@", materialID as CVarArg)
+            let blobs = try context.fetch(blobRequest)
+            let blob = blobs.first
+
+            return MaterialBlobSnapshotForTesting(
+                materialTitle: material?.value(forKey: "title") as? String,
+                materialStorageMode: material?.value(forKey: "storageMode") as? String,
+                blobRowCount: blobs.count,
+                blobByteSize: (blob?.value(forKey: "byteSize") as? NSNumber)?.int64Value,
+                blobContentHash: blob?.value(forKey: "contentHash") as? String,
+                blobPayload: includingPayload ? blob?.value(forKey: "payload") as? Data : nil
+            )
+        }
+    }
+
+    /// TEST SEAM — detach every mounted store, closing the sqlite files.
+    ///
+    /// WHY IT HAS TO EXIST. Close/reopen, and "the payload file was deleted
+    /// while the app was not running", are two states the two-store topology
+    /// has to survive; both need the files genuinely closed first, and waiting
+    /// for the actor to deallocate is not deterministic enough to delete a
+    /// sqlite under. The instance is spent afterwards — its load task still
+    /// reads as done with nothing mounted — so a caller reopens through a
+    /// fresh store.
+    func _unloadForTesting() async throws {
+        guard isIsolatedTestStore else { return }
+        try await ensureLoaded()
+        let coordinator = container.persistentStoreCoordinator
+        for store in coordinator.persistentStores {
+            try coordinator.remove(store)
         }
     }
     #endif

@@ -40,8 +40,11 @@
 // appex carries its OWN `Localizable.xcstrings`; keys are spliced into it later).
 //
 // ── Capture / send boundary ────────────────────────────────────────────────────
-// Add to Work writes only to WorkCaptureInbox. Send now preserves the shipped
-// share-and-go path and target picker. Plain Return always inserts a line break;
+// Add to Work writes only to WorkCaptureInbox, and always targetlessly: Work is
+// ONE desk, so the appex offers no Work destination and the drainer resolves the
+// desk. Send now preserves the shipped share-and-go path and its target picker
+// (gateways + recent chats), which is why the scroll region above still exists.
+// Plain Return always inserts a line break;
 // only the visible primary button or ⌘-Return commits the selected mode. Neither
 // action fires on appear; Send now always has a default target and never dead-ends.
 
@@ -68,11 +71,6 @@ enum ShareTarget: Equatable {
 private enum ShareDisposition: String, CaseIterable, Hashable {
     case work
     case send
-}
-
-private enum WorkDestination: Hashable {
-    case new
-    case existing(UUID)
 }
 
 /// The rich, async-resolved descriptor for the shared item's HEADER row — name +
@@ -167,10 +165,11 @@ struct ShareView: View {
     /// include the captured page text. Owned by the host VC, which resolves
     /// `target` into the manifest's routing fields.
     let onSend: (String, ShareTarget, Bool) -> Void
-    /// Save shared material as an inert Work capture. `UUID?` is an optional
-    /// existing Work destination; nil creates a new draft. This closure has no
+    /// Save shared material as an inert Work capture. Work is ONE desk, so the
+    /// capture carries no destination — the host always writes a targetless
+    /// envelope and the drainer resolves the desk. This closure has no
     /// gateway/send parameter and therefore cannot dispatch.
-    let onAddToWorkboard: (String, Bool, UUID?) -> Void
+    let onAddToWorkboard: (String, Bool) -> Void
     /// Dismiss without queuing anything. Owned by the host VC.
     let onCancel: () -> Void
 
@@ -178,7 +177,6 @@ struct ShareView: View {
 
     @State private var caption: String = ""
     @State private var disposition: ShareDisposition = .work
-    @State private var workSelection: WorkDestination = .new
     @State private var selection: ShareTarget?
     @State private var query: String = ""
     /// Rich header (async); `nil` until `resolveLeadHeader` returns — until then the
@@ -219,18 +217,6 @@ struct ShareView: View {
     private var recents: [ShareTargetsSnapshot.RecentConversation] {
         (snapshot?.recentConversations ?? [])
             .sorted { $0.lastActivityAt > $1.lastActivityAt }
-    }
-
-    /// Open Work items are pre-filtered and bounded by the main app. Sort again
-    /// defensively so a partially upgraded snapshot still renders predictably.
-    private var recentWorkItems: [ShareTargetsSnapshot.RecentWorkItem] {
-        (snapshot?.recentWorkItems ?? [])
-            .sorted { $0.modifiedAt > $1.modifiedAt }
-    }
-
-    private var selectedWorkItemID: UUID? {
-        guard case .existing(let id) = workSelection else { return nil }
-        return id
     }
 
     /// True when there is nothing to pick → render the single legacy fallback row
@@ -293,7 +279,7 @@ struct ShareView: View {
                 Divider().overlay(Palette.border)
                 Group {
                     if disposition == .work {
-                        workDestination
+                        workSummary
                     } else {
                         scrollRegion
                     }
@@ -360,59 +346,32 @@ struct ShareView: View {
         .accessibilityLabel(Text(Strings.destinationMode))
     }
 
-    private var workDestination: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section {
-                        let target = WorkDestination.new
-                        targetRow(
-                            badge: badge(monogram: "+", fill: Palette.amber),
-                            title: Strings.newWork,
-                            subtitle: Strings.newWorkDetail,
-                            selectable: true,
-                            isSelected: workSelection == target,
-                            action: { workSelection = target }
-                        )
-                    } header: {
-                        sectionHeader(Strings.sectionDestination)
-                    }
-
-                    if !recentWorkItems.isEmpty {
-                        Section {
-                            ForEach(recentWorkItems, id: \.id) { item in
-                                let target = WorkDestination.existing(item.id)
-                                let displayTitle = item.title.isEmpty ? Strings.untitledWork : item.title
-                                targetRow(
-                                    badge: badge(
-                                        monogram: monogram(for: displayTitle),
-                                        fill: Palette.teal
-                                    ),
-                                    title: displayTitle,
-                                    subtitle: Self.relativeFormatter.localizedString(
-                                        for: item.modifiedAt,
-                                        relativeTo: Date()
-                                    ),
-                                    selectable: true,
-                                    isSelected: workSelection == target,
-                                    action: { workSelection = target }
-                                )
-                            }
-                        } header: {
-                            sectionHeader(Strings.sectionRecentWork)
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-
-            Divider().overlay(Palette.border)
+    /// Work mode's middle region, mirroring the iOS appex. Work is ONE desk, so
+    /// there is no destination to choose and nothing here scrolls: the region
+    /// states where the share lands and that it stays inert, and the bottom
+    /// bar's single "Add to Work" press does the rest. The macOS panel is a
+    /// FIXED 480×600 (`preferredContentSize`) that cannot shrink when the
+    /// disposition flips, so this region must fill the space the Send picker
+    /// occupies rather than leave a void.
+    private var workSummary: some View {
+        VStack(spacing: 14) {
+            Spacer(minLength: 0)
+            Image(systemName: "rectangle.stack.badge.plus")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(Palette.amber)
+                .accessibilityHidden(true)
+            Text(Strings.deskDetail)
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(Palette.textSecondary)
+                .padding(.horizontal, 32)
             Label(Strings.nothingSent, systemImage: "lock.fill")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Palette.teal)
-                .padding(.vertical, 10)
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 16)
     }
 
     // MARK: - Header (§B)
@@ -940,7 +899,7 @@ struct ShareView: View {
     private func addToWorkboard() {
         guard !attachmentLimitExceeded else { return }
         guard submissionState.begin(.addingToWorkboard) else { return }
-        onAddToWorkboard(caption, includePageText, selectedWorkItemID)
+        onAddToWorkboard(caption, includePageText)
     }
 
     private func workboardFailureMessage(_ failure: WorkboardCommitFailure) -> String {
@@ -1007,21 +966,9 @@ struct ShareView: View {
         static let destinationMode = String(localized: "share.mode.accessibility",
             defaultValue: "Choose whether to save or send",
             comment: "Accessibility label for the Work versus Send mode picker")
-        static let sectionDestination = String(localized: "share.work.section.destination",
-            defaultValue: "Destination",
-            comment: "Section title above the New Work destination")
-        static let sectionRecentWork = String(localized: "share.work.section.recent",
-            defaultValue: "Recent Work",
-            comment: "Section title above recent open Work destinations")
-        static let newWork = String(localized: "share.work.new",
-            defaultValue: "New Work",
-            comment: "Destination that creates a new inert Work draft")
-        static let newWorkDetail = String(localized: "share.work.new.detail",
-            defaultValue: "Start a new draft",
-            comment: "Subtitle for the New Work destination")
-        static let untitledWork = String(localized: "share.work.untitled",
-            defaultValue: "Untitled Work",
-            comment: "Fallback title for an open Work destination without a title")
+        static let deskDetail = String(localized: "share.work.desk.detail",
+            defaultValue: "Everything you share is added to your Work desk.",
+            comment: "Explains where a Work capture lands, in place of a destination picker")
         static let nothingSent = String(localized: "share.work.inert",
             defaultValue: "Nothing is sent to AI",
             comment: "Privacy reassurance for an inert Work capture")

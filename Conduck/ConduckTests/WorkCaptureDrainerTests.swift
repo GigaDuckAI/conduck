@@ -83,7 +83,9 @@ final class WorkCaptureDrainerTests: XCTestCase {
     }
 
     /// The note and every attachment are cards side by side, and the file's
-    /// bytes are readable from the desk once the queue copy is gone.
+    /// bytes are readable from the desk once the queue copy is gone. A payload
+    /// this small is within the sync ceiling, so it rides private CloudKit
+    /// rather than staying in the device-local vault.
     func testTheNoteAndEveryAttachmentLandOnTheDeskTogether() async throws {
         let store = ConversationStore(inMemory: true)
         let payload = Data("the shared screenshot".utf8)
@@ -116,7 +118,7 @@ final class WorkCaptureDrainerTests: XCTestCase {
                        "the desk ranks the note first, then the entries in captured order")
         let image = try XCTUnwrap(desk.materials.first { $0.id == imageID })
         XCTAssertEqual(image.kind, .image)
-        XCTAssertEqual(image.availability, .availableLocally)
+        XCTAssertEqual(image.availability, .synced)
         let storedBytes = try await store.loadWorkMaterialPayload(id: imageID)
         XCTAssertEqual(storedBytes, payload)
     }

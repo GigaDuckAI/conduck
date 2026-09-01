@@ -3,15 +3,24 @@
 // Conduck
 // WorkAssetVault.swift
 //
-// Device-local storage for Workboard file bytes. The private CloudKit database
-// syncs the brief and material metadata, while the database stores only an
-// opaque local leaf key for each payload. Another device never sees a fake
-// attachment and dispatch stays blocked until the user explicitly reattaches it.
+// Device-local storage for the ONE lane of Work payloads that does not sync:
+// `WorkMaterialStoragePolicy`'s `.localVault`, which is every payload above
+// `Constants.workboardSyncCeilingBytes` and every one whose size cannot be
+// measured. Bytes within the ceiling take the other lane — a `WorkMaterialBlob`
+// row in the payload store, mirrored to the person's private CloudKit database,
+// so they reach their other devices. A payload is written to exactly one lane;
+// this vault never holds a second copy of a synced one.
 //
-// EVERY payload lands here, whatever its size: keeping even modest screenshots
-// and documents out of the shared Conversations model — which Watch also mirrors
-// for chat continuity — is a device-budget and privacy boundary, not a claimed
-// CloudKit limit.
+// A vaulted material's Core Data row carries an opaque local leaf key and no
+// bytes, so another device shows the card and reads it `unavailableOnThisDevice`
+// until the person reattaches the file there — never a payload it cannot open.
+// The ceiling is what keeps that boundary affordable: the Conversations model is
+// mirrored to the Watch as well, so an unbounded payload would be a device-budget
+// cost everywhere, which is the reason for the split rather than any claimed
+// CloudKit record limit.
+//
+// Leaf keys are generated and opaque: a source or display filename never becomes
+// a filesystem path.
 
 #if !os(watchOS)
 import Foundation

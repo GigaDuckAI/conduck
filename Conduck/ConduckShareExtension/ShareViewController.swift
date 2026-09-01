@@ -133,12 +133,8 @@ final class ShareViewController: UIViewController {
             onSend: { [weak self] caption, target, includePageText in
                 self?.commit(caption: caption, target: target, includePageText: includePageText)
             },
-            onAddToWorkboard: { [weak self] note, includePageText, targetWorkItemID in
-                self?.commitToWork(
-                    note: note,
-                    includePageText: includePageText,
-                    targetWorkItemID: targetWorkItemID
-                )
+            onAddToWorkboard: { [weak self] note, includePageText in
+                self?.commitToWork(note: note, includePageText: includePageText)
             },
             onCancel: { [weak self] in self?.cancel() },
             submissionState: submissionState
@@ -444,13 +440,13 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    /// Publish the same shared bytes into the separate Work capture inbox. It may
-    /// name an existing local Work item, but has no conversation/gateway route and
-    /// cannot dispatch: it writes an inert envelope, posts a wake hint, and exits.
+    /// Publish the same shared bytes into the separate Work capture inbox. It names
+    /// no destination — Work is one desk, which the drainer resolves — and it has no
+    /// conversation/gateway route, so it cannot dispatch: it writes an inert
+    /// envelope, posts a wake hint, and exits.
     private func commitToWork(
         note: String,
-        includePageText: Bool,
-        targetWorkItemID: UUID?
+        includePageText: Bool
     ) {
         let providers = rawProviders
         let captureTask = capturePayloadTask
@@ -465,8 +461,7 @@ final class ShareViewController: UIViewController {
                     note: note,
                     providers: providers,
                     capture: capture,
-                    includePageText: includePageText,
-                    targetWorkItemID: targetWorkItemID
+                    includePageText: includePageText
                 )
                 await self.postWorkCaptureChangeHint()
                 await MainActor.run {
@@ -640,8 +635,7 @@ final class ShareViewController: UIViewController {
         note: String,
         providers: [NSItemProvider],
         capture: CaptureLoad?,
-        includePageText: Bool,
-        targetWorkItemID: UUID?
+        includePageText: Bool
     ) async throws {
         // Reject a known-unpublishable note before loading or copying any item
         // provider. The envelope initializer intentionally preserves the full
@@ -771,12 +765,14 @@ final class ShareViewController: UIViewController {
             nextSequence += 1
         }
 
+        // Targetless by contract: Work is one desk, so the drainer resolves the
+        // destination. The envelope keeps the field for the mirrored contract.
         let envelope = WorkCaptureEnvelope(
             id: id,
             createdAt: Date(),
             note: note,
             source: .shareExtension,
-            targetWorkItemID: targetWorkItemID,
+            targetWorkItemID: nil,
             entries: entries
         )
         do {

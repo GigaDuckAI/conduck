@@ -4,8 +4,9 @@
 // WorkboardLiveRepositorySupportTests.swift
 //
 // The batched seams behind a board refresh: the vault URL lookup that feeds the
-// preview wave, and the batched turn lookup that resolves many messages in one
-// fetch without borrowing another conversation's turn.
+// preview wave, the batched turn lookup that resolves many messages in one fetch
+// without borrowing another conversation's turn, and the two pure projections
+// every card is drawn from — the kind it claims to be and the name it shows.
 
 import Foundation
 import XCTest
@@ -82,5 +83,139 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
 
         let none = try await store.fetchMessages(conversationIDsByMessageID: [:])
         XCTAssertTrue(none.isEmpty)
+    }
+
+    // MARK: - Card projections
+
+    /// A stored kind is broader than the four shapes a card can draw, so the
+    /// narrowing is stated once. A voice note travels as its recording, which is
+    /// why `.audio` draws as a file rather than as the note its transcript
+    /// becomes, and `.unknown` is decided by whether there is anything to open.
+    @MainActor
+    func testPresentationKindNarrowsEveryStoredKindToACardShape() {
+        let expected: [(WorkMaterialKind, WorkboardMaterialKind)] = [
+            (.image, .image),
+            (.file, .file),
+            (.audio, .file),
+            (.link, .link),
+            (.note, .note),
+            (.transcript, .note),
+        ]
+        for (stored, card) in expected {
+            XCTAssertEqual(
+                WorkboardLiveRepository.presentationKind(Self.record(kind: stored)),
+                card,
+                "a stored \(stored.rawValue) draws as a \(card.rawValue) card"
+            )
+        }
+
+        XCTAssertEqual(
+            WorkboardLiveRepository.presentationKind(Self.record(kind: .unknown)),
+            .note,
+            "an unknown kind with nothing to open is a note"
+        )
+        XCTAssertEqual(
+            WorkboardLiveRepository.presentationKind(
+                Self.record(kind: .unknown, filename: "report.xyz")
+            ),
+            .file
+        )
+        XCTAssertEqual(
+            WorkboardLiveRepository.presentationKind(
+                Self.record(kind: .unknown, hasPayload: true)
+            ),
+            .file,
+            "bytes this build cannot render richly are still bytes the person can open"
+        )
+
+        XCTAssertEqual(
+            Set(WorkMaterialKind.allCases.map {
+                WorkboardLiveRepository.presentationKind(Self.record(kind: $0))
+            }),
+            [.image, .file, .link, .note],
+            "every stored kind resolves; a new one must be given a shape here"
+        )
+    }
+
+    /// Title, then filename, then the link's host, then the kind's own noun.
+    /// Each candidate is judged trimmed and emitted verbatim — the card owns the
+    /// final normalization, so a name padded by the person survives to it.
+    @MainActor
+    func testMaterialNameFallsBackFromTitleToFilenameToHostToKind() {
+        XCTAssertEqual(
+            WorkboardLiveRepository.materialName(
+                Self.record(kind: .file, title: "  Rate card  ", filename: "rates.txt")
+            ),
+            "  Rate card  ",
+            "a title wins and is emitted verbatim"
+        )
+        XCTAssertEqual(
+            WorkboardLiveRepository.materialName(
+                Self.record(kind: .file, title: "   ", filename: "rates.txt")
+            ),
+            "rates.txt",
+            "a title that is only whitespace is not a name"
+        )
+        XCTAssertEqual(
+            WorkboardLiveRepository.materialName(
+                Self.record(kind: .link, urlString: "https://example.org/pricing?a=1")
+            ),
+            "example.org"
+        )
+        XCTAssertEqual(
+            WorkboardLiveRepository.materialName(
+                Self.record(kind: .link, urlString: "not a url")
+            ),
+            String(localized: "workboard.material.link", defaultValue: "Link"),
+            "an unparseable link falls through to the kind's noun"
+        )
+        XCTAssertEqual(
+            WorkboardLiveRepository.materialName(Self.record(kind: .image)),
+            String(localized: "workboard.material.image", defaultValue: "Image")
+        )
+        XCTAssertEqual(
+            WorkboardLiveRepository.materialName(Self.record(kind: .audio)),
+            String(localized: "workboard.material.file", defaultValue: "File"),
+            "a nameless recording is named by the shape it draws as, not by its stored kind"
+        )
+        XCTAssertEqual(
+            WorkboardLiveRepository.materialName(Self.record(kind: .note)),
+            String(localized: "workboard.material.note", defaultValue: "Note")
+        )
+    }
+
+    /// Only the fields the two projections read carry values; everything else is
+    /// the empty shape, so a case states exactly the input it depends on.
+    private static func record(
+        kind: WorkMaterialKind,
+        title: String = "",
+        filename: String? = nil,
+        urlString: String? = nil,
+        hasPayload: Bool = false
+    ) -> WorkMaterialRecord {
+        let now = Date(timeIntervalSince1970: 0)
+        return WorkMaterialRecord(
+            id: UUID(),
+            workItemID: Constants.workboardDeskItemID,
+            kind: kind,
+            title: title,
+            caption: "",
+            textContent: nil,
+            urlString: urlString,
+            filename: filename,
+            mimeType: nil,
+            thumbnailData: nil,
+            width: nil,
+            height: nil,
+            byteSize: 0,
+            hasPayload: hasPayload,
+            storageMode: .metadataOnly,
+            availability: .metadataOnly,
+            localVaultKey: nil,
+            sourceDevice: nil,
+            sequence: 0,
+            createdAt: now,
+            updatedAt: now
+        )
     }
 }

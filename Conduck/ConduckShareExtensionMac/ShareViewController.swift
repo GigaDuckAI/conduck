@@ -198,12 +198,8 @@ final class ShareViewController: NSViewController {
             onSend: { [weak self] caption, target, includePageText in
                 self?.commit(caption: caption, target: target, includePageText: includePageText)
             },
-            onAddToWorkboard: { [weak self] note, includePageText, targetWorkItemID in
-                self?.commitToWork(
-                    note: note,
-                    includePageText: includePageText,
-                    targetWorkItemID: targetWorkItemID
-                )
+            onAddToWorkboard: { [weak self] note, includePageText in
+                self?.commitToWork(note: note, includePageText: includePageText)
             },
             onCancel: { [weak self] in self?.cancel() },
             submissionState: submissionState
@@ -624,12 +620,12 @@ final class ShareViewController: NSViewController {
     }
 
     /// Publish the shared material to the separate inert Work queue. Unlike
-    /// `commit`, its optional target is a local Work item, never a gateway or Chat,
-    /// so this API cannot dispatch.
+    /// `commit` it takes no target at all — Work is ONE desk, so the envelope is
+    /// always targetless and the main-app drainer resolves the desk. With no
+    /// gateway or Chat parameter, this API cannot dispatch.
     private func commitToWork(
         note: String,
-        includePageText: Bool,
-        targetWorkItemID: UUID?
+        includePageText: Bool
     ) {
         let providers = rawProviders
         guard providers.count <= Self.maxAttachments else {
@@ -648,8 +644,7 @@ final class ShareViewController: NSViewController {
                     note: note,
                     providers: providers,
                     capture: capture,
-                    includePageText: includePageText,
-                    targetWorkItemID: targetWorkItemID
+                    includePageText: includePageText
                 )
                 await self.postWorkCaptureChangeHint()
                 await MainActor.run {
@@ -829,8 +824,7 @@ final class ShareViewController: NSViewController {
         note: String,
         providers: [NSItemProvider],
         capture: CaptureLoad?,
-        includePageText: Bool,
-        targetWorkItemID: UUID?
+        includePageText: Bool
     ) async throws {
         // Reject a known-unpublishable note before loading or copying any item
         // provider. The envelope initializer intentionally preserves the full
@@ -966,7 +960,10 @@ final class ShareViewController: NSViewController {
             createdAt: Date(),
             note: note,
             source: .shareExtension,
-            targetWorkItemID: targetWorkItemID,
+            // Work is ONE desk: the share never targets a Work item, and the
+            // drainer resolves the desk. The envelope FIELD stays (the three
+            // mirrored copies are byte-identical and other producers keep it).
+            targetWorkItemID: nil,
             entries: entries
         )
         do {

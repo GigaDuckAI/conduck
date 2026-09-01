@@ -256,7 +256,12 @@ final class WorkboardLiveRepository {
         )
     }
 
-    private static func presentationAvailability(
+    /// Whether a card may be opened, played or sent, from what the store says
+    /// is behind it. Every state that is not readable bytes on THIS device
+    /// collapses to `.unavailableOnThisDevice`, so the surface fails closed by
+    /// construction rather than by each caller remembering to. Internal so the
+    /// tests can drive the real mapping instead of a copy of it.
+    static func presentationAvailability(
         _ record: WorkMaterialRecord
     ) -> WorkboardMaterialAvailability {
         switch record.availability {
@@ -264,11 +269,17 @@ final class WorkboardLiveRepository {
             return .available
         case .availableLocally:
             return .localOnly
-        case .unavailableOnThisDevice, .syncedPending:
-            // Bytes that have not landed yet fail closed: the card is visible
-            // provenance, and nothing may be sent from a payload this device
-            // cannot read.
+        case .unavailableOnThisDevice:
+            // Bytes this device will never hold unless the person reattaches
+            // them fail closed: the card is visible provenance, and nothing may
+            // be sent from a payload this device cannot read.
             return .unavailableOnThisDevice
+        case .syncedPending:
+            // Also unreadable, and also fails closed — but the bytes are on
+            // their way through private CloudKit, so the card must not offer to
+            // replace them. Waiting and damage are two different things to
+            // show a person.
+            return .syncPending
         case .metadataOnly:
             // Notes and links intentionally have no binary payload. A binary
             // metadata row without bytes is visible provenance, not sendable.
@@ -326,7 +337,11 @@ final class WorkboardLiveRepository {
         }
     }
 
-    private static func materialDetail(_ record: WorkMaterialRecord) -> String? {
+    /// The card's second line: the person's caption, then the one thing worth
+    /// saying about where its bytes are, then a size when there is nothing
+    /// else. Internal so the tests can drive the real copy instead of a copy of
+    /// it.
+    static func materialDetail(_ record: WorkMaterialRecord) -> String? {
         var parts: [String] = []
         let caption = record.caption.trimmingCharacters(in: .whitespacesAndNewlines)
         if !caption.isEmpty { parts.append(caption) }
@@ -532,9 +547,14 @@ final class WorkboardLiveRepository {
         }
         let byteSize = replacement.byteCount ?? -1
         do {
-            // Reattachment replaces local bytes and metadata only. Persisting an
-            // extract or a preview here would copy user file content into
-            // private CloudKit; the board renders previews from the vault.
+            // Reattachment replaces the payload and its metadata, and nothing
+            // else: no extract, no preview. The arriving bytes are new bytes,
+            // so the storage policy picks their lane afresh — within the
+            // ceiling they ride private CloudKit as a blob, above it they stay
+            // in the device-local vault — but a derived text extract or
+            // thumbnail would put READABLE file content on the material row
+            // itself, which is a different claim from the payload the person
+            // chose to attach.
             guard try await store.replaceWorkMaterialPayloadFile(
                 id: materialID,
                 from: sourceURL,

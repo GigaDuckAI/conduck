@@ -3,10 +3,12 @@
 // Conduck
 // ShareTargetsSnapshotWriterColorTests.swift
 //
-// Share-Extension "Send to" picker — coverage for the Color → "#RRGGBB" helper
-// the main-app writer uses to FREEZE each gateway's badge color into the appex
-// snapshot (the appex can't reach the palette enum to resolve a semantic color).
-// Pure static func, no signing / no App Group / no Keychain.
+// Share-Extension "Send to" picker — coverage for the main-app writer's pure
+// seams: the Color → "#RRGGBB" helper that FREEZES each gateway's badge color
+// into the appex snapshot (the appex can't reach the palette enum to resolve a
+// semantic color), the dead-gateway recents filter, and the one-desk rule that
+// keeps Work targets out of the snapshot entirely.
+// Pure static funcs + an on-disk source read, no signing / no App Group / no Keychain.
 
 import XCTest
 import SwiftUI
@@ -70,34 +72,31 @@ final class ShareTargetsSnapshotWriterColorTests: XCTestCase {
         }
     }
 
-    /// Done items are excluded by the bounded store read that feeds this
-    /// projection (`fetchRecentWorkItemSummaries`), covered in
-    /// `WorkboardPersistenceTests`. What stays pure here is the publication rule:
-    /// true modified recency, trimmed titles, bounded payload.
-    func testRecentWorkProjectionSortsByModifiedDateAndBoundsPayload() {
-        let oldest = workItem(title: "Old", modifiedAt: Date(timeIntervalSince1970: 10))
-        let newest = workItem(title: "  Newest  ", modifiedAt: Date(timeIntervalSince1970: 30))
-        let middle = workItem(title: "Middle", modifiedAt: Date(timeIntervalSince1970: 20))
+    // MARK: - One desk → no Work targets on the wire
 
-        let projected = ShareTargetsSnapshotWriter.makeRecentWorkItems(
-            [oldest, newest, middle],
-            limit: 2
+    /// Work is ONE desk, so the appex's Add-to-Work mode names no destination and
+    /// the snapshot must never advertise Work targets. The `recentWorkItems`
+    /// FIELD stays in the contract (its three source copies are byte-identical by
+    /// rule), so the invariant lives in the writer's publication, not in the type
+    /// — which is what this reads off disk, anchored on this file's own location.
+    /// A board read here would also land on the app's hottest notification bus.
+    func testTheWriterPublishesNoWorkTargets() throws {
+        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let projectDirectory = testsDirectory.deletingLastPathComponent()
+        let source = try String(
+            contentsOf: projectDirectory
+                .appendingPathComponent("Conduck/Services/ShareTargetsSnapshotWriter.swift"),
+            encoding: .utf8
         )
 
-        XCTAssertEqual(projected.map(\.id), [newest.id, middle.id])
-        XCTAssertEqual(projected.map(\.title), ["Newest", "Middle"])
-        XCTAssertFalse(projected.contains { $0.id == oldest.id })
-    }
-
-    func testRecentWorkProjectionWithNonPositiveLimitIsEmpty() {
-        XCTAssertTrue(ShareTargetsSnapshotWriter.makeRecentWorkItems(
-            [workItem(title: "Open", modifiedAt: Date())],
-            limit: 0
-        ).isEmpty)
-    }
-
-    private func workItem(title: String, modifiedAt: Date) -> WorkItemSummary {
-        WorkItemSummary(id: UUID(), title: title, updatedAt: modifiedAt)
+        XCTAssertTrue(
+            source.contains("let recentWorkItems: [ShareTargetsSnapshot.RecentWorkItem] = []"),
+            "the writer must publish an empty Work-target list"
+        )
+        XCTAssertFalse(
+            source.contains("makeRecentWorkItems"),
+            "a recent-Work projection would re-offer a share destination the one desk cannot have"
+        )
     }
 
     // MARK: - Dead-gateway recents filter (iOS-only — RecentConversation is iOS)

@@ -116,16 +116,6 @@ nonisolated struct WorkItemRecord: Identifiable, Sendable, Hashable {
     let state: WorkItemState
 }
 
-/// Bounded id/title/date projection of one open card. Deliberately carries no
-/// material or availability fact: the cross-process share-targets snapshot
-/// is rebuilt on the app's hottest notification bus and must never pay for the
-/// whole board to publish a handful of picker rows.
-nonisolated struct WorkItemSummary: Identifiable, Sendable, Hashable {
-    let id: UUID
-    let title: String
-    let updatedAt: Date
-}
-
 /// Result of deliberately turning one existing chat turn into inert Work.
 /// Attachment misses are explicit because server-only files cannot truthfully be
 /// copied from a chat snapshot without downloading from the user's gateway.

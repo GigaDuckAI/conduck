@@ -9,9 +9,19 @@
 // independently — CloudKit materializes each record on its own schedule, and a
 // relationship would make a half-arrived board fail whole instead of showing
 // what has landed. No method here performs network I/O.
+//
+// A material's bytes live in one of two places, decided by
+// `WorkMaterialStoragePolicy`: a `WorkMaterialBlob` row in the payload store
+// (`.syncedPayload`, so the bytes reach the person's other devices) or the
+// device-local vault (`.localVault`, with reattach). The two stores cannot
+// commit as one transaction, so every write here publishes the blob FIRST and
+// names it from the material SECOND, and a replay repairs whichever half a
+// crash left behind. `WorkMaterial.payload` is never written: bytes on the
+// material row would ride its CKRecord and be realized by every board load.
 
 import Foundation
 import CoreData
+import CryptoKit
 
 #if CONDUCK_TESTING
 /// One PHYSICAL `WorkMaterial` row, before deduplication collapses a
@@ -19,6 +29,18 @@ import CoreData
 nonisolated struct WorkMaterialRowProbe: Sendable, Hashable {
     let sequence: Int32?
     let cardSize: String?
+    let updatedAt: Date?
+}
+
+/// One PHYSICAL `WorkMaterialBlob` row. `payloadByteCount` rather than the
+/// bytes: a probe exists to prove which rows are there and which one wins, and
+/// a ceiling-sized payload has no business crossing the actor boundary to be
+/// counted.
+nonisolated struct WorkMaterialBlobRowProbe: Sendable, Hashable {
+    let byteSize: Int64?
+    let contentHash: String?
+    let payloadByteCount: Int?
+    let createdAt: Date?
     let updatedAt: Date?
 }
 #endif
@@ -266,17 +288,19 @@ extension ConversationStore {
     /// intent finds its own material and gets it back instead of adding a
     /// second card.
     ///
-    /// CRASH REPAIR. Payload bytes and database rows cannot commit as one
-    /// transaction, so an interrupted capture leaves a partial state a replay
-    /// must repair rather than duplicate. Two are handled here: a material
-    /// whose owner row never landed — the desk is re-ensured on every call, so
-    /// a material stranded without it becomes visible again — and a material
-    /// whose payload never landed, restaged from the bytes the replaying
-    /// caller still carries. Bytes that are already readable are never
+    /// CRASH REPAIR. Payload bytes, the blob store and the material row cannot
+    /// commit as one transaction, so an interrupted capture leaves a partial
+    /// state a replay must repair rather than duplicate. Every one of them is
+    /// handled here. A material whose owner row never landed: the desk is
+    /// re-ensured on every call, so a material stranded without it becomes
+    /// visible again. A blob with no material: the insert path publishes the
+    /// card the bytes were waiting for. A material whose payload never landed,
+    /// in either lane: restaged from the bytes the replaying caller still
+    /// carries. A blob carrying different bytes under the same id: replaced in
+    /// the save that repoints the card, so the card is never briefly readable
+    /// as the wrong payload. Bytes that are already readable are never
     /// rewritten, and a row that claims no payload is never given one: that is
-    /// reattach, which `replaceWorkMaterialPayloadFile` owns. The synced-blob
-    /// states — blob without material, material without blob — extend this
-    /// same seam when payload bytes move into their own store.
+    /// reattach, which `replaceWorkMaterialPayloadFile` owns.
     ///
     /// - Parameter repairPayload: Bytes the caller still holds for a material
     ///   that already exists but cannot produce its payload. Falls back to
@@ -357,11 +381,46 @@ extension ConversationStore {
         case createNew(WorkItemDraft)
     }
 
-    /// Payload bytes made durable before any row is written.
+    /// Payload bytes made durable before any row is written. Exactly one lane
+    /// carries them: `vaultKey` for `.localVault`, `blobPayload`/`contentHash`
+    /// for `.syncedPayload`. Nothing is ever staged into both — the vault
+    /// serves the local lane alone, so a synced card has no second copy to
+    /// fall out of date.
     private nonisolated struct StagedWorkMaterialBytes: Sendable {
         let storageMode: WorkMaterialStorageMode
         let byteSize: Int64
         let vaultKey: String?
+        /// Held in memory only until the blob row is saved. The sync ceiling is
+        /// what bounds this, which is why an unmeasured payload never takes
+        /// this lane.
+        let blobPayload: Data?
+        let contentHash: String?
+
+        init(
+            storageMode: WorkMaterialStorageMode,
+            byteSize: Int64,
+            vaultKey: String? = nil,
+            blobPayload: Data? = nil,
+            contentHash: String? = nil
+        ) {
+            self.storageMode = storageMode
+            self.byteSize = byteSize
+            self.vaultKey = vaultKey
+            self.blobPayload = blobPayload
+            self.contentHash = contentHash
+        }
+    }
+
+    /// What the first publication step did with the payload bytes.
+    private nonisolated enum WorkMaterialBlobPublication: Sendable {
+        /// No bytes took the synced lane.
+        case none
+        /// A complete blob already carried these exact bytes, so nothing was
+        /// written and there is nothing to take back.
+        case alreadyPresent
+        /// This call inserted the row. Only this call may delete it again: it
+        /// knows the material never landed, which a background pass never can.
+        case inserted(contentHash: String, byteSize: Int64)
     }
 
     /// What the single write transaction actually did, so the vault's staged-key
@@ -416,26 +475,49 @@ extension ConversationStore {
         let carriedPayload = repairPayload ?? draft.payload
         let carriesBytes = carriedPayload != nil || sourceFileURL != nil
         let existing = try await fetchWorkMaterial(id: draft.id)
-        // Repair restores bytes a row already claims and cannot produce. It
-        // never changes what a row claims: a `.metadataOnly` card gaining bytes
-        // is a reattach, not a repair. The `.syncedPending` branch belongs to
-        // the blob store and lands with it.
-        let repairsPayload = existing.map {
-            $0.storageMode == .localVault
-                && $0.availability == .unavailableOnThisDevice
-                && carriesBytes
-        } ?? false
+        // Repair restores the bytes a row already claims, in the lane it claims
+        // them. It never changes the claim: a `.metadataOnly` card gaining
+        // bytes is a reattach, not a repair, and a card whose payload outgrew
+        // the sync ceiling is a reattach too — the bytes on offer cannot be the
+        // payload that row promised.
+        let repairLane: WorkMaterialStorageMode?
+        if let existing, carriesBytes {
+            switch existing.storageMode {
+            case .localVault:
+                repairLane = existing.availability == .unavailableOnThisDevice
+                    ? .localVault : nil
+            case .syncedPayload:
+                // Whether the blob is actually missing, stale or already
+                // correct is settled against its content hash once the bytes
+                // are staged; a hash cannot be compared before it is computed.
+                let measured = Self.measuredByteSize(
+                    payload: carriedPayload,
+                    sourceFileURL: sourceFileURL,
+                    declared: sourceFileByteSize ?? draft.byteSize
+                )
+                repairLane = WorkMaterialStoragePolicy.mode(
+                    kind: draft.kind,
+                    byteSize: measured
+                ) == .syncedPayload ? .syncedPayload : nil
+            case .metadataOnly:
+                repairLane = nil
+            }
+        } else {
+            repairLane = nil
+        }
 
         let staged: StagedWorkMaterialBytes?
-        if existing == nil || repairsPayload {
+        if existing == nil || repairLane != nil {
             staged = try await stageWorkMaterialBytes(
                 id: draft.id,
+                kind: draft.kind,
                 filename: draft.filename,
                 payload: carriedPayload,
                 declaredByteSize: draft.byteSize,
                 declaredStorageMode: draft.storageMode,
                 sourceFileURL: sourceFileURL,
                 sourceFileByteSize: sourceFileByteSize,
+                forcedStorageMode: repairLane,
                 onProgress: onProgress
             )
         } else if carriesBytes {
@@ -446,12 +528,31 @@ extension ConversationStore {
         } else {
             staged = StagedWorkMaterialBytes(
                 storageMode: draft.storageMode,
-                byteSize: draft.byteSize ?? 0,
-                vaultKey: nil
+                byteSize: draft.byteSize ?? 0
             )
             onProgress(1)
         }
 
+        // STEP 1 OF THE PUBLICATION. The blob commits in its own save, before
+        // any material row claims `.syncedPayload`. The reverse order is the
+        // one state a replay cannot repair from bytes it no longer holds: a
+        // card promising a payload that was never written anywhere.
+        let publishedBlob: WorkMaterialBlobPublication
+        if let staged,
+           staged.storageMode == .syncedPayload,
+           let blobPayload = staged.blobPayload,
+           let contentHash = staged.contentHash {
+            publishedBlob = try await publishWorkMaterialBlob(
+                materialID: draft.id,
+                payload: blobPayload,
+                byteSize: staged.byteSize,
+                contentHash: contentHash
+            )
+        } else {
+            publishedBlob = .none
+        }
+
+        // STEP 2 OF THE PUBLICATION.
         let context = newWriteContext()
         let outcome: WorkMaterialWriteOutcome
         do {
@@ -509,21 +610,54 @@ extension ConversationStore {
                     guard owners == [ownerID] else {
                         throw WorkboardStoreError.invalidMaterialOwner
                     }
+                    // CloudKit can materialize one logical material as several
+                    // physical rows. Every one of them must name the bytes that
+                    // just landed, or a later merge picks a row that still
+                    // points at nothing.
                     var repaired = false
-                    if repairsPayload,
-                       let staged,
-                       staged.storageMode == .localVault,
-                       let repairedKey = staged.vaultKey {
-                        // CloudKit can materialize one logical material as
-                        // several physical rows. Every one of them must name
-                        // the bytes that just landed, or a later merge picks a
-                        // row that still points at nothing.
-                        for row in materialRows {
-                            row.setValue(repairedKey, forKey: "localVaultKey")
-                            row.setValue(NSNumber(value: staged.byteSize), forKey: "byteSize")
-                            row.setValue(now, forKey: "updatedAt")
+                    if let staged, let repairLane {
+                        switch repairLane {
+                        case .localVault:
+                            if staged.storageMode == .localVault,
+                               let repairedKey = staged.vaultKey {
+                                for row in materialRows {
+                                    row.setValue(repairedKey, forKey: "localVaultKey")
+                                    row.setValue(
+                                        NSNumber(value: staged.byteSize), forKey: "byteSize"
+                                    )
+                                    row.setValue(now, forKey: "updatedAt")
+                                }
+                                repaired = true
+                            }
+                        case .syncedPayload:
+                            if staged.storageMode == .syncedPayload,
+                               let contentHash = staged.contentHash {
+                                // Paired with the blob that just landed: a
+                                // complete blob carrying different bytes for
+                                // this material is a superseded attempt, and it
+                                // goes in the same save that repoints the card.
+                                let superseded = try Self.deleteSupersededBlobRows(
+                                    materialID: draft.id,
+                                    keepingContentHash: contentHash,
+                                    byteSize: staged.byteSize,
+                                    in: context
+                                )
+                                if case .inserted = publishedBlob {
+                                    repaired = true
+                                } else if superseded > 0 {
+                                    repaired = true
+                                }
+                                if repaired {
+                                    for row in materialRows {
+                                        Self.pointAtSyncedPayload(
+                                            row: row, byteSize: staged.byteSize, at: now
+                                        )
+                                    }
+                                }
+                            }
+                        case .metadataOnly:
+                            break
                         }
-                        repaired = true
                     }
                     if createdOwner || repaired { try context.save() }
                     return WorkMaterialWriteOutcome(
@@ -543,6 +677,18 @@ extension ConversationStore {
                     // payload it cannot produce. A fresh capture of the same
                     // source takes the insert path instead.
                     throw WorkboardStoreError.materialNotFound
+                }
+                if staged.storageMode == .syncedPayload, let contentHash = staged.contentHash {
+                    // An earlier interrupted attempt at this same capture can
+                    // have left a complete blob carrying different bytes. It is
+                    // retired in the save that publishes the card, so the card
+                    // is never briefly readable as the wrong payload.
+                    try Self.deleteSupersededBlobRows(
+                        materialID: draft.id,
+                        keepingContentHash: contentHash,
+                        byteSize: staged.byteSize,
+                        in: context
+                    )
                 }
                 let row = NSEntityDescription.insertNewObject(
                     forEntityName: "WorkMaterial",
@@ -573,6 +719,18 @@ extension ConversationStore {
             }
         } catch {
             if let key = staged?.vaultKey { try? await workAssetVault.remove(key) }
+            if case .inserted(let contentHash, let byteSize) = publishedBlob {
+                // The ONE place a blob may be deleted without its material.
+                // This call wrote those exact bytes moments ago and knows the
+                // card never landed, so they name nothing; a background sweep
+                // cannot tell that state from a blob CloudKit imported ahead of
+                // the material it belongs to, which is why no sweep exists.
+                try? await deleteBlobRows(
+                    materialID: draft.id,
+                    contentHash: contentHash,
+                    byteSize: byteSize
+                )
+            }
             throw error
         }
 
@@ -590,26 +748,75 @@ extension ConversationStore {
         }
     }
 
-    /// Make payload bytes durable before any row names them. The vault leaf is
-    /// derived from the MATERIAL id, so a replayed capture restages onto the
-    /// same file instead of leaving an orphan behind for reconciliation.
+    /// Make payload bytes durable before any row names them, in the lane
+    /// `WorkMaterialStoragePolicy` picks for their measured size. This is the
+    /// ONE place a capture decides where bytes live, so the sync ceiling is
+    /// enforced by construction on the lanes that have no UI to warn from — the
+    /// share inbox and the headless intent.
+    ///
+    /// The vault leaf is derived from `vaultKeyID`, the MATERIAL id by default,
+    /// so a replayed capture restages onto the same file instead of leaving an
+    /// orphan behind for reconciliation. Reattach passes a fresh id instead,
+    /// because the bytes a card still names must stay authoritative until its
+    /// compare-and-swap commits.
+    ///
+    /// - Parameter forcedStorageMode: The lane a REPAIR stages into — the one
+    ///   the existing row already claims. A repair restores what a card
+    ///   promises; re-deciding the lane under it would move a payload the
+    ///   person never touched. Nil lets the policy decide, which is what every
+    ///   fresh capture does.
     private func stageWorkMaterialBytes(
         id: UUID,
+        kind: WorkMaterialKind,
         filename: String?,
         payload: Data?,
         declaredByteSize: Int64?,
         declaredStorageMode: WorkMaterialStorageMode,
         sourceFileURL: URL?,
         sourceFileByteSize: Int64?,
+        vaultKeyID: UUID? = nil,
+        forcedStorageMode: WorkMaterialStorageMode? = nil,
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws -> StagedWorkMaterialBytes {
         let suggestedExtension = filename.map { ($0 as NSString).pathExtension }
+        let vaultID = vaultKeyID ?? id
+        let expectedByteCount = sourceFileByteSize ?? declaredByteSize ?? -1
+
         if let sourceFileURL {
+            let measured = Self.measuredByteSize(
+                payload: nil,
+                sourceFileURL: sourceFileURL,
+                declared: sourceFileByteSize ?? declaredByteSize
+            )
+            let mode = forcedStorageMode
+                ?? WorkMaterialStoragePolicy.mode(kind: kind, byteSize: measured)
+            if mode == .syncedPayload {
+                // Bounded by the sync ceiling, so the file is read whole: the
+                // blob attribute takes a `Data`, and a payload at the ceiling
+                // costs about its own size in peak memory.
+                let bytes = try Data(contentsOf: sourceFileURL)
+                let byteSize = Int64(bytes.count)
+                guard WorkMaterialStoragePolicy.mode(kind: kind, byteSize: byteSize)
+                        == .syncedPayload,
+                      expectedByteCount < 0 || expectedByteCount == byteSize else {
+                    // The file is not the payload the caller described. The
+                    // streaming lane refuses the same disagreement rather than
+                    // storing a copy under a size nothing can trust.
+                    throw WorkboardStoreError.materialPayloadUnavailable
+                }
+                onProgress(1)
+                return StagedWorkMaterialBytes(
+                    storageMode: .syncedPayload,
+                    byteSize: byteSize,
+                    blobPayload: bytes,
+                    contentHash: Self.contentHash(of: bytes)
+                )
+            }
             let storedFile = try await workAssetVault.storeFileStreaming(
                 at: sourceFileURL,
-                id: id,
+                id: vaultID,
                 suggestedExtension: suggestedExtension,
-                expectedByteCount: sourceFileByteSize ?? declaredByteSize ?? -1,
+                expectedByteCount: expectedByteCount,
                 onProgress: onProgress
             )
             return StagedWorkMaterialBytes(
@@ -618,22 +825,310 @@ extension ConversationStore {
                 vaultKey: storedFile.key
             )
         }
-        let byteSize = declaredByteSize ?? Int64(payload?.count ?? 0)
-        let storageMode: WorkMaterialStorageMode = payload == nil
-            ? declaredStorageMode : .localVault
-        var vaultKey: String?
-        if storageMode == .localVault, let payload {
-            vaultKey = try await workAssetVault.store(
-                payload,
-                id: id,
-                suggestedExtension: suggestedExtension
+
+        guard let payload else {
+            // No bytes at all: what the draft declares stands, including a
+            // `.syncedPayload` claim with nothing behind it — that card reads
+            // as pending until its blob arrives.
+            onProgress(1)
+            return StagedWorkMaterialBytes(
+                storageMode: declaredStorageMode,
+                byteSize: declaredByteSize ?? 0
             )
         }
+
+        let measured = Int64(payload.count)
+        let mode = forcedStorageMode
+            ?? WorkMaterialStoragePolicy.mode(kind: kind, byteSize: measured)
+        if mode == .syncedPayload {
+            onProgress(1)
+            return StagedWorkMaterialBytes(
+                storageMode: .syncedPayload,
+                // A blob's size is the proof its bytes are whole, so it is
+                // measured here rather than taken from the caller's claim.
+                byteSize: measured,
+                blobPayload: payload,
+                contentHash: Self.contentHash(of: payload)
+            )
+        }
+        let vaultKey = try await workAssetVault.store(
+            payload,
+            id: vaultID,
+            suggestedExtension: suggestedExtension
+        )
         onProgress(1)
         return StagedWorkMaterialBytes(
-            storageMode: storageMode,
-            byteSize: byteSize,
+            storageMode: .localVault,
+            byteSize: declaredByteSize ?? measured,
             vaultKey: vaultKey
+        )
+    }
+
+    // MARK: - Payload blobs
+
+    /// The most authoritative size available for the bytes a call carries. The
+    /// file on disk outranks the caller's claim: the lane has to be decided
+    /// before anything is read, and a wrong claim would either strand a
+    /// syncable payload in the vault or pull an oversized file into memory.
+    private static func measuredByteSize(
+        payload: Data?,
+        sourceFileURL: URL?,
+        declared: Int64?
+    ) -> Int64 {
+        if let sourceFileURL {
+            if let size = try? sourceFileURL
+                .resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                return Int64(size)
+            }
+            return declared ?? -1
+        }
+        if let payload { return Int64(payload.count) }
+        return declared ?? 0
+    }
+
+    /// SHA-256 of the exact bytes a blob stores, lowercase hex. It is what
+    /// tells a replay carrying the same payload apart from one carrying
+    /// different bytes under the same material id — a size comparison cannot.
+    private static func contentHash(of payload: Data) -> String {
+        SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// STEP 1 of the publication protocol: make the payload durable in the blob
+    /// store, in a save of its own, before any material row claims it.
+    ///
+    /// Superseded blobs are NOT retired here. They go in the material's save,
+    /// so a card is never briefly readable as the wrong payload and a refused
+    /// publication leaves the blob store exactly as it found it.
+    ///
+    /// The presence check reads METADATA only — realizing blob rows to compare
+    /// them would fault a ceiling-sized payload in to answer a question about
+    /// its hash.
+    private func publishWorkMaterialBlob(
+        materialID: UUID,
+        payload: Data,
+        byteSize: Int64,
+        contentHash: String
+    ) async throws -> WorkMaterialBlobPublication {
+        let known = try await workMaterialBlobCompleteness(materialIDs: [materialID])[materialID]
+        if let known, known.contentHash == contentHash, known.byteSize == byteSize {
+            return .alreadyPresent
+        }
+        let context = newWriteContext()
+        try await context.perform { [context] in
+            let now = Date()
+            let row = NSEntityDescription.insertNewObject(
+                forEntityName: "WorkMaterialBlob",
+                into: context
+            )
+            row.setValue(materialID, forKey: "materialID")
+            row.setValue(payload, forKey: "payload")
+            row.setValue(NSNumber(value: byteSize), forKey: "byteSize")
+            row.setValue(contentHash, forKey: "contentHash")
+            row.setValue(now, forKey: "createdAt")
+            row.setValue(now, forKey: "updatedAt")
+            // No `context.assign(_:to:)`: the entity belongs to exactly one
+            // configuration, so Core Data routes the insert into the payload
+            // store on its own.
+            try context.save()
+        }
+        return .inserted(contentHash: contentHash, byteSize: byteSize)
+    }
+
+    /// Which of these materials have a whole payload behind them, from ONE
+    /// fetch that projects metadata and NEVER `payload`. Projecting the bytes
+    /// would realize every blob on the board to answer a question about its
+    /// size, which is the object-level faulting hazard the payload store exists
+    /// to avoid.
+    ///
+    /// A material is answered for only by the NEWEST COMPLETE row: CloudKit can
+    /// import one logical blob as several physical rows, and a row whose hash
+    /// or size is still absent is an arrival in progress, not a payload.
+    /// Completeness is `WorkMaterialBlobRecord.isComplete` and is never
+    /// restated anywhere else.
+    func workMaterialBlobCompleteness(
+        materialIDs: Set<UUID>
+    ) async throws -> [UUID: WorkMaterialBlobRecord] {
+        guard !materialIDs.isEmpty else { return [:] }
+        try await ensureLoaded()
+        let context = newReadContext()
+        return try await context.perform { [context] in
+            let request = NSFetchRequest<NSDictionary>(entityName: "WorkMaterialBlob")
+            request.resultType = .dictionaryResultType
+            request.propertiesToFetch = [
+                "materialID", "byteSize", "contentHash", "createdAt", "updatedAt",
+            ]
+            request.predicate = NSPredicate(format: "materialID IN %@", Array(materialIDs))
+            var newest: [UUID: WorkMaterialBlobRecord] = [:]
+            for row in try context.fetch(request) {
+                guard let record = Self.blobRecord(
+                    materialID: row["materialID"] as? UUID,
+                    byteSize: (row["byteSize"] as? NSNumber)?.int64Value,
+                    contentHash: row["contentHash"] as? String,
+                    createdAt: row["createdAt"] as? Date,
+                    updatedAt: row["updatedAt"] as? Date
+                ), record.isComplete else { continue }
+                guard let current = newest[record.materialID] else {
+                    newest[record.materialID] = record
+                    continue
+                }
+                if (record.updatedAt, record.createdAt) > (current.updatedAt, current.createdAt) {
+                    newest[record.materialID] = record
+                }
+            }
+            return newest
+        }
+    }
+
+    /// The bytes of the newest COMPLETE blob for one material, or nil while the
+    /// card is still waiting for them.
+    ///
+    /// This realizes the rows it walks, unlike the completeness projection: the
+    /// caller is opening one card and wants its payload, so the fault it fires
+    /// is the read it asked for. Duplicates are a transient CloudKit state, so
+    /// the walk is one or two rows deep in practice.
+    private func newestCompleteBlobPayload(materialID: UUID) async throws -> Data? {
+        try await ensureLoaded()
+        let context = newReadContext()
+        return try await context.perform { [context] () -> Data? in
+            for row in try Self.blobRows(materialID: materialID, in: context) {
+                guard Self.blobRecord(of: row)?.isComplete == true else { continue }
+                return row.value(forKey: "payload") as? Data
+            }
+            return nil
+        }
+    }
+
+    /// Take back blob rows carrying exactly the bytes this process just wrote,
+    /// for a material that never landed. Scoped to that hash and size so a
+    /// concurrently imported blob for the same material is left alone.
+    private func deleteBlobRows(
+        materialID: UUID,
+        contentHash: String,
+        byteSize: Int64
+    ) async throws {
+        let context = newWriteContext()
+        try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterialBlob")
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(format: "materialID == %@", materialID as CVarArg),
+                NSPredicate(format: "contentHash == %@", contentHash),
+                NSPredicate(format: "byteSize == %@", NSNumber(value: byteSize)),
+            ])
+            // The payload is not read to delete the row that holds it.
+            request.includesPropertyValues = false
+            let rows = try context.fetch(request)
+            guard !rows.isEmpty else { return }
+            rows.forEach(context.delete)
+            try context.save()
+        }
+    }
+
+    /// Every physical blob row of one material, newest first — the same
+    /// newest-wins ordering the material rows use, so a payload read and the
+    /// completeness projection cannot disagree about which blob is canonical.
+    private static func blobRows(
+        materialID: UUID,
+        in context: NSManagedObjectContext
+    ) throws -> [NSManagedObject] {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterialBlob")
+        request.predicate = NSPredicate(format: "materialID == %@", materialID as CVarArg)
+        request.sortDescriptors = [
+            NSSortDescriptor(key: "updatedAt", ascending: false),
+            NSSortDescriptor(key: "createdAt", ascending: false),
+        ]
+        return try context.fetch(request)
+    }
+
+    /// Retire complete blob rows of this material that carry OTHER bytes.
+    ///
+    /// Incomplete rows are deliberately left standing: a row whose hash or size
+    /// has not arrived is indistinguishable from an import still in flight, and
+    /// deleting it would export the removal of a payload that is merely early.
+    @discardableResult
+    private static func deleteSupersededBlobRows(
+        materialID: UUID,
+        keepingContentHash contentHash: String,
+        byteSize: Int64,
+        in context: NSManagedObjectContext
+    ) throws -> Int {
+        var deleted = 0
+        for row in try blobRows(materialID: materialID, in: context) {
+            guard let record = blobRecord(of: row), record.isComplete else { continue }
+            guard record.contentHash != contentHash || record.byteSize != byteSize else {
+                continue
+            }
+            context.delete(row)
+            deleted += 1
+        }
+        return deleted
+    }
+
+    /// Delete every blob of one material, in the caller's transaction.
+    ///
+    /// PAIRED DELETION IS THE ONLY WAY A BLOB IS EVER RECLAIMED. There is
+    /// deliberately no orphan sweep: CloudKit can import a blob before the
+    /// material that names it, so a pass removing "blobs with no material"
+    /// would export the deletion of a payload that is merely early. Bytes
+    /// stranded by a crash between the two publication steps are accepted
+    /// residue — bounded by the sync ceiling and rare.
+    @discardableResult
+    private static func deleteBlobRows(
+        materialID: UUID,
+        in context: NSManagedObjectContext
+    ) throws -> Int {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterialBlob")
+        request.predicate = NSPredicate(format: "materialID == %@", materialID as CVarArg)
+        // The payload is not read to delete the row that holds it.
+        request.includesPropertyValues = false
+        let rows = try context.fetch(request)
+        rows.forEach(context.delete)
+        return rows.count
+    }
+
+    /// Point one material row at the payload store. `payload` and
+    /// `localVaultKey` are cleared together: a synced card has its bytes in
+    /// exactly one place, and a stale vault key would let a reader answer from
+    /// a file the card no longer describes.
+    private static func pointAtSyncedPayload(
+        row: NSManagedObject,
+        byteSize: Int64,
+        at date: Date
+    ) {
+        row.setValue(nil, forKey: "payload")
+        row.setValue(WorkMaterialStorageMode.syncedPayload.rawValue, forKey: "storageMode")
+        row.setValue(nil, forKey: "localVaultKey")
+        row.setValue(NSNumber(value: byteSize), forKey: "byteSize")
+        row.setValue(date, forKey: "updatedAt")
+    }
+
+    /// One blob row's metadata, never its bytes. Both readers — the projection
+    /// and the payload walk — build the record here, so "complete" means one
+    /// thing wherever it is asked.
+    private static func blobRecord(of row: NSManagedObject) -> WorkMaterialBlobRecord? {
+        blobRecord(
+            materialID: row.value(forKey: "materialID") as? UUID,
+            byteSize: (row.value(forKey: "byteSize") as? NSNumber)?.int64Value,
+            contentHash: row.value(forKey: "contentHash") as? String,
+            createdAt: row.value(forKey: "createdAt") as? Date,
+            updatedAt: row.value(forKey: "updatedAt") as? Date
+        )
+    }
+
+    private static func blobRecord(
+        materialID: UUID?,
+        byteSize: Int64?,
+        contentHash: String?,
+        createdAt: Date?,
+        updatedAt: Date?
+    ) -> WorkMaterialBlobRecord? {
+        guard let materialID else { return nil }
+        let created = createdAt ?? .distantPast
+        return WorkMaterialBlobRecord(
+            materialID: materialID,
+            byteSize: byteSize ?? 0,
+            contentHash: contentHash ?? "",
+            createdAt: created,
+            updatedAt: updatedAt ?? created
         )
     }
 
@@ -666,9 +1161,15 @@ extension ConversationStore {
         return (highest ?? -1) + 1
     }
 
-    /// Add a material and update the parent card in one Core Data save. Payload
-    /// bytes go to the explicit device-local vault; their row syncs metadata +
-    /// availability instead of over-promising a CloudKit asset.
+    /// Add a material to an arbitrary owner and update it in one Core Data
+    /// save. Payload bytes always go to the explicit device-local vault.
+    ///
+    /// NO CAPTURE SURFACE REACHES THIS — every one of them publishes onto the
+    /// desk through `upsertDeskMaterial`, which is where
+    /// `WorkMaterialStoragePolicy` decides the lane. What survives here is the
+    /// only way to mint a material under a NON-desk owner, which several store
+    /// tests need, and it deliberately stays on the local lane: a fixture that
+    /// wants a device-local payload must be able to ask for one.
     func addWorkMaterial(
         _ draft: WorkMaterialDraft,
         to workItemID: UUID,
@@ -706,9 +1207,11 @@ extension ConversationStore {
         )
     }
 
-    /// Import a picker URL without materializing arbitrary bytes on the main
-    /// actor. File bytes stream into the explicit device-local vault with
-    /// cancellable progress; only metadata mirrors through private CloudKit.
+    /// Import a URL under an arbitrary owner without materializing arbitrary
+    /// bytes on the main actor. File bytes stream into the explicit
+    /// device-local vault with cancellable progress; only metadata mirrors
+    /// through private CloudKit. Same standing as `addWorkMaterial`: no capture
+    /// surface reaches it, and it stays on the local lane on purpose.
     func addWorkMaterialFile(
         _ draft: WorkMaterialDraft,
         from sourceURL: URL,
@@ -801,8 +1304,19 @@ extension ConversationStore {
     }
 
     /// Reattach a file in place without changing material identity, order,
-    /// caption or title. Files stream to a new vault key; the old payload
-    /// remains authoritative until the owner-revision CAS commits.
+    /// caption or title.
+    ///
+    /// The arriving bytes re-decide the lane through
+    /// `WorkMaterialStoragePolicy`, so a card whose payload was device-local
+    /// moves onto the synced lane when a small file replaces it, and off it
+    /// when a large one does. Whichever lane it leaves is cleared in the same
+    /// save that points it at the new one — the old blob rows, or the old vault
+    /// key — so a card never names bytes in two places.
+    ///
+    /// Nothing the card still names is disturbed before the owner-revision CAS
+    /// commits: the vault lane stages under a FRESH key, and the blob lane
+    /// retires superseded rows inside the transaction and takes its own insert
+    /// back if the CAS refuses.
     func replaceWorkMaterialPayloadFile(
         id: UUID,
         from sourceURL: URL,
@@ -814,14 +1328,39 @@ extension ConversationStore {
         onProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> WorkMaterialRecord? {
         try await ensureLoaded()
-        let storedFile = try await workAssetVault.storeFileStreaming(
-            at: sourceURL,
-            id: UUID(),
-            suggestedExtension: filename.map { ($0 as NSString).pathExtension },
-            expectedByteCount: byteSize,
+        // Kind comes from the row: a reattach replaces bytes, never what the
+        // card is.
+        guard let existing = try await fetchWorkMaterial(id: id) else {
+            throw WorkboardStoreError.materialNotFound
+        }
+        let staged = try await stageWorkMaterialBytes(
+            id: id,
+            kind: existing.kind,
+            filename: filename,
+            payload: nil,
+            declaredByteSize: byteSize,
+            declaredStorageMode: .localVault,
+            sourceFileURL: sourceURL,
+            sourceFileByteSize: byteSize,
+            vaultKeyID: UUID(),
             onProgress: onProgress
         )
-        let newKey = storedFile.key
+        let newKey = staged.vaultKey
+
+        let publishedBlob: WorkMaterialBlobPublication
+        if staged.storageMode == .syncedPayload,
+           let blobPayload = staged.blobPayload,
+           let contentHash = staged.contentHash {
+            publishedBlob = try await publishWorkMaterialBlob(
+                materialID: id,
+                payload: blobPayload,
+                byteSize: staged.byteSize,
+                contentHash: contentHash
+            )
+        } else {
+            publishedBlob = .none
+        }
+
         let context = newWriteContext()
         let oldKey: String?
         do {
@@ -836,29 +1375,57 @@ extension ConversationStore {
                     throw WorkboardStoreError.staleRevision
                 }
                 let oldKey = row.value(forKey: "localVaultKey") as? String
-                row.setValue(nil, forKey: "payload")
-                row.setValue(WorkMaterialStorageMode.localVault.rawValue, forKey: "storageMode")
-                row.setValue(newKey, forKey: "localVaultKey")
+                let now = Date()
+                switch staged.storageMode {
+                case .syncedPayload:
+                    if let contentHash = staged.contentHash {
+                        try Self.deleteSupersededBlobRows(
+                            materialID: id,
+                            keepingContentHash: contentHash,
+                            byteSize: staged.byteSize,
+                            in: context
+                        )
+                    }
+                    Self.pointAtSyncedPayload(row: row, byteSize: staged.byteSize, at: now)
+                case .localVault, .metadataOnly:
+                    // The card's payload leaves the synced lane, so its blobs
+                    // leave with it in this same save.
+                    try Self.deleteBlobRows(materialID: id, in: context)
+                    row.setValue(nil, forKey: "payload")
+                    row.setValue(
+                        WorkMaterialStorageMode.localVault.rawValue, forKey: "storageMode"
+                    )
+                    row.setValue(newKey, forKey: "localVaultKey")
+                    row.setValue(NSNumber(value: staged.byteSize), forKey: "byteSize")
+                    row.setValue(now, forKey: "updatedAt")
+                }
                 row.setValue(sourceDevice, forKey: "sourceDevice")
-                row.setValue(NSNumber(value: storedFile.byteCount), forKey: "byteSize")
                 if let filename { row.setValue(filename, forKey: "filename") }
                 if let mimeType { row.setValue(mimeType, forKey: "mimeType") }
-                // Extracts and previews are user file content; the reattached
-                // payload is device-local, so neither is carried into the
-                // synced row.
+                // An extract and a preview describe the bytes that were here
+                // before, and this call is handed neither for the bytes
+                // replacing them.
                 row.setValue(nil, forKey: "textContent")
                 row.setValue(nil, forKey: "thumbnailData")
-                let now = Date()
-                row.setValue(now, forKey: "updatedAt")
                 owner.setValue(now, forKey: "updatedAt")
                 try context.save()
                 return oldKey
             }
         } catch {
-            try? await workAssetVault.remove(newKey)
+            if let newKey { try? await workAssetVault.remove(newKey) }
+            if case .inserted(let contentHash, let blobByteSize) = publishedBlob {
+                // The card kept the payload it had, so the bytes this call
+                // wrote name nothing. Same rule as a refused capture: only the
+                // call that wrote them knows that.
+                try? await deleteBlobRows(
+                    materialID: id,
+                    contentHash: contentHash,
+                    byteSize: blobByteSize
+                )
+            }
             throw error
         }
-        await workAssetVault.markReferenced(newKey)
+        if let newKey { await workAssetVault.markReferenced(newKey) }
         if let oldKey, oldKey != newKey { try? await workAssetVault.remove(oldKey) }
         await postDidChange()
         return try await fetchWorkMaterial(id: id)
@@ -896,6 +1463,13 @@ extension ConversationStore {
                 }
             }
             rows.forEach(context.delete)
+            // PAIRED DELETE. The card and its payload leave in ONE save, across
+            // both stores, so no device is left holding bytes for a card that
+            // no longer exists. This is the ONLY reclamation path blobs have —
+            // see `deleteBlobRows(materialID:in:)` for why there is no sweep.
+            // Reached only when a material row was actually deleted: a blob
+            // whose material has not arrived yet is early, not orphaned.
+            try Self.deleteBlobRows(materialID: id, in: context)
             if let item = try Self.workItemRow(id: owner, in: context) {
                 item.setValue(Date(), forKey: "updatedAt")
             }
@@ -1000,23 +1574,26 @@ extension ConversationStore {
         return LoadedWorkMaterial(record: record, payload: try await loadWorkMaterialPayload(id: id))
     }
 
+    /// The bytes behind one card, from whichever lane it names. A
+    /// `.syncedPayload` card answers from the newest COMPLETE blob and nil
+    /// while it is still waiting for one; `WorkMaterial.payload` is not read,
+    /// because it is not written.
     func loadWorkMaterialPayload(id: UUID) async throws -> Data? {
         try await ensureLoaded()
         let context = newReadContext()
-        let payloadSource = try await context.perform { [context] () -> (WorkMaterialStorageMode, Data?, String?)? in
+        let payloadSource = try await context.perform { [context] () -> (WorkMaterialStorageMode, String?)? in
             guard let row = try Self.workMaterialRow(id: id, in: context) else { return nil }
             let mode = WorkMaterialStorageMode(stored: row.value(forKey: "storageMode") as? String)
-            let data = mode == .syncedPayload ? row.value(forKey: "payload") as? Data : nil
-            return (mode, data, row.value(forKey: "localVaultKey") as? String)
+            return (mode, row.value(forKey: "localVaultKey") as? String)
         }
         guard let payloadSource else { return nil }
         switch payloadSource.0 {
         case .metadataOnly:
             return nil
         case .syncedPayload:
-            return payloadSource.1
+            return try await newestCompleteBlobPayload(materialID: id)
         case .localVault:
-            guard let key = payloadSource.2 else { return nil }
+            guard let key = payloadSource.1 else { return nil }
             return try? await workAssetVault.data(for: key)
         }
     }
@@ -1031,9 +1608,9 @@ extension ConversationStore {
         return try await workAssetVault.url(for: key)
     }
 
-    /// One row, one vault probe. This sits on the material import/read-back hot
-    /// path and is called once per image on every board load, so it must never
-    /// project the whole board to answer a single id.
+    /// One row, one availability pass. This sits on the material
+    /// import/read-back hot path and is called once per image on every board
+    /// load, so it must never project the whole board to answer a single id.
     private func fetchWorkMaterial(id: UUID) async throws -> WorkMaterialRecord? {
         try await ensureLoaded()
         let context = newReadContext()
@@ -1041,11 +1618,44 @@ extension ConversationStore {
             try Self.workMaterialRow(id: id, in: context).map(StoredWorkMaterial.init)
         }
         guard let stored else { return nil }
+        return try await workMaterialRecords(for: [stored]).first
+    }
+
+    /// The ONE projection from stored rows to records, and therefore the one
+    /// place a card's availability is decided. Both questions behind it — which
+    /// vault leaves are on this device, and which synced payloads have a whole
+    /// blob behind them — are asked ONCE for the whole batch.
+    ///
+    /// Per-row resolution is what this exists to prevent: each answer is a hop
+    /// onto the vault actor or a fetch into the payload store, so asking card
+    /// by card queues a board's worth of round trips behind every other write
+    /// in flight, on the path a board refresh runs on.
+    private func workMaterialRecords(
+        for materials: [StoredWorkMaterial]
+    ) async throws -> [WorkMaterialRecord] {
+        guard !materials.isEmpty else { return [] }
+
+        let vaultKeys = Array(Set(materials.compactMap(\.localVaultKey)))
         var availableLocalKeys: Set<String> = []
-        if let key = stored.localVaultKey, await workAssetVault.contains(key) {
-            availableLocalKeys.insert(key)
+        if !vaultKeys.isEmpty {
+            availableLocalKeys = Set(await workAssetVault.urls(for: vaultKeys).keys)
         }
-        return stored.record(availableLocalKeys: availableLocalKeys)
+
+        // Only a card that CLAIMS synced bytes asks the payload store anything,
+        // so the predicate carries exactly the ids whose answer is read.
+        let syncedIDs = Set(
+            materials.compactMap { $0.storageMode == .syncedPayload ? $0.id : nil }
+        )
+        let completeBlobMaterialIDs = Set(
+            try await workMaterialBlobCompleteness(materialIDs: syncedIDs).keys
+        )
+
+        return materials.map {
+            $0.record(
+                availableLocalKeys: availableLocalKeys,
+                completeBlobMaterialIDs: completeBlobMaterialIDs
+            )
+        }
     }
 
     private func fetchWorkItems(
@@ -1082,14 +1692,12 @@ extension ConversationStore {
             return StoredWorkboard(items: items, materials: materials)
         }
 
-        var availableLocalKeys: Set<String> = []
-        for key in Set(stored.materials.compactMap(\.localVaultKey)) {
-            if await workAssetVault.contains(key) { availableLocalKeys.insert(key) }
-        }
-
+        // Deduplicate BEFORE resolving availability: a physically duplicated
+        // CloudKit row is not a second card, so it must not become a second
+        // vault probe or a second id in the blob predicate.
         let canonicalItems = Self.deduplicatedWorkItems(stored.items)
         let canonicalMaterials = Self.deduplicatedWorkMaterials(stored.materials)
-        let materialRecords = canonicalMaterials.map { $0.record(availableLocalKeys: availableLocalKeys) }
+        let materialRecords = try await workMaterialRecords(for: canonicalMaterials)
         let materialsByItem = Dictionary(grouping: materialRecords, by: \.workItemID)
 
         return canonicalItems.map { item in
@@ -1342,7 +1950,11 @@ extension ConversationStore {
         row.setValue(draft.urlString, forKey: "urlString")
         row.setValue(draft.filename, forKey: "filename")
         row.setValue(draft.mimeType, forKey: "mimeType")
-        row.setValue(storageMode == .syncedPayload ? draft.payload : nil, forKey: "payload")
+        // The payload column stays unwritten in every lane. Synced bytes live
+        // in their own store so that a caption edit does not re-export them and
+        // a board refresh does not realize them; writing them here as well
+        // would give one payload two CKRecords and two chances to disagree.
+        row.setValue(nil, forKey: "payload")
         // A thumbnail is still user file content. Keep it off the shared
         // model whenever the full payload is device-local.
         row.setValue(
@@ -1479,13 +2091,25 @@ extension ConversationStore {
             updatedAt = row.value(forKey: "updatedAt") as? Date ?? createdAt
         }
 
-        func record(availableLocalKeys: Set<String>) -> WorkMaterialRecord {
+        /// Both sets are resolved once per fetch by `workMaterialRecords(for:)`
+        /// and handed in whole. A row answers from them and reaches nothing
+        /// else: a projection that could probe the filesystem or the payload
+        /// store per card is the shape this signature refuses.
+        func record(
+            availableLocalKeys: Set<String>,
+            completeBlobMaterialIDs: Set<UUID>
+        ) -> WorkMaterialRecord {
             let availability: WorkMaterialAvailability
             switch storageMode {
             case .metadataOnly:
                 availability = .metadataOnly
             case .syncedPayload:
-                availability = .synced
+                // The card names bytes in the payload store, which CloudKit
+                // materializes independently of the material row — so the claim
+                // is not the proof. Only a COMPLETE blob row is, and
+                // `WorkMaterialBlobRecord.isComplete` is where that rule lives;
+                // membership of this set already carries it.
+                availability = completeBlobMaterialIDs.contains(id) ? .synced : .syncedPending
             case .localVault:
                 availability = localVaultKey.map(availableLocalKeys.contains) == true
                     ? .availableLocally : .unavailableOnThisDevice
@@ -1593,6 +2217,134 @@ extension ConversationStore {
             }
             try? context.save()
         }
+    }
+
+    /// TEST SEAM — every PHYSICAL blob row of one material, newest first.
+    ///
+    /// WHY IT HAS TO EXIST. Duplicate blobs are a legal transient state that
+    /// only the newest COMPLETE row resolves, and paired deletion has to leave
+    /// none of them behind. Both facts are invisible through `loadWorkMaterial`
+    /// — it answers with bytes, so one correct row and three stale ones read
+    /// identically to one correct row.
+    func _workMaterialBlobRowsForTesting(materialID: UUID) async -> [WorkMaterialBlobRowProbe] {
+        do { try await ensureLoaded() } catch { return [] }
+        let context = newReadContext()
+        return await context.perform { [context] in
+            guard Self.isInMemory(context) else { return [] }
+            let rows = (try? Self.blobRows(materialID: materialID, in: context)) ?? []
+            return rows.map { row in
+                WorkMaterialBlobRowProbe(
+                    byteSize: (row.value(forKey: "byteSize") as? NSNumber)?.int64Value,
+                    contentHash: row.value(forKey: "contentHash") as? String,
+                    payloadByteCount: (row.value(forKey: "payload") as? Data)?.count,
+                    createdAt: row.value(forKey: "createdAt") as? Date,
+                    updatedAt: row.value(forKey: "updatedAt") as? Date
+                )
+            }
+        }
+    }
+
+    /// TEST SEAM — the raw `WorkMaterial.payload` column.
+    ///
+    /// WHY IT HAS TO EXIST. "The payload column stays unwritten" is a claim
+    /// about a column no reader reads any more, so nothing in the projection
+    /// can catch a regression that starts writing it again — the card would
+    /// still open, and every byte would quietly ride the material's own
+    /// CKRecord as well as its blob's.
+    func _workMaterialPayloadColumnForTesting(id: UUID) async -> Data? {
+        do { try await ensureLoaded() } catch { return nil }
+        let context = newReadContext()
+        return await context.perform { [context] in
+            guard Self.isInMemory(context) else { return nil }
+            let row = try? Self.workMaterialRow(id: id, in: context)
+            return row?.value(forKey: "payload") as? Data
+        }
+    }
+
+    /// TEST SEAM — insert one blob row directly, bypassing publication.
+    ///
+    /// WHY IT HAS TO EXIST. CloudKit can import one logical blob as several
+    /// physical rows, and a row whose hash or size has not arrived is a legal
+    /// in-flight state. No public API can produce either — publication refuses
+    /// to write a second row for bytes it already has, and never writes an
+    /// incomplete one — so newest-complete-wins and the leave-incomplete-rows
+    /// rule have no reachable test without a seam.
+    func _insertWorkMaterialBlobRowForTesting(
+        materialID: UUID,
+        payload: Data,
+        byteSize: Int64,
+        contentHash: String,
+        updatedAt: Date
+    ) async {
+        do { try await ensureLoaded() } catch { return }
+        let context = newWriteContext()
+        await context.perform { [context] in
+            guard Self.isInMemory(context) else { return }
+            let row = NSEntityDescription.insertNewObject(
+                forEntityName: "WorkMaterialBlob", into: context
+            )
+            row.setValue(materialID, forKey: "materialID")
+            row.setValue(payload, forKey: "payload")
+            row.setValue(NSNumber(value: byteSize), forKey: "byteSize")
+            row.setValue(contentHash, forKey: "contentHash")
+            row.setValue(updatedAt, forKey: "createdAt")
+            row.setValue(updatedAt, forKey: "updatedAt")
+            try? context.save()
+        }
+    }
+
+    /// TEST SEAM — drop every blob of one material, leaving the card standing.
+    ///
+    /// WHY IT HAS TO EXIST. It is the state the payload store's loss produces —
+    /// proven survivable and silent — and the one state no publication path can
+    /// reach, because paired deletion always takes the material with the bytes.
+    /// A card claiming `.syncedPayload` with nothing behind it is what the
+    /// pending projection is for, so it has to be constructible.
+    @discardableResult
+    func _deleteWorkMaterialBlobRowsForTesting(materialID: UUID) async -> Int {
+        do { try await ensureLoaded() } catch { return 0 }
+        let context = newWriteContext()
+        return await context.perform { [context] in
+            guard Self.isInMemory(context) else { return 0 }
+            let deleted = (try? Self.deleteBlobRows(materialID: materialID, in: context)) ?? 0
+            try? context.save()
+            return deleted
+        }
+    }
+
+    /// TEST SEAM — run ONLY the first publication step of a desk capture.
+    ///
+    /// WHY IT HAS TO EXIST. The protocol's whole claim is that a process dying
+    /// between the blob save and the material save leaves a repairable state.
+    /// A crash runs no rollback, so the refusal paths cannot stand in for it,
+    /// and hand-inserting a row would test a fixture rather than the code that
+    /// writes blobs. This runs the real staging and the real blob publication
+    /// and then stops where a crash would.
+    func _publishDeskMaterialBlobOnlyForTesting(_ draft: WorkMaterialDraft) async throws {
+        try await ensureLoaded()
+        let probe = newReadContext()
+        let isolated = await probe.perform { [probe] in Self.isInMemory(probe) }
+        guard isolated else { return }
+        let staged = try await stageWorkMaterialBytes(
+            id: draft.id,
+            kind: draft.kind,
+            filename: draft.filename,
+            payload: draft.payload,
+            declaredByteSize: draft.byteSize,
+            declaredStorageMode: draft.storageMode,
+            sourceFileURL: nil,
+            sourceFileByteSize: nil,
+            onProgress: { _ in }
+        )
+        guard staged.storageMode == .syncedPayload,
+              let payload = staged.blobPayload,
+              let contentHash = staged.contentHash else { return }
+        _ = try await publishWorkMaterialBlob(
+            materialID: draft.id,
+            payload: payload,
+            byteSize: staged.byteSize,
+            contentHash: contentHash
+        )
     }
 
     private static func isInMemory(_ context: NSManagedObjectContext) -> Bool {

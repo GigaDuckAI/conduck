@@ -3,11 +3,15 @@
 // Conduck
 // ShareTargetsSnapshotWriter.swift
 //
-// Share-Extension destination picker — the MAIN-APP WRITER that REGENERATES the
-// App-Group `share-targets.json` the appex reads to fill its picker. The appex
+// Share-Extension "Send to" picker — the MAIN-APP WRITER that REGENERATES the
+// App-Group `share-targets.json` the appex reads to fill that picker. The appex
 // can't reach the live store / palette enum / `RemoteAgentRef`, so every render
 // value (display name, badge color "#RRGGBB", monogram) is RESOLVED here and
 // frozen into the flat `ShareTargetsSnapshot` contract.
+//
+// WORK TARGETS: none. Work is ONE desk, so the appex's Add-to-Work mode offers
+// no destination and `recentWorkItems` is published EMPTY. The field itself
+// stays in the contract because its three source copies must stay byte-identical.
 //
 // WRITE LOCATION (load-bearing): `<AppGroup>/Application Support/share-targets.json`
 // — the appex reads the SAME literal path. The write is ATOMIC (sibling temp +
@@ -32,10 +36,6 @@ import SwiftUI
 /// coalesced: actor methods are re-entrant across `await`, so an older build is
 /// explicitly discarded when a newer regeneration has started.
 actor ShareTargetsSnapshotWriter {
-
-    /// Keep the cross-process snapshot glanceable and cheap to decode inside an
-    /// extension. The full board remains available after opening Conduck.
-    nonisolated static let maximumRecentWorkItems = 8
 
     /// Production singleton — writes into the App-Group `Application Support`
     /// container, reads the shared store + settings singletons.
@@ -101,8 +101,8 @@ actor ShareTargetsSnapshotWriter {
     ///     colorHex / monogram / configured=true, all pre-resolved here.
     ///   - recentConversations: the most-recent conversations (cap 12) → the flat
     ///     RecentConversation (id / label / backendRef / lastActivityAt).
-    ///   - recentWorkItems: a bounded most-recent-first list of open Work items,
-    ///     read as id/title/date summaries only (no materials, runs or vault).
+    ///   - recentWorkItems: always empty — Work is one desk, so the appex has
+    ///     nothing to pick between and the store is never read for it.
     private func buildSnapshot() async -> ShareTargetsSnapshot {
         // One customs roster read drives both the metadata + palette resolution
         // (built-in refs ignore it; customs key on it).
@@ -147,30 +147,6 @@ actor ShareTargetsSnapshotWriter {
             recentConversations: recentConversations,
             recentWorkItems: recentWorkItems
         )
-    }
-
-    /// Pure projection for tests and for keeping the publication rule explicit:
-    /// ordering is true modified recency (independent of the board's pinned
-    /// grouping) and the payload is bounded before it crosses the process
-    /// boundary. Done items are excluded by the store read that feeds this.
-    nonisolated static func makeRecentWorkItems(
-        _ items: [WorkItemSummary],
-        limit: Int = maximumRecentWorkItems
-    ) -> [ShareTargetsSnapshot.RecentWorkItem] {
-        guard limit > 0 else { return [] }
-        return items
-            .sorted { lhs, rhs in
-                if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
-                return lhs.id.uuidString < rhs.id.uuidString
-            }
-            .prefix(limit)
-            .map { item in
-                ShareTargetsSnapshot.RecentWorkItem(
-                    id: item.id,
-                    title: item.title.trimmingCharacters(in: .whitespacesAndNewlines),
-                    modifiedAt: item.updatedAt
-                )
-            }
     }
 
     /// PURE filter+map: keep only recents whose bound `backend` is still in

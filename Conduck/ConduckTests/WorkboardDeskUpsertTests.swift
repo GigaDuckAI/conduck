@@ -212,7 +212,12 @@ final class WorkboardDeskUpsertTests: XCTestCase {
 
     // MARK: - Payload repair
 
-    func testReplayRepairsACardWhoseVaultBytesAreGone() async throws {
+    /// A capture within the sync ceiling takes the synced lane, so the payload a
+    /// desk card can lose is its blob — the state the payload store's loss and a
+    /// blob-after-material CloudKit import both produce. The desk's own property
+    /// is that the repair stays one card: a replay carrying the bytes restores
+    /// them in place rather than publishing a second row beside the pending one.
+    func testReplayRepairsACardWhoseSyncedBytesAreGone() async throws {
         let store = ConversationStore(inMemory: true)
         let payload = Data("recovered rate card".utf8)
         let draft = WorkMaterialDraft(
@@ -225,19 +230,21 @@ final class WorkboardDeskUpsertTests: XCTestCase {
         )
 
         let published = try await store.upsertDeskMaterial(draft)
-        XCTAssertEqual(published.availability, .availableLocally)
-        let key = try XCTUnwrap(published.localVaultKey)
-        try await store.workAssetVault.remove(key)
+        XCTAssertEqual(published.storageMode, .syncedPayload)
+        XCTAssertEqual(published.availability, .synced)
+        XCTAssertNil(published.localVaultKey,
+                     "the synced lane stages nothing into the device-local vault")
+        await store._deleteWorkMaterialBlobRowsForTesting(materialID: draft.id)
 
         let damagedValue = try await store
             .fetchWorkItem(id: Constants.workboardDeskItemID)?.materials.first
         let damaged = try XCTUnwrap(damagedValue)
-        XCTAssertEqual(damaged.availability, .unavailableOnThisDevice)
+        XCTAssertEqual(damaged.availability, .syncedPending)
 
         let repaired = try await store.upsertDeskMaterial(draft)
 
         XCTAssertEqual(repaired.id, draft.id)
-        XCTAssertEqual(repaired.availability, .availableLocally,
+        XCTAssertEqual(repaired.availability, .synced,
                        "a replay that still carries the bytes restores them")
         let repairedPayload = try await store.loadWorkMaterialPayload(id: draft.id)
         XCTAssertEqual(repairedPayload, payload)

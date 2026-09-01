@@ -79,6 +79,10 @@ struct WorkboardCaptureCanvas: View {
     @State private var materialComposer: WorkboardMaterialComposerKind?
     @State private var largeImportConfirmation: WorkboardWorkspaceLargeImportConfirmation?
     @State private var isAddingThought = false
+    /// The shared account-level monitor, observed rather than copied: the desk
+    /// and the conversation list must never disagree about whether iCloud is
+    /// signed in, nor about whether this outage's banner was already dismissed.
+    @State private var syncMonitor = CloudSyncMonitor.shared
     @FocusState private var composerFocused: Bool
     #if os(iOS)
     @State private var showsCamera = false
@@ -235,6 +239,27 @@ struct WorkboardCaptureCanvas: View {
         if composerFocused { composerFocused = false }
     }
 
+    /// The desk's sync notice, and the whole of it. It is driven by ACCOUNT
+    /// state — signed out, restricted, storage full — because those are the only
+    /// states a person can act on and the only ones that hold for every card at
+    /// once. A failed sync EVENT is deliberately not a trigger: card metadata and
+    /// card bytes are mirrored from two separate stores, so the most recent
+    /// failure can concern one payload while the rest of the desk is syncing
+    /// normally, and a banner is a claim about all of it.
+    ///
+    /// The dismissal is the same sticky per-outage flag the conversation list's
+    /// banner uses, on purpose: the account is broken in one place, so saying so
+    /// twice and asking to be dismissed twice would be the same interruption
+    /// charged again.
+    @ViewBuilder
+    private var deskSyncBanner: some View {
+        if syncMonitor.showsBanner, let reason = syncMonitor.unavailableReason {
+            ICloudUnavailableBanner(reason: reason) {
+                syncMonitor.dismissBanner()
+            }
+        }
+    }
+
     /// The only surviving canvas status: it exists while an import is running
     /// and disappears with it, so it costs the de-texted board nothing at rest.
     @ViewBuilder
@@ -272,6 +297,7 @@ struct WorkboardCaptureCanvas: View {
     @ViewBuilder
     private var boardStack: some View {
         VStack(alignment: .leading, spacing: 14) {
+            deskSyncBanner
             importProgress
             if !item.materials.isEmpty {
                 WorkboardMaterialBoard(
@@ -1374,10 +1400,30 @@ private struct WorkboardSourceCard: View {
     @ViewBuilder
     private var availabilityGlyph: some View {
         if material.availability != .available {
-            Image(systemName: material.availability == .localOnly ? "internaldrive" : "paperclip.badge.ellipsis")
+            Image(systemName: availabilityGlyphName)
                 .font(.caption)
-                .foregroundStyle(material.availability == .localOnly ? AppColors.brandTeal : AppColors.warning)
+                .foregroundStyle(availabilityGlyphTint)
                 .accessibilityHidden(true)
+        }
+    }
+
+    /// A card waiting for iCloud is not a card asking to be repaired, so it
+    /// carries the sync glyph in the tertiary tint rather than the paperclip in
+    /// the warning tint: only `unavailableOnThisDevice` is something the person
+    /// can act on.
+    private var availabilityGlyphName: String {
+        switch material.availability {
+        case .localOnly: return "internaldrive"
+        case .syncPending: return "icloud.and.arrow.down"
+        case .available, .unavailableOnThisDevice: return "paperclip.badge.ellipsis"
+        }
+    }
+
+    private var availabilityGlyphTint: Color {
+        switch material.availability {
+        case .localOnly: return AppColors.brandTeal
+        case .syncPending: return AppColors.textTertiary
+        case .available, .unavailableOnThisDevice: return AppColors.warning
         }
     }
 
@@ -1588,15 +1634,23 @@ private struct WorkboardSourceCard: View {
     }
 
     private var availabilityLabel: LocalizedStringResource {
-        material.availability == .localOnly
-            ? LocalizedStringResource(
+        switch material.availability {
+        case .localOnly:
+            return LocalizedStringResource(
                 "workboard.material.localOnly",
                 defaultValue: "Available on this device"
             )
-            : LocalizedStringResource(
+        case .syncPending:
+            return LocalizedStringResource(
+                "workboard.material.syncPending",
+                defaultValue: "Waiting for iCloud…"
+            )
+        case .available, .unavailableOnThisDevice:
+            return LocalizedStringResource(
                 "workboard.material.reattach.short",
                 defaultValue: "Reattach"
             )
+        }
     }
 }
 

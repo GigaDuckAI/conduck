@@ -49,13 +49,18 @@ enum WorkboardMaterialKind: String, CaseIterable, Codable, Hashable, Sendable {
 
 /// Device-relative payload truth. Local-only files intentionally remain visible
 /// on other devices as provenance, but they cannot be opened there until their
-/// bytes are reattached.
+/// bytes are reattached. `syncPending` is the other unreadable state and is a
+/// different thing to ask of the person: the bytes ride private CloudKit and
+/// have not landed here yet, so the card waits rather than asking to be
+/// repaired. Both are unreadable, so both fail closed — `isAvailable` names
+/// the readable cases so a state added later cannot fail open by omission.
 enum WorkboardMaterialAvailability: String, Codable, Hashable, Sendable {
     case available
     case localOnly
+    case syncPending
     case unavailableOnThisDevice
 
-    var isAvailable: Bool { self != .unavailableOnThisDevice }
+    var isAvailable: Bool { self == .available || self == .localOnly }
 }
 
 struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {

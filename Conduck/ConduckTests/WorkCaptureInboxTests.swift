@@ -302,8 +302,8 @@ final class WorkCaptureInboxTests: XCTestCase {
             XCTAssertTrue(source.contains("if !didPublish"), relativePath)
             XCTAssertTrue(source.contains("try? fm.removeItem(at: tmp)"), relativePath)
             XCTAssertTrue(
-                source.contains("targetWorkItemID: targetWorkItemID"),
-                "\(relativePath) must carry the optional inert Work destination into the envelope"
+                source.contains("targetWorkItemID: nil"),
+                "\(relativePath) must publish a targetless envelope — Work is one desk, so an appex can never name a destination"
             )
         }
     }
@@ -314,17 +314,23 @@ final class WorkCaptureInboxTests: XCTestCase {
         let expectedWorkKeys = [
             "share.addToWork",
             "share.addToWork.progress",
-            "share.work.new",
-            "share.work.new.detail",
-            "share.work.section.destination",
-            "share.work.section.recent",
-            "share.work.untitled",
+            "share.work.desk.detail",
             "share.work.error.empty",
             "share.work.error.title",
             "share.work.error.tooLarge",
             "share.work.error.unavailable",
             "share.work.error.invalidContent",
             "share.work.error.unsupportedItem",
+        ]
+        // Work is ONE desk: the destination picker has no subject, so neither
+        // appex may carry a target list, a "New Work" row or an untitled-card
+        // placeholder. Guarded positively so a revert shows up here first.
+        let retiredWorkKeys = [
+            "share.work.new",
+            "share.work.new.detail",
+            "share.work.section.destination",
+            "share.work.section.recent",
+            "share.work.untitled",
         ]
         for relativePath in [
             "ConduckShareExtension/ShareView.swift",
@@ -346,8 +352,18 @@ final class WorkCaptureInboxTests: XCTestCase {
                     "\(relativePath) must use the exact catalog key \(key)"
                 )
             }
+            for key in retiredWorkKeys {
+                XCTAssertFalse(
+                    source.contains("String(localized: \"\(key)\""),
+                    "\(relativePath) must not reintroduce the Work destination key \(key)"
+                )
+            }
             XCTAssertFalse(source.contains("String(localized: \"share.addToWorkboard"), relativePath)
             XCTAssertFalse(source.contains("String(localized: \"share.workboard."), relativePath)
+            XCTAssertFalse(
+                source.contains("snapshot.recentWorkItems"),
+                "\(relativePath) must not read Work targets — the snapshot publishes none"
+            )
         }
 
         for relativePath in [
@@ -362,6 +378,12 @@ final class WorkCaptureInboxTests: XCTestCase {
                 XCTAssertTrue(
                     catalog.contains("\"\(key)\" :"),
                     "\(relativePath) must carry the exact source key \(key)"
+                )
+            }
+            for key in retiredWorkKeys {
+                XCTAssertFalse(
+                    catalog.contains("\"\(key)\" :"),
+                    "\(relativePath) must not keep the retired Work destination key \(key)"
                 )
             }
             XCTAssertFalse(catalog.contains("\"share.addToWorkboard\" :"), relativePath)
