@@ -45,8 +45,9 @@ nonisolated enum WorkItemContentLimits {
     static let maximumFieldCharacters = WorkCaptureEnvelope.maximumNoteCharacters
 }
 
-/// The editable fields of one brief. A full value (rather than a patch full of
-/// nested optionals) makes autosave call sites explicit about what they retain.
+/// The editable heading fields of a work item. The desk leaves both unwritten;
+/// a full value (rather than a patch full of nested optionals) keeps autosave
+/// call sites explicit about what they retain.
 nonisolated struct WorkItemContent: Sendable, Hashable, Codable {
     var title: String
     var objective: String
@@ -163,8 +164,8 @@ nonisolated enum WorkMaterialStorageMode: String, CaseIterable, Codable, Sendabl
 }
 
 /// How much room one material's card claims on the board. Presentation only:
-/// it is never part of a brief, a prompt, or a dispatch snapshot, so writing it
-/// must not advance any revision. `standard` is the absent value — a row that
+/// it is never part of the material's content, so writing it must not advance
+/// any revision. `standard` is the absent value — a row that
 /// has never been resized stores nil, which keeps the CloudKit-mirrored column
 /// empty for every card nobody has deliberately sized.
 nonisolated enum WorkMaterialCardSize: String, CaseIterable, Codable, Sendable, Hashable {
@@ -192,7 +193,7 @@ nonisolated enum WorkMaterialCardSize: String, CaseIterable, Codable, Sendable, 
     var storedValue: String? { self == .standard ? nil : rawValue }
 }
 
-/// Device-relative availability shown before dispatch. This prevents a locally
+/// Device-relative availability of a card's bytes. This prevents a locally
 /// captured large file from simply disappearing when the card opens elsewhere.
 nonisolated enum WorkMaterialAvailability: String, Codable, Sendable, Hashable {
     case metadataOnly
@@ -202,13 +203,13 @@ nonisolated enum WorkMaterialAvailability: String, Codable, Sendable, Hashable {
     /// The row names synced bytes whose blob has not landed on this device yet.
     /// CloudKit materializes a material and its blob independently, so this is
     /// an ordinary arrival gap, not damage. It fails closed — the card renders
-    /// from its metadata but cannot open, play or dispatch until bytes arrive.
+    /// from its metadata but cannot open or play until the bytes arrive.
     case syncedPending
 }
 
-/// Creation request. File/image content stays in the device-local vault; only
-/// metadata enters the CloudKit-mirrored row. Callers never hand the store a
-/// security-scoped URL.
+/// Creation request. The row itself carries metadata only; where the bytes go
+/// is `WorkMaterialStoragePolicy`'s decision, recorded in `storageMode`.
+/// Callers never hand the store a security-scoped URL.
 nonisolated struct WorkMaterialDraft: Sendable {
     let id: UUID
     let kind: WorkMaterialKind
@@ -421,7 +422,7 @@ extension WorkboardStoreError: LocalizedError {
             let limit = WorkItemContentLimits.maximumFieldCharacters.formatted(.number)
             return String(
                 localized: "workboard.error.contentTooLong",
-                defaultValue: "That brief is longer than \(limit) characters. Shorten it, then try again."
+                defaultValue: "That text is longer than \(limit) characters. Shorten it, then try again."
             )
         case .itemNotFound,
              .staleRevision,

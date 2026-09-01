@@ -1082,30 +1082,12 @@ private struct WorkboardMaterialBoard: View {
     var body: some View {
         WorkboardMosaicLayout(metrics: metrics, layoutDirection: layoutDirection) {
             ForEach(Array(item.materials.enumerated()), id: \.element.id) { index, material in
-                WorkboardSourceCard(
-                    material: material,
-                    size: material.cardSize,
-                    grantedColumns: gridColumns,
-                    boardPosition: index + 1,
-                    boardCount: item.materials.count,
-                    onOpen: { onOpen(material) },
-                    onReattach: material.availability == .unavailableOnThisDevice
-                        ? { onReattach(material) }
-                        : nil,
-                    onSetSize: { size in setSize(size, for: material) },
-                    onMoveEarlier: index > 0
-                        ? { move(material, direction: .earlier) }
-                        : nil,
-                    onMoveLater: index + 1 < item.materials.count
-                        ? { move(material, direction: .later) }
-                        : nil,
-                    onRemove: { materialPendingRemoval = material }
-                )
-                .workboardMosaicCardSize(material.cardSize)
-                .draggable(WorkMaterialDragPayload(
-                    itemID: Constants.workboardDeskItemID,
-                    materialID: material.id
-                ))
+                card(for: material, at: index)
+                    .workboardMosaicCardSize(material.cardSize)
+                    .draggable(WorkMaterialDragPayload(
+                        itemID: Constants.workboardDeskItemID,
+                        materialID: material.id
+                    ))
             }
         }
         .frame(maxWidth: .infinity)
@@ -1168,6 +1150,51 @@ private struct WorkboardMaterialBoard: View {
                 )),
                 material.name
             ))
+        }
+    }
+
+    /// Which card one material draws. A voice note is a transport rather than a
+    /// preview, so it draws the audio card; every other kind draws the source
+    /// card. Both take the same board arguments and carry the same arrange
+    /// actions, so footprint, order, drag and removal behave identically
+    /// whichever one is drawn — the kind decides the CONTENT of the tile and
+    /// nothing about its place on the board.
+    @ViewBuilder
+    private func card(for material: WorkboardMaterialSnapshot, at index: Int) -> some View {
+        let onMoveEarlier: (() -> Void)? = index > 0
+            ? { move(material, direction: .earlier) }
+            : nil
+        let onMoveLater: (() -> Void)? = index + 1 < item.materials.count
+            ? { move(material, direction: .later) }
+            : nil
+        if material.kind == .audio {
+            WorkboardAudioCardView(
+                material: material,
+                size: material.cardSize,
+                grantedColumns: gridColumns,
+                boardPosition: index + 1,
+                boardCount: item.materials.count,
+                onSetSize: { size in setSize(size, for: material) },
+                onMoveEarlier: onMoveEarlier,
+                onMoveLater: onMoveLater,
+                onRemove: { materialPendingRemoval = material }
+            )
+        } else {
+            WorkboardSourceCard(
+                material: material,
+                size: material.cardSize,
+                grantedColumns: gridColumns,
+                boardPosition: index + 1,
+                boardCount: item.materials.count,
+                onOpen: { onOpen(material) },
+                onReattach: material.availability == .unavailableOnThisDevice
+                    ? { onReattach(material) }
+                    : nil,
+                onSetSize: { size in setSize(size, for: material) },
+                onMoveEarlier: onMoveEarlier,
+                onMoveLater: onMoveLater,
+                onRemove: { materialPendingRemoval = material }
+            )
         }
     }
 
@@ -1596,11 +1623,13 @@ private struct WorkboardSourceCard: View {
             .accessibilityHidden(true)
     }
 
+    /// `.audio` is listed for exhaustiveness only — a voice note draws
+    /// `WorkboardAudioCardView`, never this card.
     private var previewText: String? {
         switch material.kind {
         case .note: return material.textContent
         case .link: return material.urlString
-        case .image, .file: return material.detail
+        case .image, .file, .audio: return material.detail
         }
     }
 

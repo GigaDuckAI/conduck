@@ -28,7 +28,7 @@ struct CaptureWorkboardIntent: AppIntent {
     static var description = IntentDescription(
         LocalizedStringResource(
             "intent.workboardCapture.description",
-            defaultValue: "Save a thought as a private Workboard draft without sending it to an AI."
+            defaultValue: "Save a thought to your private Work desk without sending it to an AI."
         )
     )
 
@@ -53,7 +53,7 @@ struct CaptureWorkboardIntent: AppIntent {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { throw CaptureWorkboardIntentError.emptyThought }
         // A Shortcut can pipe a whole document into this parameter. Refuse
-        // rather than truncate: a silently shortened brief looks like a
+        // rather than truncate: a silently shortened note looks like a
         // successful capture and loses the part the person cared about.
         guard normalized.count <= WorkCaptureEnvelope.maximumNoteCharacters else {
             throw CaptureWorkboardIntentError.thoughtTooLong
@@ -65,7 +65,7 @@ struct CaptureWorkboardIntent: AppIntent {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty })
             .map { String($0.prefix(72)) }
-            ?? String(localized: "workboard.item.untitled", defaultValue: "Untitled brief")
+            ?? String(localized: "workboard.item.untitled", defaultValue: "Untitled note")
 
         // Each run of the Shortcut is its own capture, so the material id is
         // minted here rather than derived from the text: two runs carrying the
@@ -87,7 +87,7 @@ struct CaptureWorkboardIntent: AppIntent {
         )
         let confirmation = String(
             localized: "intent.workboardCapture.confirmation",
-            defaultValue: "Added to Workboard. Nothing was sent."
+            defaultValue: "Added to Work. Nothing was sent."
         )
         return .result(
             value: record.title,

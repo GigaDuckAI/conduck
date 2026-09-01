@@ -302,8 +302,11 @@ final class WorkboardLiveRepository {
     static func presentationKind(_ record: WorkMaterialRecord) -> WorkboardMaterialKind {
         switch record.kind {
         case .image: return .image
-        // A voice note travels as its recording.
-        case .file, .audio: return .file
+        case .file: return .file
+        // A voice note travels as its recording, and the recording is the card:
+        // narrowing it to a file would draw an openable document where a
+        // transport belongs, and the audio card would never be reached.
+        case .audio: return .audio
         case .link: return .link
         case .note, .transcript: return .note
         case .unknown: return record.filename != nil || record.hasPayload ? .file : .note
@@ -334,6 +337,8 @@ final class WorkboardLiveRepository {
             return String(localized: "workboard.material.link", defaultValue: "Link")
         case .note:
             return String(localized: "workboard.material.note", defaultValue: "Note")
+        case .audio:
+            return String(localized: "workboard.material.audio", defaultValue: "Voice note")
         }
     }
 
@@ -395,7 +400,9 @@ final class WorkboardLiveRepository {
         let textContent: String?
         let urlString: String?
         switch material.kind {
-        case .image, .file:
+        case .image, .file, .audio:
+            // A recording arrives carrying bytes or a file URL exactly as a
+            // file does; only the shape it draws as differs.
             if let url = material.fileURL {
                 payload = nil
                 sourceFileURL = url
@@ -470,6 +477,7 @@ final class WorkboardLiveRepository {
         case .file: return .file
         case .link: return .link
         case .note: return .note
+        case .audio: return .audio
         }
     }
 
@@ -591,12 +599,12 @@ enum WorkboardLiveRepositoryError: LocalizedError, Equatable {
         case .itemNotFound:
             return String(
                 localized: "workboard.error.itemMissing",
-                defaultValue: "This brief is no longer available."
+                defaultValue: "This card is no longer available."
             )
         case .staleDraft:
             return String(
                 localized: "workboard.error.staleDraft",
-                defaultValue: "This brief changed on another device. Reopen it to keep the latest version."
+                defaultValue: "This card changed on another device. Reopen it to keep the latest version."
             )
         case .missingPayload:
             return String(

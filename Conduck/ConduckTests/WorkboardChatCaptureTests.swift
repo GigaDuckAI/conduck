@@ -219,4 +219,155 @@ final class WorkboardChatCaptureTests: XCTestCase {
         let byTurnIdentity = try await store.fetchWorkItem(captureEnvelopeID: firstMessage.id)
         XCTAssertNil(byTurnIdentity, "A captured turn is a card, so no item carries it as capture identity")
     }
+
+    // MARK: - Replay repairs rather than reports
+
+    /// The desk already showing a card is not proof the card can be opened: the
+    /// blob and the material row commit in different stores, so a crash between
+    /// them — or an import that has not brought the bytes — leaves a card
+    /// claiming a payload that is not there. Skipping an attachment on its id
+    /// alone would report the turn as captured while the card stays unreadable
+    /// for good, so a repeat republishes every attachment this device can still
+    /// read and lets the store decide whether that is a repair or a no-op.
+    func testRecapturingATurnRestagesAnAttachmentWhoseSyncedBytesAreGone() async throws {
+        let store = ConversationStore(inMemory: true)
+        let conversation = try await store.createConversation(backend: "hermes")
+        let payload = Data("the source the card promises".utf8)
+        let message = try await store.appendMessage(
+            role: "user",
+            text: "Keep this",
+            conversationID: conversation.id,
+            sourceDevice: "test",
+            attachments: [
+                AttachmentDraft(
+                    mimeType: "text/plain",
+                    filename: "source.txt",
+                    data: payload,
+                    thumbnailData: nil,
+                    width: 0,
+                    height: 0,
+                    byteSize: payload.count,
+                    sequence: 0
+                )
+            ]
+        )
+        _ = try await store.captureMessageToWork(message, conversationID: conversation.id)
+        let capturedValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let captured = try XCTUnwrap(capturedValue)
+        let attachmentCard = try XCTUnwrap(captured.materials.first { $0.filename == "source.txt" })
+        XCTAssertEqual(attachmentCard.storageMode, .syncedPayload)
+        XCTAssertEqual(attachmentCard.availability, .synced)
+
+        let dropped = await store._deleteWorkMaterialBlobRowsForTesting(materialID: attachmentCard.id)
+        XCTAssertEqual(dropped, 1)
+        let damagedValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let damaged = try XCTUnwrap(
+            try XCTUnwrap(damagedValue).materials.first { $0.id == attachmentCard.id }
+        )
+        XCTAssertEqual(damaged.availability, .syncedPending)
+        XCTAssertFalse(damaged.hasPayload)
+
+        let receipt = try await store.captureMessageToWork(message, conversationID: conversation.id)
+
+        XCTAssertTrue(receipt.wasAlreadyCaptured)
+        XCTAssertEqual(receipt.addedMaterialCount, 0,
+                       "a repaired card was already on the desk, so nothing was added")
+        XCTAssertEqual(receipt.referencedOnlyMaterialCount, 0)
+        XCTAssertEqual(receipt.failedMaterialCount, 0)
+
+        let repairedValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let deskAfter = try XCTUnwrap(repairedValue)
+        XCTAssertEqual(deskAfter.materials.count, 2, "the repair is the same card, not a second one")
+        let repaired = try XCTUnwrap(deskAfter.materials.first { $0.id == attachmentCard.id })
+        XCTAssertEqual(repaired.availability, .synced)
+        let restored = try await store.loadWorkMaterialPayload(id: attachmentCard.id)
+        XCTAssertEqual(restored, payload)
+        let rows = await store._workMaterialRowsForTesting(id: attachmentCard.id)
+        XCTAssertEqual(rows.count, 1)
+    }
+
+    // MARK: - Upgrade from a pre-desk build
+
+    /// A build before the single desk minted one Work item per captured turn
+    /// and hung the turn and its attachments off it. Those rows are kept, so a
+    /// re-capture meets its own material ids under an owner that is not the
+    /// desk: it has to adopt them, because reporting a failure would leave the
+    /// person with a turn that can never be captured again.
+    func testATurnCapturedByAnOlderBuildIsAdoptedOntoTheDeskRatherThanFailing() async throws {
+        let store = ConversationStore(inMemory: true)
+        let conversation = try await store.createConversation(backend: "hermes")
+        let payload = Data("the attachment the older build copied".utf8)
+        let message = try await store.appendMessage(
+            role: "user",
+            text: "Keep this turn",
+            conversationID: conversation.id,
+            sourceDevice: "test",
+            attachments: [
+                AttachmentDraft(
+                    mimeType: "text/plain",
+                    filename: "source.txt",
+                    data: payload,
+                    thumbnailData: nil,
+                    width: 0,
+                    height: 0,
+                    byteSize: payload.count,
+                    sequence: 0
+                )
+            ]
+        )
+        // The PERSISTED attachment identity — the record `appendMessage` hands
+        // back mints its own, and the capture lane reads the stored rows.
+        let localPayloads = try await store.loadLocalAttachmentPayloads(for: message.id)
+        let attachmentID = try XCTUnwrap(localPayloads.keys.first)
+        // Exactly what the pre-desk lane wrote: an item named by the turn, with
+        // the turn and its attachment as materials under it.
+        _ = try await store.createWorkItem(
+            WorkItemDraft(
+                id: message.id,
+                captureEnvelopeID: message.id,
+                content: WorkItemContent(title: "Keep this turn")
+            )
+        )
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                id: message.id,
+                kind: .note,
+                title: "Chat message",
+                textContent: "Keep this turn",
+                storageMode: .metadataOnly
+            ),
+            to: message.id
+        )
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                id: attachmentID,
+                kind: .file,
+                title: "source.txt",
+                filename: "source.txt",
+                mimeType: "text/plain",
+                payload: payload
+            ),
+            to: message.id
+        )
+
+        let receipt = try await store.captureMessageToWork(message, conversationID: conversation.id)
+
+        XCTAssertEqual(receipt.failedMaterialCount, 0,
+                       "a card an older build parked elsewhere is adopted, never reported as failed")
+        XCTAssertEqual(receipt.addedMaterialCount, 2)
+        XCTAssertEqual(receipt.itemID, Constants.workboardDeskItemID)
+        XCTAssertFalse(receipt.wasAlreadyCaptured, "the desk itself held neither card")
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(Set(desk.materials.map(\.id)), [message.id, attachmentID])
+        let turnRows = await store._workMaterialRowsForTesting(id: message.id)
+        XCTAssertEqual(turnRows.count, 1, "adoption moves the row; it never publishes a second")
+        let carried = try await store.loadWorkMaterialPayload(id: attachmentID)
+        XCTAssertEqual(carried, payload, "an adopted attachment keeps the bytes it already had")
+
+        let legacyValue = try await store.fetchWorkItem(id: message.id)
+        let legacy = try XCTUnwrap(legacyValue, "the item the older build minted is never deleted")
+        XCTAssertTrue(legacy.materials.isEmpty)
+    }
 }

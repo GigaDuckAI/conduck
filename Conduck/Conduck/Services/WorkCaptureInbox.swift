@@ -8,11 +8,14 @@
 // second rename, imports it into the Workboard, then acknowledges deletion. The
 // API deliberately has no dispatch operation and the envelope has no gateway
 // fields, so capture ingress cannot accidentally become an agent send path.
-// Claim tokens protect against stale acknowledgements within one process; a
-// lease file inside the claimed directory extends the same protection across
-// processes, because the app and a headless intent process drain the same queue.
-// `reconcile()` returns claims whose lease is absent or older than the stale
-// horizon to the pending queue and sweeps only abandoned temp data.
+// Claim tokens protect against stale acknowledgements within one process. Across
+// processes — the app and a headless intent process drain the same queue — the
+// claiming rename carries ownership itself: its destination name is unique to one
+// acquisition, so no other process can name, requeue, or roll back that path, and
+// every later operation on a claim verifies that name's generation. A lease file
+// written inside it names the owner and carries the heartbeat that keeps a long
+// import alive. `reconcile()` returns to the pending queue only claims no live
+// acquisition covers, and sweeps only abandoned temp data.
 //
 // Acknowledgement is never self-issued: only the drainer, after the imported
 // material is durably readable, may delete a claim.
@@ -73,7 +76,11 @@ actor WorkCaptureInbox {
     /// Ownership marker written inside a claimed directory. The name is reserved
     /// against payload leaves so a published envelope can never declare it.
     nonisolated static let leaseFilename = "claim-lease.json"
-    /// A lease this old is treated as abandoned. Chosen far above a realistic
+    /// Separates the three fields a claimed directory's name carries. A UUID
+    /// string never contains it, so the name parses unambiguously even when the
+    /// claim instant is negative.
+    nonisolated static let claimNameSeparator: Character = "_"
+    /// A claim this old is treated as abandoned. Chosen far above a realistic
     /// drain (a bounded envelope persists in seconds) so a live drainer is never
     /// robbed, and low enough that a capture stranded by a crash returns within
     /// one recovery window instead of hiding for an hour. A drain that genuinely
@@ -90,6 +97,10 @@ actor WorkCaptureInbox {
 
     struct Claim: Sendable {
         let token: UUID
+        /// Identifies the one acquisition that took this capture. It is spelled
+        /// into the claimed directory's name, so it is the value every later
+        /// operation checks before touching those bytes.
+        let generation: UUID
         let envelope: WorkCaptureEnvelope
         let directoryURL: URL
 
@@ -104,13 +115,30 @@ actor WorkCaptureInbox {
         }
     }
 
-    /// The on-disk ownership marker. `owner` identifies one inbox instance, so a
-    /// relaunched process never recognizes its predecessor's lease as its own and
-    /// falls back to the horizon, which is the only cross-process liveness signal
-    /// a plain file can carry.
+    /// The on-disk ownership marker. `owner` identifies one inbox instance and
+    /// `generation` the one acquisition it names, so a relaunched process never
+    /// recognizes its predecessor's lease as its own and falls back to the
+    /// horizon, which is the only cross-process liveness signal a plain file can
+    /// carry. `refreshedAt` is what a heartbeat extends.
     struct ClaimLease: Codable, Equatable, Sendable {
         let owner: UUID
+        let generation: UUID
         let refreshedAt: Date
+    }
+
+    /// The identity a claimed directory's NAME carries. The claiming rename is
+    /// the only atomic step of an acquisition, so its destination has to answer
+    /// both ownership questions on its own: which capture this is, and which
+    /// acquisition took it. `claimedAt` is the one freshness clock that is atomic
+    /// with that rename — a rename leaves the directory's own timestamps alone,
+    /// so they still date the publication — which is what lets an acquisition
+    /// whose lease has not landed yet read as live rather than as abandoned.
+    private struct ClaimDirectory {
+        let envelopeID: UUID
+        /// Nil for a bare-id directory. No acquisition in this build can create
+        /// one, so such a directory is stranded by definition.
+        let generation: UUID?
+        let claimedAt: Date?
     }
 
     enum InboxError: Error, Equatable, Sendable {
@@ -149,9 +177,11 @@ actor WorkCaptureInbox {
         /// block later claims. This flag makes a scaffold/enumeration/move failure
         /// explicit to callers instead of silently treating it as an empty queue.
         let encounteredFilesystemFailure: Bool
-        /// Directories left in processing because a lease inside the stale horizon
-        /// still covers them. Distinguishes "another process is draining it" from
-        /// "nothing was stranded", which are otherwise both a zero release count.
+        /// Directories left in processing because a live acquisition still covers
+        /// them — a lease inside the stale horizon, or a claiming rename whose
+        /// lease has not landed yet. Distinguishes "another process is draining
+        /// it" from "nothing was stranded", which are otherwise both a zero
+        /// release count.
         let respectedLeaseCount: Int
 
         init(
@@ -180,6 +210,9 @@ actor WorkCaptureInbox {
     /// two inboxes over one directory — the app and a headless intent process —
     /// can tell each other's claims apart.
     nonisolated let ownerID = UUID()
+    /// Keyed by claim generation, not by envelope id: a capture requeued and
+    /// retaken by another process is a different acquisition, and this map must
+    /// not let one instance's bookkeeping speak for the other's.
     private var activeClaims: [UUID: UUID] = [:]
     private var didScaffold = false
 
@@ -265,7 +298,6 @@ actor WorkCaptureInbox {
             isDirectory: true
         )
         let published = baseURL.appendingPathComponent(id.uuidString, isDirectory: true)
-        let processing = processingURL.appendingPathComponent(id.uuidString, isDirectory: true)
 
         // Caller-owned identity makes GigaAction recovery idempotent. If the
         // intent was killed after its atomic move but before it cleared the
@@ -273,8 +305,7 @@ actor WorkCaptureInbox {
         // than publishing a second project. An already-imported capture may no
         // longer have either directory; replaying the same id is still safe
         // because WorkCaptureDrainer persists envelope ids before acknowledge.
-        if fileManager.fileExists(atPath: published.path)
-            || fileManager.fileExists(atPath: processing.path) {
+        if fileManager.fileExists(atPath: published.path) || isClaimed(id) {
             return id
         }
         var entries: [WorkCaptureEnvelope.Entry] = []
@@ -337,8 +368,7 @@ actor WorkCaptureInbox {
             // Another process may have won the same deterministic publication
             // between the existence check and atomic move. Its complete
             // directory is the durable result; the losing temp is discarded.
-            if fileManager.fileExists(atPath: published.path)
-                || fileManager.fileExists(atPath: processing.path) {
+            if fileManager.fileExists(atPath: published.path) || isClaimed(id) {
                 return id
             }
             throw InboxError.filesystemFailure
@@ -350,17 +380,23 @@ actor WorkCaptureInbox {
         return try pendingEnvelopeIDs().count
     }
 
-    /// Claims the oldest published capture. An atomic move is the cross-process
-    /// ownership boundary; a second caller either claims another capture or sees
-    /// no work. The lease is written before validation, so the directory is never
-    /// visible in processing without an owner and cannot be requeued underneath a
-    /// claim that is still being validated. Malformed envelopes are securely
-    /// removed and reported without ever entering Workboard persistence.
+    /// Claims the oldest published capture. The atomic move IS the acquisition of
+    /// ownership: its destination is named for this attempt's generation and the
+    /// instant it happens, so exactly one caller can create that path, no other
+    /// process can requeue or roll back a claim it did not take, and a rename
+    /// whose lease has not landed yet still reads as live rather than abandoned.
+    /// The lease follows immediately and before validation, naming the owner for
+    /// acknowledgement and carrying the heartbeat. Malformed envelopes are
+    /// securely removed and reported without ever entering Workboard persistence.
     func claimNext(now: Date = Date()) throws -> Claim? {
         try ensureScaffold()
         for id in try pendingEnvelopeIDs() {
             let published = baseURL.appendingPathComponent(id.uuidString, isDirectory: true)
-            let claimed = processingURL.appendingPathComponent(id.uuidString, isDirectory: true)
+            let generation = UUID()
+            let claimed = processingURL.appendingPathComponent(
+                Self.claimDirectoryName(envelopeID: id, claimedAt: now, generation: generation),
+                isDirectory: true
+            )
             do {
                 try fileManager.moveItem(at: published, to: claimed)
             } catch {
@@ -374,20 +410,26 @@ actor WorkCaptureInbox {
             }
 
             do {
-                // An unleasable claim is refused outright: proceeding would drain
-                // a directory any other process is free to requeue mid-import.
-                try writeLease(in: claimed, now: now)
+                // An unleasable claim is refused outright: an acknowledgement has
+                // to be able to prove ownership, and the acquisition window that
+                // covers a markerless claim expires with the same horizon.
+                try writeLease(in: claimed, generation: generation, now: now)
             } catch {
-                try preserveClaimedDirectory(id: id, at: claimed)
+                try preserveClaimedDirectory(id: id, at: claimed, generation: generation)
                 throw InboxError.filesystemFailure
             }
 
             do {
                 let envelope = try validateEnvelope(in: claimed, expectedID: id)
                 let token = UUID()
-                activeClaims[id] = token
+                activeClaims[generation] = token
                 postLocalChange()
-                return Claim(token: token, envelope: envelope, directoryURL: claimed)
+                return Claim(
+                    token: token,
+                    generation: generation,
+                    envelope: envelope,
+                    directoryURL: claimed
+                )
             } catch let error as InboxError {
                 switch error {
                 case .invalidEnvelope(_, let reason):
@@ -408,13 +450,13 @@ actor WorkCaptureInbox {
                     postLocalChange()
                     throw error
                 case .filesystemFailure, .staleClaim:
-                    try preserveClaimedDirectory(id: id, at: claimed)
+                    try preserveClaimedDirectory(id: id, at: claimed, generation: generation)
                     throw error
                 }
             } catch {
                 // An unclassified validator failure is not proof of malformed
                 // private data. Preserve it and fail closed for this pass.
-                try preserveClaimedDirectory(id: id, at: claimed)
+                try preserveClaimedDirectory(id: id, at: claimed, generation: generation)
                 throw InboxError.filesystemFailure
             }
         }
@@ -441,7 +483,7 @@ actor WorkCaptureInbox {
                 throw InboxError.filesystemFailure
             }
         }
-        activeClaims.removeValue(forKey: claim.id)
+        activeClaims.removeValue(forKey: claim.generation)
         postLocalChange()
     }
 
@@ -459,7 +501,7 @@ actor WorkCaptureInbox {
         removeLease(in: claim.directoryURL)
         do {
             try fileManager.moveItem(at: claim.directoryURL, to: destination)
-            activeClaims.removeValue(forKey: claim.id)
+            activeClaims.removeValue(forKey: claim.generation)
             postLocalChange()
         } catch {
             throw InboxError.filesystemFailure
@@ -471,7 +513,7 @@ actor WorkCaptureInbox {
     func refreshLease(_ claim: Claim, now: Date = Date()) throws {
         try requireActive(claim)
         try requireLeaseOwnership(claim)
-        try writeLease(in: claim.directoryURL, now: now)
+        try writeLease(in: claim.directoryURL, generation: claim.generation, now: now)
     }
 
     /// Repairs crash-stranded claims and abandoned extension writes. Claims this
@@ -499,17 +541,21 @@ actor WorkCaptureInbox {
             )
         }
 
-        let strandedIDs: [UUID]
+        let strandedChildren: [URL]
         do {
-            strandedIDs = try childEnvelopeIDs(of: processingURL)
+            strandedChildren = try directoryChildren(of: processingURL)
         } catch {
-            strandedIDs = []
+            strandedChildren = []
             encounteredFilesystemFailure = true
         }
-        for id in strandedIDs where activeClaims[id] == nil {
-            let source = processingURL.appendingPathComponent(id.uuidString, isDirectory: true)
-            let destination = baseURL.appendingPathComponent(id.uuidString, isDirectory: true)
-            guard isAbandonedClaim(at: source, now: now) else {
+        for source in strandedChildren {
+            guard let claimed = Self.claimDirectory(named: source.lastPathComponent) else { continue }
+            if let generation = claimed.generation, activeClaims[generation] != nil { continue }
+            let destination = baseURL.appendingPathComponent(
+                claimed.envelopeID.uuidString,
+                isDirectory: true
+            )
+            guard isAbandonedClaim(claimed, at: source, now: now) else {
                 respectedLeases += 1
                 continue
             }
@@ -567,20 +613,74 @@ actor WorkCaptureInbox {
         )
     }
 
-    // MARK: - Cross-process claim lease
+    // MARK: - Cross-process claim ownership
 
-    /// A claimed directory is abandoned when no lease covers it: the marker is
-    /// gone, it names this instance (which is not holding the claim, or the
-    /// caller would have skipped it), or it predates the stale horizon. A lease
+    /// The on-disk name of one acquisition. It is not private because it IS the
+    /// ownership boundary: reconciliation reads it back, and a test that stages
+    /// an acquisition has to spell exactly what the claiming rename creates.
+    nonisolated static func claimDirectoryName(
+        envelopeID: UUID,
+        claimedAt: Date,
+        generation: UUID
+    ) -> String {
+        let separator = claimNameSeparator
+        return "\(envelopeID.uuidString)\(separator)\(epochSeconds(claimedAt))\(separator)\(generation.uuidString)"
+    }
+
+    private nonisolated static func claimDirectory(named name: String) -> ClaimDirectory? {
+        if let envelopeID = UUID(uuidString: name) {
+            return ClaimDirectory(envelopeID: envelopeID, generation: nil, claimedAt: nil)
+        }
+        let fields = name.split(separator: claimNameSeparator, omittingEmptySubsequences: false)
+        guard fields.count == 3,
+              let envelopeID = UUID(uuidString: String(fields[0])),
+              let seconds = Int64(fields[1]),
+              let generation = UUID(uuidString: String(fields[2])) else { return nil }
+        return ClaimDirectory(
+            envelopeID: envelopeID,
+            generation: generation,
+            claimedAt: Date(timeIntervalSince1970: TimeInterval(seconds))
+        )
+    }
+
+    /// Clamped and finite-checked so no date a caller can supply traps the
+    /// conversion; a nonsense instant only ages the claim from a boundary.
+    private nonisolated static func epochSeconds(_ date: Date) -> Int64 {
+        let raw = date.timeIntervalSince1970.rounded(.down)
+        guard raw.isFinite else { return 0 }
+        return Int64(min(max(raw, -8_000_000_000_000), 8_000_000_000_000))
+    }
+
+    /// Whether any acquisition currently holds `id` in processing. The claim
+    /// path carries a generation, so identity has to be read out of the name
+    /// rather than spelled as one expected path.
+    private func isClaimed(_ id: UUID) -> Bool {
+        guard let children = try? directoryChildren(of: processingURL) else { return false }
+        return children.contains { child in
+            Self.claimDirectory(named: child.lastPathComponent)?.envelopeID == id
+        }
+    }
+
+    /// A claimed directory is abandoned when no live acquisition covers it: its
+    /// name predates generation-scoped claims, its lease names this instance
+    /// (which is not holding that generation, or the caller would have skipped
+    /// it), or both the instant its name carries and its lease predate the stale
+    /// horizon. The name's instant is what protects a rename whose lease has not
+    /// landed yet, and it is the only clock atomic with that rename. A claim
     /// dated in the future is respected until the clock catches up — skew must
     /// never let two processes drain one capture at once.
-    private func isAbandonedClaim(at directory: URL, now: Date) -> Bool {
-        switch leaseState(in: directory, fallbackDate: now) {
-        case .absent:
+    private func isAbandonedClaim(_ claimed: ClaimDirectory, at directory: URL, now: Date) -> Bool {
+        guard let generation = claimed.generation, let claimedAt = claimed.claimedAt else {
             return true
-        case .held(let owner, let refreshedAt):
-            if owner == ownerID { return true }
-            return now.timeIntervalSince(refreshedAt) >= Self.staleClaimHorizon
+        }
+        switch leaseState(in: directory, fallbackDate: claimedAt) {
+        case .absent:
+            return now.timeIntervalSince(claimedAt) >= Self.staleClaimHorizon
+        case .held(let owner, let leasedGeneration, let refreshedAt):
+            // The path is unique to one acquisition, so a lease naming this
+            // instance on a generation it no longer holds is its own dead claim.
+            if owner == ownerID, leasedGeneration == generation { return true }
+            return now.timeIntervalSince(max(claimedAt, refreshedAt)) >= Self.staleClaimHorizon
         }
     }
 
@@ -590,33 +690,50 @@ actor WorkCaptureInbox {
     private func requireLeaseOwnership(_ claim: Claim) throws {
         switch leaseState(in: claim.directoryURL, fallbackDate: Date()) {
         case .absent:
-            // A directory that is simply gone was already consumed; only a
-            // present directory stripped of its marker means lost ownership.
-            guard fileManager.fileExists(atPath: claim.directoryURL.path) else { return }
-            activeClaims.removeValue(forKey: claim.id)
+            // The marker is written before a claim is handed out and the path is
+            // unique to this acquisition, so a missing marker — whether the
+            // directory is gone or merely stripped — means the claim was taken.
+            activeClaims.removeValue(forKey: claim.generation)
             throw InboxError.staleClaim
-        case .held(let owner, _):
+        case .held(let owner, let generation, _):
             // An unreadable marker is corruption, not evidence of a takeover: a
             // process that steals the claim writes a readable lease of its own.
-            guard let owner, owner != ownerID else { return }
-            activeClaims.removeValue(forKey: claim.id)
+            guard let owner else { return }
+            guard owner != ownerID || generation != claim.generation else { return }
+            activeClaims.removeValue(forKey: claim.generation)
             throw InboxError.staleClaim
+        }
+    }
+
+    /// Whether `directory` is safe for this acquisition's own rollback to move.
+    /// A readable lease naming anyone else means the path was taken over, and
+    /// rolling it back would requeue bytes another drainer is reading.
+    private func isOwnedForRollback(_ directory: URL, generation: UUID) -> Bool {
+        switch leaseState(in: directory, fallbackDate: Date()) {
+        case .absent:
+            // The lease may simply not have landed yet: rollback is reached from
+            // the failure of the write itself.
+            return true
+        case .held(let owner, let leasedGeneration, _):
+            guard let owner else { return true }
+            return owner == ownerID && leasedGeneration == generation
         }
     }
 
     private enum LeaseState {
         case absent
-        case held(owner: UUID?, refreshedAt: Date)
+        case held(owner: UUID?, generation: UUID?, refreshedAt: Date)
     }
 
     private func leaseURL(in directory: URL) -> URL {
         directory.appendingPathComponent(Self.leaseFilename, isDirectory: false)
     }
 
-    private func writeLease(in directory: URL, now: Date) throws {
+    private func writeLease(in directory: URL, generation: UUID, now: Date) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
-        guard let data = try? encoder.encode(ClaimLease(owner: ownerID, refreshedAt: now)) else {
+        let lease = ClaimLease(owner: ownerID, generation: generation, refreshedAt: now)
+        guard let data = try? encoder.encode(lease) else {
             throw InboxError.filesystemFailure
         }
         do {
@@ -642,9 +759,13 @@ actor WorkCaptureInbox {
             // Unreadable bytes still prove someone claimed the directory. Age it
             // by the file instead so the horizon can still expire it.
             let modifiedAt = (try? fileManager.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
-            return .held(owner: nil, refreshedAt: modifiedAt ?? fallbackDate)
+            return .held(owner: nil, generation: nil, refreshedAt: modifiedAt ?? fallbackDate)
         }
-        return .held(owner: lease.owner, refreshedAt: lease.refreshedAt)
+        return .held(
+            owner: lease.owner,
+            generation: lease.generation,
+            refreshedAt: lease.refreshedAt
+        )
     }
 
     /// Best effort: a surviving marker is tolerated by claim validation and
@@ -831,8 +952,9 @@ actor WorkCaptureInbox {
     // MARK: - Filesystem helpers
 
     private func requireActive(_ claim: Claim) throws {
-        guard activeClaims[claim.id] == claim.token,
-              claim.directoryURL.deletingLastPathComponent().standardizedFileURL == processingURL.standardizedFileURL else {
+        guard activeClaims[claim.generation] == claim.token,
+              claim.directoryURL.deletingLastPathComponent().standardizedFileURL == processingURL.standardizedFileURL,
+              Self.claimDirectory(named: claim.directoryURL.lastPathComponent)?.generation == claim.generation else {
             throw InboxError.staleClaim
         }
     }
@@ -891,10 +1013,14 @@ actor WorkCaptureInbox {
     }
 
     /// Validation has not minted an active token yet, so transient failures use
-    /// this narrow rollback instead of the public `release` API.
-    private func preserveClaimedDirectory(id: UUID, at claimed: URL) throws {
+    /// this narrow rollback instead of the public `release` API. It moves only a
+    /// directory this acquisition still owns: `claimed` is generation-scoped, so
+    /// no other process can occupy it, and a foreign lease inside it is refused
+    /// rather than requeued.
+    private func preserveClaimedDirectory(id: UUID, at claimed: URL, generation: UUID) throws {
         let destination = baseURL.appendingPathComponent(id.uuidString, isDirectory: true)
-        guard !fileManager.fileExists(atPath: destination.path) else {
+        guard !fileManager.fileExists(atPath: destination.path),
+              isOwnedForRollback(claimed, generation: generation) else {
             throw InboxError.filesystemFailure
         }
         removeLease(in: claimed)

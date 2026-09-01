@@ -42,7 +42,7 @@ nonisolated enum WatchWorkboardCaptureText {
             .replacingOccurrences(of: "\r", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { throw WatchWorkboardCaptureError.emptyThought }
-        // Refuse rather than truncate: a silently shortened brief looks like a
+        // Refuse rather than truncate: a silently shortened note looks like a
         // successful capture and loses the part the person cared about.
         guard normalized.count <= maximumObjectiveCharacters else {
             throw WatchWorkboardCaptureError.thoughtTooLong
@@ -54,7 +54,7 @@ nonisolated enum WatchWorkboardCaptureText {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty })
             .map { String($0.prefix(72)) }
-            ?? String(localized: "workboard.item.untitled", defaultValue: "Untitled brief")
+            ?? String(localized: "workboard.item.untitled", defaultValue: "Untitled note")
         return WatchWorkboardCapture(title: title, objective: normalized)
     }
 }
@@ -86,7 +86,7 @@ extension ConversationStore {
     /// compile-time id every other surface names — `Constants.swift` is a
     /// member of this target, so the wrist reads the canonical value rather
     /// than a copy of it. The desk row is created lazily by the first capture,
-    /// holds no editable brief (title and objective stay nil columns) and is
+    /// holds no editable heading (title and objective stay nil columns) and is
     /// never deleted.
     ///
     /// NO DEDUP. CloudKit forbids a Core Data uniqueness constraint, so two
@@ -186,7 +186,7 @@ struct CaptureWorkboardIntent: AppIntent {
     static var description = IntentDescription(
         LocalizedStringResource(
             "intent.workboardCapture.description",
-            defaultValue: "Save a thought as a private Workboard draft without sending it to an AI."
+            defaultValue: "Save a thought to your private Work desk without sending it to an AI."
         )
     )
 
@@ -212,7 +212,7 @@ struct CaptureWorkboardIntent: AppIntent {
         let title = try await ConversationStore.shared.upsertDeskMaterial(capture)
         let confirmation = String(
             localized: "intent.workboardCapture.confirmation",
-            defaultValue: "Added to Workboard. Nothing was sent."
+            defaultValue: "Added to Work. Nothing was sent."
         )
         return .result(value: title, dialog: IntentDialog(stringLiteral: confirmation))
     }

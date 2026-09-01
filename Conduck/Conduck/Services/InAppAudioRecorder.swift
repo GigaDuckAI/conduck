@@ -19,6 +19,15 @@
 // card can surface, but we don't need the preempt-save + deferred
 // notification dance that `TranscribeIntent` uses (mirrors the macOS
 // rationale: no silent auto-retry — fast-fail with a visible retry).
+//
+// The WORK lane (`retryDestination == .work`, the desk's own voice sheet) runs
+// a second, two-phase publication over the same capture:
+// `WorkVoiceCaptureCoordinator` puts the compressed recording on the desk as a
+// playable card BEFORE the transcription hop, and writes the transcript onto
+// that same card afterwards. So a refused key, an offline device or an
+// abandoned request costs the words and never the recording. Chat captures are
+// untouched by it: their transcript IS the artifact, and a conversation has no
+// card to hold bytes.
 
 import Foundation
 import AVFoundation
@@ -86,6 +95,15 @@ final class InAppAudioRecorder {
     /// send path.
     let retryDestination: PendingRetryDestination
 
+    /// The Work desk card this capture published, and the material its
+    /// transcript is written onto. Nil for every Chat capture, for a Work
+    /// capture whose card could not be published, and for one whose transcript
+    /// did not reach the card it published — in all three the host must hand
+    /// the words to its own composer instead, so a storage failure costs the
+    /// card and never what was said. Cleared at the start of every recording so
+    /// a second attempt can never claim the first one's card.
+    private(set) var workRecordingMaterialID: UUID?
+
     /// Underlying capture engine. Composed (not inherited) so the
     /// AudioRecorder's `ObservableObject`-based timer callbacks stay in
     /// their existing shape without leaking into this view-facing API.
@@ -150,6 +168,9 @@ final class InAppAudioRecorder {
     /// success, `.error(...)` on permission / engine / mic-busy failure.
     func startRecording() async {
         guard case .idle = state, !isStarting else { return }
+        // A new recording is a new capture: it publishes its own card, and must
+        // never be mistaken for the previous one still standing on the desk.
+        workRecordingMaterialID = nil
         // Hold a "starting" claim across the async gap below — `state` stays
         // `.idle` until `recorder.startRecording()` returns, so without this a
         // rapid double-tap would fire a second capture, and (macOS) an auto-speak
@@ -299,6 +320,36 @@ final class InAppAudioRecorder {
         let uploadData = compressionResult.data
         let format = compressionResult.format
 
+        // ONE identity for this capture, minted before anything durable is
+        // written. It names the desk card the recording becomes AND is the id
+        // the pending-retry record carries, so a retry hours later repairs that
+        // same card instead of publishing the recovered words a second time.
+        let captureID = UUID()
+
+        #if !os(watchOS)
+        // PHASE 1 of the Work voice capture: the recording reaches the desk
+        // before transcription is attempted, so a failure below costs the words
+        // and never the recording. The coordinator COPIES these bytes into the
+        // store; the temporary file written just after this is still ours alone
+        // and is still removed by the paths that own it.
+        if retryDestination == .work {
+            do {
+                let card = try await WorkVoiceCaptureCoordinator.publishRecording(
+                    captureID: captureID,
+                    audio: uploadData,
+                    fileExtension: format.fileExtension,
+                    mimeType: format.mimeType
+                )
+                workRecordingMaterialID = card.id
+            } catch {
+                // No card, so the host falls back to handing the transcript to
+                // its composer. Surfacing a storage error here would abandon a
+                // transcription that has not even been attempted yet.
+                workRecordingMaterialID = nil
+            }
+        }
+        #endif
+
         // Write to a temp file for STTClient (which takes a URL + defer-deletes).
         // Extension comes from the compressor's own format truth — `.original`
         // fallbacks carry the recorder's untouched AAC M4A bytes, never WAV, so
@@ -376,6 +427,7 @@ final class InAppAudioRecorder {
             // read fine.
             await preserveForRetry(
                 error: .sttKeyUnreadable,
+                captureID: captureID,
                 uploadData: uploadData,
                 audioFileURL: audioFileURL,
                 preferredLanguage: preferredLanguage
@@ -469,6 +521,20 @@ final class InAppAudioRecorder {
                 return .failure(.noSpeechDetected)
             }
 
+            #if !os(watchOS)
+            // PHASE 2: the words join the recording they came from. A refusal
+            // (the card was deleted while the request was in flight, or the
+            // write failed) drops the claim rather than the transcript — the
+            // host then routes it the way it did before there were cards.
+            if let materialID = workRecordingMaterialID {
+                let attached = (try? await WorkVoiceCaptureCoordinator.attachTranscript(
+                    response.text,
+                    toRecording: materialID
+                )) ?? false
+                if !attached { workRecordingMaterialID = nil }
+            }
+            #endif
+
             CompletionFeedbackPlayer.play(mode: "sound")
             state = .idle
             return .success(response.text)
@@ -488,6 +554,7 @@ final class InAppAudioRecorder {
             // realistically want to retry from the in-app retry card.
             await preserveForRetry(
                 error: error,
+                captureID: captureID,
                 uploadData: uploadData,
                 audioFileURL: audioFileURL,
                 preferredLanguage: preferredLanguage
@@ -507,7 +574,10 @@ final class InAppAudioRecorder {
     }
 
     /// The ONE place this recorder hands a capture to the retry lane, so the
-    /// pre-flight refusal and the STT failure cannot preserve on different terms.
+    /// pre-flight refusal and the STT failure cannot preserve on different
+    /// terms. `captureID` is this capture's single identity, so a Work retry
+    /// recovered from this record names the recording card that capture already
+    /// published rather than minting a second capture beside it.
     /// No-ops unless the taxonomy says these bytes can succeed on a second
     /// attempt (`shouldPreserveForRetry`), which is what keeps a bad-input
     /// verdict from parking audio the user would only ever retry into the same
@@ -518,13 +588,14 @@ final class InAppAudioRecorder {
     /// would tell the user the wrong thing about why their capture stopped.
     private func preserveForRetry(
         error: AppError,
+        captureID: UUID,
         uploadData: Data,
         audioFileURL: URL,
         preferredLanguage: String?
     ) async {
         guard error.shouldPreserveForRetry else { return }
         let metadata = PendingRetryMetadata(
-            id: UUID(),
+            id: captureID,
             createdAt: Date(),
             audioFileURL: audioFileURL,
             preferredLanguage: preferredLanguage,

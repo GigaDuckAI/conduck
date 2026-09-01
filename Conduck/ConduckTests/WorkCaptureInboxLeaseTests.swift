@@ -13,6 +13,58 @@
 import XCTest
 @testable import Conduck
 
+/// Runs one hostile interleaving at the instant a claimant begins validating: the
+/// closure receives the directory the claiming rename created, and the manifest
+/// read then fails so the claimant takes its rollback path — the step that must
+/// never touch bytes another acquisition owns.
+private final class ClaimInterferenceFileManager: FileManager, @unchecked Sendable {
+    private let lock = NSLock()
+    private var interference: (@Sendable (URL) -> Void)?
+
+    init(interference: @escaping @Sendable (URL) -> Void) {
+        self.interference = interference
+        super.init()
+    }
+
+    override func attributesOfItem(atPath path: String) throws -> [FileAttributeKey: Any] {
+        lock.lock()
+        var pending: (@Sendable (URL) -> Void)?
+        if path.contains("/processing/"), path.hasSuffix("/manifest.json") {
+            pending = interference
+            interference = nil
+        }
+        lock.unlock()
+
+        guard let pending else { return try super.attributesOfItem(atPath: path) }
+        pending(URL(fileURLWithPath: path).deletingLastPathComponent())
+        throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError)
+    }
+}
+
+/// Requeues an acquisition the instant its claiming rename lands, so its lease
+/// can never be written into it.
+private final class RequeueDuringClaimFileManager: FileManager, @unchecked Sendable {
+    private let lock = NSLock()
+    private var requeue: (@Sendable (URL) -> Void)?
+
+    init(requeue: @escaping @Sendable (URL) -> Void) {
+        self.requeue = requeue
+        super.init()
+    }
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        try super.moveItem(at: srcURL, to: dstURL)
+        lock.lock()
+        var pending: (@Sendable (URL) -> Void)?
+        if dstURL.deletingLastPathComponent().lastPathComponent == "processing" {
+            pending = requeue
+            requeue = nil
+        }
+        lock.unlock()
+        pending?(dstURL)
+    }
+}
+
 final class WorkCaptureInboxLeaseTests: XCTestCase {
     private var root: URL!
     private let anchor = Date(timeIntervalSince1970: 1_700_000_000)
@@ -56,23 +108,67 @@ final class WorkCaptureInboxLeaseTests: XCTestCase {
         return id
     }
 
-    private func processingURL(for id: UUID) -> URL {
+    private var processingRoot: URL {
         root.appendingPathComponent("processing", isDirectory: true)
-            .appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
-    private func leaseURL(for id: UUID) -> URL {
-        processingURL(for: id)
+    /// A claimed directory is named for the acquisition that took it, so a test
+    /// cannot spell its path either — it reads the queue back the way
+    /// reconciliation does.
+    private func claimedURLs(for id: UUID) -> [URL] {
+        let children = (try? FileManager.default.contentsOfDirectory(
+            at: processingRoot,
+            includingPropertiesForKeys: nil
+        )) ?? []
+        return children.filter { $0.lastPathComponent.hasPrefix(id.uuidString) }
+    }
+
+    private func claimedURL(for id: UUID) throws -> URL {
+        let claimed = claimedURLs(for: id)
+        XCTAssertEqual(claimed.count, 1, "Exactly one acquisition may hold \(id.uuidString)")
+        return try XCTUnwrap(claimed.first)
+    }
+
+    private func leaseURL(for id: UUID) throws -> URL {
+        try claimedURL(for: id)
             .appendingPathComponent(WorkCaptureInbox.leaseFilename, isDirectory: false)
     }
 
     private func readLease(for id: UUID) throws -> WorkCaptureInbox.ClaimLease {
+        try readLease(at: try leaseURL(for: id))
+    }
+
+    private func readLease(at url: URL) throws -> WorkCaptureInbox.ClaimLease {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .secondsSince1970
         return try decoder.decode(
             WorkCaptureInbox.ClaimLease.self,
-            from: try Data(contentsOf: leaseURL(for: id))
+            from: try Data(contentsOf: url)
         )
+    }
+
+    /// Stages exactly what the claiming rename produces: the capture sits in
+    /// processing under an acquisition's own name, and no lease has landed yet.
+    @discardableResult
+    private func stageAcquisition(
+        of id: UUID,
+        claimedAt: Date,
+        generation: UUID = UUID()
+    ) throws -> URL {
+        try FileManager.default.createDirectory(at: processingRoot, withIntermediateDirectories: true)
+        let claimed = processingRoot.appendingPathComponent(
+            WorkCaptureInbox.claimDirectoryName(
+                envelopeID: id,
+                claimedAt: claimedAt,
+                generation: generation
+            ),
+            isDirectory: true
+        )
+        try FileManager.default.moveItem(
+            at: root.appendingPathComponent(id.uuidString, isDirectory: true),
+            to: claimed
+        )
+        return claimed
     }
 
     private func childNames(of directory: URL) throws -> Set<String> {
@@ -97,8 +193,10 @@ final class WorkCaptureInboxLeaseTests: XCTestCase {
         let lease = try readLease(for: id)
         XCTAssertEqual(lease.owner, inbox.ownerID)
         XCTAssertEqual(lease.refreshedAt, anchor)
+        XCTAssertEqual(lease.generation, try XCTUnwrap(claimed).generation,
+                       "The marker names the acquisition its directory is named for")
         XCTAssertEqual(
-            try childNames(of: processingURL(for: id)),
+            try childNames(of: try claimedURL(for: id)),
             ["manifest.json", "payload-000.pdf", WorkCaptureInbox.leaseFilename],
             "The lease is the only file a claim adds to a validated capture"
         )
@@ -160,7 +258,7 @@ final class WorkCaptureInboxLeaseTests: XCTestCase {
         let payloadURL = try XCTUnwrap(claim.payloadURL(for: claim.envelope.entries[0]))
         XCTAssertEqual(try Data(contentsOf: payloadURL), Data("test".utf8))
         try await owner.acknowledge(claim)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: processingURL(for: id).path))
+        XCTAssertTrue(claimedURLs(for: id).isEmpty)
     }
 
     func testARefreshedLeaseSurvivesAHorizonThatWouldHaveExpiredIt() async throws {
@@ -232,11 +330,11 @@ final class WorkCaptureInboxLeaseTests: XCTestCase {
         } catch let error as WorkCaptureInbox.InboxError {
             XCTAssertEqual(error, .staleClaim)
         }
-        XCTAssertTrue(FileManager.default.fileExists(atPath: processingURL(for: id).path))
+        XCTAssertEqual(claimedURLs(for: id).count, 1)
         XCTAssertEqual(try readLease(for: id).owner, intruder.ownerID)
 
         try await intruder.acknowledge(recovered)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: processingURL(for: id).path))
+        XCTAssertTrue(claimedURLs(for: id).isEmpty)
     }
 
     // MARK: - Crash recovery
@@ -277,9 +375,10 @@ final class WorkCaptureInboxLeaseTests: XCTestCase {
         XCTAssertEqual(pending, 0)
     }
 
-    func testAMarkerlessStrandedClaimIsRequeuedImmediately() async throws {
-        // A directory in processing with no lease predates any claim this build
-        // can make and is stranded by definition; no horizon should hide it.
+    func testABareIdStrandedDirectoryIsRequeuedImmediately() async throws {
+        // A processing directory named for the capture rather than for an
+        // acquisition predates any claim this build can make: it is stranded by
+        // definition, so no horizon should hide it.
         let id = try writePublished()
         let processing = root.appendingPathComponent("processing", isDirectory: true)
         try FileManager.default.createDirectory(at: processing, withIntermediateDirectories: true)
@@ -313,5 +412,192 @@ final class WorkCaptureInboxLeaseTests: XCTestCase {
         let second = try XCTUnwrap(secondClaim)
         XCTAssertEqual(second.id, id)
         XCTAssertNotEqual(second.token, claim.token)
+    }
+
+    // MARK: - Acquisition
+
+    func testAnAcquisitionIsNotRequeuedBeforeItsLeaseLands() async throws {
+        // The exact interleaving the claim path has to survive: the capture has
+        // moved into processing and the marker naming its owner has not been
+        // written yet, while another process reconciles the same directory.
+        let id = try writePublished()
+        let claimed = try stageAcquisition(of: id, claimedAt: anchor)
+        let intruder = WorkCaptureInbox(baseURL: root)
+
+        let report = await intruder.reconcile(now: anchor.addingTimeInterval(1))
+        XCTAssertEqual(report.releasedClaimCount, 0)
+        XCTAssertEqual(report.respectedLeaseCount, 1)
+        XCTAssertFalse(report.encounteredFilesystemFailure)
+        let pendingForIntruder = try await intruder.pendingCount()
+        XCTAssertEqual(pendingForIntruder, 0)
+        let stolen = try await intruder.claimNext(now: anchor.addingTimeInterval(1))
+        XCTAssertNil(stolen, "An acquisition must not be interruptible between its move and its lease")
+        XCTAssertEqual(
+            try childNames(of: claimed),
+            ["manifest.json", "payload-000.pdf"],
+            "The staged acquisition is left exactly where its claiming rename put it"
+        )
+    }
+
+    func testAnAcquisitionThatNeverLeasesIsRecoveredAtTheHorizon() async throws {
+        // The grace an acquisition gets is bounded by the same horizon a lease
+        // gets, so a process killed between the two can strand nothing.
+        let id = try writePublished()
+        try stageAcquisition(of: id, claimedAt: anchor)
+        let inbox = WorkCaptureInbox(baseURL: root)
+        let expiry = anchor.addingTimeInterval(WorkCaptureInbox.staleClaimHorizon)
+
+        let report = await inbox.reconcile(now: expiry)
+        XCTAssertEqual(report.releasedClaimCount, 1)
+        XCTAssertEqual(report.respectedLeaseCount, 0)
+        XCTAssertEqual(
+            try childNames(of: root.appendingPathComponent(id.uuidString, isDirectory: true)),
+            ["manifest.json", "payload-000.pdf"]
+        )
+
+        let recoveredClaim = try await inbox.claimNext(now: expiry)
+        let recovered = try XCTUnwrap(recoveredClaim)
+        XCTAssertEqual(recovered.id, id)
+        XCTAssertEqual(try readLease(for: id).owner, inbox.ownerID)
+    }
+
+    func testARollbackCannotTouchACaptureAnotherAcquisitionTookOver() async throws {
+        let id = try writePublished()
+        let root = try XCTUnwrap(self.root)
+        let anchor = self.anchor
+        let thiefOwner = UUID()
+        let thiefGeneration = UUID()
+        let fileManager = ClaimInterferenceFileManager { claimed in
+            // Another process requeues what it reads as an unowned claim and
+            // retakes it under its own acquisition, all while the first claimant
+            // is inside validation.
+            let published = root.appendingPathComponent(id.uuidString, isDirectory: true)
+            let retaken = claimed
+                .deletingLastPathComponent()
+                .appendingPathComponent(
+                    WorkCaptureInbox.claimDirectoryName(
+                        envelopeID: id,
+                        claimedAt: anchor,
+                        generation: thiefGeneration
+                    ),
+                    isDirectory: true
+                )
+            try? FileManager.default.moveItem(at: claimed, to: published)
+            try? FileManager.default.moveItem(at: published, to: retaken)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .secondsSince1970
+            let lease = WorkCaptureInbox.ClaimLease(
+                owner: thiefOwner,
+                generation: thiefGeneration,
+                refreshedAt: anchor
+            )
+            try? encoder.encode(lease).write(
+                to: retaken.appendingPathComponent(
+                    WorkCaptureInbox.leaseFilename,
+                    isDirectory: false
+                ),
+                options: .atomic
+            )
+        }
+        let inbox = WorkCaptureInbox(baseURL: root, fileManager: fileManager)
+
+        do {
+            _ = try await inbox.claimNext(now: anchor)
+            XCTFail("A transient validation failure must surface")
+        } catch let error as WorkCaptureInbox.InboxError {
+            XCTAssertEqual(error, .filesystemFailure)
+        }
+
+        let claimed = try claimedURL(for: id)
+        XCTAssertEqual(
+            try childNames(of: claimed),
+            ["manifest.json", "payload-000.pdf", WorkCaptureInbox.leaseFilename],
+            "The rolled-back claimant must not strip the new owner's directory"
+        )
+        let lease = try readLease(
+            at: claimed.appendingPathComponent(WorkCaptureInbox.leaseFilename, isDirectory: false)
+        )
+        XCTAssertEqual(lease.owner, thiefOwner)
+        XCTAssertEqual(lease.generation, thiefGeneration)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent(id.uuidString, isDirectory: true).path
+            ),
+            "A rollback must not requeue a capture it no longer owns"
+        )
+    }
+
+    func testARollbackRefusesADirectoryAForeignLeaseCovers() async throws {
+        let id = try writePublished()
+        let anchor = self.anchor
+        let foreignOwner = UUID()
+        let foreignGeneration = UUID()
+        let fileManager = ClaimInterferenceFileManager { claimed in
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .secondsSince1970
+            let lease = WorkCaptureInbox.ClaimLease(
+                owner: foreignOwner,
+                generation: foreignGeneration,
+                refreshedAt: anchor
+            )
+            try? encoder.encode(lease).write(
+                to: claimed.appendingPathComponent(
+                    WorkCaptureInbox.leaseFilename,
+                    isDirectory: false
+                ),
+                options: .atomic
+            )
+        }
+        let inbox = WorkCaptureInbox(baseURL: root, fileManager: fileManager)
+
+        do {
+            _ = try await inbox.claimNext(now: anchor)
+            XCTFail("A transient validation failure must surface")
+        } catch let error as WorkCaptureInbox.InboxError {
+            XCTAssertEqual(error, .filesystemFailure)
+        }
+
+        XCTAssertEqual(claimedURLs(for: id).count, 1)
+        XCTAssertEqual(try readLease(for: id).owner, foreignOwner,
+                       "Rollback verifies the marker before moving anything")
+        let pending = try await inbox.pendingCount()
+        XCTAssertEqual(pending, 0)
+
+        // Refusing to roll back cannot strand the capture: the horizon still
+        // returns it, because a foreign marker is exactly what reconciliation
+        // already knows how to age.
+        let report = await inbox.reconcile(
+            now: anchor.addingTimeInterval(WorkCaptureInbox.staleClaimHorizon)
+        )
+        XCTAssertEqual(report.releasedClaimCount, 1)
+    }
+
+    func testAClaimWhoseLeaseCannotLandIsRefusedWithoutClobberingTheRequeuedCapture() async throws {
+        let id = try writePublished()
+        let root = try XCTUnwrap(self.root)
+        let fileManager = RequeueDuringClaimFileManager { claimed in
+            try? FileManager.default.moveItem(
+                at: claimed,
+                to: root.appendingPathComponent(id.uuidString, isDirectory: true)
+            )
+        }
+        let inbox = WorkCaptureInbox(baseURL: root, fileManager: fileManager)
+
+        do {
+            _ = try await inbox.claimNext(now: anchor)
+            XCTFail("A claim that cannot be leased must not be drained")
+        } catch let error as WorkCaptureInbox.InboxError {
+            XCTAssertEqual(error, .filesystemFailure)
+        }
+        XCTAssertTrue(claimedURLs(for: id).isEmpty)
+        XCTAssertEqual(
+            try childNames(of: root.appendingPathComponent(id.uuidString, isDirectory: true)),
+            ["manifest.json", "payload-000.pdf"],
+            "The requeued capture keeps the exact shape its publisher wrote"
+        )
+
+        let retried = try await inbox.claimNext(now: anchor)
+        XCTAssertEqual(try XCTUnwrap(retried).id, id)
+        XCTAssertEqual(try readLease(for: id).owner, inbox.ownerID)
     }
 }

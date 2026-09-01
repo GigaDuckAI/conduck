@@ -11,11 +11,19 @@
 // sandbox anyway — is carried by the envelope but never honoured here. Envelope
 // and entry UUIDs are reused as database identities, so a crash after any
 // individual write is repaired by replay rather than by making a second
-// material. A claim is acknowledged only after every material this capture
-// wrote reads back out of the store, because the queue holds the only copy of a
-// shared file until then. This type has no gateway dependency and no dispatch
-// API: opening the app can drain captures, but can never turn one into network
-// work.
+// material.
+//
+// Two rules protect the bytes, because until a claim is acknowledged the queue
+// holds the only copy of a shared file. A claim is acknowledged only once every
+// material this capture wrote reads back out of the store — the row, and for a
+// card that carries bytes a payload this device can actually READ, which is a
+// complete blob row on the synced lane and a present leaf on the vault lane.
+// And the claim's filesystem lease is renewed for as long as that import takes,
+// so a large or slow capture cannot age past the queue's stale horizon and be
+// reclaimed by another process mid-write.
+//
+// This type has no gateway dependency and no dispatch API: opening the app can
+// drain captures, but can never turn one into network work.
 
 #if !os(watchOS)
 
@@ -42,28 +50,70 @@ actor WorkCaptureDrainer {
         /// The acknowledgement barrier reads these back before the queue copy
         /// of the bytes is destroyed.
         let materialIDs: [UUID]
+        /// The subset whose bytes came out of the claimed directory. Only these
+        /// have to prove a readable payload before acknowledgement: a note, a
+        /// shared text and a link carry their whole content in the row, so a
+        /// payload requirement on them would refuse every valid capture.
+        let payloadBearingIDs: Set<UUID>
 
         var materialCount: Int { materialIDs.count }
     }
 
+    /// How often an active claim's lease is renewed. Deliberately several times
+    /// below `WorkCaptureInbox.staleClaimHorizon` so that consecutive missed
+    /// renewals — a suspended app, a device under load — still leave the claim
+    /// covered, and never so close to it that a single late beat hands a
+    /// directory this drainer is reading to another process.
+    static let defaultLeaseHeartbeatInterval: Duration = .seconds(60)
+
     private let inbox: WorkCaptureInbox
     private let store: ConversationStore
     private let sourceDevice: String
+    private let leaseHeartbeatInterval: Duration
+    /// Timestamp written into each renewed lease. Injectable for the same
+    /// reason `WorkCaptureInbox.claimNext(now:)` and `reconcile(now:)` are: the
+    /// horizon this heartbeat exists to outrun is five minutes long, and no
+    /// test can be made to wait one.
+    private let now: @Sendable () -> Date
 
     init(
         inbox: WorkCaptureInbox = .shared,
         store: ConversationStore = .shared,
-        sourceDevice: String
+        sourceDevice: String,
+        leaseHeartbeatInterval: Duration = WorkCaptureDrainer.defaultLeaseHeartbeatInterval,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.inbox = inbox
         self.store = store
         self.sourceDevice = sourceDevice
+        self.leaseHeartbeatInterval = leaseHeartbeatInterval
+        self.now = now
     }
+
+    #if CONDUCK_TESTING
+    /// TEST SEAM — hold one import open inside the region its lease covers.
+    ///
+    /// WHY IT HAS TO EXIST. The heartbeat's whole claim is about an import that
+    /// outlives the stale horizon, and nothing else in this type can produce
+    /// one: a bounded envelope persists in milliseconds. Without somewhere to
+    /// hold an import open, ownership could only be observed by racing a
+    /// sampler against a live drain, which measures timing rather than
+    /// ownership — and the payload-disappearance the acknowledgement barrier
+    /// refuses could not be staged at all, because it happens between the write
+    /// and the barrier. Awaited between persistence and the barrier; nil on
+    /// every production path.
+    private var importHoldForTesting: (@Sendable () async -> Void)?
+
+    func _setImportHoldForTesting(_ hold: (@Sendable () async -> Void)?) {
+        importHoldForTesting = hold
+    }
+    #endif
 
     /// Reconcile crash-stranded claims, then consume the queue oldest-first.
     /// Malformed captures have already been removed by `claimNext`; they do not
-    /// prevent a later valid capture from importing. A persistence failure puts
-    /// the active claim back before surfacing the error, preserving its bytes.
+    /// prevent a later valid capture from importing. A persistence failure — or
+    /// a capture whose payload does not read back — puts the active claim back
+    /// before surfacing the error, preserving its bytes.
     func drainAvailableCaptures() async throws -> Report {
         _ = await inbox.reconcile()
 
@@ -85,23 +135,33 @@ actor WorkCaptureDrainer {
             }
 
             guard let claim else { break }
-            do {
-                let persisted = try await persist(claim)
-                try await confirmDurablyImported(persisted.materialIDs)
-                try await inbox.acknowledge(claim)
-                if persisted.wasReplay {
-                    replayedCaptureCount += 1
-                } else {
-                    importedCaptureCount += 1
+            // Everything that touches the claimed directory happens under a
+            // renewed lease — the release included, since it moves the very
+            // files another process would otherwise be entitled to requeue.
+            let persisted = try await withLeaseHeartbeat(for: claim) {
+                do {
+                    let persisted = try await persist(claim)
+                    #if CONDUCK_TESTING
+                    await importHoldForTesting?()
+                    #endif
+                    try await confirmDurablyImported(persisted)
+                    try await inbox.acknowledge(claim)
+                    return persisted
+                } catch {
+                    // Best effort is deliberately only for the ownership
+                    // rollback. The original persistence error remains the
+                    // useful diagnosis; a failed release is repaired by
+                    // `reconcile` after relaunch.
+                    try? await inbox.release(claim)
+                    throw error
                 }
-                importedMaterialCount += persisted.materialCount
-            } catch {
-                // Best effort is deliberately only for the ownership rollback.
-                // The original persistence error remains the useful diagnosis;
-                // a failed release is repaired by `reconcile` after relaunch.
-                try? await inbox.release(claim)
-                throw error
             }
+            if persisted.wasReplay {
+                replayedCaptureCount += 1
+            } else {
+                importedCaptureCount += 1
+            }
+            importedMaterialCount += persisted.materialCount
         }
 
         return Report(
@@ -123,9 +183,11 @@ actor WorkCaptureDrainer {
         // replay of an import that was interrupted before its claim could be
         // acknowledged. The desk's material set answers that in one fetch.
         let expectedIDs = try Self.materialIDs(for: envelope)
-        let wasReplay = try await !deskMaterialIDs().isDisjoint(with: expectedIDs)
+        let existingIDs = Set(try await deskMaterials().map(\.id))
+        let wasReplay = !existingIDs.isDisjoint(with: expectedIDs)
 
         var materialIDs: [UUID] = []
+        var payloadBearingIDs: Set<UUID> = []
 
         // The share-sheet note is source material in its own right, and every
         // capture carries it onto the desk — including the first one ever made,
@@ -169,42 +231,100 @@ actor WorkCaptureDrainer {
                     sourceFileURL: payloadURL,
                     sourceFileByteSize: byteSize
                 )
+                payloadBearingIDs.insert(record.id)
             } else {
                 record = try await store.upsertDeskMaterial(draft)
             }
             materialIDs.append(record.id)
         }
 
-        return PersistedCapture(wasReplay: wasReplay, materialIDs: materialIDs)
+        return PersistedCapture(
+            wasReplay: wasReplay,
+            materialIDs: materialIDs,
+            payloadBearingIDs: payloadBearingIDs
+        )
     }
 
-    /// The material ids the desk currently holds. The projection unions every
-    /// physical desk row, so a duplicate row imported from another device does
-    /// not hide a card this drainer already wrote.
-    private func deskMaterialIDs() async throws -> Set<UUID> {
+    /// The cards the desk currently holds, from ONE fetch. The projection
+    /// unions every physical desk row, so a duplicate row imported from another
+    /// device does not hide a card this drainer already wrote, and each record
+    /// arrives carrying the availability that same pass resolved.
+    private func deskMaterials() async throws -> [WorkMaterialRecord] {
         let desk = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        return Set(desk?.materials.map(\.id) ?? [])
+        return desk?.materials ?? []
     }
 
     /// The acknowledgement barrier. `WorkCaptureInbox.acknowledge` is the only
     /// thing that deletes a capture's bytes, and for a shared file the queue
-    /// holds the only copy, so nothing is acknowledged until everything this
-    /// capture wrote reads back out of the store. A material that does not read
-    /// back throws, which returns the claim to the queue for a later replay.
+    /// holds the only copy — so nothing is acknowledged until everything this
+    /// capture wrote reads back out of the store, and reads back WHOLE.
     ///
-    /// BYTE-SYNC EXTENSION POINT: when payload bytes move out of the device
-    /// vault into their own blob store, widen "durable" here — a material row
-    /// naming a blob is not durable until that blob row is readable too. The
-    /// publication protocol writes the blob first, the material second and
-    /// acknowledges third, and this one function is where the third step waits
-    /// for the first two. Extending it here keeps the barrier in a single place
-    /// instead of once per capture surface.
-    private func confirmDurablyImported(_ materialIDs: [UUID]) async throws {
-        guard !materialIDs.isEmpty else { return }
-        let durable = try await deskMaterialIDs()
-        guard Set(materialIDs).isSubset(of: durable) else {
-            throw WorkboardStoreError.materialNotFound
+    /// Presence of the row is not that proof. The two payload lanes commit in
+    /// their own transactions, so a card can exist while its bytes do not: a
+    /// `.syncedPayload` card whose blob row never landed is `.syncedPending`,
+    /// and a `.localVault` card whose leaf is gone is unavailable. Both would
+    /// pass an id check and then lose the only surviving copy of the payload to
+    /// the acknowledgement.
+    ///
+    /// One desk fetch answers both lanes for the whole capture, because
+    /// `WorkMaterialRecord.hasPayload` is decided by the store's single
+    /// availability pass — a complete blob row on the synced lane, a present
+    /// leaf on the vault lane. Completeness is consumed here, never restated.
+    ///
+    /// Anything short of that throws, which releases the claim and leaves the
+    /// bytes in the queue for a later replay to repair.
+    private func confirmDurablyImported(_ capture: PersistedCapture) async throws {
+        guard !capture.materialIDs.isEmpty else { return }
+        let durable = Dictionary(
+            try await deskMaterials().map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        for id in capture.materialIDs {
+            guard let material = durable[id] else {
+                throw WorkboardStoreError.materialNotFound
+            }
+            guard !capture.payloadBearingIDs.contains(id) || material.hasPayload else {
+                throw WorkboardStoreError.materialPayloadUnavailable
+            }
         }
+    }
+
+    /// Run one claim's import under a lease this drainer keeps renewing.
+    ///
+    /// `WorkCaptureInbox.staleClaimHorizon` is a filesystem fact other
+    /// processes read: the app and a headless intent process both reconcile the
+    /// same queue, and a claim whose lease has aged past the horizon is fair
+    /// game to requeue. A validated envelope may carry up to
+    /// `WorkCaptureEnvelope.maximumEnvelopeBytes`, so persistence alone can
+    /// outlast the horizon on a slow device, and a suspended app can stretch
+    /// any import arbitrarily. Restating ownership periodically is what keeps a
+    /// second drainer out of a directory this one is still reading and writing
+    /// out of. The renewal covers persistence, the acknowledgement barrier and
+    /// whichever of `acknowledge` or `release` ends the claim.
+    private func withLeaseHeartbeat<T>(
+        for claim: WorkCaptureInbox.Claim,
+        _ body: () async throws -> T
+    ) async throws -> T {
+        // Detached deliberately: a renewal is a hop onto the inbox actor and
+        // must not have to wait for the executor the import it protects is
+        // occupying.
+        let heartbeat = Task.detached(
+            priority: .utility
+        ) { [inbox, leaseHeartbeatInterval, now] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: leaseHeartbeatInterval)
+                guard !Task.isCancelled else { return }
+                // A refusal never stops the beat. The claim may already be
+                // gone — acknowledged, released, or taken over — in which case
+                // the import's own next inbox call is what surfaces it; or the
+                // marker may be momentarily unreadable, and giving up there
+                // would disarm the protection this loop exists to provide for
+                // the rest of a long import.
+                try? await inbox.refreshLease(claim, now: now())
+            }
+        }
+        defer { heartbeat.cancel() }
+        return try await body()
     }
 
     // MARK: - Deterministic capture mapping

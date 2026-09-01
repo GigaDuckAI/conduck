@@ -1214,7 +1214,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Added to Workboard. Nothing was sent."
+            "value" : "Added to Work. Nothing was sent."
           }
         }
       }
@@ -1225,7 +1225,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Save a thought as a private Workboard draft without sending it to an AI."
+            "value" : "Save a thought to your private Work desk without sending it to an AI."
           }
         }
       }
@@ -3106,7 +3106,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Untitled brief"
+            "value" : "Untitled note"
           }
         }
       }

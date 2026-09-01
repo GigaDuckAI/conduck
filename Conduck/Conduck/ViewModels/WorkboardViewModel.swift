@@ -22,6 +22,10 @@ enum WorkboardMaterialKind: String, CaseIterable, Codable, Hashable, Sendable {
     case file
     case link
     case note
+    // A recording is its own card shape, not a file that happens to be audible:
+    // the board draws it with a transport, so a card that cannot play must be
+    // impossible to reach through this kind.
+    case audio
 
     var title: LocalizedStringResource {
         switch self {
@@ -33,6 +37,8 @@ enum WorkboardMaterialKind: String, CaseIterable, Codable, Hashable, Sendable {
             return LocalizedStringResource("workboard.material.link", defaultValue: "Link")
         case .note:
             return LocalizedStringResource("workboard.material.note", defaultValue: "Note")
+        case .audio:
+            return LocalizedStringResource("workboard.material.audio", defaultValue: "Voice note")
         }
     }
 
@@ -42,6 +48,7 @@ enum WorkboardMaterialKind: String, CaseIterable, Codable, Hashable, Sendable {
         case .file: return "doc"
         case .link: return "link"
         case .note: return "note.text"
+        case .audio: return "waveform"
         }
     }
 
@@ -241,9 +248,9 @@ nonisolated enum WorkboardMoveDirection: Hashable, Sendable {
 }
 
 /// Pure planning for card drag, drop-slot insertion and the equivalent
-/// accessibility actions inside one project's board. The result is always a
-/// COMPLETE ordering of that project's materials, because the store rewrites
-/// dense sequence ranks from the whole list under one owner-revision CAS.
+/// accessibility actions on the desk. The result is always a COMPLETE ordering
+/// of the desk's materials, because the store rewrites dense sequence ranks
+/// from the whole list under one owner-revision CAS.
 enum WorkboardMaterialOrdering {
     /// `index` is a slot in the CURRENT order, `0...count` — exactly what the
     /// mosaic engine's `insertionIndex(at:)` returns. Nil when the move is a

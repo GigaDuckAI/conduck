@@ -42,15 +42,15 @@ struct ConduckShortcuts: AppShortcutsProvider {
         )
 
         // Fast, inert capture for Siri, the Action Button, and user-built
-        // shortcuts. This only creates a draft; it never selects a gateway or
-        // dispatches network work.
+        // shortcuts. It appends one card to the Work desk; it never selects a
+        // gateway or sends anything.
         AppShortcut(
             intent: CaptureWorkboardIntent(),
             phrases: [
-                "Add a thought to my Workboard in \(.applicationName)",
-                "Prepare something in \(.applicationName)"
+                "Add a thought to my Work desk in \(.applicationName)",       // xcstrings
+                "Capture a thought in \(.applicationName)"                     // xcstrings
             ],
-            shortTitle: "Add to Work",
+            shortTitle: "Add to Work",                        // xcstrings
             systemImageName: "tray.and.arrow.down.fill"
         )
     }

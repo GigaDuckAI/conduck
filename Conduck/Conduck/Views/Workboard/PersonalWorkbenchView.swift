@@ -427,7 +427,9 @@ final class PersonalWorkbenchRouter {
                     MaterialPresentation(title: material.name, content: .image(data)),
                     requestID: requestID
                 )
-            case .file:
+            // A recording reaches this presenter only through Share/Open, where
+            // Quick Look plays it; the board's own audio card never routes here.
+            case .file, .audio:
                 if let localURL = try await ConversationStore.shared.localURLForWorkMaterial(id: material.id) {
                     let previewURL = try await Self.makePreviewCopy(
                         from: localURL,
@@ -530,13 +532,12 @@ final class PersonalWorkbenchRouter {
             .replacingOccurrences(of: ":", with: "-")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let safe = replaced == "." || replaced == ".." ? "" : replaced
-        return safe.isEmpty ? "Workboard material" : String(safe.prefix(120))
+        return safe.isEmpty ? "Work material" : String(safe.prefix(120))
     }
 
     /// External preview/open/share surfaces receive a disposable snapshot,
     /// never WorkAssetVault's authoritative URL. An editor may freely mutate
-    /// this copy without changing the bytes covered by Work's revision and
-    /// immutable dispatch preflight.
+    /// this copy without changing the bytes the desk's own revision covers.
     private nonisolated static func makePreviewCopy(
         from sourceURL: URL,
         displayName: String
@@ -656,8 +657,9 @@ final class WorkCaptureRefreshCoordinator {
     /// per store mutation — and `drainDeferredRefresh()` replays the newest one.
     ///
     /// The FIRST pass always runs, hidden or not: it warms the board so opening
-    /// Work shows projects rather than the empty-board copy, and it is the pass
-    /// that adopts whatever the share extension left in the queue before launch.
+    /// Work shows the cards already on the desk rather than the empty-board
+    /// copy, and it is the pass that adopts whatever the share extension left
+    /// in the queue before launch.
     private func refreshIfVisible() async {
         guard boardIsVisible() || !hasLoadedBoard else {
             boardIsStale = true

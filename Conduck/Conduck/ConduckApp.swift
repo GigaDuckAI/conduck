@@ -336,7 +336,7 @@ struct ConduckApp: App {
                 .keyboardShortcut("n", modifiers: .command)
             }
             CommandGroup(after: .newItem) {
-                Button("Workboard") {
+                Button("Work") {
                     openWindow(id: "main")
                     NotificationCenter.default.post(name: .showWorkboard, object: nil)
                 }

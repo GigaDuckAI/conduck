@@ -21,6 +21,14 @@
 //
 // Leaf keys are generated and opaque: a source or display filename never becomes
 // a filesystem path.
+//
+// The vault lives in the App Group, so the app, the share extensions and the
+// headless intent process all write it. A leaf therefore exists for a moment
+// before ANY process can see the row that names it, and the database alone
+// cannot tell that publication gap from a crash orphan. Reclamation closes the
+// gap from both sides: a staging marker beside the leaf states the claim across
+// processes, and no leaf younger than `stagingHorizon` is reclaimed even
+// without one.
 
 #if !os(watchOS)
 import Foundation
@@ -39,14 +47,42 @@ actor WorkAssetVault {
         case writeFailed
     }
 
+    /// The on-disk staging claim written beside a leaf while its `WorkMaterial`
+    /// row is being written. `owner` names one vault instance, so a marker this
+    /// instance wrote for a key it is no longer staging is known residue and
+    /// expires at once instead of waiting out the horizon.
+    struct StagingClaim: Codable, Equatable, Sendable {
+        let owner: UUID
+        let stagedAt: Date
+    }
+
+    /// Suffix of the staging marker for a leaf. A marker name is deliberately
+    /// NOT a valid vault key, so reclamation reads markers as claims and never
+    /// as payload data, and no reader can reach one through `data(for:)`.
+    nonisolated static let stagingMarkerSuffix = ".staging"
+
+    /// A leaf younger than this — or covered by a marker no older than this — is
+    /// never reclaimed. The cost is asymmetric: keeping a crash orphan for one
+    /// more board load wastes bounded disk, while deleting a leaf another
+    /// process staged seconds ago destroys a payload the person just captured.
+    /// Chosen far above a real publication (one copy plus one Core Data save,
+    /// seconds even at the 256 MB share cap) and low enough that residue does
+    /// not outlive a session.
+    nonisolated static let stagingHorizon: TimeInterval = 15 * 60
+
     private let baseURL: URL
     private let fileManager: FileManager
+    /// Per-instance identity, minted in the stored-property initializer so both
+    /// `init`s carry one. A relaunched process must not read its predecessor's
+    /// marker as its own: the horizon is the only cross-process liveness signal
+    /// a plain file can carry.
+    nonisolated let instanceID = UUID()
     /// Keys written by this process whose database mutation has not committed
     /// yet. Reconciliation can run while `ConversationStore` is suspended on a
     /// vault write; protecting that small publication gap prevents a just-picked
     /// file from being mistaken for a crash orphan before its `WorkMaterial`
-    /// row exists. Process death clears the set, which is exactly when the next
-    /// launch should judge the database authoritative again.
+    /// row exists. Process death clears the set, which is why the marker and the
+    /// horizon — not this set — are what protect a leaf staged elsewhere.
     private var stagedKeys: Set<String> = []
 
     private init() {
@@ -87,6 +123,7 @@ actor WorkAssetVault {
         try scaffold()
         let key = Self.makeKey(id: id, suggestedExtension: suggestedExtension)
         let destination = try resolvedURL(for: key)
+        beginStaging(key)
         do {
             #if os(iOS)
             try data.write(
@@ -96,9 +133,9 @@ actor WorkAssetVault {
             #else
             try data.write(to: destination, options: [.atomic])
             #endif
-            stagedKeys.insert(key)
             return key
         } catch {
+            endStaging(key)
             throw VaultError.writeFailed
         }
     }
@@ -118,6 +155,7 @@ actor WorkAssetVault {
         let destination = try resolvedURL(for: key)
         let scoped = sourceURL.startAccessingSecurityScopedResource()
         defer { if scoped { sourceURL.stopAccessingSecurityScopedResource() } }
+        beginStaging(key)
         do {
             try fileManager.copyItem(at: sourceURL, to: destination)
             #if os(iOS)
@@ -126,10 +164,10 @@ actor WorkAssetVault {
                 ofItemAtPath: destination.path
             )
             #endif
-            stagedKeys.insert(key)
             return key
         } catch {
             try? fileManager.removeItem(at: destination)
+            endStaging(key)
             throw VaultError.writeFailed
         }
     }
@@ -152,6 +190,7 @@ actor WorkAssetVault {
         let destination = try resolvedURL(for: key)
         let scoped = sourceURL.startAccessingSecurityScopedResource()
         defer { if scoped { sourceURL.stopAccessingSecurityScopedResource() } }
+        beginStaging(key)
 
         do {
             guard fileManager.createFile(atPath: destination.path, contents: nil) else {
@@ -187,13 +226,14 @@ actor WorkAssetVault {
             )
             #endif
             onProgress(1)
-            stagedKeys.insert(key)
             return StoredFile(key: key, byteCount: copied)
         } catch is CancellationError {
             try? fileManager.removeItem(at: destination)
+            endStaging(key)
             throw CancellationError()
         } catch {
             try? fileManager.removeItem(at: destination)
+            endStaging(key)
             throw VaultError.writeFailed
         }
     }
@@ -262,6 +302,7 @@ actor WorkAssetVault {
         try scaffold()
         let destinationKey = Self.makeKey(id: id, suggestedExtension: source.pathExtension)
         let destination = try resolvedURL(for: destinationKey)
+        beginStaging(destinationKey)
         do {
             try fileManager.copyItem(at: source, to: destination)
             #if os(iOS)
@@ -270,12 +311,11 @@ actor WorkAssetVault {
                 ofItemAtPath: destination.path
             )
             #endif
-            let byteCount = ((try? fileManager.attributesOfItem(atPath: destination.path))?[.size]
-                as? NSNumber)?.int64Value ?? 0
-            stagedKeys.insert(destinationKey)
+            let byteCount = fileByteCount(at: destination) ?? 0
             return StoredFile(key: destinationKey, byteCount: byteCount)
         } catch {
             try? fileManager.removeItem(at: destination)
+            endStaging(destinationKey)
             throw VaultError.writeFailed
         }
     }
@@ -287,35 +327,91 @@ actor WorkAssetVault {
 
     func remove(_ key: String) throws {
         let url = try resolvedURL(for: key)
-        stagedKeys.remove(key)
+        endStaging(key)
         guard fileManager.fileExists(atPath: url.path) else { return }
         try fileManager.removeItem(at: url)
     }
 
-    /// Release the short in-process publication guard after the matching
-    /// `WorkMaterial.localVaultKey` save has committed. A later reconciliation
-    /// will still retain the file from the authoritative database key set.
+    /// Release the publication guard — the in-process staged key and the
+    /// cross-process marker both — after the matching `WorkMaterial.localVaultKey`
+    /// save has committed. A later reconciliation retains the file from the
+    /// authoritative database key set instead.
     func markReferenced(_ key: String) {
-        stagedKeys.remove(key)
+        endStaging(key)
     }
 
-    /// Reclaim only valid vault leaves not named by the authoritative database.
-    /// Invalid/foreign directory entries are left untouched and reported.
-    func reclaimUnreferenced(keeping keys: Set<String>) -> Int {
+    /// Prove a published leaf before its publication may be reported durable,
+    /// then release the guard. A caller that has just saved a row naming `key`
+    /// must not acknowledge the capture — or delete the source bytes it came
+    /// from — when the leaf is missing or the wrong length, because the row
+    /// would then promise a payload the vault cannot serve. A mismatch KEEPS the
+    /// guard, so the failed publication cannot be followed by a reclamation pass
+    /// deleting what is left of it.
+    @discardableResult
+    func confirmPublication(of key: String, expectedByteCount: Int64? = nil) -> Bool {
+        guard let url = try? resolvedURL(for: key) else { return false }
+        guard let byteCount = fileByteCount(at: url) else {
+            // Nothing on disk left to protect; the caller learns the publication
+            // is not durable from the returned false.
+            endStaging(key)
+            return false
+        }
+        if let expectedByteCount, expectedByteCount >= 0, byteCount != expectedByteCount {
+            return false
+        }
+        endStaging(key)
+        return true
+    }
+
+    /// Reclaim only valid vault leaves that neither the authoritative database
+    /// nor a live staging claim names. Invalid/foreign directory entries are left
+    /// untouched. `now` is injectable so a test can age past the horizon without
+    /// sleeping; production always judges against the wall clock.
+    func reclaimUnreferenced(keeping keys: Set<String>, now: Date = Date()) -> Int {
         guard (try? scaffold()) != nil,
               let children = try? fileManager.contentsOfDirectory(
                 at: baseURL,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: [
+                    .isRegularFileKey, .creationDateKey, .contentModificationDateKey
+                ],
                 options: [.skipsHiddenFiles]
               ) else { return 0 }
-        var removed = 0
-        let protectedKeys = keys.union(stagedKeys)
+
+        var leaves: [String: URL] = [:]
+        var markers: [String: URL] = [:]
         for child in children {
-            let key = child.lastPathComponent
-            guard Self.isSafeKey(key), !protectedKeys.contains(key) else { continue }
+            let name = child.lastPathComponent
             let values = try? child.resourceValues(forKeys: [.isRegularFileKey])
             guard values?.isRegularFile == true else { continue }
-            if (try? fileManager.removeItem(at: child)) != nil { removed += 1 }
+            // A safe key is payload first: `staging` is a legal path extension,
+            // so classifying by suffix ahead of key shape would let a leaf named
+            // `<uuid>.staging` be mistaken for a claim on nothing.
+            if Self.isSafeKey(name) {
+                leaves[name] = child
+            } else if let staged = Self.stagedKey(forMarkerNamed: name) {
+                markers[staged] = child
+            }
+        }
+
+        var removed = 0
+        let protectedKeys = keys.union(stagedKeys)
+        for (key, url) in leaves where !protectedKeys.contains(key) {
+            if let marker = markers[key],
+               !isAbandonedStagingClaim(at: marker, now: now) { continue }
+            guard isPastStagingHorizon(url, now: now) else { continue }
+            guard (try? fileManager.removeItem(at: url)) != nil else { continue }
+            removed += 1
+            if let marker = markers.removeValue(forKey: key) {
+                try? fileManager.removeItem(at: marker)
+            }
+        }
+        // A marker whose leaf is absent names nothing yet — an atomic write
+        // publishes its file only at the end — so it is swept solely once
+        // abandoned, never merely because the payload has not appeared.
+        for (key, marker) in markers {
+            guard leaves[key] == nil, !protectedKeys.contains(key) else { continue }
+            guard isAbandonedStagingClaim(at: marker, now: now) else { continue }
+            try? fileManager.removeItem(at: marker)
         }
         return removed
     }
@@ -325,6 +421,14 @@ actor WorkAssetVault {
         return id.uuidString.lowercased() + "." + ext
     }
 
+    /// The leaf a marker name claims, or nil when the name is not a marker for a
+    /// key this vault could have written.
+    nonisolated static func stagedKey(forMarkerNamed name: String) -> String? {
+        guard name.hasSuffix(stagingMarkerSuffix) else { return nil }
+        let key = String(name.dropLast(stagingMarkerSuffix.count))
+        return isSafeKey(key) ? key : nil
+    }
+
     nonisolated static func isSafeKey(_ key: String) -> Bool {
         guard key == (key as NSString).lastPathComponent,
               !key.contains("/"), !key.contains("\\"),
@@ -332,6 +436,97 @@ actor WorkAssetVault {
               UUID(uuidString: String(key[..<dot])) != nil else { return false }
         return WorkCaptureEnvelope.safePathExtension(String(key[key.index(after: dot)...]))
             == String(key[key.index(after: dot)...]).lowercased()
+    }
+
+    // MARK: - Publication guard
+
+    /// Open the publication gap for `key`: the marker goes down BEFORE the bytes
+    /// so another process can never observe a leaf that no claim covers.
+    private func beginStaging(_ key: String) {
+        stagedKeys.insert(key)
+        writeStagingMarker(for: key)
+    }
+
+    private func endStaging(_ key: String) {
+        stagedKeys.remove(key)
+        removeStagingMarker(for: key)
+    }
+
+    private func stagingMarkerURL(for key: String) -> URL? {
+        guard Self.isSafeKey(key) else { return nil }
+        return baseURL.appendingPathComponent(key + Self.stagingMarkerSuffix, isDirectory: false)
+    }
+
+    /// Best effort by design: `stagingHorizon` still covers the publication gap
+    /// without a marker, so a marker that cannot be written must never fail a
+    /// capture the person just made.
+    private func writeStagingMarker(for key: String) {
+        guard let url = stagingMarkerURL(for: key) else { return }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        guard let data = try? encoder.encode(
+            StagingClaim(owner: instanceID, stagedAt: Date())
+        ) else { return }
+        #if os(iOS)
+        // Any awake process must be able to read this marker to see that the
+        // leaf is claimed, and it carries no user content — the payloads'
+        // stronger protection would only turn a locked device into a false
+        // orphan and license deleting live bytes.
+        try? data.write(
+            to: url,
+            options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+        )
+        #else
+        try? data.write(to: url, options: [.atomic])
+        #endif
+    }
+
+    private func removeStagingMarker(for key: String) {
+        guard let url = stagingMarkerURL(for: key) else { return }
+        try? fileManager.removeItem(at: url)
+    }
+
+    /// A claim is abandoned when this instance wrote it for a key it is no
+    /// longer staging (the publication it covered has ended, and marker removal
+    /// merely failed) or when it predates the horizon. A claim dated in the
+    /// future is respected until the clock catches up: skew must never license
+    /// deleting a payload mid-publication.
+    private func isAbandonedStagingClaim(at url: URL, now: Date) -> Bool {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let claim = fileManager.contents(atPath: url.path).flatMap {
+            try? decoder.decode(StagingClaim.self, from: $0)
+        }
+        if let claim, claim.owner == instanceID { return true }
+        var stagedAt = claim?.stagedAt
+        if stagedAt == nil {
+            // Unreadable bytes still prove someone claimed the leaf; age the
+            // claim by its file so the horizon can expire it anyway.
+            let attributes = try? fileManager.attributesOfItem(atPath: url.path)
+            stagedAt = attributes?[.modificationDate] as? Date
+        }
+        guard let stagedAt else { return false }
+        return now.timeIntervalSince(stagedAt) >= Self.stagingHorizon
+    }
+
+    /// Whether a leaf is old enough to be judged by the database alone. A file
+    /// still being streamed keeps advancing its modification date, so the newest
+    /// of the two timestamps is what a long copy is measured by. A leaf whose age
+    /// cannot be read is never reclaimed: the vault refuses to delete what it
+    /// cannot reason about.
+    private func isPastStagingHorizon(_ url: URL, now: Date) -> Bool {
+        let values = try? url.resourceValues(
+            forKeys: [.creationDateKey, .contentModificationDateKey]
+        )
+        let stamps = [values?.creationDate, values?.contentModificationDate].compactMap { $0 }
+        guard let newest = stamps.max() else { return false }
+        return now.timeIntervalSince(newest) >= Self.stagingHorizon
+    }
+
+    private func fileByteCount(at url: URL) -> Int64? {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else { return nil }
+        return size.int64Value
     }
 
     private func scaffold() throws {

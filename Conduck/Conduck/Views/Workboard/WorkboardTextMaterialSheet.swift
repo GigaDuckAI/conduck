@@ -82,7 +82,7 @@ struct WorkboardTextMaterialSheet: View {
                         .accessibilityAddTraits(.isHeader)
                 } footer: {
                     Text(kind == .link
-                        ? LocalizedStringResource("workboard.material.link.footer", defaultValue: "The gateway receives the address as text. Conduck does not fetch the page in the background.")
+                        ? LocalizedStringResource("workboard.material.link.footer", defaultValue: "The address is saved as text. Conduck does not fetch the page in the background.")
                         : LocalizedStringResource("workboard.material.note.footer", defaultValue: "Use a note when a thought should remain a separate, reusable material."))
                 }
             }

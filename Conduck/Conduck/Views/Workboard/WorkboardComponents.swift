@@ -12,13 +12,9 @@
 import SwiftUI
 import CoreTransferable
 import UniformTypeIdentifiers
-#if os(iOS)
-import UIKit
-#endif
 
 enum WorkboardMetrics {
     static let contentMaxWidth: CGFloat = 920
-    static let cardCornerRadius: CGFloat = 18
     static let surfaceCornerRadius: CGFloat = 16
     static let standardSpacing: CGFloat = 16
     static let generousSpacing: CGFloat = 24
@@ -123,7 +119,7 @@ enum WorkboardMaterialIcon {
             return ext.isEmpty ? AppColors.brandAmber : AttachmentChipStyle.tint(forExtension: ext)
         case .link:
             return AppColors.guidedSetupBlue
-        case .image, .note:
+        case .image, .note, .audio:
             return AppColors.brandAmber
         }
     }
@@ -172,52 +168,15 @@ struct WorkboardEmptyState: View {
 
 // MARK: - Adding material
 
-/// Every way material enters Work, described once for both Work surfaces.
-enum WorkboardMaterialRoute: String, CaseIterable, Identifiable {
-    case photos
-    case camera
-    case files
-    case link
-    case note
-
-    var id: String { rawValue }
-
-    var title: LocalizedStringResource {
-        switch self {
-        case .photos:
-            return LocalizedStringResource("workboard.material.addPhotos", defaultValue: "Photos")
-        case .camera:
-            return LocalizedStringResource("composer.attach.takePhoto", defaultValue: "Take Photo")
-        case .files:
-            return LocalizedStringResource("workboard.material.addFiles", defaultValue: "Files")
-        case .link:
-            return LocalizedStringResource("workboard.material.addLink.short", defaultValue: "Link")
-        case .note:
-            return LocalizedStringResource("workboard.material.addNote.short", defaultValue: "Note")
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .photos: return "photo.on.rectangle.angled"
-        case .camera: return "camera"
-        case .files: return "doc.badge.plus"
-        case .link: return "link.badge.plus"
-        case .note: return "note.text.badge.plus"
-        }
-    }
-}
-
 /// The single add-material control for Work. `.menu` mounts Chat's shared
-/// `AttachmentMenu` unchanged, so the pinned composer keeps the exact paperclip
-/// interaction a conversation has; `.row` is the editor's always-visible list of
-/// the same routes. Both presentations take the same handlers, so a new route is
-/// added and wired once. `.note` reaches only the row: it has no place in
-/// Chat's menu, and Work must not fork that shared control to add one.
+/// `AttachmentMenu` unchanged, so the desk composer keeps the exact paperclip
+/// interaction a conversation has. `Presentation` stays an enum with one case so
+/// a second mounting can be introduced without re-threading the call site, and a
+/// new route belongs in `AttachmentMenu` rather than forked here — one paperclip
+/// means one route list.
 struct WorkboardMaterialActions: View {
     enum Presentation: Equatable {
         case menu
-        case row
     }
 
     let presentation: Presentation
@@ -225,23 +184,12 @@ struct WorkboardMaterialActions: View {
     let onTakePhoto: () -> Void
     let onPickFiles: () -> Void
     let onAddLink: () -> Void
+    /// `AttachmentMenu` carries no note route, so this handler has no reachable
+    /// trigger. It stays so the desk's note composer keeps a single owner while
+    /// the way back to it is decided.
     let onAddNote: () -> Void
     var iconPointSize: CGFloat = 22
     var iconFrame: CGFloat = WorkboardMetrics.touchTarget
-
-    /// True only on an iOS device with a camera, so the route is removed rather
-    /// than shown as a dead pill — matching `AttachmentMenu`'s own rule.
-    private var cameraAvailable: Bool {
-        #if os(iOS)
-        return UIImagePickerController.isSourceTypeAvailable(.camera)
-        #else
-        return false
-        #endif
-    }
-
-    private var rowRoutes: [WorkboardMaterialRoute] {
-        WorkboardMaterialRoute.allCases.filter { $0 != .camera || cameraAvailable }
-    }
 
     var body: some View {
         switch presentation {
@@ -255,40 +203,7 @@ struct WorkboardMaterialActions: View {
                 iconPointSize: iconPointSize,
                 iconFrame: iconFrame
             )
-        case .row:
-            ScrollView(.horizontal) {
-                HStack(spacing: 9) {
-                    ForEach(rowRoutes) { route in
-                        Button(action: action(for: route)) {
-                            label(for: route)
-                        }
-                        .choiceCardButton(cornerRadius: WorkboardMetrics.touchTarget / 2)
-                    }
-                }
-            }
-            .scrollIndicators(.hidden)
         }
-    }
-
-    private func action(for route: WorkboardMaterialRoute) -> () -> Void {
-        switch route {
-        case .photos: return onPickPhotos
-        case .camera: return onTakePhoto
-        case .files: return onPickFiles
-        case .link: return onAddLink
-        case .note: return onAddNote
-        }
-    }
-
-    private func label(for route: WorkboardMaterialRoute) -> some View {
-        Label(route.title, systemImage: route.systemImage)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(AppColors.textPrimary)
-            .padding(.horizontal, 13)
-            .frame(minHeight: WorkboardMetrics.touchTarget)
-            .background(AppColors.backgroundSecondary, in: Capsule())
-            .overlay { Capsule().stroke(AppColors.borderSubtle, lineWidth: 1) }
-            .contentShape(Capsule())
     }
 }
 

@@ -4480,6 +4480,15 @@ actor ConversationStore {
         }
     }
 
+    // The seams below reach `WorkMaterialBlob`, and the wrist mounts no `Blobs`
+    // store (`storeDescriptions` returns `[core]` there) — that omission IS the
+    // payload exclusion. A blob insert on watchOS has no store to land in and a
+    // blob fetch can only come back empty, so the payload seams must not exist
+    // in the watch build at all: an unusable seam is one a watch test can call
+    // and draw a false conclusion from. `_mountedStoresForTesting` stays outside
+    // this guard — asserting the wrist mounts Core ALONE is the whole point of
+    // it there.
+    #if !os(watchOS)
     /// Which physical file each row of one cross-store write landed in.
     struct MaterialBlobStoresForTesting: Sendable {
         let materialStoreURL: URL?
@@ -4597,6 +4606,7 @@ actor ConversationStore {
             )
         }
     }
+    #endif
 
     /// TEST SEAM — detach every mounted store, closing the sqlite files.
     ///

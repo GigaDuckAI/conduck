@@ -4,50 +4,6 @@
     "" : {
 
     },
-    "workboard.action.rename" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Rename"
-          }
-        }
-      }
-    },
-    "workboard.rename.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Only the name changes. Cards, sources and replies stay where they are."
-          }
-        }
-      }
-    },
-    "workboard.rename.prompt" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Name"
-          }
-        }
-      }
-    },
-    "workboard.rename.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Rename Work"
-          }
-        }
-      }
-    },
     "…" : {
 
     },
@@ -626,9 +582,6 @@
 
     },
     "Bind %@" : {
-
-    },
-    "Brief My Workboard" : {
 
     },
     "bubble.copy.copied" : {
@@ -1219,17 +1172,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "OK"
-          }
-        }
-      }
-    },
-    "common.settings" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Settings"
           }
         }
       }
@@ -6610,35 +6552,13 @@
         }
       }
     },
-    "intent.workboardBrief.description" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Hear what needs your review, what is waiting for an AI reply, and what is still being prepared."
-          }
-        }
-      }
-    },
-    "intent.workboardBrief.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Brief My Workboard"
-          }
-        }
-      }
-    },
     "intent.workboardCapture.confirmation" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Added to Workboard. Nothing was sent."
+            "value" : "Added to Work. Nothing was sent."
           }
         }
       }
@@ -6649,7 +6569,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Save a thought as a private Workboard draft without sending it to an AI."
+            "value" : "Save a thought to your private Work desk without sending it to an AI."
           }
         }
       }
@@ -20081,7 +20001,7 @@
         }
       }
     },
-    "This removes every conversation and its usage records from this device and all your other devices. Workboard briefs stay on your board. This cannot be undone." : {
+    "This removes every conversation and its usage records from this device and all your other devices. Your Work desk and everything on it stay untouched. This cannot be undone." : {
 
     },
     "This removes every conversation from this device and all your other devices. This cannot be undone." : {
@@ -21687,6 +21607,9 @@
     "Where does your AI live?" : {
 
     },
+    "Work" : {
+
+    },
     "workbench.chats" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -21716,31 +21639,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Work"
-          }
-        }
-      }
-    },
-    "Workboard" : {
-
-    },
-    "workboard.action.delete" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Delete Work"
-          }
-        }
-      }
-    },
-    "workboard.action.duplicate" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Duplicate Work"
           }
         }
       }
@@ -21778,237 +21676,79 @@
         }
       }
     },
-    "workboard.briefing.clear" : {
+    "workboard.audio.failed" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your Workboard is clear. There is nothing open right now."
+            "value" : "This recording couldn’t be played"
           }
         }
       }
     },
-    "workboard.briefing.clear.message" : {
+    "workboard.audio.loading" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "There are no drafts, waiting runs or results asking for review right now."
+            "value" : "Loading"
           }
         }
       }
     },
-    "workboard.briefing.clear.title" : {
+    "workboard.audio.pause" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your Workboard is clear"
+            "value" : "Pause"
           }
         }
       }
     },
-    "workboard.briefing.heading" : {
+    "workboard.audio.paused" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Here’s where your work stands"
+            "value" : "Paused"
           }
         }
       }
     },
-    "workboard.briefing.item.accessibility" : {
+    "workboard.audio.play" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$@. %2$@. %3$@"
+            "value" : "Play"
           }
         }
       }
     },
-    "workboard.briefing.item.hint" : {
+    "workboard.audio.playing" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Opens this brief."
+            "value" : "Playing"
           }
         }
       }
     },
-    "workboard.briefing.nothingOpen" : {
+    "workboard.audio.position" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "nothing open"
-          }
-        }
-      }
-    },
-    "workboard.briefing.private" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Built on device from your private board. No analytics and no AI-generated claims."
-          }
-        }
-      }
-    },
-    "workboard.briefing.readAloud" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Read Aloud"
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.draft" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld prepared draft"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld prepared drafts"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.failure" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld send needing attention"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld sends needing attention"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.reply" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld reply to review"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld replies to review"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "workboard.briefing.spoken.waiting" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld request waiting for a reply"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld requests waiting for replies"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "workboard.briefing.stopReading" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Stop Reading"
-          }
-        }
-      }
-    },
-    "workboard.briefing.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Brief Me"
-          }
-        }
-      }
-    },
-    "workboard.briefing.update.format" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Workboard update: %@."
-          }
-        }
-      }
-    },
-    "workboard.briefMe" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Brief My Work"
+            "value" : "%1$@ of %2$@"
           }
         }
       }
@@ -22134,28 +21874,6 @@
         }
       }
     },
-    "workboard.capture.targetUnavailable" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The selected Work item was no longer open, so this capture was saved as a new draft."
-          }
-        }
-      }
-    },
-    "workboard.capture.untitled" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Captured material"
-          }
-        }
-      }
-    },
     "workboard.capture.webPage" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22218,39 +21936,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Chat"
-          }
-        }
-      }
-    },
-    "workboard.chatCapture.followUpObjective" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Continue working from this response."
-          }
-        }
-      }
-    },
-    "workboard.chatCapture.followUpTitle" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Follow up: %@"
-          }
-        }
-      }
-    },
-    "workboard.chatCapture.longMessageObjective" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Continue working from the captured message."
           }
         }
       }
@@ -22387,94 +22072,6 @@
         }
       }
     },
-    "workboard.confirm.delete.action" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Delete Brief"
-          }
-        }
-      }
-    },
-    "workboard.confirm.delete.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "“%@” will be removed from your private iCloud board. Its existing conversations stay in Chat."
-          }
-        }
-      }
-    },
-    "workboard.confirm.delete.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Delete this brief?"
-          }
-        }
-      }
-    },
-    "workboard.confirm.duplicate.action" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Make a Copy"
-          }
-        }
-      }
-    },
-    "workboard.confirm.duplicate.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A new private draft will be created from “%@”. Sent runs are not copied."
-          }
-        }
-      }
-    },
-    "workboard.confirm.duplicate.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Duplicate this brief?"
-          }
-        }
-      }
-    },
-    "workboard.conflict.copy.failed.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn’t save a copy"
-          }
-        }
-      }
-    },
-    "workboard.conflict.reload.failed.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn’t load the latest brief"
-          }
-        }
-      }
-    },
     "workboard.desk.empty.message" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22482,72 +22079,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Whatever you collect lands here as a card you can move and resize."
-          }
-        }
-      }
-    },
-    "workboard.dispatch.failed.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Nothing was sent"
-          }
-        }
-      }
-    },
-    "workboard.editor.reviewAndSend" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Review & Send…"
-          }
-        }
-      }
-    },
-    "workboard.editor.reviewAndSend.hint" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Opens a final preview. Nothing is sent yet."
-          }
-        }
-      }
-    },
-    "workboard.empty.filtered.action" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Clear Search and Filters"
-          }
-        }
-      }
-    },
-    "workboard.empty.filtered.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Try a different search or show all work. Search stays inside your private board."
-          }
-        }
-      }
-    },
-    "workboard.empty.filtered.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No work matches"
           }
         }
       }
@@ -22563,35 +22094,13 @@
         }
       }
     },
-    "workboard.error.alreadyStarted" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This exact dispatch has already started. Conduck will not send it twice."
-          }
-        }
-      }
-    },
     "workboard.error.contentTooLong" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "That brief is longer than %@ characters. Shorten it, then try again."
-          }
-        }
-      }
-    },
-    "workboard.error.derivedState" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Waiting and Review are updated by the linked conversation."
+            "value" : "That text is longer than %@ characters. Shorten it, then try again."
           }
         }
       }
@@ -22607,39 +22116,6 @@
         }
       }
     },
-    "workboard.error.fileServerRequired" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A selected file needs this gateway's file transfer connection. Set it up or choose another gateway."
-          }
-        }
-      }
-    },
-    "workboard.error.fileTransferFailed" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A selected file could not be transferred through this gateway. Nothing was sent; check the connection and try again."
-          }
-        }
-      }
-    },
-    "workboard.error.gatewayUnavailable" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "That gateway is not ready on this device. Nothing was sent."
-          }
-        }
-      }
-    },
     "workboard.error.invalidLink" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22651,46 +22127,13 @@
         }
       }
     },
-    "workboard.error.itemChanged" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This brief changed after the preview opened. Review the latest version before sending."
-          }
-        }
-      }
-    },
     "workboard.error.itemMissing" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "This brief is no longer available."
-          }
-        }
-      }
-    },
-    "workboard.error.materialChanged" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The selected materials changed after the preview opened. Review them again before sending."
-          }
-        }
-      }
-    },
-    "workboard.error.materialUnavailable" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A selected material is not available on this device. Reattach it here before sending."
+            "value" : "This card is no longer available."
           }
         }
       }
@@ -22706,354 +22149,13 @@
         }
       }
     },
-    "workboard.error.previewMismatch" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The final prompt no longer matches the preview. Nothing was sent; reopen Review & Send."
-          }
-        }
-      }
-    },
-    "workboard.error.staleBoardOrder" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The project order changed on another device. The latest order is shown."
-          }
-        }
-      }
-    },
     "workboard.error.staleDraft" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "This brief changed on another device. Reopen it to keep the latest version."
-          }
-        }
-      }
-    },
-    "workboard.error.unsupportedMaterial" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "One selected material cannot be prepared safely. Remove or replace it before sending."
-          }
-        }
-      }
-    },
-    "workboard.filter.all" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Everything"
-          }
-        }
-      }
-    },
-    "workboard.filter.changed" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Changed after send"
-          }
-        }
-      }
-    },
-    "workboard.filter.done" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Done"
-          }
-        }
-      }
-    },
-    "workboard.filter.drafts" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Drafts"
-          }
-        }
-      }
-    },
-    "workboard.filter.help" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Choose which work appears on the board"
-          }
-        }
-      }
-    },
-    "workboard.filter.needsYou" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Needs you"
-          }
-        }
-      }
-    },
-    "workboard.filter.open" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open work"
-          }
-        }
-      }
-    },
-    "workboard.filter.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Show"
-          }
-        }
-      }
-    },
-    "workboard.filter.waiting" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Waiting on AI"
-          }
-        }
-      }
-    },
-    "workboard.gateway.configured.status" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Configured on this device; full file transfer is ready."
-          }
-        }
-      }
-    },
-    "workboard.gateway.custom" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Custom endpoint"
-          }
-        }
-      }
-    },
-    "workboard.gateway.hosted" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Hosted model"
-          }
-        }
-      }
-    },
-    "workboard.gateway.load.failed.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Gateways unavailable"
-          }
-        }
-      }
-    },
-    "workboard.gateway.selfHosted" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Self-hosted agent"
-          }
-        }
-      }
-    },
-    "workboard.group.done" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Done"
-          }
-        }
-      }
-    },
-    "workboard.group.drafts" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Drafts"
-          }
-        }
-      }
-    },
-    "workboard.group.needsYou" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Needs You"
-          }
-        }
-      }
-    },
-    "workboard.group.waiting" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Waiting on AI"
-          }
-        }
-      }
-    },
-    "workboard.item.accessibility.latestRun" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Latest run: %@"
-          }
-        }
-      }
-    },
-    "workboard.item.accessibility.materials" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld materials"
-          }
-        }
-      }
-    },
-    "workboard.item.accessibility.materials.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "One material"
-          }
-        }
-      }
-    },
-    "workboard.item.accessibility.reviewBy" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Review by %@"
-          }
-        }
-      }
-    },
-    "workboard.item.changedAfterSend" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Changed after this was sent"
-          }
-        }
-      }
-    },
-    "workboard.item.copyTitle" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ — Copy"
-          }
-        }
-      }
-    },
-    "workboard.item.missing.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "It may have been deleted on another device."
-          }
-        }
-      }
-    },
-    "workboard.item.missing.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This brief is no longer here"
-          }
-        }
-      }
-    },
-    "workboard.item.open.hint" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Opens the brief and its run history."
-          }
-        }
-      }
-    },
-    "workboard.item.pinned" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Pinned"
+            "value" : "This card changed on another device. Reopen it to keep the latest version."
           }
         }
       }
@@ -23064,7 +22166,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Untitled brief"
+            "value" : "Untitled note"
           }
         }
       }
@@ -23075,7 +22177,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your projects stay private and unchanged. Try opening them again."
+            "value" : "Your desk stays private and unchanged. Try opening it again."
           }
         }
       }
@@ -23113,28 +22215,6 @@
         }
       }
     },
-    "workboard.material.accessibility.summary" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@, %2$@. %3$@"
-          }
-        }
-      }
-    },
-    "workboard.material.addFiles" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Files"
-          }
-        }
-      }
-    },
     "workboard.material.addLink" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23142,17 +22222,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Add Link"
-          }
-        }
-      }
-    },
-    "workboard.material.addLink.short" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Link"
           }
         }
       }
@@ -23168,24 +22237,13 @@
         }
       }
     },
-    "workboard.material.addNote.short" : {
+    "workboard.material.audio" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Note"
-          }
-        }
-      }
-    },
-    "workboard.material.addPhotos" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Photos"
+            "value" : "Voice note"
           }
         }
       }
@@ -23344,28 +22402,6 @@
         }
       }
     },
-    "workboard.material.included" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Included"
-          }
-        }
-      }
-    },
-    "workboard.material.item" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Material"
-          }
-        }
-      }
-    },
     "workboard.material.large.confirm.add" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23427,7 +22463,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "The gateway receives the address as text. Conduck does not fetch the page in the background."
+            "value" : "The address is saved as text. Conduck does not fetch the page in the background."
           }
         }
       }
@@ -23560,17 +22596,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Standalone Note"
-          }
-        }
-      }
-    },
-    "workboard.material.omitted" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Not included"
           }
         }
       }
@@ -23751,28 +22776,6 @@
         }
       }
     },
-    "workboard.material.unsupported.fileTransfer" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Needs this gateway’s file transfer connection"
-          }
-        }
-      }
-    },
-    "workboard.material.unsupported.generic" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Not available for this gateway"
-          }
-        }
-      }
-    },
     "workboard.menuBar.addToWork" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23839,699 +22842,6 @@
         }
       }
     },
-    "workboard.newBrief" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "New Work"
-          }
-        }
-      }
-    },
-    "workboard.overview.hint" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Shows the attention overview for every project"
-          }
-        }
-      }
-    },
-    "workboard.overview.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "All Work"
-          }
-        }
-      }
-    },
-    "workboard.pin" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Pin"
-          }
-        }
-      }
-    },
-    "workboard.preflight.compatibility.images" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Images are sent inline. Whether the AI can understand them depends on the model behind this gateway."
-          }
-        }
-      }
-    },
-    "workboard.preflight.compatibility.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Route check"
-          }
-        }
-      }
-    },
-    "workboard.preflight.compatibility.unavailable" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld materials are not on this device and will stay in Work."
-          }
-        }
-      }
-    },
-    "workboard.preflight.compatibility.unavailable.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "One material is not on this device and will stay in Work."
-          }
-        }
-      }
-    },
-    "workboard.preflight.compatibility.unsupported" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld incompatible materials will stay in Work and will not be sent."
-          }
-        }
-      }
-    },
-    "workboard.preflight.compatibility.unsupported.one" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "One incompatible material will stay in Work and will not be sent."
-          }
-        }
-      }
-    },
-    "workboard.preflight.eyebrow" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Final check"
-          }
-        }
-      }
-    },
-    "workboard.preflight.gateway.accessibility" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@. %2$@. %3$@. %4$@"
-          }
-        }
-      }
-    },
-    "workboard.preflight.gateway.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No destination is preselected. This run stays bound to the gateway you approve."
-          }
-        }
-      }
-    },
-    "workboard.preflight.gateway.configure" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Gateway Settings"
-          }
-        }
-      }
-    },
-    "workboard.preflight.gateway.empty" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Configure a Personal AI gateway before sending. Your draft is already saved."
-          }
-        }
-      }
-    },
-    "workboard.preflight.gateway.notSelected" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Not selected"
-          }
-        }
-      }
-    },
-    "workboard.preflight.gateway.selected" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Selected"
-          }
-        }
-      }
-    },
-    "workboard.preflight.gateway.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "1. Choose a gateway"
-          }
-        }
-      }
-    },
-    "workboard.preflight.intro" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Choose the destination, confirm its materials, then approve the exact brief below."
-          }
-        }
-      }
-    },
-    "workboard.preflight.material.accessibility" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$@, %2$@. %3$@"
-          }
-        }
-      }
-    },
-    "workboard.preflight.materials.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Only checked, compatible materials are copied into this run."
-          }
-        }
-      }
-    },
-    "workboard.preflight.materials.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "2. Confirm materials"
-          }
-        }
-      }
-    },
-    "workboard.preflight.missing.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Close this preview and open the latest version from the board."
-          }
-        }
-      }
-    },
-    "workboard.preflight.missing.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This brief changed elsewhere"
-          }
-        }
-      }
-    },
-    "workboard.preflight.promise.binding" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The new conversation stays bound to this gateway"
-          }
-        }
-      }
-    },
-    "workboard.preflight.promise.done" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A reply asks for your review; it never marks the objective done"
-          }
-        }
-      }
-    },
-    "workboard.preflight.promise.reviewBy" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Review by"
-          }
-        }
-      }
-    },
-    "workboard.preflight.promise.snapshot" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The sent version stays immutable"
-          }
-        }
-      }
-    },
-    "workboard.preflight.prompt.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This canonical text is frozen into the run and sent with the checked materials."
-          }
-        }
-      }
-    },
-    "workboard.preflight.prompt.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "3. Approve the exact prompt"
-          }
-        }
-      }
-    },
-    "workboard.preflight.send" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Send"
-          }
-        }
-      }
-    },
-    "workboard.preflight.send.chooseFirst" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Choose a gateway to unlock Send"
-          }
-        }
-      }
-    },
-    "workboard.preflight.send.hint" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Creates a new bound conversation and sends the approved snapshot once."
-          }
-        }
-      }
-    },
-    "workboard.preflight.sending" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Sending…"
-          }
-        }
-      }
-    },
-    "workboard.preflight.sendingTo" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Sending to %@…"
-          }
-        }
-      }
-    },
-    "workboard.preflight.sendTo" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Send to %@"
-          }
-        }
-      }
-    },
-    "workboard.preflight.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Review & Send"
-          }
-        }
-      }
-    },
-    "workboard.projectShelf.new.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Start with a thought or source"
-          }
-        }
-      }
-    },
-    "workboard.projectShelf.new.hint" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Opens an empty private project canvas"
-          }
-        }
-      }
-    },
-    "workboard.projectShelf.pinned.subtitle" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Pinned work keeps its own order"
-          }
-        }
-      }
-    },
-    "workboard.projectShelf.pinned.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Pinned"
-          }
-        }
-      }
-    },
-    "workboard.projectShelf.subtitle" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Drag projects to arrange them"
-          }
-        }
-      }
-    },
-    "workboard.projectShelf.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Projects"
-          }
-        }
-      }
-    },
-    "workboard.review.acknowledge.failed.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn’t mark this result reviewed"
-          }
-        }
-      }
-    },
-    "workboard.run.cancelled" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Cancelled"
-          }
-        }
-      }
-    },
-    "workboard.run.conversationRemoved" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The linked conversation was removed. The sent brief remains here for your records."
-          }
-        }
-      }
-    },
-    "workboard.run.failed" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Needs attention"
-          }
-        }
-      }
-    },
-    "workboard.run.failed.generic" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The request did not complete. Open its conversation to review or retry it."
-          }
-        }
-      }
-    },
-    "workboard.run.replied" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Reply received"
-          }
-        }
-      }
-    },
-    "workboard.run.sending" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Sending"
-          }
-        }
-      }
-    },
-    "workboard.run.waiting" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Waiting for AI"
-          }
-        }
-      }
-    },
-    "workboard.save.failed.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Draft not saved"
-          }
-        }
-      }
-    },
-    "workboard.save.pending" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Changes waiting to save"
-          }
-        }
-      }
-    },
-    "workboard.save.privateDraft" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Private draft"
-          }
-        }
-      }
-    },
-    "workboard.save.saved" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Saved"
-          }
-        }
-      }
-    },
-    "workboard.save.saving" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Saving…"
-          }
-        }
-      }
-    },
-    "workboard.search.private" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Search runs only across your private Workboard"
-          }
-        }
-      }
-    },
-    "workboard.search.prompt" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Search work, sources and replies"
-          }
-        }
-      }
-    },
-    "workboard.shape.failed.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn’t shape this brief"
-          }
-        }
-      }
-    },
-    "workboard.state.done" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Done"
-          }
-        }
-      }
-    },
-    "workboard.state.draft" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Draft"
-          }
-        }
-      }
-    },
-    "workboard.state.review" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Review"
-          }
-        }
-      }
-    },
-    "workboard.state.waiting" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Waiting"
-          }
-        }
-      }
-    },
     "workboard.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24582,7 +22892,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Nothing is sent to an AI until you review it."
+            "value" : "Everything stays in your iCloud, on all your devices."
           }
         }
       }
@@ -24594,17 +22904,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "How your board works"
-          }
-        }
-      }
-    },
-    "workboard.unpin" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Unpin"
           }
         }
       }
@@ -24686,17 +22985,6 @@
         }
       }
     },
-    "workboard.voice.objective" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Describe the work"
-          }
-        }
-      }
-    },
     "workboard.voice.preparing" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24714,7 +23002,18 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Adds editable text to this private draft. It never sends the brief or chooses a gateway."
+            "value" : "Keeps the recording on your private desk and adds the words when they’re ready. Nothing is sent."
+          }
+        }
+      }
+    },
+    "workboard.voice.recording.untitled" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Voice note"
           }
         }
       }
@@ -24736,7 +23035,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Stop and Add Text"
+            "value" : "Stop and Save"
           }
         }
       }
@@ -24807,17 +23106,6 @@
         }
       }
     },
-    "workboard.workspace.captured" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Captured"
-          }
-        }
-      }
-    },
     "workboard.workspace.composer.prompt" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24825,28 +23113,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Add to Work…"
-          }
-        }
-      }
-    },
-    "workboard.workspace.composer.prompt.existing" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Add a thought to %@…"
-          }
-        }
-      }
-    },
-    "workboard.workspace.composer.prompt.new" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Start a new work item…"
           }
         }
       }
@@ -24869,50 +23135,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Files, photos, screenshots, links and text will be added here. Nothing is sent."
-          }
-        }
-      }
-    },
-    "workboard.workspace.drop.overlay.existing" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Drop into %@"
-          }
-        }
-      }
-    },
-    "workboard.workspace.drop.overlay.existing.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Files, photos, screenshots, links and text will be added here. Nothing is sent."
-          }
-        }
-      }
-    },
-    "workboard.workspace.drop.overlay.new" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Drop to create New Work"
-          }
-        }
-      }
-    },
-    "workboard.workspace.drop.overlay.new.caption" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A private draft is created only after the first item is safely stored. Nothing is sent."
           }
         }
       }
@@ -24979,28 +23201,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%1$lld of %2$lld"
-          }
-        }
-      }
-    },
-    "workboard.workspace.new.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "New Work"
-          }
-        }
-      }
-    },
-    "workboard.workspace.sidebar.privacy" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Briefs sync privately · source files and screenshots stay on this device"
           }
         }
       }

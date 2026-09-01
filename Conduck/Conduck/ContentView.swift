@@ -1552,12 +1552,27 @@ struct ContentView: View {
             }
 
             if pending.metadata.resolvedDestination == .work {
-                _ = try await WorkCaptureRetryCoordinator.publish(
-                    transcript: recoveredTranscript,
-                    rawImageData: pending.workImageData,
-                    captureID: pending.metadata.id,
-                    createdAt: pending.metadata.createdAt
-                )
+                // The desk's voice sheet published this recording as its own
+                // card before transcription was attempted, under this same
+                // capture id. Repair THAT card: the recording is the material
+                // and the words belong on it, so publishing them as a second,
+                // note-shaped capture would put one utterance on the board
+                // twice and leave the recording beside it still untranscribed.
+                // A false answer means this capture owns no recording card —
+                // the Shortcuts route never publishes one — and the ordinary
+                // publication below is then the only way the words land.
+                let attached = (try? await WorkVoiceCaptureCoordinator.attachTranscript(
+                    recoveredTranscript,
+                    toRecording: pending.metadata.id
+                )) ?? false
+                if !attached {
+                    _ = try await WorkCaptureRetryCoordinator.publish(
+                        transcript: recoveredTranscript,
+                        rawImageData: pending.workImageData,
+                        captureID: pending.metadata.id,
+                        createdAt: pending.metadata.createdAt
+                    )
+                }
             }
 
             _ = await PendingRetryStore.shared.clear(ifCurrentID: pending.metadata.id)

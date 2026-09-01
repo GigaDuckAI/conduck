@@ -87,16 +87,16 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
 
     // MARK: - Card projections
 
-    /// A stored kind is broader than the four shapes a card can draw, so the
-    /// narrowing is stated once. A voice note travels as its recording, which is
-    /// why `.audio` draws as a file rather than as the note its transcript
+    /// A stored kind is broader than the shapes a card can draw, so the
+    /// narrowing is stated once. A voice note travels as its recording and draws
+    /// as its own transport-bearing card rather than as the note its transcript
     /// becomes, and `.unknown` is decided by whether there is anything to open.
     @MainActor
     func testPresentationKindNarrowsEveryStoredKindToACardShape() {
         let expected: [(WorkMaterialKind, WorkboardMaterialKind)] = [
             (.image, .image),
             (.file, .file),
-            (.audio, .file),
+            (.audio, .audio),
             (.link, .link),
             (.note, .note),
             (.transcript, .note),
@@ -132,7 +132,7 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
             Set(WorkMaterialKind.allCases.map {
                 WorkboardLiveRepository.presentationKind(Self.record(kind: $0))
             }),
-            [.image, .file, .link, .note],
+            [.image, .file, .link, .note, .audio],
             "every stored kind resolves; a new one must be given a shape here"
         )
     }
@@ -175,8 +175,8 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
         )
         XCTAssertEqual(
             WorkboardLiveRepository.materialName(Self.record(kind: .audio)),
-            String(localized: "workboard.material.file", defaultValue: "File"),
-            "a nameless recording is named by the shape it draws as, not by its stored kind"
+            String(localized: "workboard.material.audio", defaultValue: "Voice note"),
+            "a nameless recording is named by the shape it draws as, which is its own"
         )
         XCTAssertEqual(
             WorkboardLiveRepository.materialName(Self.record(kind: .note)),

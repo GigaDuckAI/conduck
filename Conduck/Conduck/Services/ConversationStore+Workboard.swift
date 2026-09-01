@@ -25,10 +25,16 @@ import CryptoKit
 
 #if CONDUCK_TESTING
 /// One PHYSICAL `WorkMaterial` row, before deduplication collapses a
-/// CloudKit-merged material to a single logical card.
+/// CloudKit-merged material to a single logical card. It carries the columns a
+/// duplicate row can silently disagree about — its owner and its payload lane —
+/// because whichever row wins the canonical read is what the person sees.
 nonisolated struct WorkMaterialRowProbe: Sendable, Hashable {
+    let workItemID: UUID?
     let sequence: Int32?
     let cardSize: String?
+    let storageMode: String?
+    let localVaultKey: String?
+    let byteSize: Int64?
     let updatedAt: Date?
 }
 
@@ -103,11 +109,13 @@ extension ConversationStore {
     ///
     /// The message id is the note card's identity and every attachment keeps
     /// its own, so a retry after a process interruption repairs the same cards
-    /// instead of publishing a second set. No Work item is minted: Chat → Work
-    /// is a capture onto the one desk like every other surface, and
-    /// `upsertDeskMaterial` decides desk identity, rank and idempotency. The
-    /// turn's words are therefore always a card — the desk holds no brief field
-    /// for a short turn to land in.
+    /// instead of publishing a second set — every attachment whose bytes this
+    /// device still holds is republished on a repeat, because the store, not
+    /// this lane, is what can tell a healthy card from one whose payload never
+    /// landed. No Work item is minted: Chat → Work is a capture onto the one
+    /// desk like every other surface, and `upsertDeskMaterial` decides desk
+    /// identity, rank and idempotency. The turn's words are therefore always a
+    /// card — the desk holds no brief field for a short turn to land in.
     func captureMessageToWork(
         _ message: MessageRecord,
         conversationID: UUID
@@ -177,7 +185,18 @@ extension ConversationStore {
         // Rank is the desk write's to decide, so the cards are published in the
         // order they are meant to read: the turn's words, then its attachments.
         for attachment in persistedMessage.attachments.sorted(by: { $0.sequence < $1.sequence }) {
-            guard !existingIDs.contains(attachment.id) else { continue }
+            let localPayload = payloads[attachment.id]
+            let alreadyOnDesk = existingIDs.contains(attachment.id)
+            // An attachment whose bytes this device still holds is republished
+            // even when the desk already shows the card. `upsertDeskMaterial`
+            // is what detects a payload that never landed — the blob half of a
+            // publication interrupted by a crash, or a card whose bytes an
+            // import has not brought yet — and restages it; skipping on the id
+            // alone would report the turn as captured while its card stays
+            // permanently unreadable. A healthy card takes the idempotent
+            // no-op path instead. A card carrying no bytes has nothing to
+            // repair, so it is still skipped.
+            if alreadyOnDesk, localPayload == nil { continue }
             let name = attachment.filename
                 ?? String(localized: "workboard.chatCapture.attachment", defaultValue: "Chat attachment")
             let material: WorkMaterialDraft
@@ -202,7 +221,7 @@ extension ConversationStore {
                     sourceDevice: persistedMessage.sourceDevice,
                     createdAt: attachment.createdAt
                 )
-            } else if let payload = payloads[attachment.id] {
+            } else if let payload = localPayload {
                 material = WorkMaterialDraft(
                     id: attachment.id,
                     kind: attachment.mimeType.hasPrefix("image/") ? .image : .file,
@@ -242,7 +261,10 @@ extension ConversationStore {
             do {
                 _ = try await upsertDeskMaterial(material)
                 existingIDs.insert(attachment.id)
-                added += 1
+                // The counter keeps its meaning: cards this call put on the
+                // desk. A repaired card was already there, and reporting it as
+                // added would tell the person a second copy arrived.
+                if !alreadyOnDesk { added += 1 }
             } catch {
                 failed += 1
             }
@@ -286,7 +308,11 @@ extension ConversationStore {
     /// IDEMPOTENCY. `draft.id` is the material's identity and every capture
     /// lane mints it deterministically, so a replayed envelope or a retried
     /// intent finds its own material and gets it back instead of adding a
-    /// second card.
+    /// second card. A build before the single desk parked those same ids under
+    /// a per-capture owner row; an explicit re-capture of one adopts its
+    /// physical rows onto the desk rather than refusing them, because a refusal
+    /// makes that capture fail on every replay for ever. The legacy owner row
+    /// is left exactly where it is.
     ///
     /// CRASH REPAIR. Payload bytes, the blob store and the material row cannot
     /// commit as one transaction, so an interrupted capture leaves a partial
@@ -418,9 +444,13 @@ extension ConversationStore {
         /// A complete blob already carried these exact bytes, so nothing was
         /// written and there is nothing to take back.
         case alreadyPresent
-        /// This call inserted the row. Only this call may delete it again: it
-        /// knows the material never landed, which a background pass never can.
-        case inserted(contentHash: String, byteSize: Int64)
+        /// This call inserted THIS row, named by its permanent object id. Only
+        /// this call may delete it again: it knows the material never landed,
+        /// which a background pass never can. The identity is the row rather
+        /// than its `(materialID, contentHash, byteSize)` columns because those
+        /// carry no uniqueness — a peer's import or a concurrent publication of
+        /// the same bytes matches them too.
+        case inserted(rowID: NSManagedObjectID)
     }
 
     /// What the single write transaction actually did, so the vault's staged-key
@@ -429,6 +459,10 @@ extension ConversationStore {
     private nonisolated struct WorkMaterialWriteOutcome: Sendable {
         let insertedMaterial: Bool
         let repairedMaterial: Bool
+        /// Physical rows of this material were re-homed from a legacy owner
+        /// onto the desk. The card is new to the board even though no row was
+        /// inserted, so the board has to be told.
+        let adoptedMaterial: Bool
         let createdOwner: Bool
         /// Vault key the surviving material row names, which decides whether
         /// bytes staged by this call are referenced or garbage.
@@ -603,12 +637,50 @@ extension ConversationStore {
 
                 let now = Date()
                 let materialRows = try Self.workMaterialRows(id: draft.id, in: context)
+                var adopted = false
                 if !materialRows.isEmpty {
                     let owners = Set(
                         materialRows.compactMap { $0.value(forKey: "workItemID") as? UUID }
                     )
-                    guard owners == [ownerID] else {
-                        throw WorkboardStoreError.invalidMaterialOwner
+                    if owners != [ownerID] {
+                        // LEGACY-OWNER ADOPTION. A build before the single desk
+                        // stored a chat turn, its attachments and a partially
+                        // drained envelope's entries as materials under a
+                        // per-capture owner row, and those owner rows are
+                        // deliberately kept rather than migrated. An explicit
+                        // re-capture of that exact material id therefore
+                        // re-homes its physical rows onto the desk instead of
+                        // refusing them: refusing makes the capture fail for
+                        // good — the drainer replays the same envelope forever
+                        // and the chat banner reports a card it can never
+                        // publish. Only a capture naming the id does this;
+                        // there is no background sweep, and the owner row it
+                        // leaves behind is never deleted, because deleting a
+                        // valid CloudKit record exports that deletion to every
+                        // other device.
+                        guard case .desk = policy else {
+                            throw WorkboardStoreError.invalidMaterialOwner
+                        }
+                        // One logical card holds one rank across every physical
+                        // row, so a stray joins the rank its desk-side twin
+                        // already has rather than minting a second one.
+                        let rank: Int
+                        if let twin = materialRows.first(where: {
+                            $0.value(forKey: "workItemID") as? UUID == ownerID
+                        }), let twinRank = (twin.value(forKey: "sequence") as? NSNumber)?.intValue {
+                            rank = twinRank
+                        } else {
+                            rank = try Self.appendRank(forWorkItemID: ownerID, in: context)
+                        }
+                        for row in materialRows
+                        where row.value(forKey: "workItemID") as? UUID != ownerID {
+                            row.setValue(ownerID, forKey: "workItemID")
+                            row.setValue(NSNumber(value: Int32(clamping: rank)), forKey: "sequence")
+                            row.setValue(now, forKey: "updatedAt")
+                            adopted = true
+                        }
+                        // A card joined the board, so the desk moved.
+                        ownerRow.setValue(now, forKey: "updatedAt")
                     }
                     // CloudKit can materialize one logical material as several
                     // physical rows. Every one of them must name the bytes that
@@ -620,12 +692,17 @@ extension ConversationStore {
                         case .localVault:
                             if staged.storageMode == .localVault,
                                let repairedKey = staged.vaultKey {
+                                // The lane is written along with the key, so a
+                                // duplicate row that drifted onto the synced
+                                // lane cannot keep claiming bytes the card no
+                                // longer keeps there.
                                 for row in materialRows {
-                                    row.setValue(repairedKey, forKey: "localVaultKey")
-                                    row.setValue(
-                                        NSNumber(value: staged.byteSize), forKey: "byteSize"
+                                    Self.pointAtLocalVault(
+                                        row: row,
+                                        vaultKey: repairedKey,
+                                        byteSize: staged.byteSize,
+                                        at: now
                                     )
-                                    row.setValue(now, forKey: "updatedAt")
                                 }
                                 repaired = true
                             }
@@ -659,10 +736,11 @@ extension ConversationStore {
                             break
                         }
                     }
-                    if createdOwner || repaired { try context.save() }
+                    if createdOwner || repaired || adopted { try context.save() }
                     return WorkMaterialWriteOutcome(
                         insertedMaterial: false,
                         repairedMaterial: repaired,
+                        adoptedMaterial: adopted,
                         createdOwner: createdOwner,
                         existingVaultKey: materialRows.compactMap {
                             $0.value(forKey: "localVaultKey") as? String
@@ -713,38 +791,53 @@ extension ConversationStore {
                 return WorkMaterialWriteOutcome(
                     insertedMaterial: true,
                     repairedMaterial: false,
+                    adoptedMaterial: false,
                     createdOwner: createdOwner,
                     existingVaultKey: staged.vaultKey
                 )
             }
         } catch {
             if let key = staged?.vaultKey { try? await workAssetVault.remove(key) }
-            if case .inserted(let contentHash, let byteSize) = publishedBlob {
+            if case .inserted(let rowID) = publishedBlob {
                 // The ONE place a blob may be deleted without its material.
-                // This call wrote those exact bytes moments ago and knows the
-                // card never landed, so they name nothing; a background sweep
+                // This call inserted that exact row moments ago and knows the
+                // card never landed, so it names nothing; a background sweep
                 // cannot tell that state from a blob CloudKit imported ahead of
                 // the material it belongs to, which is why no sweep exists.
-                try? await deleteBlobRows(
-                    materialID: draft.id,
-                    contentHash: contentHash,
-                    byteSize: byteSize
-                )
+                await deleteBlobRow(rowID)
             }
             throw error
         }
 
+        // STEP 3 of the publication protocol: the row naming this leaf has
+        // committed, so the leaf itself has to read back before the capture may
+        // be reported durable. A vault reclamation running in another process
+        // between the copy and this save is exactly what the staging guard
+        // exists to stop, and a publication it did not stop must surface as a
+        // failure rather than as a card promising bytes the vault cannot serve.
+        // A refusal KEEPS the guard, so the next reclamation cannot delete what
+        // is left of the evidence.
+        var publicationIsDurable = true
         if let key = staged?.vaultKey {
             if outcome.insertedMaterial
                 || outcome.repairedMaterial
                 || key == outcome.existingVaultKey {
-                await workAssetVault.markReferenced(key)
+                publicationIsDurable = await workAssetVault.confirmPublication(of: key)
             } else {
                 try? await workAssetVault.remove(key)
             }
         }
-        if outcome.insertedMaterial || outcome.repairedMaterial || outcome.createdOwner {
+        if outcome.insertedMaterial
+            || outcome.repairedMaterial
+            || outcome.adoptedMaterial
+            || outcome.createdOwner {
             await postDidChange()
+        }
+        guard publicationIsDurable else {
+            // The card stays on the desk reading `.unavailableOnThisDevice`:
+            // a replay of this same capture repairs it, and the drainer's
+            // durability barrier keeps the queue copy until one does.
+            throw WorkboardStoreError.materialPayloadUnavailable
         }
     }
 
@@ -914,7 +1007,7 @@ extension ConversationStore {
             return .alreadyPresent
         }
         let context = newWriteContext()
-        try await context.perform { [context] in
+        let insertedRowID = try await context.perform { [context] () -> NSManagedObjectID in
             let now = Date()
             let row = NSEntityDescription.insertNewObject(
                 forEntityName: "WorkMaterialBlob",
@@ -929,9 +1022,17 @@ extension ConversationStore {
             // No `context.assign(_:to:)`: the entity belongs to exactly one
             // configuration, so Core Data routes the insert into the payload
             // store on its own.
+            //
+            // The permanent id is claimed BEFORE the save so a rollback can name
+            // this exact row. Nothing about the row's columns identifies it —
+            // the presence check above and this insert are separate operations,
+            // so two callers carrying the same bytes for one material can both
+            // reach here and write rows that are equal in every column.
+            try context.obtainPermanentIDs(for: [row])
             try context.save()
+            return row.objectID
         }
-        return .inserted(contentHash: contentHash, byteSize: byteSize)
+        return .inserted(rowID: insertedRowID)
     }
 
     /// Which of these materials have a whole payload behind them, from ONE
@@ -998,28 +1099,24 @@ extension ConversationStore {
         }
     }
 
-    /// Take back blob rows carrying exactly the bytes this process just wrote,
-    /// for a material that never landed. Scoped to that hash and size so a
-    /// concurrently imported blob for the same material is left alone.
-    private func deleteBlobRows(
-        materialID: UUID,
-        contentHash: String,
-        byteSize: Int64
-    ) async throws {
+    /// Take back the ONE blob row a refused publication inserted, named by the
+    /// permanent object id that publication returned.
+    ///
+    /// Identity is the row, never `(materialID, contentHash, byteSize)`: that
+    /// tuple carries no uniqueness constraint — CloudKit forbids one — so a
+    /// peer's import of the same payload, or a second process publishing the
+    /// same capture at the same instant, matches it exactly. Deleting by the
+    /// columns would therefore reclaim bytes this call never wrote, and a card
+    /// that named them would be left with no payload behind it.
+    ///
+    /// A row that has already gone (paired deletion took the whole material, or
+    /// the store was rebuilt) is not an error: there is nothing left to reclaim.
+    private func deleteBlobRow(_ rowID: NSManagedObjectID) async {
         let context = newWriteContext()
-        try await context.perform { [context] in
-            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterialBlob")
-            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-                NSPredicate(format: "materialID == %@", materialID as CVarArg),
-                NSPredicate(format: "contentHash == %@", contentHash),
-                NSPredicate(format: "byteSize == %@", NSNumber(value: byteSize)),
-            ])
-            // The payload is not read to delete the row that holds it.
-            request.includesPropertyValues = false
-            let rows = try context.fetch(request)
-            guard !rows.isEmpty else { return }
-            rows.forEach(context.delete)
-            try context.save()
+        await context.perform { [context] in
+            guard let row = try? context.existingObject(with: rowID) else { return }
+            context.delete(row)
+            try? context.save()
         }
     }
 
@@ -1097,6 +1194,27 @@ extension ConversationStore {
         row.setValue(nil, forKey: "payload")
         row.setValue(WorkMaterialStorageMode.syncedPayload.rawValue, forKey: "storageMode")
         row.setValue(nil, forKey: "localVaultKey")
+        row.setValue(NSNumber(value: byteSize), forKey: "byteSize")
+        row.setValue(date, forKey: "updatedAt")
+    }
+
+    /// Point one material row at the device-local vault. The mirror of
+    /// `pointAtSyncedPayload`, and written to EVERY physical row for the same
+    /// reason: a CloudKit-merged duplicate that kept claiming the lane the card
+    /// has left would resurrect it the moment that row won the canonical read.
+    ///
+    /// Blob rows are not touched here. Retiring the bytes of a lane a card
+    /// leaves belongs to the transaction that moves it; a repair only restores
+    /// what a card already claims.
+    private static func pointAtLocalVault(
+        row: NSManagedObject,
+        vaultKey: String?,
+        byteSize: Int64,
+        at date: Date
+    ) {
+        row.setValue(nil, forKey: "payload")
+        row.setValue(WorkMaterialStorageMode.localVault.rawValue, forKey: "storageMode")
+        row.setValue(vaultKey, forKey: "localVaultKey")
         row.setValue(NSNumber(value: byteSize), forKey: "byteSize")
         row.setValue(date, forKey: "updatedAt")
     }
@@ -1291,12 +1409,18 @@ extension ConversationStore {
             if let newVaultKey { try? await workAssetVault.remove(newVaultKey) }
             throw error
         }
+        var publicationIsDurable = true
         if !inserted, let newVaultKey {
             try? await workAssetVault.remove(newVaultKey)
         } else if let newVaultKey {
-            await workAssetVault.markReferenced(newVaultKey)
+            // Same rule as the desk publication: a committed row may not report
+            // a payload the vault can no longer read back.
+            publicationIsDurable = await workAssetVault.confirmPublication(of: newVaultKey)
         }
         if inserted { await postDidChange() }
+        guard publicationIsDurable else {
+            throw WorkboardStoreError.materialPayloadUnavailable
+        }
         guard let record = try await fetchWorkMaterial(id: draft.id) else {
             throw WorkboardStoreError.materialNotFound
         }
@@ -1317,6 +1441,13 @@ extension ConversationStore {
     /// commits: the vault lane stages under a FRESH key, and the blob lane
     /// retires superseded rows inside the transaction and takes its own insert
     /// back if the CAS refuses.
+    ///
+    /// EVERY physical row of the material is written under ONE compare-and-swap
+    /// — CloudKit can merge a card into several rows, and blob deletion is
+    /// scoped to the logical id, so a row left behind on the old lane would
+    /// either resurrect the payload this call replaced or claim a synced
+    /// payload whose bytes this same save removed. Rows that disagree about
+    /// their owner are refused rather than guessed at.
     func replaceWorkMaterialPayloadFile(
         id: UUID,
         from sourceURL: URL,
@@ -1362,19 +1493,32 @@ extension ConversationStore {
         }
 
         let context = newWriteContext()
-        let oldKey: String?
+        let oldKeys: Set<String>
         do {
-            oldKey = try await context.perform { [context] in
-                guard let row = try Self.workMaterialRow(id: id, in: context),
-                      let ownerID = row.value(forKey: "workItemID") as? UUID,
-                      let owner = try Self.workItemRow(id: ownerID, in: context),
+            oldKeys = try await context.perform { [context] () -> Set<String> in
+                // EVERY physical row, not the canonical one: a duplicate left
+                // on the old lane still holds a storage mode, a key and a size,
+                // and a later merge that lets it win the canonical read would
+                // hand the person back the payload this call replaced — or, on
+                // the way off the synced lane, a `.syncedPayload` claim whose
+                // blobs this same save deleted.
+                let rows = try Self.workMaterialRows(id: id, in: context)
+                guard !rows.isEmpty else { throw WorkboardStoreError.materialNotFound }
+                let owners = Set(rows.compactMap { $0.value(forKey: "workItemID") as? UUID })
+                guard owners.count == 1, let ownerID = owners.first else {
+                    // Rows disagreeing about their owner cannot be moved under
+                    // one compare-and-swap, and picking one owner would decide
+                    // the disagreement by accident.
+                    throw WorkboardStoreError.invalidMaterialOwner
+                }
+                guard let owner = try Self.workItemRow(id: ownerID, in: context),
                       let ownerUpdatedAt = owner.value(forKey: "updatedAt") as? Date else {
                     throw WorkboardStoreError.materialNotFound
                 }
                 guard Self.workRevision(for: ownerUpdatedAt) == expectedOwnerRevision else {
                     throw WorkboardStoreError.staleRevision
                 }
-                let oldKey = row.value(forKey: "localVaultKey") as? String
+                let oldKeys = Set(rows.compactMap { $0.value(forKey: "localVaultKey") as? String })
                 let now = Date()
                 switch staged.storageMode {
                 case .syncedPayload:
@@ -1386,48 +1530,60 @@ extension ConversationStore {
                             in: context
                         )
                     }
-                    Self.pointAtSyncedPayload(row: row, byteSize: staged.byteSize, at: now)
+                    for row in rows {
+                        Self.pointAtSyncedPayload(row: row, byteSize: staged.byteSize, at: now)
+                    }
                 case .localVault, .metadataOnly:
                     // The card's payload leaves the synced lane, so its blobs
                     // leave with it in this same save.
                     try Self.deleteBlobRows(materialID: id, in: context)
-                    row.setValue(nil, forKey: "payload")
-                    row.setValue(
-                        WorkMaterialStorageMode.localVault.rawValue, forKey: "storageMode"
-                    )
-                    row.setValue(newKey, forKey: "localVaultKey")
-                    row.setValue(NSNumber(value: staged.byteSize), forKey: "byteSize")
-                    row.setValue(now, forKey: "updatedAt")
+                    for row in rows {
+                        Self.pointAtLocalVault(
+                            row: row,
+                            vaultKey: newKey,
+                            byteSize: staged.byteSize,
+                            at: now
+                        )
+                    }
                 }
-                row.setValue(sourceDevice, forKey: "sourceDevice")
-                if let filename { row.setValue(filename, forKey: "filename") }
-                if let mimeType { row.setValue(mimeType, forKey: "mimeType") }
-                // An extract and a preview describe the bytes that were here
-                // before, and this call is handed neither for the bytes
-                // replacing them.
-                row.setValue(nil, forKey: "textContent")
-                row.setValue(nil, forKey: "thumbnailData")
+                for row in rows {
+                    row.setValue(sourceDevice, forKey: "sourceDevice")
+                    if let filename { row.setValue(filename, forKey: "filename") }
+                    if let mimeType { row.setValue(mimeType, forKey: "mimeType") }
+                    // An extract and a preview describe the bytes that were
+                    // here before, and this call is handed neither for the
+                    // bytes replacing them.
+                    row.setValue(nil, forKey: "textContent")
+                    row.setValue(nil, forKey: "thumbnailData")
+                }
                 owner.setValue(now, forKey: "updatedAt")
                 try context.save()
-                return oldKey
+                return oldKeys
             }
         } catch {
             if let newKey { try? await workAssetVault.remove(newKey) }
-            if case .inserted(let contentHash, let blobByteSize) = publishedBlob {
-                // The card kept the payload it had, so the bytes this call
-                // wrote name nothing. Same rule as a refused capture: only the
-                // call that wrote them knows that.
-                try? await deleteBlobRows(
-                    materialID: id,
-                    contentHash: contentHash,
-                    byteSize: blobByteSize
-                )
+            if case .inserted(let rowID) = publishedBlob {
+                // The card kept the payload it had, so the row this call
+                // inserted names nothing. Same rule as a refused capture: only
+                // the call that wrote a row knows that, and only that row goes.
+                await deleteBlobRow(rowID)
             }
             throw error
         }
-        if let newKey { await workAssetVault.markReferenced(newKey) }
-        if let oldKey, oldKey != newKey { try? await workAssetVault.remove(oldKey) }
+        // The rows already point at the new leaf and the lane they left was
+        // cleared in that same save, so the old keys go regardless; what a
+        // refusal changes is only that the reattach is reported as failed.
+        var publicationIsDurable = true
+        if let newKey {
+            publicationIsDurable = await workAssetVault.confirmPublication(of: newKey)
+        }
+        for oldKey in oldKeys where oldKey != newKey {
+            try? await workAssetVault.remove(oldKey)
+        }
         await postDidChange()
+        guard publicationIsDurable else {
+            throw WorkboardStoreError.materialPayloadUnavailable
+        }
         return try await fetchWorkMaterial(id: id)
     }
 
@@ -2163,8 +2319,12 @@ extension ConversationStore {
             request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
             return ((try? context.fetch(request)) ?? []).map { row in
                 WorkMaterialRowProbe(
+                    workItemID: row.value(forKey: "workItemID") as? UUID,
                     sequence: (row.value(forKey: "sequence") as? NSNumber)?.int32Value,
                     cardSize: row.value(forKey: "cardSize") as? String,
+                    storageMode: row.value(forKey: "storageMode") as? String,
+                    localVaultKey: row.value(forKey: "localVaultKey") as? String,
+                    byteSize: (row.value(forKey: "byteSize") as? NSNumber)?.int64Value,
                     updatedAt: row.value(forKey: "updatedAt") as? Date
                 )
             }
@@ -2178,7 +2338,13 @@ extension ConversationStore {
     /// public API can produce that state — every insert path refuses a colliding
     /// id — so the duplicate-tolerant writes have no reachable test without a
     /// seam. Same in-memory gate as above.
-    func _duplicateWorkMaterialRowForTesting(id: UUID) async {
+    ///
+    /// - Parameter updatedAt: Stamp for the copy. A duplicate that is NEWER than
+    ///   the row a write touched is the only way to prove a write reached every
+    ///   physical row: with equal stamps the canonical read picks the touched
+    ///   row anyway, so a write that skipped the duplicate would still look
+    ///   correct through the projection.
+    func _duplicateWorkMaterialRowForTesting(id: UUID, updatedAt: Date? = nil) async {
         do { try await ensureLoaded() } catch { return }
         let context = newWriteContext()
         await context.perform { [context] in
@@ -2193,6 +2359,7 @@ extension ConversationStore {
             for name in source.entity.attributesByName.keys {
                 copy.setValue(source.value(forKey: name), forKey: name)
             }
+            if let updatedAt { copy.setValue(updatedAt, forKey: "updatedAt") }
             try? context.save()
         }
     }

@@ -3,10 +3,13 @@
 // Conduck
 // WorkboardVoiceCaptureView.swift
 //
-// Explicit, interactive voice-to-brief capture. It reuses Conduck's existing
-// mic/STT state machine (including permission, on-device model self-heal,
-// selected-provider routing, retry preservation and duration cap), but only
-// returns editable text to the draft. It can never dispatch a Workboard item.
+// Explicit, interactive voice capture for the Work desk. It reuses Conduck's
+// existing mic/STT state machine (including permission, on-device model
+// self-heal, selected-provider routing, retry preservation and duration cap).
+// The recorder publishes the recording as a playable card BEFORE the speech
+// hop, so a transcription that fails costs the words and never the audio; the
+// transcript is then written onto that same card. Nothing here reaches a
+// gateway.
 
 #if !os(watchOS)
 
@@ -181,7 +184,7 @@ struct WorkboardVoiceCaptureView: View {
                 Task { handle(await recorder.stopAndUpload()) }
             } label: {
                 Label(
-                    LocalizedStringResource("workboard.voice.stop", defaultValue: "Stop and Add Text"),
+                    LocalizedStringResource("workboard.voice.stop", defaultValue: "Stop and Save"),
                     systemImage: "stop.fill"
                 )
                 .font(.headline)
@@ -230,7 +233,7 @@ struct WorkboardVoiceCaptureView: View {
         Label(
             LocalizedStringResource(
                 "workboard.voice.privacy",
-                defaultValue: "Adds editable text to this private draft. It never sends the brief or chooses a gateway."
+                defaultValue: "Keeps the recording on your private desk and adds the words when they’re ready. Nothing is sent."
             ),
             systemImage: "lock.shield"
         )
@@ -291,9 +294,21 @@ struct WorkboardVoiceCaptureView: View {
     private func handle(_ result: Result<String, AppError>) {
         switch result {
         case .success(let transcript):
-            onTranscript(transcript)
+            // The recording is already a card on the desk and the transcript is
+            // already written onto it, so handing the same words to the
+            // composer would put one utterance on the board twice. `onCancel`
+            // is this sheet's only dismissal hook. A recorder that published no
+            // card — Work storage refused the write — keeps the older
+            // behaviour, because a storage failure must not also cost the words.
+            if recorder.workRecordingMaterialID != nil {
+                onCancel()
+            } else {
+                onTranscript(transcript)
+            }
         case .failure:
-            // The recorder already owns the typed error state and retry lane.
+            // The recorder already owns the typed error state and retry lane,
+            // and the recording it published before transcribing stands on the
+            // desk either way.
             break
         }
     }

@@ -276,26 +276,9 @@ final class WorkCaptureDrainerTests: XCTestCase {
     /// write failure, and every other test here takes a path that succeeds.
     func testAPersistenceFailureReleasesTheClaimAndPreservesItsPayload() async throws {
         let store = ConversationStore(inMemory: true)
-        let otherOwner = try await store.createWorkItem(
-            WorkItemDraft(content: WorkItemContent(title: "Already owns the identity"))
-        )
-        // A material ID may belong to exactly one item, so reusing it as an
-        // envelope entry ID makes the second write fail through the public API
-        // with no store seam.
-        let collidingID = UUID()
-        _ = try await store.addWorkMaterial(
-            WorkMaterialDraft(
-                id: collidingID,
-                kind: .note,
-                title: "Prior material",
-                textContent: "owned elsewhere",
-                sequence: 0,
-                storageMode: .metadataOnly
-            ),
-            to: otherOwner.id
-        )
 
         let payload = Data("shared bytes that must survive".utf8)
+        let unreadable = Data("bytes the store cannot read".utf8)
         let imageID = UUID()
         let envelope = WorkCaptureEnvelope(
             source: .shareExtension,
@@ -309,18 +292,50 @@ final class WorkCaptureDrainerTests: XCTestCase {
                     mimeType: "image/png",
                     byteCount: Int64(payload.count)
                 ),
-                .init(id: collidingID, kind: .text, sequence: 1, text: "the write that fails"),
+                .init(
+                    id: UUID(),
+                    kind: .file,
+                    sequence: 1,
+                    relativePath: "payload-001.bin",
+                    displayName: "REPORT.bin",
+                    mimeType: "application/octet-stream",
+                    byteCount: Int64(unreadable.count)
+                ),
             ]
         )
-        try publish(envelope, payloads: ["payload-000.png": payload])
+        try publish(
+            envelope,
+            payloads: ["payload-000.png": payload, "payload-001.bin": unreadable]
+        )
+        // The inbox validator only STATS a leaf, so a mode-0 regular file passes
+        // validation and fails where the bytes are actually read — a mid-import
+        // write failure produced through the public API, with no store seam and
+        // nothing a replay could mistake for a legitimate card.
+        let queuedDirectory = root.appendingPathComponent(
+            envelope.id.uuidString,
+            isDirectory: true
+        )
+        let unreadableLeaf = queuedDirectory
+            .appendingPathComponent("payload-001.bin", isDirectory: false)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0],
+            ofItemAtPath: unreadableLeaf.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o644],
+                ofItemAtPath: unreadableLeaf.path
+            )
+        }
 
         let inbox = WorkCaptureInbox(baseURL: root)
         let drainer = WorkCaptureDrainer(inbox: inbox, store: store, sourceDevice: "test-device")
         do {
             _ = try await drainer.drainAvailableCaptures()
-            XCTFail("A material owned by another Work item must fail the import")
+            XCTFail("An entry whose bytes cannot be read must fail the import")
         } catch {
-            XCTAssertEqual(error as? WorkboardStoreError, .invalidMaterialOwner)
+            // Which error the store raised is not the subject; that the claim
+            // went back rather than being consumed is.
         }
 
         let pending = try await inbox.pendingCount()

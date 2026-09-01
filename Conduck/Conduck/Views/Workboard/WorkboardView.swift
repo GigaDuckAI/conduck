@@ -248,7 +248,7 @@ struct WorkboardDetailColumn: View {
                 ),
                 message: LocalizedStringResource(
                     "workboard.load.failed.message",
-                    defaultValue: "Your projects stay private and unchanged. Try opening them again."
+                    defaultValue: "Your desk stays private and unchanged. Try opening it again."
                 ),
                 actionTitle: LocalizedStringResource(
                     "workboard.load.retry",

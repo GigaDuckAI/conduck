@@ -397,6 +397,114 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         XCTAssertEqual(loaded, existingPayload)
     }
 
+    /// Two publications carrying the same bytes for one material both insert:
+    /// the presence check and the insert are separate operations, and
+    /// `(materialID, contentHash, byteSize)` carries no uniqueness constraint —
+    /// CloudKit forbids one — so the rows are equal in every column. A rollback
+    /// matching on those columns therefore reclaims the other call's payload
+    /// along with its own, and a card naming those bytes is left with nothing
+    /// behind it.
+    ///
+    /// The state is staged here rather than raced: a peer's newer import makes
+    /// the presence check miss the identical row that is already there, which
+    /// is the same position a concurrent publication is in.
+    func testARefusedPublicationLeavesAnIdenticalBlobItDidNotWrite() async throws {
+        let store = ConversationStore(inMemory: true)
+        let mine = Data("the bytes this capture carries".utf8)
+        let draft = WorkMaterialDraft(
+            kind: .file,
+            title: "shared.txt",
+            filename: "shared.txt",
+            mimeType: "text/plain",
+            payload: mine,
+            byteSize: Int64(mine.count)
+        )
+        let published = try await store.upsertDeskMaterial(draft)
+
+        let peer = Data("bytes another device published for the same card".utf8)
+        await store._insertWorkMaterialBlobRowForTesting(
+            materialID: draft.id,
+            payload: peer,
+            byteSize: Int64(peer.count),
+            contentHash: hex(peer),
+            updatedAt: published.updatedAt.addingTimeInterval(60)
+        )
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        do {
+            _ = try await store.upsertDeskMaterial(
+                draft,
+                expectedOwnerRevision: WorkboardRevision.value(for: desk.updatedAt) - 1
+            )
+            XCTFail("a write against a revision the board has moved past must be refused")
+        } catch WorkboardStoreError.staleRevision {
+            // Expected.
+        }
+
+        let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
+        XCTAssertEqual(
+            blobs.count, 2,
+            "the refusal takes back the row it inserted and leaves the identical one standing"
+        )
+        XCTAssertEqual(
+            Set(blobs.compactMap(\.contentHash)), [hex(mine), hex(peer)],
+            "a row this call did not write is not this call's to reclaim, however equal its columns"
+        )
+        let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
+        XCTAssertEqual(loaded, peer, "the newest complete row still answers for the card")
+    }
+
+    /// The same rule on the reattach path, which is the one with no in-process
+    /// claim serializing it: two reattaches of one card can genuinely overlap.
+    func testARefusedReattachTakesBackOnlyTheBlobRowItWrote() async throws {
+        let store = ConversationStore(inMemory: true)
+        let mine = Data("the copy this reattach carries".utf8)
+        let draft = WorkMaterialDraft(
+            kind: .file,
+            title: "reattached.txt",
+            filename: "reattached.txt",
+            mimeType: "text/plain",
+            payload: mine,
+            byteSize: Int64(mine.count)
+        )
+        let published = try await store.upsertDeskMaterial(draft)
+        let peer = Data("a newer copy imported from another device".utf8)
+        await store._insertWorkMaterialBlobRowForTesting(
+            materialID: draft.id,
+            payload: peer,
+            byteSize: Int64(peer.count),
+            contentHash: hex(peer),
+            updatedAt: published.updatedAt.addingTimeInterval(60)
+        )
+
+        let replacement = FileManager.default.temporaryDirectory
+            .appendingPathComponent("blob-rollback-\(UUID().uuidString).txt")
+        try mine.write(to: replacement, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: replacement) }
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        do {
+            _ = try await store.replaceWorkMaterialPayloadFile(
+                id: draft.id,
+                from: replacement,
+                byteSize: Int64(mine.count),
+                filename: replacement.lastPathComponent,
+                mimeType: "text/plain",
+                sourceDevice: "test",
+                expectedOwnerRevision: WorkboardRevision.value(for: desk.updatedAt) - 1
+            )
+            XCTFail("a reattach against a stale revision must be refused")
+        } catch WorkboardStoreError.staleRevision {
+            // Expected.
+        }
+
+        let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
+        XCTAssertEqual(blobs.count, 2)
+        XCTAssertEqual(Set(blobs.compactMap(\.contentHash)), [hex(mine), hex(peer)])
+    }
+
     // MARK: - Reattach moves a card between the lanes
 
     func testReattachingASmallFileMovesACardOffTheVaultOntoTheSyncedLane() async throws {
@@ -507,5 +615,67 @@ final class WorkboardBlobPublicationTests: XCTestCase {
                       "the card's payload left the synced lane, so its blob left with it")
         let emptied = try await store.loadWorkMaterialPayload(id: draft.id)
         XCTAssertEqual(emptied, Data())
+    }
+
+    /// CloudKit can merge one card into several physical rows, and blob
+    /// deletion is scoped to the LOGICAL material id. A reattach that wrote
+    /// only the canonical row would therefore leave a duplicate still claiming
+    /// `.syncedPayload` while this same save deleted the blobs behind it —
+    /// unreadable the moment that row wins the canonical read.
+    func testReattachWritesEveryDuplicateRowSoNoneResurrectsTheOldLane() async throws {
+        let store = ConversationStore(inMemory: true)
+        let payload = Data("the payload the card is about to lose".utf8)
+        let draft = WorkMaterialDraft(
+            kind: .file,
+            title: "synced.txt",
+            filename: "synced.txt",
+            mimeType: "text/plain",
+            payload: payload,
+            byteSize: Int64(payload.count)
+        )
+        let published = try await store.upsertDeskMaterial(draft)
+        XCTAssertEqual(published.storageMode, .syncedPayload)
+        await store._duplicateWorkMaterialRowForTesting(
+            id: draft.id,
+            updatedAt: published.updatedAt.addingTimeInterval(3_600)
+        )
+        let mergedRows = await store._workMaterialRowsForTesting(id: draft.id)
+        XCTAssertEqual(mergedRows.count, 2)
+
+        // A zero-byte file has no measurable payload to sync, so the policy
+        // sends it to the vault and the card leaves the synced lane.
+        let replacement = FileManager.default.temporaryDirectory
+            .appendingPathComponent("blob-merge-reattach-\(UUID().uuidString).bin")
+        try Data().write(to: replacement, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: replacement) }
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        let reattachedValue = try await store.replaceWorkMaterialPayloadFile(
+            id: draft.id,
+            from: replacement,
+            byteSize: 0,
+            filename: replacement.lastPathComponent,
+            mimeType: "application/octet-stream",
+            sourceDevice: "test",
+            expectedOwnerRevision: WorkboardRevision.value(for: desk.updatedAt)
+        )
+        let reattached = try XCTUnwrap(reattachedValue)
+
+        XCTAssertEqual(reattached.storageMode, .localVault)
+        XCTAssertEqual(reattached.availability, .availableLocally)
+        let rows = await store._workMaterialRowsForTesting(id: draft.id)
+        XCTAssertEqual(rows.count, 2, "a reattach replaces bytes; it never adds a row")
+        XCTAssertEqual(
+            Set(rows.compactMap(\.storageMode)), ["localVault"],
+            "a row left on the synced lane would claim a payload this same save deleted"
+        )
+        XCTAssertEqual(Set(rows.map(\.localVaultKey)).count, 1)
+        XCTAssertNotNil(rows.first?.localVaultKey)
+        XCTAssertEqual(Set(rows.compactMap(\.byteSize)), [0])
+        let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
+        XCTAssertTrue(blobs.isEmpty)
+        let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
+        XCTAssertEqual(loaded, Data())
     }
 }

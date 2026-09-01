@@ -4,9 +4,9 @@
 // WorkboardTutorialView.swift
 //
 // The one-time duck beat shown on a first visit to Work. It carries the three
-// things the board surface itself no longer says in-place — collect from
-// anywhere, arrange and resize freely, nothing is sent until you review — so the
-// board can stay de-texted and the affordances still get taught once.
+// things the board surface itself does not say in-place — collect from
+// anywhere, arrange and resize freely, everything stays in your own iCloud — so
+// the board can stay de-texted and the affordances still get taught once.
 //
 // Register: warm INSTRUCTION, not a pitch. The user already chose Conduck; this
 // screen tells them how the board behaves and then gets out of the way. Chrome
@@ -67,7 +67,7 @@ struct WorkboardTutorialView: View {
     // MARK: - The three lines
 
     /// One line per affordance, in the order the work happens: gather, arrange,
-    /// send. Kept to a single clause each — a longer explainer here would just
+    /// keep. Kept to a single clause each — a longer explainer here would just
     /// re-import the text the board surface was cleared of.
     private var points: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -89,7 +89,7 @@ struct WorkboardTutorialView: View {
                 symbol: "lock.shield.fill",
                 text: LocalizedStringResource(
                     "workboard.tutorial.point.review",
-                    defaultValue: "Nothing is sent to an AI until you review it."
+                    defaultValue: "Everything stays in your iCloud, on all your devices."
                 )
             )
         }

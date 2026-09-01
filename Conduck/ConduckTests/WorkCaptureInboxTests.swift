@@ -133,6 +133,17 @@ final class WorkCaptureInboxTests: XCTestCase {
             .write(to: manifestURL, options: .atomic)
     }
 
+    /// A claimed directory is named for its acquisition, not for the capture, so
+    /// nothing can spell its path: identity is read back out of the name.
+    private func claimedDirectoryCount(for id: UUID) -> Int {
+        let processing = root.appendingPathComponent("processing", isDirectory: true)
+        let children = (try? FileManager.default.contentsOfDirectory(
+            at: processing,
+            includingPropertiesForKeys: nil
+        )) ?? []
+        return children.filter { $0.lastPathComponent.hasPrefix(id.uuidString) }.count
+    }
+
     // MARK: - Wire and sanitation
 
     func testWireRoundTripPreservesMaterialsAndHasNoDispatchFields() throws {
@@ -710,9 +721,7 @@ final class WorkCaptureInboxTests: XCTestCase {
         } catch let error as WorkCaptureInbox.InboxError {
             XCTAssertEqual(error, .invalidEnvelope(id, .unsupportedVersion))
         }
-        XCTAssertFalse(FileManager.default.fileExists(
-            atPath: root.appendingPathComponent("processing/\(id.uuidString)").path
-        ))
+        XCTAssertEqual(claimedDirectoryCount(for: id), 0)
     }
 
     func testDecodedUnsafeFilenameMIMEAndTypeMetadataAreRejected() async throws {
@@ -768,9 +777,7 @@ final class WorkCaptureInboxTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: root.appendingPathComponent(id.uuidString).path
         ), "Transient I/O must roll the claim back to pending")
-        XCTAssertFalse(FileManager.default.fileExists(
-            atPath: root.appendingPathComponent("processing/\(id.uuidString)").path
-        ))
+        XCTAssertEqual(claimedDirectoryCount(for: id), 0)
 
         let retried = try await inbox.claimNext()
         XCTAssertEqual(try XCTUnwrap(retried).id, id)
@@ -833,8 +840,7 @@ final class WorkCaptureInboxTests: XCTestCase {
         } catch let error as WorkCaptureInbox.InboxError {
             XCTAssertEqual(error, .invalidEnvelope(id, .unsafeRelativePath))
         }
-        let processing = root.appendingPathComponent("processing/\(id.uuidString)")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: processing.path))
+        XCTAssertEqual(claimedDirectoryCount(for: id), 0)
     }
 
     func testUnexpectedUnreferencedPayloadIsRejected() async throws {
