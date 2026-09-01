@@ -209,7 +209,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await SettingsManager.shared.performInitialSync()
             await FileTransferCapabilityRefresher.refreshIfNeeded()
-            await WorkboardUploadJournal.shared.reconcile()
         }
         // Privacy hygiene: expired retry audio + aged Quick Look scratch
         // downloads (>24 h — never on panel close, see AgentDownloadScratch).

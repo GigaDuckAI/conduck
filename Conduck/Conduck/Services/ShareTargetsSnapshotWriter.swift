@@ -135,12 +135,10 @@ actor ShareTargetsSnapshotWriter {
 
         let recents = (try? await store.fetchRecentForPicker(limit: 12)) ?? []
         let recentConversations = Self.filterRecents(recents, configuredRefStrings: configuredRefStrings)
-        // Bounded store-side read: this runs on every `.conversationsDidChange`,
-        // so the picker's handful of rows must never cost a whole-board fetch.
-        let workItems = (try? await store.fetchRecentWorkItemSummaries(
-            limit: Self.maximumRecentWorkItems
-        )) ?? []
-        let recentWorkItems = Self.makeRecentWorkItems(workItems)
+        // Work is ONE desk, so there is no set of recent cards to pick between
+        // and nothing to publish. The field stays in the snapshot because its
+        // three mirrored copies must remain byte-identical.
+        let recentWorkItems: [ShareTargetsSnapshot.RecentWorkItem] = []
 
         return ShareTargetsSnapshot(
             schemaVersion: 2,

@@ -2097,8 +2097,10 @@ enum Constants {
     /// and never deletes a row, so a duplicate is invisible rather than lossy.
     ///
     /// `nonisolated` because the store and drainer actors resolve the desk off
-    /// the main actor. The Watch target mirrors this literal locally (it does
-    /// not compile the store extension); a drift-guard test compares the two.
+    /// the main actor. `Constants.swift` is a member of the Watch target too, so
+    /// every surface reads this value rather than a copy;
+    /// `WorkboardDeskIdentityDriftTests` fails if the literal is ever restated
+    /// outside this file.
     nonisolated static let workboardDeskItemID =
         UUID(uuidString: "DE5C0000-0000-4000-A000-000000000001")!
 

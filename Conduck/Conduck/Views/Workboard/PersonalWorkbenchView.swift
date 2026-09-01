@@ -3,17 +3,16 @@
 // Conduck
 // PersonalWorkbenchView.swift
 //
-// The top-level Work / Chats shell. Workboard is a first-class personal surface,
-// while every dispatched brief still opens in Conduck's normal conversation UI.
-// This host owns only presentation routing and local preview/speech conveniences;
-// capture persistence and dispatch authority remain in their dedicated seams.
+// The top-level Work / Chats shell. Work is a first-class personal surface with
+// no path to a gateway. This host owns only presentation routing and local
+// preview conveniences; capture persistence remains in its dedicated seam.
 // A section switch animates ONLY root opacity: a cheap composited dissolve,
 // while title, toolbar, lifecycle and accessibility state change immediately
 // outside the animation transaction. Native NavigationSplitView motion remains
 // untouched. Chat stays mounted across the switch because it owns a selected
 // thread, an unsent composer and a live recorder; Work keeps its equivalents on
-// the view model, so the macOS shell mounts Work's columns only while they are
-// on screen (`MainWindowView.mountsWorkLayer`).
+// the view model, so the macOS shell mounts Work's layer only while it is on
+// screen (`MainWindowView.mountsWorkLayer`).
 
 #if !os(watchOS)
 
@@ -585,36 +584,6 @@ private enum WorkbenchPreviewError: LocalizedError {
     }
 }
 
-@MainActor
-private final class WorkboardBriefingSpeaker {
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    func read(_ text: String) async {
-        finish()
-        #if os(macOS)
-        SpeechExclusivity.shared.claim(ReplyVoice.shared)
-        #endif
-        ReplyVoice.shared.cancel()
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-            ReplyVoice.shared.speak(text, sanitize: true) { [weak self] _ in
-                self?.finish()
-            }
-        }
-    }
-
-    func stop() {
-        ReplyVoice.shared.cancel()
-        finish()
-    }
-
-    private func finish() {
-        let pending = continuation
-        continuation = nil
-        pending?.resume()
-    }
-}
-
 /// Keeps durable capture ingestion independent from the cancelable/debounced UI
 /// reload task. `WorkCaptureInbox` posts a change while a claim is moved and
 /// again when it is acknowledged; those notifications may request another pass,
@@ -737,47 +706,15 @@ final class PersonalWorkbenchModel {
     let workboardViewModel: WorkboardViewModel
 
     @ObservationIgnored private let refreshCoordinator: WorkCaptureRefreshCoordinator
-    @ObservationIgnored private let speaker: WorkboardBriefingSpeaker
 
     init() {
         let router = PersonalWorkbenchRouter()
-        let speaker = WorkboardBriefingSpeaker()
-        let shapingHandler: (@MainActor (WorkboardEditDraft) async throws -> WorkboardEditDraft)?
-        if WorkBriefAssistant.availability == .available {
-            shapingHandler = { draft in
-                // Shaping reads the collected thought cards as well as the
-                // authored fields: on this board the thoughts are usually the
-                // only description of the work that exists yet.
-                let source = WorkBriefShapingSource.transcript(for: draft)
-                let suggestion = try await WorkBriefAssistant.shared.shape(transcript: source)
-                var shaped = draft
-                if !suggestion.title.isEmpty { shaped.title = suggestion.title }
-                if !suggestion.objective.isEmpty { shaped.objective = suggestion.objective }
-                if !suggestion.context.isEmpty { shaped.context = suggestion.context }
-                if !suggestion.desiredResult.isEmpty { shaped.desiredResult = suggestion.desiredResult }
-                // Constraints, dates, materials, pinning and identity are never
-                // model-authored. The person stays in control of those facts.
-                return shaped
-            }
-        } else {
-            shapingHandler = nil
-        }
-
         let repository = WorkboardLiveRepository(
-            dispatch: { request, gatewayName in
-                try await WorkboardDispatchCoordinator.shared.dispatch(
-                    request,
-                    gatewayName: gatewayName
-                )
-            },
             openConversation: { id in router.openConversation(id) },
             openMaterial: { material in
                 Task { @MainActor in await router.present(material) }
             },
-            openGatewaySettings: { router.openGatewaySettings() },
-            shapeDraft: shapingHandler,
-            readBriefingAloud: { text in await speaker.read(text) },
-            stopBriefingAloud: { speaker.stop() }
+            openGatewaySettings: { router.openGatewaySettings() }
         )
 
         let workboardViewModel = WorkboardViewModel(dependencies: repository.makeDependencies())
@@ -842,7 +779,6 @@ final class PersonalWorkbenchModel {
         )
 
         self.router = router
-        self.speaker = speaker
         self.repository = repository
         self.workboardViewModel = workboardViewModel
         self.refreshCoordinator = refreshCoordinator
@@ -902,8 +838,8 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 routeConversationDeepLink(note)
                 #endif
             }
-            .onReceive(NotificationCenter.default.publisher(for: .openWorkboardDeepLink)) { note in
-                routeWorkboardDeepLink(note)
+            .onReceive(NotificationCenter.default.publisher(for: .openWorkboardDeepLink)) { _ in
+                routeWorkboardDeepLink()
             }
             .onReceive(NotificationCenter.default.publisher(for: .openPersonalAISettings)) { _ in
                 #if !os(macOS)
@@ -949,13 +885,12 @@ struct PersonalWorkbenchView<Chats: View>: View {
             }
     }
 
-    /// Launch/foreground repair for Work's two durable stores. Both sweeps have
-    /// delete authority and scale with what is on disk, so they belong on this
+    /// Launch/foreground repair for the device-local asset vault. The sweep has
+    /// delete authority and scales with what is on disk, so it belongs on this
     /// edge and never in the board's read path, which re-runs on ordinary Chat
-    /// activity. Sequential on purpose: one disk sweep at a time.
+    /// activity.
     private func reconcileDurableWorkStorage() {
         Task {
-            await WorkboardUploadJournal.shared.reconcile()
             _ = try? await ConversationStore.shared.reconcileWorkAssetVault()
         }
     }
@@ -968,16 +903,18 @@ struct PersonalWorkbenchView<Chats: View>: View {
     }
     #endif
 
-    private func routeWorkboardDeepLink(_ note: Notification) {
-        guard let value = note.userInfo?[NotificationDeepLink.workItemIDKey] as? String,
-              let itemID = UUID(uuidString: value) else { return }
+    /// Every Work deep link resolves to the one desk
+    /// (`Constants.workboardDeskItemID`). A payload id names material that
+    /// landed on that desk, never a board to choose between, so a link that
+    /// carries no id routes exactly like one that does. The window itself is
+    /// foregrounded by the scene host, which consumes the same notification.
+    ///
+    /// The reload is REQUESTED from the refresh coordinator rather than run
+    /// here: it owns every board load, so a direct `load()` would open a second
+    /// reload path outside its visibility gate and serialization.
+    private func routeWorkboardDeepLink() {
         model.router.destination = .work
-        Task { @MainActor in
-            await model.workboardViewModel.load()
-            if model.workboardViewModel.item(withID: itemID) != nil {
-                model.workboardViewModel.selectedItemID = itemID
-            }
-        }
+        model.scheduleRefresh()
     }
 
     @ViewBuilder

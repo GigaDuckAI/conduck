@@ -60,25 +60,31 @@ final class ConversationStoreWorkCaptureTests: XCTestCase {
             appended,
             conversationID: conversation.id
         )
+        XCTAssertEqual(receipt.itemID, Constants.workboardDeskItemID)
         let itemValue = try await store.fetchWorkItem(id: receipt.itemID)
         let item = try XCTUnwrap(itemValue)
 
-        XCTAssertEqual(item.captureEnvelopeID, appended.id)
-        XCTAssertEqual(item.content.objective, "Compare the evidence and recommend a direction.")
-        XCTAssertEqual(item.content.preferredGatewayRef, "hermes")
+        // The desk owns no brief: the turn's words are a card, not an objective,
+        // and nothing about the conversation is written to the owner row.
+        XCTAssertNil(item.captureEnvelopeID)
+        XCTAssertEqual(item.content.title, "")
+        XCTAssertEqual(item.content.objective, "")
+        XCTAssertNil(item.content.preferredGatewayRef)
         XCTAssertEqual(item.state, .draft)
-        XCTAssertTrue(item.dispatches.isEmpty)
-        XCTAssertEqual(receipt.addedMaterialCount, 3)
+        XCTAssertEqual(receipt.addedMaterialCount, 4)
         XCTAssertEqual(receipt.referencedOnlyMaterialCount, 1)
         XCTAssertEqual(receipt.failedMaterialCount, 0)
         XCTAssertFalse(receipt.wasAlreadyCaptured)
 
+        let turnMaterial = try XCTUnwrap(item.materials.first { $0.id == appended.id })
         let imageMaterial = try XCTUnwrap(item.materials.first { $0.filename == "diagram.jpg" })
         let textMaterial = try XCTUnwrap(item.materials.first { $0.filename == "notes.txt" })
         let remoteMaterial = try XCTUnwrap(item.materials.first { $0.title == "gateway-report.pdf" })
         let copiedImage = try await store.loadWorkMaterialPayload(id: imageMaterial.id)
         let copiedText = try await store.loadWorkMaterialPayload(id: textMaterial.id)
 
+        XCTAssertEqual(turnMaterial.kind, .note)
+        XCTAssertEqual(turnMaterial.textContent, "Compare the evidence and recommend a direction.")
         XCTAssertEqual(imageMaterial.kind, .image)
         XCTAssertEqual(textMaterial.kind, .file)
         XCTAssertEqual(copiedImage, imageBytes)
@@ -127,13 +133,13 @@ final class ConversationStoreWorkCaptureTests: XCTestCase {
             return values
         }
 
-        XCTAssertEqual(Set(receipts.map(\.itemID)).count, 1)
+        XCTAssertEqual(Set(receipts.map(\.itemID)), [Constants.workboardDeskItemID])
         XCTAssertEqual(receipts.filter { !$0.wasAlreadyCaptured }.count, 1)
-        XCTAssertEqual(receipts.reduce(0) { $0 + $1.addedMaterialCount }, 1)
+        XCTAssertEqual(receipts.reduce(0) { $0 + $1.addedMaterialCount }, 2)
         let items = try await store.fetchWorkItems()
-            .filter { $0.captureEnvelopeID == message.id }
         XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items.first?.materials.count, 1)
+        XCTAssertEqual(items.first?.id, Constants.workboardDeskItemID)
+        XCTAssertEqual(items.first?.materials.count, 2)
     }
 
     func testZeroByteLocalFileRemainsARealAvailableSource() async throws {
@@ -160,7 +166,9 @@ final class ConversationStoreWorkCaptureTests: XCTestCase {
 
         let receipt = try await store.captureMessageToWork(message, conversationID: conversation.id)
         let itemValue = try await store.fetchWorkItem(id: receipt.itemID)
-        let material = try XCTUnwrap(try XCTUnwrap(itemValue).materials.first)
+        let material = try XCTUnwrap(
+            try XCTUnwrap(itemValue).materials.first { $0.filename == "empty.txt" }
+        )
         let copied = try await store.loadWorkMaterialPayload(id: material.id)
 
         XCTAssertEqual(receipt.referencedOnlyMaterialCount, 0)
@@ -169,10 +177,10 @@ final class ConversationStoreWorkCaptureTests: XCTestCase {
         XCTAssertEqual(copied, Data())
     }
 
-    /// The chat composer caps nothing, so a pasted log is an ordinary user turn
-    /// while a brief field is bounded. Capture must keep the text rather than
-    /// fail the whole "Add to Work" on a length the person never saw — an agent
-    /// reply of any size already succeeds this way.
+    /// The chat composer caps nothing, so a pasted log is an ordinary user turn.
+    /// Capture keeps every character of it on the card rather than failing the
+    /// whole "Add to Work" on a length the person never saw — an agent reply of
+    /// any size already succeeds this way.
     func testAnOversizedUserTurnIsCapturedAsAMaterialRatherThanRefused() async throws {
         let store = ConversationStore(inMemory: true)
         let conversation = try await store.createConversation(backend: "hermes")
@@ -190,17 +198,12 @@ final class ConversationStoreWorkCaptureTests: XCTestCase {
         let item = try XCTUnwrap(itemValue)
 
         XCTAssertEqual(receipt.addedMaterialCount, 1)
-        XCTAssertLessThanOrEqual(
-            item.content.objective.count,
-            WorkItemContentLimits.maximumFieldCharacters
-        )
-        XCTAssertFalse(
-            item.content.objective.contains(String(repeating: "x", count: 64)),
-            "The oversized turn must not be written into a bounded brief field"
-        )
-        XCTAssertEqual(item.content.title, "Line one of the log")
+        XCTAssertEqual(receipt.failedMaterialCount, 0)
+        XCTAssertEqual(item.content.objective, "")
+        XCTAssertEqual(item.content.title, "")
 
         let material = try XCTUnwrap(item.materials.first)
+        XCTAssertEqual(material.id, message.id)
         XCTAssertEqual(material.kind, .note)
         XCTAssertEqual(material.sequence, 0)
         XCTAssertEqual(material.textContent, pastedLog)

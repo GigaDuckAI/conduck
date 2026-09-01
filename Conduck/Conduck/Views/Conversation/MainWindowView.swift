@@ -18,6 +18,17 @@
 // from the retired `ConversationsWindowView` — the VM-binding invariant below is
 // copied VERBATIM and is load-bearing.
 //
+// WORK / CHATS: one persistent split view owns the window, and the two
+// sections swap pixels inside its columns rather than swapping the split
+// itself. Chats is the shell described above. Work is ONE desk with no list
+// beside it, so the sidebar column collapses (`splitColumnVisibility`) and the
+// desk fills the window. The toolbar arrangement is identical in both
+// sections: compose + the system toggle in the sidebar region, a zero-area
+// principal item whose flexible spaces are the only thing pinning the
+// Work/Chats section control to the trailing edge (see
+// `gatewayToolbarContent`), and that control declared LAST on the detail side
+// so nothing Chat draws can move it.
+//
 // FILE DROP (window-owned): the drop target spans the whole configured
 // conversation pane — transcript included — because that is the target users
 // actually aim at. It lives here rather than on the composer for a hard
@@ -57,7 +68,6 @@ struct MainWindowView: View {
 
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var selectedConversationID: UUID?
@@ -128,20 +138,18 @@ struct MainWindowView: View {
     /// applies, needed up here because the trash is a column-level item.
     @State private var sidebarHasConversations = false
 
-    /// Split-view column visibility, bound so the toolbar can OBSERVE the
-    /// sidebar state: a column-level item survives collapse on macOS (that is
-    /// why compose lives at column level), so hiding the Delete-All trash in
+    /// CHAT's split-view column visibility, bound so the toolbar can OBSERVE
+    /// the sidebar state: a column-level item survives collapse on macOS (that
+    /// is why compose lives at column level), so hiding the Delete-All trash in
     /// the collapsed bar needs an explicit gate, not the platform's unmount.
-    /// `.automatic` start = the system's own default (sidebar shown), same as
-    /// the unbound initializer this window used before.
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    /// `.automatic` = the system's own default, sidebar shown.
+    ///
+    /// Chat's alone, because Work is one desk and has no sidebar to show:
+    /// `splitColumnVisibility` forces the column collapsed for the whole time
+    /// Work is active, and this holds what Chat is restored to on the way back,
+    /// so a column the user collapsed BY HAND survives a round trip through Work.
+    @State private var chatColumnVisibility: NavigationSplitViewVisibility = .automatic
 
-    // Work uses the same native split-view columns as Chat on macOS. These are
-    // the Work-only presentation values that must survive while its pixels are
-    // hidden; the shared `columnVisibility` above intentionally is not duplicated.
-    @SceneStorage("workboard.showsOverview") private var workboardShowsOverview = true
-    @State private var workboardEmptyWorkspaceID = UUID()
-    @State private var workboardPreferredCompactColumn = NavigationSplitViewColumn.sidebar
     /// Keeps Work's columns mounted for the tail of the dissolve after Work is
     /// hidden, so the crossfade still has a layer to fade out. Set by the
     /// `.task(id:)` on the split view below, never written directly.
@@ -329,13 +337,15 @@ struct MainWindowView: View {
     /// so the divider, system sidebar toggle, and measured Chat toolbar slots do
     /// not acquire a new AppKit identity when the section picker changes.
     private var persistentSplitView: some View {
-        // Keep columnVisibility on the native binding with no app-supplied
-        // animation transaction. AppKit owns the divider's velocity, clipping,
-        // toolbar tracking separator and Reduce Motion behavior; driving the
-        // width ourselves would double-animate the system split and can move the
-        // measured toolbar controls. Work / Chats motion is scoped to layer
-        // opacity below, so it cannot leak into this native sidebar transition.
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        // Keep the visibility on the native binding with no app-supplied
+        // animation transaction — including the Work collapse, which is just
+        // another value this binding reports. AppKit owns the divider's
+        // velocity, clipping, toolbar tracking separator and Reduce Motion
+        // behavior; driving the width ourselves would double-animate the system
+        // split and can move the measured toolbar controls. Work / Chats motion
+        // is scoped to layer opacity below, so it cannot leak into this native
+        // sidebar transition.
+        NavigationSplitView(columnVisibility: splitColumnVisibility) {
             // WHY a width floor on the column CONTENT as well as the column
             // width: each `NavigationSplitView` column is hosted in its OWN
             // `NSHostingView`, which measures the column's minimum size by
@@ -408,8 +418,10 @@ struct MainWindowView: View {
                     // bar shows no Delete-All at all — a destructive bulk
                     // action stays with the list it destroys, like the iPad
                     // sidebar bar, while compose+toggle keep their two
-                    // collapsed capsules.
-                    if sidebarHasConversations && columnVisibility != .detailOnly {
+                    // collapsed capsules. Work collapses the column, so the
+                    // same rule hides the trash there: the list it would
+                    // destroy is not on screen to stand beside it.
+                    if sidebarHasConversations && effectiveColumnVisibility != .detailOnly {
                         ToolbarItem(placement: .primaryAction) {
                             Button(role: .destructive) {
                                 activateChatsForToolbarAction()
@@ -448,13 +460,13 @@ struct MainWindowView: View {
             // isn't double-wrapped.
             .sharedBackgroundVisibility(.hidden)
         }
-        // Hold Work's columns for the tail of the dissolve after Work is hidden,
-        // then drop them. `.task(id:)` cancels a pending unmount if Work comes
-        // back first, so a fast Work → Chats → Work round trip never unmounts,
-        // and a cancelled hold cannot wedge: the id is the destination itself,
-        // so whichever value it settles on re-runs this to completion. It also
-        // runs AFTER the update that mounted those columns, which is what gives
-        // the enter dissolve a frame at opacity 0 to fade up from.
+        // Hold Work's detail layer for the tail of the dissolve after Work is
+        // hidden, then drop it. `.task(id:)` cancels a pending unmount if Work
+        // comes back first, so a fast Work → Chats → Work round trip never
+        // unmounts, and a cancelled hold cannot wedge: the id is the destination
+        // itself, so whichever value it settles on re-runs this to completion.
+        // It also runs AFTER the update that mounted that layer, which is what
+        // gives the enter dissolve a frame at opacity 0 to fade up from.
         //
         // The hold comes from the layer modifier so it always outlasts the fade.
         .task(id: workDestinationIsActive) {
@@ -487,6 +499,35 @@ struct MainWindowView: View {
         personalWorkbenchModel?.router.destination == .work
     }
 
+    /// The visibility the window is REALLY in, Work's forced collapse included.
+    /// Every sidebar-region toolbar gate reads this rather than the stored
+    /// value, so a control that must not appear over a collapsed column is
+    /// hidden in Work for the same reason it is hidden when the user collapses
+    /// the column by hand.
+    private var effectiveColumnVisibility: NavigationSplitViewVisibility {
+        workDestinationIsActive ? .detailOnly : chatColumnVisibility
+    }
+
+    /// What the split view is driven with. Work is ONE desk with no list beside
+    /// it, so its column collapses and the desk gets the whole window; switching
+    /// to Chats hands the column back in the state Chat was left in.
+    ///
+    /// Writes are accepted only from Chat. The getter is constant while Work is
+    /// active, which makes the split view's own toggle inert there — and, the
+    /// part that matters, stops a write-back AppKit performs on its OWN
+    /// initiative (it revises this binding when the window is resized past the
+    /// two-column floor, and when it restores a saved frame) from rewriting
+    /// Chat's remembered state out of a section that has no sidebar to describe.
+    private var splitColumnVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { effectiveColumnVisibility },
+            set: { newValue in
+                guard !workDestinationIsActive else { return }
+                chatColumnVisibility = newValue
+            }
+        )
+    }
+
     /// What the Work layer's PIXELS follow, as distinct from
     /// `workDestinationIsActive`, which hit testing, accessibility and draw
     /// order follow immediately. Entering trails the destination by one update
@@ -516,11 +557,11 @@ struct MainWindowView: View {
 
     /// Chat stays mounted for its whole session — it owns a selected thread, an
     /// unsent composer, a live recorder and a parked drop batch. Work owns none
-    /// of that inside its columns: selection, composer text and every sheet live
-    /// on the view model or on the persistent split view above, and deactivating
-    /// Work already discards its transient capture UI. So Work's columns are
-    /// mounted only while they are on screen (plus the dissolve's tail), and
-    /// hidden Chat never pays to lay out a second full column tree.
+    /// of that inside its layer: composer text and every sheet live on the view
+    /// model or on the persistent split view above, and deactivating Work
+    /// already discards its transient capture UI. So Work's desk is mounted only
+    /// while it is on screen (plus the dissolve's tail), and hidden Chat never
+    /// pays to lay out a second full column tree.
     private var mountsWorkLayer: Bool {
         workDestinationIsActive || keepsWorkLayerMounted
     }
@@ -530,19 +571,16 @@ struct MainWindowView: View {
     ) -> WorkboardExperience {
         WorkboardExperience(
             viewModel: model.workboardViewModel,
-            showsOverview: $workboardShowsOverview,
-            emptyWorkspaceID: $workboardEmptyWorkspaceID,
-            preferredCompactColumn: $workboardPreferredCompactColumn,
-            columnVisibility: $columnVisibility,
             isActive: workDestinationIsActive,
-            // The persistent shell retains the original Chat toolbar. Work's
-            // own New Work affordances remain in its project canvas/composer.
-            showsSidebarToolbar: false,
-            horizontalSizeClass: horizontalSizeClass,
             reduceMotion: reduceMotion
         )
     }
 
+    /// The sidebar column is CHAT's alone — Work is one desk and mounts nothing
+    /// here. Chat's list still stays mounted while Work is active (it owns a
+    /// selection, a search string and a scroll position), hidden by the same
+    /// layer contract the detail side uses, so the column the user comes back to
+    /// is the one they left rather than a rebuilt one.
     @ViewBuilder
     private var mountedSidebarDestinations: some View {
         ZStack {
@@ -553,20 +591,6 @@ struct MainWindowView: View {
                     isVisible: chatLayerIsShowing,
                     reduceMotion: reduceMotion
                 )
-
-            if let personalWorkbenchModel, mountsWorkLayer {
-                workboardExperience(for: personalWorkbenchModel).sidebarColumn
-                    .environment(\.workbenchDestinationIsActive, workDestinationIsActive)
-                    .workbenchDestinationLayer(
-                        isActive: workDestinationIsActive,
-                        isVisible: workLayerIsShowing,
-                        reduceMotion: reduceMotion
-                    )
-                    // A constant identity for the gated layer: mounting and
-                    // unmounting it must never let the ZStack reindex Chat's
-                    // column, which would remount the conversation list.
-                    .id(Self.workLayerIdentity)
-            }
         }
     }
 
@@ -591,19 +615,6 @@ struct MainWindowView: View {
                             reduceMotion: reduceMotion
                         )
                         .id(Self.workLayerIdentity)
-                }
-
-                if workDestinationIsActive {
-                    Button {
-                        workboardShowsOverview = false
-                        personalWorkbenchModel.workboardViewModel.beginWorkspace()
-                    } label: {
-                        EmptyView()
-                    }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
-                    .frame(width: 0, height: 0)
-                    .opacity(0)
-                    .accessibilityHidden(true)
                 }
 
                 // The section switch belongs to this persistent split rather
@@ -1007,8 +1018,8 @@ struct MainWindowView: View {
     /// picker below seeds itself to a gateway that can actually send, so the
     /// stored default not being one of them is no reason to blank the title bar.
     ///
-    /// Chat's alone: Work binds a gateway at Review & Send and says so on the
-    /// board, so a title-bar pill there would name a gateway Work will not use.
+    /// Chat's alone: the desk sends nothing to a gateway, so a title-bar pill
+    /// there would name a gateway Work never uses.
     /// The gate is on the CONTENT rather than on the `ToolbarItem` in
     /// `persistentSplitView` — declaring and undeclaring the principal item
     /// re-lays out the bar, and this window's whole arrangement rests on the

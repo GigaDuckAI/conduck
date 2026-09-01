@@ -3,11 +3,10 @@
 // ConduckTests
 // WorkboardMaterialBoardActionsTests.swift
 //
-// The project board is a free card board: cards are dragged into a new order
-// and resized. These tests hold the two properties that separates those two
-// gestures — reorder rewrites canonical prompt order under the owner's
-// optimistic revision, while a resize is presentation and must leave the
-// revision, the brief and the shaping transcript untouched.
+// The board is a free card board: cards are dragged into a new order and
+// resized. These tests hold the property that separates those two gestures —
+// reorder rewrites canonical card order under the owner's optimistic revision,
+// while a resize is presentation and must leave the revision untouched.
 
 import XCTest
 @testable import Conduck
@@ -105,10 +104,9 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
 
     func testDropReordersOptimisticallyAndAdoptsTheStoredOrder() async {
         let materials = makeMaterials(count: 3)
-        let item = WorkboardItemSnapshot(title: "Launch", materials: materials, revision: 9)
+        let item = makeDesk(materials: materials, revision: 9)
         let harness = BoardHarness(item: item)
-        let viewModel = makeViewModel(harness: harness)
-        viewModel.items = [item]
+        let viewModel = await makeViewModelShowingDesk(harness: harness)
         let ids = materials.map(\.id)
 
         let moved = await viewModel.reorderMaterial(ids[2], toInsertionIndex: 0, in: item.id)
@@ -125,10 +123,9 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
 
     func testAccessibilityMoveUsesTheSameStoreCallAsADrag() async {
         let materials = makeMaterials(count: 3)
-        let item = WorkboardItemSnapshot(title: "Launch", materials: materials, revision: 4)
+        let item = makeDesk(materials: materials, revision: 4)
         let harness = BoardHarness(item: item)
-        let viewModel = makeViewModel(harness: harness)
-        viewModel.items = [item]
+        let viewModel = await makeViewModelShowingDesk(harness: harness)
         let ids = materials.map(\.id)
 
         let movedLater = await viewModel.moveMaterial(ids[0], direction: .later, in: item.id)
@@ -147,12 +144,11 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
 
     func testRefusedReorderRestoresTheOrderAndReportsIt() async {
         let materials = makeMaterials(count: 3)
-        let item = WorkboardItemSnapshot(title: "Launch", materials: materials, revision: 9)
+        let item = makeDesk(materials: materials, revision: 9)
         let harness = BoardHarness(item: item)
+        let viewModel = await makeViewModelShowingDesk(harness: harness)
         harness.reorderFails = true
         harness.loadFails = true
-        let viewModel = makeViewModel(harness: harness)
-        viewModel.items = [item]
         let ids = materials.map(\.id)
 
         let moved = await viewModel.reorderMaterial(
@@ -170,19 +166,16 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
 
     func testRefusedReorderPrefersTheLatestStoredOrderWhenItCanBeRead() async {
         let materials = makeMaterials(count: 3)
-        let item = WorkboardItemSnapshot(title: "Launch", materials: materials, revision: 9)
+        let item = makeDesk(materials: materials, revision: 9)
         let harness = BoardHarness(item: item)
+        let viewModel = await makeViewModelShowingDesk(harness: harness)
         harness.reorderFails = true
         // Another device already moved the last card to the front.
         let ids = materials.map(\.id)
-        harness.item = WorkboardItemSnapshot(
-            id: item.id,
-            title: "Launch",
+        harness.item = makeDesk(
             materials: [materials[2], materials[0], materials[1]],
             revision: 12
         )
-        let viewModel = makeViewModel(harness: harness)
-        viewModel.items = [item]
 
         let moved = await viewModel.reorderMaterial(ids[0], toInsertionIndex: 3, in: item.id)
 
@@ -196,16 +189,18 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
 
     func testUnknownItemAndUnchangedOrderNeverReachTheStore() async {
         let materials = makeMaterials(count: 2)
-        let item = WorkboardItemSnapshot(title: "Launch", materials: materials, revision: 3)
+        let item = makeDesk(materials: materials, revision: 3)
         let harness = BoardHarness(item: item)
-        let viewModel = makeViewModel(harness: harness)
-        viewModel.items = [item]
+        let viewModel = await makeViewModelShowingDesk(harness: harness)
         let ids = materials.map(\.id)
 
         let unchanged = await viewModel.reorderMaterial(ids[0], toInsertionIndex: 1, in: item.id)
         let unknownItem = await viewModel.reorderMaterial(ids[0], toInsertionIndex: 0, in: UUID())
         XCTAssertFalse(unchanged)
-        XCTAssertFalse(unknownItem)
+        XCTAssertFalse(
+            unknownItem,
+            "a board that is not the desk is not a board this model can rearrange"
+        )
         XCTAssertTrue(harness.reorderedOrders.isEmpty)
         XCTAssertNil(viewModel.notice)
     }
@@ -214,18 +209,9 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
 
     func testCardSizeAppliesLocallyWithoutTouchingTheBriefOrTheRevision() async {
         let materials = makeMaterials(count: 2)
-        let item = WorkboardItemSnapshot(
-            title: "Launch",
-            objective: "Compare the plans",
-            materials: materials,
-            revision: 9,
-            lastSentRevision: 9
-        )
+        let item = makeDesk(materials: materials, revision: 9)
         let harness = BoardHarness(item: item)
-        let viewModel = makeViewModel(harness: harness)
-        viewModel.items = [item]
-        viewModel.showEditor(for: item)
-        let fingerprintBeforeResize = viewModel.editingDraft.contentFingerprint
+        let viewModel = await makeViewModelShowingDesk(harness: harness)
 
         let resized = await viewModel.setMaterialCardSize(
             .large,
@@ -242,17 +228,14 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
             [.standard, .large]
         )
         XCTAssertEqual(viewModel.item(withID: item.id)?.revision, 9)
-        XCTAssertFalse(viewModel.item(withID: item.id)?.hasChangesSinceLastSend ?? true)
-        XCTAssertEqual(viewModel.editingDraft.contentFingerprint, fingerprintBeforeResize)
         XCTAssertTrue(harness.reorderedOrders.isEmpty)
     }
 
     func testResizingToTheSameSizeIsANoOpAndAFailedResizeRollsBack() async {
         let materials = makeMaterials(count: 2)
-        let item = WorkboardItemSnapshot(title: "Launch", materials: materials, revision: 2)
+        let item = makeDesk(materials: materials, revision: 2)
         let harness = BoardHarness(item: item)
-        let viewModel = makeViewModel(harness: harness)
-        viewModel.items = [item]
+        let viewModel = await makeViewModelShowingDesk(harness: harness)
 
         let unchanged = await viewModel.setMaterialCardSize(
             .standard,
@@ -281,14 +264,10 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
 
     func testBoardRemovalCASesOnTheItemRevisionWithNoEditorOpen() async {
         let materials = makeMaterials(count: 3)
-        let item = WorkboardItemSnapshot(title: "Launch", materials: materials, revision: 7)
+        let item = makeDesk(materials: materials, revision: 7)
         let harness = BoardHarness(item: item)
-        let viewModel = makeViewModel(harness: harness)
-        viewModel.items = [item]
+        let viewModel = await makeViewModelShowingDesk(harness: harness)
         let ids = materials.map(\.id)
-
-        // No brief is open: the editor-scoped form would be a silent no-op here.
-        XCTAssertNotEqual(viewModel.editingDraft.id, item.id)
 
         let removed = await viewModel.removeMaterialFromBoard(ids[1], in: item.id)
 
@@ -301,10 +280,9 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
 
     func testBoardRemovalOfAnUnknownCardNeverReachesTheStoreAndAFailureIsReported() async {
         let materials = makeMaterials(count: 2)
-        let item = WorkboardItemSnapshot(title: "Launch", materials: materials, revision: 2)
+        let item = makeDesk(materials: materials, revision: 2)
         let harness = BoardHarness(item: item)
-        let viewModel = makeViewModel(harness: harness)
-        viewModel.items = [item]
+        let viewModel = await makeViewModelShowingDesk(harness: harness)
 
         let unknown = await viewModel.removeMaterialFromBoard(UUID(), in: item.id)
         XCTAssertFalse(unknown)
@@ -347,94 +325,20 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: Constants.workboardTutorialSeenKey))
     }
 
-    // MARK: - Shaping transcript
-
-    func testShapingTranscriptCarriesCollectedThoughtsAndStaysBounded() {
-        let draft = WorkboardEditDraft(item: WorkboardItemSnapshot(
-            title: "Launch plan",
-            objective: "",
-            materials: [
-                WorkboardMaterialSnapshot(
-                    kind: .note,
-                    name: "Pricing",
-                    textContent: "Customer interviews favor the smaller launch.",
-                    sequence: 0
-                ),
-                WorkboardMaterialSnapshot(
-                    kind: .image,
-                    name: "Whiteboard",
-                    textContent: "never shaped",
-                    sequence: 1
-                ),
-                WorkboardMaterialSnapshot(
-                    kind: .note,
-                    name: "Long",
-                    textContent: String(repeating: "x", count: 5_000),
-                    sequence: 2
-                )
-            ]
-        ))
-
-        let transcript = WorkBriefShapingSource.transcript(for: draft)
-
-        XCTAssertTrue(transcript.contains("Launch plan"))
-        XCTAssertTrue(transcript.contains("Customer interviews favor the smaller launch."))
-        XCTAssertFalse(transcript.contains("never shaped"), "only thoughts are shaped")
-        XCTAssertFalse(
-            transcript.contains(String(repeating: "x", count: WorkBriefShapingSource.maximumNoteCharacters + 1))
-        )
-        XCTAssertLessThanOrEqual(transcript.count, WorkBriefShapingSource.maximumTranscriptCharacters)
-    }
-
-    /// Workboard retains no audio, so a voice capture is a transcript card.
-    /// The `.note` filter the shaping source uses only covers it because the
-    /// projection maps `.transcript` onto `.note` — hold both halves.
-    func testAVoiceTranscriptIsANoteCardTheShapingSourceCanSee() {
-        let spoken = WorkBriefFixtures.record(
-            kind: .transcript,
-            title: "Voice note",
-            textContent: "Ask legal whether the smaller launch needs a new notice.",
-            sequence: 0
-        )
-
-        XCTAssertEqual(WorkboardLiveRepository.presentationKind(spoken), .note)
-
-        let draft = WorkboardEditDraft(item: WorkboardItemSnapshot(
-            title: "Launch plan",
-            objective: "",
-            materials: [WorkboardMaterialSnapshot(
-                kind: WorkboardLiveRepository.presentationKind(spoken),
-                name: WorkboardLiveRepository.materialName(spoken),
-                textContent: spoken.textContent,
-                sequence: spoken.sequence
-            )]
-        ))
-
-        XCTAssertTrue(
-            WorkBriefShapingSource.transcript(for: draft)
-                .contains("Ask legal whether the smaller launch needs a new notice.")
-        )
-    }
-
-    func testShapingTranscriptOfAThoughtOnlyBriefIsNotEmpty() {
-        let draft = WorkboardEditDraft(item: WorkboardItemSnapshot(
-            title: "",
-            objective: "",
-            materials: [WorkboardMaterialSnapshot(
-                kind: .note,
-                name: "Thought",
-                textContent: "Work out whether the smaller launch is defensible.",
-                sequence: 0
-            )]
-        ))
-
-        XCTAssertEqual(
-            WorkBriefShapingSource.transcript(for: draft),
-            "Collected thoughts:\n- Work out whether the smaller launch is defensible."
-        )
-    }
-
     // MARK: - Fixtures
+
+    /// Work is one desk, so every board fixture carries the fixed desk id: a
+    /// snapshot under any other id is not a board this model can address.
+    private func makeDesk(
+        materials: [WorkboardMaterialSnapshot],
+        revision: Int64
+    ) -> WorkboardItemSnapshot {
+        WorkboardItemSnapshot(
+            id: Constants.workboardDeskItemID,
+            materials: materials,
+            revision: revision
+        )
+    }
 
     private func makeMaterials(count: Int) -> [WorkboardMaterialSnapshot] {
         (0..<count).map { index in
@@ -447,22 +351,28 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
         }
     }
 
+    /// The desk the person is looking at, seeded through the real load path.
+    /// The seeding read is discounted so the counts below describe only the
+    /// corrective reads a refused gesture triggers.
+    private func makeViewModelShowingDesk(harness: BoardHarness) async -> WorkboardViewModel {
+        let viewModel = makeViewModel(harness: harness)
+        await viewModel.load()
+        harness.loadCount = 0
+        return viewModel
+    }
+
     private func makeViewModel(harness: BoardHarness) -> WorkboardViewModel {
         WorkboardViewModel(dependencies: WorkboardViewModel.Dependencies(
-            loadItems: { [harness] in
+            loadDesk: { [harness] in
                 harness.loadCount += 1
                 if harness.loadFails { throw TestError.expectedFailure }
-                return [harness.item]
+                return harness.item
             },
-            loadGateways: { ([], []) },
-            saveDraft: { _ in throw TestError.unexpectedCall },
-            saveDraftAsCopy: { _ in throw TestError.unexpectedCall },
-            importMaterial: { _, _, _, _ in throw TestError.unexpectedCall },
-            removeMaterial: { [harness] itemID, expectedRevision, materialID in
+            importMaterial: { _, _, _ in throw TestError.unexpectedCall },
+            removeMaterial: { [harness] expectedRevision, materialID in
                 harness.removedMaterialIDs.append(materialID)
                 harness.removeRevisions.append(expectedRevision)
                 if harness.removeFails { throw TestError.expectedFailure }
-                XCTAssertEqual(itemID, harness.item.id)
                 harness.item = WorkboardItemSnapshot(
                     id: harness.item.id,
                     title: harness.item.title,
@@ -472,21 +382,14 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
                 )
                 return harness.item
             },
-            replaceMaterial: { _, _, _, _, _ in throw TestError.unexpectedCall },
-            deleteItem: { _ in throw TestError.unexpectedCall },
-            duplicateItem: { _ in throw TestError.unexpectedCall },
-            reorderItems: { _ in throw TestError.unexpectedCall },
-            setState: { _, _ in throw TestError.unexpectedCall },
-            acknowledgeRun: { _, _, _ in throw TestError.unexpectedCall },
-            dispatch: { _ in throw TestError.unexpectedCall },
+            replaceMaterial: { _, _, _, _ in throw TestError.unexpectedCall },
             openConversation: { _ in },
             openMaterial: { _ in },
             openGatewaySettings: {},
-            reorderMaterials: { [harness] itemID, orderedIDs, expectedRevision in
+            reorderMaterials: { [harness] orderedIDs, expectedRevision in
                 harness.reorderedOrders.append(orderedIDs)
                 harness.reorderRevisions.append(expectedRevision)
                 if harness.reorderFails { throw TestError.expectedFailure }
-                XCTAssertEqual(itemID, harness.item.id)
                 let byID = Dictionary(
                     harness.item.materials.map { ($0.id, $0) },
                     uniquingKeysWith: { first, _ in first }
@@ -502,9 +405,8 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
                 )
                 return harness.item
             },
-            setMaterialCardSize: { [harness] itemID, materialID, size in
+            setMaterialCardSize: { [harness] materialID, size in
                 if harness.cardSizeFails { throw TestError.expectedFailure }
-                XCTAssertEqual(itemID, harness.item.id)
                 harness.cardSizeWrites.append((materialID: materialID, size: size))
             }
         ))

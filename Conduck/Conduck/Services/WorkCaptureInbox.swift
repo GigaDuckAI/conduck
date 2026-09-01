@@ -8,8 +8,14 @@
 // second rename, imports it into the Workboard, then acknowledges deletion. The
 // API deliberately has no dispatch operation and the envelope has no gateway
 // fields, so capture ingress cannot accidentally become an agent send path.
-// Claim tokens protect against stale acknowledgements; `reconcile()` returns
-// crash-stranded claims to the pending queue and sweeps only abandoned temp data.
+// Claim tokens protect against stale acknowledgements within one process; a
+// lease file inside the claimed directory extends the same protection across
+// processes, because the app and a headless intent process drain the same queue.
+// `reconcile()` returns claims whose lease is absent or older than the stale
+// horizon to the pending queue and sweeps only abandoned temp data.
+//
+// Acknowledgement is never self-issued: only the drainer, after the imported
+// material is durably readable, may delete a claim.
 
 import Foundation
 import os
@@ -64,6 +70,15 @@ actor WorkCaptureInbox {
 
     nonisolated static let directoryName = "WorkCaptureInbox"
     nonisolated static let manifestFilename = "manifest.json"
+    /// Ownership marker written inside a claimed directory. The name is reserved
+    /// against payload leaves so a published envelope can never declare it.
+    nonisolated static let leaseFilename = "claim-lease.json"
+    /// A lease this old is treated as abandoned. Chosen far above a realistic
+    /// drain (a bounded envelope persists in seconds) so a live drainer is never
+    /// robbed, and low enough that a capture stranded by a crash returns within
+    /// one recovery window instead of hiding for an hour. A drain that genuinely
+    /// needs longer refreshes its lease rather than widening this horizon.
+    nonisolated static let staleClaimHorizon: TimeInterval = 5 * 60
     nonisolated static let didChangeNotification = Notification.Name(
         Constants.identityNamespace + ".work-capture-inbox.changed"
     )
@@ -87,6 +102,15 @@ actor WorkCaptureInbox {
                   let relativePath = entry.relativePath else { return nil }
             return directoryURL.appendingPathComponent(relativePath, isDirectory: false)
         }
+    }
+
+    /// The on-disk ownership marker. `owner` identifies one inbox instance, so a
+    /// relaunched process never recognizes its predecessor's lease as its own and
+    /// falls back to the horizon, which is the only cross-process liveness signal
+    /// a plain file can carry.
+    struct ClaimLease: Codable, Equatable, Sendable {
+        let owner: UUID
+        let refreshedAt: Date
     }
 
     enum InboxError: Error, Equatable, Sendable {
@@ -125,17 +149,23 @@ actor WorkCaptureInbox {
         /// block later claims. This flag makes a scaffold/enumeration/move failure
         /// explicit to callers instead of silently treating it as an empty queue.
         let encounteredFilesystemFailure: Bool
+        /// Directories left in processing because a lease inside the stale horizon
+        /// still covers them. Distinguishes "another process is draining it" from
+        /// "nothing was stranded", which are otherwise both a zero release count.
+        let respectedLeaseCount: Int
 
         init(
             releasedClaimCount: Int,
             removedTemporaryCount: Int,
             collisionCount: Int,
-            encounteredFilesystemFailure: Bool = false
+            encounteredFilesystemFailure: Bool = false,
+            respectedLeaseCount: Int = 0
         ) {
             self.releasedClaimCount = releasedClaimCount
             self.removedTemporaryCount = removedTemporaryCount
             self.collisionCount = collisionCount
             self.encounteredFilesystemFailure = encounteredFilesystemFailure
+            self.respectedLeaseCount = respectedLeaseCount
         }
     }
 
@@ -146,6 +176,10 @@ actor WorkCaptureInbox {
 
     private let baseURL: URL
     private let fileManager: FileManager
+    /// Identifies this instance in every lease it writes. Minted per instance so
+    /// two inboxes over one directory — the app and a headless intent process —
+    /// can tell each other's claims apart.
+    nonisolated let ownerID = UUID()
     private var activeClaims: [UUID: UUID] = [:]
     private var didScaffold = false
 
@@ -318,9 +352,11 @@ actor WorkCaptureInbox {
 
     /// Claims the oldest published capture. An atomic move is the cross-process
     /// ownership boundary; a second caller either claims another capture or sees
-    /// no work. Malformed envelopes are securely removed and reported without
-    /// ever entering Workboard persistence.
-    func claimNext() throws -> Claim? {
+    /// no work. The lease is written before validation, so the directory is never
+    /// visible in processing without an owner and cannot be requeued underneath a
+    /// claim that is still being validated. Malformed envelopes are securely
+    /// removed and reported without ever entering Workboard persistence.
+    func claimNext(now: Date = Date()) throws -> Claim? {
         try ensureScaffold()
         for id in try pendingEnvelopeIDs() {
             let published = baseURL.appendingPathComponent(id.uuidString, isDirectory: true)
@@ -334,6 +370,15 @@ actor WorkCaptureInbox {
                 if Self.isMissingFileError(error) || Self.isDestinationExistsError(error) {
                     continue
                 }
+                throw InboxError.filesystemFailure
+            }
+
+            do {
+                // An unleasable claim is refused outright: proceeding would drain
+                // a directory any other process is free to requeue mid-import.
+                try writeLease(in: claimed, now: now)
+            } catch {
+                try preserveClaimedDirectory(id: id, at: claimed)
                 throw InboxError.filesystemFailure
             }
 
@@ -376,12 +421,19 @@ actor WorkCaptureInbox {
         return nil
     }
 
-    /// Deletes a successfully imported capture. Idempotency belongs to the
-    /// Workboard importer: it should persist `envelope.id` before acknowledging,
-    /// so a process death between those operations merely presents the same id
-    /// again and never creates a second draft.
+    // MARK: - Acknowledgement seam
+
+    /// THE acknowledgement point: the queue's only deletion of imported bytes,
+    /// and the inbox never reaches it on its own. The drainer calls this once the
+    /// capture is durably readable from the store — every material row, and the
+    /// blob of every material whose bytes it carries. Anything acknowledged
+    /// before that is unrecoverable, while anything acknowledged twice is merely
+    /// replayed: the importer persists `envelope.id` first, so a death between
+    /// import and acknowledgement presents the same id again and never creates a
+    /// second draft.
     func acknowledge(_ claim: Claim) throws {
         try requireActive(claim)
+        try requireLeaseOwnership(claim)
         do {
             try fileManager.removeItem(at: claim.directoryURL)
         } catch {
@@ -399,10 +451,12 @@ actor WorkCaptureInbox {
     /// directory.
     func release(_ claim: Claim) throws {
         try requireActive(claim)
+        try requireLeaseOwnership(claim)
         let destination = baseURL.appendingPathComponent(claim.id.uuidString, isDirectory: true)
         guard !fileManager.fileExists(atPath: destination.path) else {
             throw InboxError.filesystemFailure
         }
+        removeLease(in: claim.directoryURL)
         do {
             try fileManager.moveItem(at: claim.directoryURL, to: destination)
             activeClaims.removeValue(forKey: claim.id)
@@ -412,14 +466,26 @@ actor WorkCaptureInbox {
         }
     }
 
-    /// Repairs crash-stranded claims and abandoned extension writes. Active
-    /// claims owned by this actor are never touched. Call once during app launch,
-    /// then claim until nil. The 1-hour temp horizon is generous relative to an
-    /// extension copy while bounding private bytes left by a killed extension.
+    /// Extends ownership of a claim whose durable import legitimately outlives
+    /// the stale horizon. Callers that finish inside the horizon never need it.
+    func refreshLease(_ claim: Claim, now: Date = Date()) throws {
+        try requireActive(claim)
+        try requireLeaseOwnership(claim)
+        try writeLease(in: claim.directoryURL, now: now)
+    }
+
+    /// Repairs crash-stranded claims and abandoned extension writes. Claims this
+    /// actor holds are never touched, and neither are claims another process's
+    /// lease still covers — the queue is drained by the app and by headless
+    /// intent processes, so process-local bookkeeping alone cannot decide who
+    /// owns a directory. Call once during app launch, then claim until nil. The
+    /// 1-hour temp horizon is generous relative to an extension copy while
+    /// bounding private bytes left by a killed extension.
     func reconcile(now: Date = Date()) -> ReconciliationReport {
         var released = 0
         var removedTemporary = 0
         var collisions = 0
+        var respectedLeases = 0
         var encounteredFilesystemFailure = false
 
         do {
@@ -443,10 +509,17 @@ actor WorkCaptureInbox {
         for id in strandedIDs where activeClaims[id] == nil {
             let source = processingURL.appendingPathComponent(id.uuidString, isDirectory: true)
             let destination = baseURL.appendingPathComponent(id.uuidString, isDirectory: true)
+            guard isAbandonedClaim(at: source, now: now) else {
+                respectedLeases += 1
+                continue
+            }
             if fileManager.fileExists(atPath: destination.path) {
                 collisions += 1
                 continue
             }
+            // The marker belongs to processing. Carrying it back would leave an
+            // undeclared file in a directory whose containment is exact.
+            removeLease(in: source)
             do {
                 try fileManager.moveItem(at: source, to: destination)
                 released += 1
@@ -489,8 +562,95 @@ actor WorkCaptureInbox {
             releasedClaimCount: released,
             removedTemporaryCount: removedTemporary,
             collisionCount: collisions,
-            encounteredFilesystemFailure: encounteredFilesystemFailure
+            encounteredFilesystemFailure: encounteredFilesystemFailure,
+            respectedLeaseCount: respectedLeases
         )
+    }
+
+    // MARK: - Cross-process claim lease
+
+    /// A claimed directory is abandoned when no lease covers it: the marker is
+    /// gone, it names this instance (which is not holding the claim, or the
+    /// caller would have skipped it), or it predates the stale horizon. A lease
+    /// dated in the future is respected until the clock catches up — skew must
+    /// never let two processes drain one capture at once.
+    private func isAbandonedClaim(at directory: URL, now: Date) -> Bool {
+        switch leaseState(in: directory, fallbackDate: now) {
+        case .absent:
+            return true
+        case .held(let owner, let refreshedAt):
+            if owner == ownerID { return true }
+            return now.timeIntervalSince(refreshedAt) >= Self.staleClaimHorizon
+        }
+    }
+
+    /// Fails a claim whose directory another process has taken over. Without it
+    /// an acknowledgement could delete, and a release could requeue, bytes that
+    /// a live drainer in another process is reading.
+    private func requireLeaseOwnership(_ claim: Claim) throws {
+        switch leaseState(in: claim.directoryURL, fallbackDate: Date()) {
+        case .absent:
+            // A directory that is simply gone was already consumed; only a
+            // present directory stripped of its marker means lost ownership.
+            guard fileManager.fileExists(atPath: claim.directoryURL.path) else { return }
+            activeClaims.removeValue(forKey: claim.id)
+            throw InboxError.staleClaim
+        case .held(let owner, _):
+            // An unreadable marker is corruption, not evidence of a takeover: a
+            // process that steals the claim writes a readable lease of its own.
+            guard let owner, owner != ownerID else { return }
+            activeClaims.removeValue(forKey: claim.id)
+            throw InboxError.staleClaim
+        }
+    }
+
+    private enum LeaseState {
+        case absent
+        case held(owner: UUID?, refreshedAt: Date)
+    }
+
+    private func leaseURL(in directory: URL) -> URL {
+        directory.appendingPathComponent(Self.leaseFilename, isDirectory: false)
+    }
+
+    private func writeLease(in directory: URL, now: Date) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        guard let data = try? encoder.encode(ClaimLease(owner: ownerID, refreshedAt: now)) else {
+            throw InboxError.filesystemFailure
+        }
+        do {
+            // Another process must be able to read this marker whenever it is
+            // awake, and it holds no user content — so the payload's complete
+            // protection would only turn a locked device into a false takeover.
+            try data.write(
+                to: leaseURL(in: directory),
+                options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+            )
+        } catch {
+            throw InboxError.filesystemFailure
+        }
+    }
+
+    private func leaseState(in directory: URL, fallbackDate: Date) -> LeaseState {
+        let url = leaseURL(in: directory)
+        guard fileManager.fileExists(atPath: url.path) else { return .absent }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        guard let data = fileManager.contents(atPath: url.path),
+              let lease = try? decoder.decode(ClaimLease.self, from: data) else {
+            // Unreadable bytes still prove someone claimed the directory. Age it
+            // by the file instead so the horizon can still expire it.
+            let modifiedAt = (try? fileManager.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+            return .held(owner: nil, refreshedAt: modifiedAt ?? fallbackDate)
+        }
+        return .held(owner: lease.owner, refreshedAt: lease.refreshedAt)
+    }
+
+    /// Best effort: a surviving marker is tolerated by claim validation and
+    /// overwritten by the next claim, so failing here must not fail the caller.
+    private func removeLease(in directory: URL) {
+        try? fileManager.removeItem(at: leaseURL(in: directory))
     }
 
     // MARK: - Validation
@@ -609,7 +769,10 @@ actor WorkCaptureInbox {
             }
         }
 
-        let allowedNames = relativePaths.union([Self.manifestFilename])
+        // The lease is this actor's own file, written before validation and never
+        // declarable as a payload leaf. Any bytes a publisher smuggled under that
+        // name were overwritten by the claim, so tolerating it here admits none.
+        let allowedNames = relativePaths.union([Self.manifestFilename, Self.leaseFilename])
         let actualNames = Set(try directoryChildren(of: directory).map(\.lastPathComponent))
         guard actualNames == allowedNames else {
             throw InboxError.invalidEnvelope(expectedID, .unexpectedPayload)
@@ -622,6 +785,7 @@ actor WorkCaptureInbox {
               value != ".",
               value != "..",
               value != manifestFilename,
+              value != leaseFilename,
               value.count <= 160,
               (value as NSString).lastPathComponent == value,
               !value.contains("/"),
@@ -733,6 +897,7 @@ actor WorkCaptureInbox {
         guard !fileManager.fileExists(atPath: destination.path) else {
             throw InboxError.filesystemFailure
         }
+        removeLease(in: claimed)
         do {
             try fileManager.moveItem(at: claimed, to: destination)
             postLocalChange()

@@ -1408,6 +1408,8 @@ struct ConversationThreadView: View {
                         ? String(localized: "workboard.chatCapture.already", defaultValue: "This message is already in Work.")
                         : String(localized: "workboard.chatCapture.saved", defaultValue: "Added to Work. Nothing was sent.")
                 }
+                // Work is one desk and the receipt names it, so the banner's
+                // Open Work link resolves there however the turn was captured.
                 presentWorkCaptureNotice(.init(itemID: receipt.itemID, message: detail, isError: false))
             } catch {
                 presentWorkCaptureNotice(.init(itemID: nil, message: error.localizedDescription, isError: true))

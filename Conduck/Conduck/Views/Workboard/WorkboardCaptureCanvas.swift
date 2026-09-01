@@ -3,76 +3,60 @@
 // Conduck
 // WorkboardCaptureCanvas.swift
 //
-// The project-shaped capture surface from the Work sketches. A typed thought,
-// picker result, or drop is always persisted as inert Work first. The visually
-// separate Review & Send action can only open the exact existing preflight; this
-// view has no transport dependency and cannot choose a gateway.
+// The desk's capture surface. A typed thought, picker result, or drop is
+// persisted as inert Work and nothing else: this view has no transport
+// dependency of any kind, so capture can never become a send.
 
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
 enum WorkboardCaptureCanvasMode: Sendable {
-    case full
     case sources
     case composer
 }
 
-enum WorkboardCaptureDestination: Equatable, Sendable {
-    case existingWork(String)
-    case newWork
+/// Work is ONE desk, so capture has a single destination and its copy names no
+/// target: there is nothing to choose between and no title to interpolate.
+/// `private` because a host does not pick it — the canvas and the pane-wide drop
+/// state it, which is what keeps a second destination from creeping back in.
+private enum WorkboardCaptureDestination: Equatable, Sendable {
+    case desk
 
     var composerPrompt: LocalizedStringResource {
-        switch self {
-        case .existingWork(let title):
-            return LocalizedStringResource(
-                "workboard.workspace.composer.prompt.existing",
-                defaultValue: "Add a thought to \(title)…"
-            )
-        case .newWork:
-            return LocalizedStringResource(
-                "workboard.workspace.composer.prompt.new",
-                defaultValue: "Start a new work item…"
-            )
-        }
+        LocalizedStringResource(
+            "workboard.workspace.composer.prompt",
+            defaultValue: "Add to Work…"
+        )
     }
 
     var dropTitle: LocalizedStringResource {
-        switch self {
-        case .existingWork(let title):
-            return LocalizedStringResource(
-                "workboard.workspace.drop.overlay.existing",
-                defaultValue: "Drop into \(title)"
-            )
-        case .newWork:
-            return LocalizedStringResource(
-                "workboard.workspace.drop.overlay.new",
-                defaultValue: "Drop to create New Work"
-            )
-        }
+        LocalizedStringResource(
+            "workboard.workspace.drop.overlay.title",
+            defaultValue: "Drop into Work"
+        )
     }
 
     var dropCaption: LocalizedStringResource {
-        switch self {
-        case .existingWork:
-            return LocalizedStringResource(
-                "workboard.workspace.drop.overlay.existing.caption",
-                defaultValue: "Files, photos, screenshots, links and text will be added here. Nothing is sent."
-            )
-        case .newWork:
-            return LocalizedStringResource(
-                "workboard.workspace.drop.overlay.new.caption",
-                defaultValue: "A private draft is created only after the first item is safely stored. Nothing is sent."
-            )
-        }
+        LocalizedStringResource(
+            "workboard.workspace.drop.overlay.caption",
+            defaultValue: "Files, photos, screenshots, links and text will be added here. Nothing is sent."
+        )
     }
 }
 
 struct WorkboardCaptureCanvas: View {
     @Bindable var viewModel: WorkboardViewModel
+    /// The desk as it stands: the cards to draw, and the count a photo name
+    /// numbers from. Every write below addresses `Constants.workboardDeskItemID`
+    /// rather than this snapshot's id, so capture on the desk-before-its-first-
+    /// material canvas lands on the same identity the first card will.
     let item: WorkboardItemSnapshot
-    var mode: WorkboardCaptureCanvasMode = .full
-    var destination: WorkboardCaptureDestination
+    let mode: WorkboardCaptureCanvasMode
+
+    /// Capture always lands on the desk, so the destination is a constant the
+    /// canvas states rather than an argument a host chooses.
+    private let destination = WorkboardCaptureDestination.desk
 
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -80,13 +64,11 @@ struct WorkboardCaptureCanvas: View {
     init(
         viewModel: WorkboardViewModel,
         item: WorkboardItemSnapshot,
-        mode: WorkboardCaptureCanvasMode = .full,
-        destination: WorkboardCaptureDestination? = nil
+        mode: WorkboardCaptureCanvasMode
     ) {
         self.viewModel = viewModel
         self.item = item
         self.mode = mode
-        self.destination = destination ?? .existingWork(item.displayTitle)
     }
 
     @State private var photoSelection: [PhotosPickerItem] = []
@@ -97,8 +79,6 @@ struct WorkboardCaptureCanvas: View {
     @State private var materialComposer: WorkboardMaterialComposerKind?
     @State private var largeImportConfirmation: WorkboardWorkspaceLargeImportConfirmation?
     @State private var isAddingThought = false
-    @State private var isReviewing = false
-    @State private var reviewTask: Task<Void, Never>?
     @FocusState private var composerFocused: Bool
     #if os(iOS)
     @State private var showsCamera = false
@@ -113,18 +93,10 @@ struct WorkboardCaptureCanvas: View {
         Group {
             if mode == .composer {
                 pinnedComposer
-            } else if mode == .full {
-                WorkboardSurface {
-                    VStack(alignment: .leading, spacing: 14) {
-                        boardStack
-                        Divider().overlay(AppColors.borderSubtle)
-                        expandedComposer
-                    }
-                }
             } else {
                 // No container around the cards: the WHOLE pane is the drop
                 // target, and a bordered surface would read as the one place a
-                // drop lands. An empty project therefore renders nothing here —
+                // drop lands. An empty desk therefore renders nothing here —
                 // the one-time tutorial teaches capture, the pane accepts it.
                 boardStack
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -153,7 +125,10 @@ struct WorkboardCaptureCanvas: View {
         .sheet(item: activeMaterialComposer) { kind in
             WorkboardTextMaterialSheet(kind: kind) { materialImport in
                 Task {
-                    await viewModel.importWorkspaceMaterials([materialImport], to: item.id)
+                    await viewModel.importWorkspaceMaterials(
+                        [materialImport],
+                        to: Constants.workboardDeskItemID
+                    )
                 }
             }
         }
@@ -163,7 +138,7 @@ struct WorkboardCaptureCanvas: View {
                 onTranscript: { transcript in
                     viewModel.setWorkspaceComposerDraft(
                         appending(transcript, to: composerText),
-                        for: item.id
+                        for: Constants.workboardDeskItemID
                     )
                     showsVoiceCapture = false
                     composerFocused = true
@@ -257,11 +232,6 @@ struct WorkboardCaptureCanvas: View {
             WorkboardImportMapping.reclaim(confirmation.batch)
             largeImportConfirmation = nil
         }
-        if reviewTask != nil {
-            reviewTask?.cancel()
-            reviewTask = nil
-        }
-        if isReviewing { isReviewing = false }
         if composerFocused { composerFocused = false }
     }
 
@@ -269,7 +239,8 @@ struct WorkboardCaptureCanvas: View {
     /// and disappears with it, so it costs the de-texted board nothing at rest.
     @ViewBuilder
     private var importProgress: some View {
-        if let state = viewModel.workspaceImportState, state.itemID == item.id {
+        if let state = viewModel.workspaceImportState,
+           state.itemID == Constants.workboardDeskItemID {
             let progressText = String.localizedStringWithFormat(
                 String(localized: LocalizedStringResource(
                     "workboard.workspace.import.progress",
@@ -418,22 +389,6 @@ struct WorkboardCaptureCanvas: View {
         #endif
     }
 
-    private var expandedComposer: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .bottom, spacing: 8) {
-                attachmentMenu
-                composerField(lineLimit: 1...7)
-                voiceButton
-                addThoughtButton
-            }
-
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) { reviewAndSendButton }
-                VStack(spacing: 10) { reviewAndSendButton }
-            }
-        }
-    }
-
     private var attachmentMenu: some View {
         WorkboardMaterialActions(
             presentation: .menu,
@@ -505,7 +460,7 @@ struct WorkboardCaptureCanvas: View {
             fillColor: AppColors.brandAmber,
             diameter: composerControlDiameter,
             glyphSize: composerGlyphSize,
-            isDisabled: !workbenchDestinationIsActive || isImporting || isAddingThought || isReviewing,
+            isDisabled: !workbenchDestinationIsActive || isImporting || isAddingThought,
             accessibilityLabel: String(localized: LocalizedStringResource(
                 "workboard.voice.capture",
                 defaultValue: "Add by voice"
@@ -522,7 +477,6 @@ struct WorkboardCaptureCanvas: View {
             || cleanComposerText.isEmpty
             || isImporting
             || isAddingThought
-            || isReviewing
         return CaptureCircleButton(
             symbol: isAddingThought ? "ellipsis" : "arrow.up",
             fillColor: isDisabled ? AppColors.disabled : AppColors.brandAmber,
@@ -539,39 +493,6 @@ struct WorkboardCaptureCanvas: View {
         .accessibilityHint(Text(LocalizedStringResource(
             "workboard.workspace.add.hint",
             defaultValue: "Saves this thought privately. Nothing is sent to an AI."
-        )))
-    }
-
-    private var reviewAndSendButton: some View {
-        Button(action: reviewAndSend) {
-            HStack(spacing: 8) {
-                if isReviewing {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "checkmark.shield")
-                }
-                Text(LocalizedStringResource(
-                    "workboard.editor.reviewAndSend",
-                    defaultValue: "Review & Send…"
-                ))
-            }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(AppColors.textPrimary)
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, minHeight: WorkboardMetrics.touchTarget)
-            .background(AppColors.backgroundSecondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(AppColors.borderSubtle, lineWidth: 1)
-            }
-        }
-        .choiceCardButton(cornerRadius: 12)
-        .disabled(!workbenchDestinationIsActive
-            || (!item.isReadyToSend && cleanComposerText.isEmpty)
-            || isImporting || isAddingThought || isReviewing)
-        .accessibilityHint(Text(LocalizedStringResource(
-            "workboard.editor.reviewAndSend.hint",
-            defaultValue: "Opens a final preview. Nothing is sent yet."
         )))
     }
 
@@ -614,13 +535,13 @@ struct WorkboardCaptureCanvas: View {
     }
 
     private var composerText: String {
-        viewModel.workspaceComposerDraft(for: item.id)
+        viewModel.workspaceComposerDraft(for: Constants.workboardDeskItemID)
     }
 
     private var composerTextBinding: Binding<String> {
         Binding(
-            get: { viewModel.workspaceComposerDraft(for: item.id) },
-            set: { viewModel.setWorkspaceComposerDraft($0, for: item.id) }
+            get: { viewModel.workspaceComposerDraft(for: Constants.workboardDeskItemID) },
+            set: { viewModel.setWorkspaceComposerDraft($0, for: Constants.workboardDeskItemID) }
         )
     }
 
@@ -628,13 +549,15 @@ struct WorkboardCaptureCanvas: View {
         let thought = cleanComposerText
         guard workbenchDestinationIsActive,
               !thought.isEmpty,
-              !isAddingThought,
-              !isReviewing else { return }
+              !isAddingThought else { return }
         isAddingThought = true
         Task {
-            let added = await viewModel.addWorkspaceThought(thought, to: item.id)
+            let added = await viewModel.addWorkspaceThought(
+                thought,
+                to: Constants.workboardDeskItemID
+            )
             if added {
-                viewModel.setWorkspaceComposerDraft("", for: item.id)
+                viewModel.setWorkspaceComposerDraft("", for: Constants.workboardDeskItemID)
                 let message = String(localized: LocalizedStringResource(
                     "workboard.workspace.thought.saved",
                     defaultValue: "Added to Work. Nothing was sent."
@@ -644,22 +567,6 @@ struct WorkboardCaptureCanvas: View {
             }
             isAddingThought = false
             composerFocused = workbenchDestinationIsActive && !added
-        }
-    }
-
-    private func reviewAndSend() {
-        guard workbenchDestinationIsActive, !isAddingThought, !isReviewing else { return }
-        isReviewing = true
-        let targetItemID = item.id
-        reviewTask?.cancel()
-        reviewTask = Task {
-            _ = await viewModel.reviewWorkspaceAndSend(itemID: targetItemID)
-            guard !Task.isCancelled,
-                  viewModel.selectedItemID == targetItemID else {
-                isReviewing = false
-                return
-            }
-            isReviewing = false
         }
     }
 
@@ -771,7 +678,7 @@ struct WorkboardCaptureCanvas: View {
         defer { if hasAccess { sourceURL.stopAccessingSecurityScopedResource() } }
         await viewModel.reattachWorkspaceMaterial(
             material,
-            in: item.id,
+            in: Constants.workboardDeskItemID,
             with: replacement
         )
     }
@@ -805,7 +712,7 @@ struct WorkboardCaptureCanvas: View {
         let mapped = WorkboardImportMapping.imports(from: batch)
         await viewModel.importWorkspaceMaterials(
             mapped.imports,
-            to: item.id,
+            to: Constants.workboardDeskItemID,
             additionalFailureCount: batch.failedCount
         )
         for url in mapped.scopedURLs { url.stopAccessingSecurityScopedResource() }
@@ -824,24 +731,17 @@ extension View {
     /// Makes the complete Work detail region a capture target. This deliberately
     /// lives above both the scrolling canvas and pinned composer: nested drop
     /// handlers caused the composer to reject a valid drop while the populated
-    /// All Work screen had no handler at all.
-    func workboardPaneDropDestination(
-        viewModel: WorkboardViewModel,
-        itemID: UUID,
-        destination: WorkboardCaptureDestination
-    ) -> some View {
-        modifier(WorkboardPaneDropModifier(
-            viewModel: viewModel,
-            itemID: itemID,
-            destination: destination
-        ))
+    /// desk had no handler at all. A drop names no target: the desk is the only
+    /// one there is.
+    func workboardPaneDropDestination(viewModel: WorkboardViewModel) -> some View {
+        modifier(WorkboardPaneDropModifier(viewModel: viewModel))
     }
 }
 
 private struct WorkboardPaneDropModifier: ViewModifier {
     @Bindable var viewModel: WorkboardViewModel
-    let itemID: UUID
-    let destination: WorkboardCaptureDestination
+
+    private let destination = WorkboardCaptureDestination.desk
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
@@ -880,7 +780,6 @@ private struct WorkboardPaneDropModifier: ViewModifier {
                     WorkboardImportMapping.reclaim(confirmation.batch)
                 }
             )
-            .onChange(of: itemID) { _, _ in cancelDropWork() }
             .onChange(of: workbenchDestinationIsActive) { _, isActive in
                 if !isActive { cancelDropWork() }
             }
@@ -1074,7 +973,7 @@ private struct WorkboardPaneDropModifier: ViewModifier {
         let mapped = WorkboardImportMapping.imports(from: batch)
         await viewModel.importWorkspaceMaterials(
             mapped.imports,
-            to: itemID,
+            to: Constants.workboardDeskItemID,
             additionalFailureCount: batch.failedCount
         )
         for url in mapped.scopedURLs { url.stopAccessingSecurityScopedResource() }
@@ -1177,7 +1076,10 @@ private struct WorkboardMaterialBoard: View {
                     onRemove: { materialPendingRemoval = material }
                 )
                 .workboardMosaicCardSize(material.cardSize)
-                .draggable(WorkMaterialDragPayload(itemID: item.id, materialID: material.id))
+                .draggable(WorkMaterialDragPayload(
+                    itemID: Constants.workboardDeskItemID,
+                    materialID: material.id
+                ))
             }
         }
         .frame(maxWidth: .infinity)
@@ -1246,7 +1148,7 @@ private struct WorkboardMaterialBoard: View {
     private func drop(_ payloads: [WorkMaterialDragPayload], at location: CGPoint) -> Bool {
         guard workbenchDestinationIsActive,
               let moving = payloads.first,
-              moving.itemID == item.id,
+              moving.itemID == Constants.workboardDeskItemID,
               item.materials.contains(where: { $0.id == moving.materialID }) else { return false }
         let index = WorkboardMosaicLayout.insertionIndex(
             at: location,
@@ -1258,7 +1160,7 @@ private struct WorkboardMaterialBoard: View {
             await viewModel.reorderMaterial(
                 moving.materialID,
                 toInsertionIndex: index,
-                in: item.id
+                in: Constants.workboardDeskItemID
             )
         }
         return true
@@ -1267,7 +1169,11 @@ private struct WorkboardMaterialBoard: View {
     private func setSize(_ size: WorkMaterialCardSize, for material: WorkboardMaterialSnapshot) {
         guard workbenchDestinationIsActive else { return }
         Task {
-            await viewModel.setMaterialCardSize(size, materialID: material.id, in: item.id)
+            await viewModel.setMaterialCardSize(
+                size,
+                materialID: material.id,
+                in: Constants.workboardDeskItemID
+            )
         }
     }
 
@@ -1277,8 +1183,12 @@ private struct WorkboardMaterialBoard: View {
     private func move(_ material: WorkboardMaterialSnapshot, direction: WorkboardMoveDirection) {
         guard workbenchDestinationIsActive else { return }
         Task {
-            guard await viewModel.moveMaterial(material.id, direction: direction, in: item.id),
-                  let refreshed = viewModel.item(withID: item.id),
+            guard await viewModel.moveMaterial(
+                      material.id,
+                      direction: direction,
+                      in: Constants.workboardDeskItemID
+                  ),
+                  let refreshed = viewModel.item(withID: Constants.workboardDeskItemID),
                   let index = refreshed.materials.firstIndex(where: { $0.id == material.id })
             else { return }
             AccessibilityAnnouncer.announce([
@@ -1294,7 +1204,10 @@ private struct WorkboardMaterialBoard: View {
     private func remove(_ material: WorkboardMaterialSnapshot) {
         guard workbenchDestinationIsActive else { return }
         Task {
-            await viewModel.removeMaterialFromBoard(material.id, in: item.id)
+            await viewModel.removeMaterialFromBoard(
+                material.id,
+                in: Constants.workboardDeskItemID
+            )
         }
     }
 }

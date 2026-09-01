@@ -3,10 +3,12 @@
 // ConduckTests
 // WorkCaptureDrainerTests.swift
 //
-// End-to-end coverage for Share Extension captures targeting existing Work:
-// open-target append, visible note preservation, stale-target fallback, and
-// deterministic replay after a crash boundary. The drainer has no transport
-// dependency, and every assertion stays inside in-memory Core Data + temp files.
+// End-to-end coverage for App-Group captures reaching the single Work desk:
+// every envelope's note becomes a card, attachments land beside it, a named
+// target is ignored rather than resolved, replay never doubles a material, and
+// the queue is consumed only after everything the capture wrote reads back. The
+// drainer has no transport dependency, and every assertion stays inside
+// in-memory Core Data + temp files.
 
 import XCTest
 @testable import Conduck
@@ -27,9 +29,104 @@ final class WorkCaptureDrainerTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testOpenTargetReceivesVisibleNoteAndMaterialsWithoutChangingBriefOrDispatching() async throws {
+    // MARK: - Everything lands on the desk
+
+    /// The desk is created by the capture itself. A menu-bar or GigaAction
+    /// envelope carries no target and the store holds nothing at all, and the
+    /// note still has to become a visible card: it is the whole capture.
+    func testTheFirstTargetlessCaptureBecomesAMaterialOnAFreshDesk() async throws {
         let store = ConversationStore(inMemory: true)
-        let target = try await store.createWorkItem(WorkItemDraft(content: WorkItemContent(
+        let before = try await store.fetchWorkItems()
+        XCTAssertTrue(before.isEmpty, "nothing exists before the first capture")
+
+        let envelope = WorkCaptureEnvelope(
+            note: "Ask the harbour office about the winter timetable",
+            source: .app,
+            entries: []
+        )
+        try publish(envelope)
+
+        let report = try await makeDrainer(store: store).drainAvailableCaptures()
+        let desk = try await unwrapDesk(store)
+
+        XCTAssertEqual(report.importedCaptureCount, 1)
+        XCTAssertEqual(report.importedMaterialCount, 1,
+                       "the note of a targetless capture is a material, not a discarded label")
+        XCTAssertEqual(desk.id, Constants.workboardDeskItemID)
+        XCTAssertEqual(desk.materials.count, 1)
+        let note = try XCTUnwrap(desk.materials.first)
+        XCTAssertEqual(note.id, envelope.id)
+        XCTAssertEqual(note.kind, .note)
+        XCTAssertEqual(note.title, "Share note")
+        XCTAssertEqual(note.textContent, "Ask the harbour office about the winter timetable")
+    }
+
+    /// Two targetless captures from different surfaces converge on one desk
+    /// rather than each minting a board of their own.
+    func testCapturesFromDifferentSurfacesShareTheOneDesk() async throws {
+        let store = ConversationStore(inMemory: true)
+        let fromShareSheet = WorkCaptureEnvelope(
+            note: "From the share sheet",
+            source: .shareExtension,
+            entries: []
+        )
+        let fromTheApp = WorkCaptureEnvelope(note: "From the menu bar", source: .app, entries: [])
+        try publish(fromShareSheet)
+        try publish(fromTheApp)
+
+        _ = try await makeDrainer(store: store).drainAvailableCaptures()
+
+        let items = try await store.fetchWorkItems()
+        XCTAssertEqual(items.map(\.id), [Constants.workboardDeskItemID])
+        let desk = try XCTUnwrap(items.first)
+        XCTAssertEqual(Set(desk.materials.map(\.id)), [fromShareSheet.id, fromTheApp.id])
+    }
+
+    /// The note and every attachment are cards side by side, and the file's
+    /// bytes are readable from the desk once the queue copy is gone.
+    func testTheNoteAndEveryAttachmentLandOnTheDeskTogether() async throws {
+        let store = ConversationStore(inMemory: true)
+        let payload = Data("the shared screenshot".utf8)
+        let imageID = UUID()
+        let textID = UUID()
+        let envelope = WorkCaptureEnvelope(
+            note: "Compare this with the current plan",
+            source: .shareExtension,
+            entries: [
+                .init(id: textID, kind: .text, sequence: 0, text: "Source excerpt"),
+                .init(
+                    id: imageID,
+                    kind: .image,
+                    sequence: 1,
+                    relativePath: "payload-000.png",
+                    displayName: "IMG.png",
+                    mimeType: "image/png",
+                    byteCount: Int64(payload.count)
+                ),
+            ]
+        )
+        try publish(envelope, payloads: ["payload-000.png": payload])
+
+        let report = try await makeDrainer(store: store).drainAvailableCaptures()
+        let desk = try await unwrapDesk(store)
+
+        XCTAssertEqual(report.importedMaterialCount, 3)
+        XCTAssertEqual(Set(desk.materials.map(\.id)), [envelope.id, textID, imageID])
+        XCTAssertEqual(desk.materials.map(\.sequence), [0, 1, 2],
+                       "the desk ranks the note first, then the entries in captured order")
+        let image = try XCTUnwrap(desk.materials.first { $0.id == imageID })
+        XCTAssertEqual(image.kind, .image)
+        XCTAssertEqual(image.availability, .availableLocally)
+        let storedBytes = try await store.loadWorkMaterialPayload(id: imageID)
+        XCTAssertEqual(storedBytes, payload)
+    }
+
+    /// `targetWorkItemID` survives in the envelope because the share extension
+    /// cannot be taught the desk from its sandbox, but nothing honours it: an
+    /// item that still exists is left exactly as it was.
+    func testANamedTargetIsIgnoredAndLeftUntouched() async throws {
+        let store = ConversationStore(inMemory: true)
+        let other = try await store.createWorkItem(WorkItemDraft(content: WorkItemContent(
             title: "Launch",
             objective: "Prepare the launch plan",
             context: "Original context"
@@ -37,89 +134,30 @@ final class WorkCaptureDrainerTests: XCTestCase {
         let envelope = WorkCaptureEnvelope(
             note: "Please compare this with the current plan",
             source: .shareExtension,
-            targetWorkItemID: target.id,
-            entries: [
-                .init(kind: .text, sequence: 0, text: "Source excerpt"),
-                .init(kind: .url, sequence: 1, text: "https://example.com/source"),
-            ]
-        )
-        try publish(envelope)
-
-        let report = try await makeDrainer(store: store).drainAvailableCaptures()
-        let updatedValue = try await store.fetchWorkItem(id: target.id)
-        let updated = try XCTUnwrap(updatedValue)
-
-        XCTAssertEqual(report.importedCaptureCount, 1)
-        XCTAssertEqual(report.importedMaterialCount, 3)
-        XCTAssertEqual(updated.content.title, "Launch")
-        XCTAssertEqual(updated.content.objective, "Prepare the launch plan")
-        XCTAssertEqual(updated.content.context, "Original context")
-        XCTAssertEqual(updated.materials.count, 3)
-        XCTAssertTrue(updated.materials.contains {
-            $0.kind == .note
-                && $0.title == "Share note"
-                && $0.textContent == "Please compare this with the current plan"
-        })
-        XCTAssertTrue(updated.dispatches.isEmpty, "capture ingress must never create a dispatch")
-        let captureItem = try await store.fetchWorkItem(captureEnvelopeID: envelope.id)
-        XCTAssertNil(captureItem)
-    }
-
-    func testReplayedAppendUsesSameTargetAndNeverDuplicatesAnyMaterial() async throws {
-        let store = ConversationStore(inMemory: true)
-        let target = try await store.createWorkItem(
-            WorkItemDraft(content: WorkItemContent(title: "Existing Work"))
-        )
-        let entryID = UUID()
-        let envelope = WorkCaptureEnvelope(
-            note: "Append once",
-            source: .shareExtension,
-            targetWorkItemID: target.id,
-            entries: [.init(id: entryID, kind: .text, sequence: 0, text: "One source")]
-        )
-
-        try publish(envelope)
-        let drainer = makeDrainer(store: store)
-        _ = try await drainer.drainAvailableCaptures()
-        try publish(envelope)
-        let replay = try await drainer.drainAvailableCaptures()
-        let updatedValue = try await store.fetchWorkItem(id: target.id)
-        let updated = try XCTUnwrap(updatedValue)
-
-        XCTAssertEqual(replay.replayedCaptureCount, 1)
-        XCTAssertEqual(Set(updated.materials.map(\.id)), [envelope.id, entryID])
-        XCTAssertEqual(updated.materials.count, 2)
-        XCTAssertTrue(updated.dispatches.isEmpty)
-    }
-
-    func testNoteIdentityNeverMasksAnEntryThatUsesTheEnvelopeID() async throws {
-        let store = ConversationStore(inMemory: true)
-        let target = try await store.createWorkItem(
-            WorkItemDraft(content: WorkItemContent(title: "Collision-safe destination"))
-        )
-        let envelopeID = UUID()
-        let envelope = WorkCaptureEnvelope(
-            id: envelopeID,
-            note: "Visible note",
-            source: .shareExtension,
-            targetWorkItemID: target.id,
-            entries: [
-                .init(id: envelopeID, kind: .text, sequence: 0, text: "Distinct source")
-            ]
+            targetWorkItemID: other.id,
+            entries: [.init(kind: .url, sequence: 0, text: "https://example.com/source")]
         )
         try publish(envelope)
 
         _ = try await makeDrainer(store: store).drainAvailableCaptures()
-        let updatedValue = try await store.fetchWorkItem(id: target.id)
-        let updated = try XCTUnwrap(updatedValue)
+        let untouchedValue = try await store.fetchWorkItem(id: other.id)
+        let untouched = try XCTUnwrap(untouchedValue)
+        let desk = try await unwrapDesk(store)
 
-        XCTAssertEqual(updated.materials.count, 2)
-        XCTAssertTrue(updated.materials.contains { $0.textContent == "Visible note" })
-        XCTAssertTrue(updated.materials.contains { $0.textContent == "Distinct source" })
-        XCTAssertEqual(Set(updated.materials.map(\.id)).count, 2)
+        XCTAssertTrue(untouched.materials.isEmpty,
+                      "a capture never appends to a named item; Work is one desk")
+        XCTAssertEqual(untouched.content.title, "Launch")
+        XCTAssertEqual(untouched.content.objective, "Prepare the launch plan")
+        XCTAssertEqual(untouched.content.context, "Original context")
+        XCTAssertEqual(desk.materials.count, 2)
+        XCTAssertTrue(desk.materials.contains { $0.textContent == "Please compare this with the current plan" })
+        XCTAssertTrue(desk.materials.contains { $0.urlString == "https://example.com/source" })
     }
 
-    func testMissingTargetFallsBackToClearlyExplainedNewDraft() async throws {
+    /// A target the store has never held is not a special case: the capture
+    /// takes the one path every capture takes, and no item is minted to carry
+    /// the envelope.
+    func testAnUnknownTargetStillLandsOnTheDesk() async throws {
         let store = ConversationStore(inMemory: true)
         let envelope = WorkCaptureEnvelope(
             note: "Keep this idea",
@@ -130,68 +168,103 @@ final class WorkCaptureDrainerTests: XCTestCase {
         try publish(envelope)
 
         _ = try await makeDrainer(store: store).drainAvailableCaptures()
-        let fallbackValue = try await store.fetchWorkItem(captureEnvelopeID: envelope.id)
-        let fallback = try XCTUnwrap(fallbackValue)
+        let desk = try await unwrapDesk(store)
+        let mintedByEnvelope = try await store.fetchWorkItem(captureEnvelopeID: envelope.id)
 
-        XCTAssertEqual(fallback.id, envelope.id)
-        XCTAssertEqual(fallback.content.objective, "Keep this idea")
-        XCTAssertTrue(fallback.content.context.contains("saved as a new draft"))
-        XCTAssertTrue(fallback.dispatches.isEmpty)
+        XCTAssertEqual(desk.materials.map(\.textContent), ["Keep this idea"])
+        XCTAssertNil(mintedByEnvelope,
+                     "the drainer resolves the desk; it never mints an item for an envelope")
+        let items = try await store.fetchWorkItems()
+        XCTAssertEqual(items.map(\.id), [Constants.workboardDeskItemID])
     }
 
-    func testDoneTargetFallsBackUnlessThisCaptureHadAlreadyStartedAppending() async throws {
+    // MARK: - Replay
+
+    func testReplayingTheSameEnvelopeYieldsOneMaterialSet() async throws {
         let store = ConversationStore(inMemory: true)
-        let untouchedDone = try await store.createWorkItem(
-            WorkItemDraft(content: WorkItemContent(title: "Done destination"))
-        )
-        _ = try await store.completeWorkItem(id: untouchedDone.id)
-        let fallbackEnvelope = WorkCaptureEnvelope(
-            note: "Late capture",
-            source: .shareExtension,
-            targetWorkItemID: untouchedDone.id,
-            entries: []
-        )
-        try publish(fallbackEnvelope)
-        _ = try await makeDrainer(store: store).drainAvailableCaptures()
-        let fallback = try await store.fetchWorkItem(captureEnvelopeID: fallbackEnvelope.id)
-        XCTAssertNotNil(fallback)
-
-        // Simulate a crash after the deterministic note marker committed but
-        // before the remaining entry and inbox acknowledgement. Completing the
-        // target during that gap must not split one capture across two Work items.
-        let startedTarget = try await store.createWorkItem(
-            WorkItemDraft(content: WorkItemContent(title: "Started destination"))
-        )
         let entryID = UUID()
-        let replayEnvelope = WorkCaptureEnvelope(
-            note: "Started note",
+        let envelope = WorkCaptureEnvelope(
+            note: "Append once",
             source: .shareExtension,
-            targetWorkItemID: startedTarget.id,
-            entries: [.init(id: entryID, kind: .text, sequence: 0, text: "Remaining source")]
+            entries: [.init(id: entryID, kind: .text, sequence: 0, text: "One source")]
         )
-        _ = try await store.addWorkMaterial(
-            WorkMaterialDraft(
-                id: replayEnvelope.id,
-                kind: .note,
-                title: "Share note",
-                textContent: replayEnvelope.note,
-                sequence: 0,
-                storageMode: .metadataOnly
-            ),
-            to: startedTarget.id
+
+        try publish(envelope)
+        let drainer = makeDrainer(store: store)
+        let first = try await drainer.drainAvailableCaptures()
+        try publish(envelope)
+        let replay = try await drainer.drainAvailableCaptures()
+        let desk = try await unwrapDesk(store)
+
+        XCTAssertEqual(first.importedCaptureCount, 1)
+        XCTAssertEqual(first.replayedCaptureCount, 0)
+        XCTAssertEqual(replay.replayedCaptureCount, 1,
+                       "a capture whose ids are already on the desk is reported as a replay")
+        XCTAssertEqual(replay.importedCaptureCount, 0)
+        XCTAssertEqual(Set(desk.materials.map(\.id)), [envelope.id, entryID])
+        XCTAssertEqual(desk.materials.count, 2, "replay repairs the same cards, it never adds more")
+    }
+
+    func testNoteIdentityNeverMasksAnEntryThatUsesTheEnvelopeID() async throws {
+        let store = ConversationStore(inMemory: true)
+        let envelopeID = UUID()
+        let envelope = WorkCaptureEnvelope(
+            id: envelopeID,
+            note: "Visible note",
+            source: .shareExtension,
+            entries: [
+                .init(id: envelopeID, kind: .text, sequence: 0, text: "Distinct source")
+            ]
         )
-        _ = try await store.completeWorkItem(id: startedTarget.id)
-        try publish(replayEnvelope)
+        try publish(envelope)
 
-        let report = try await makeDrainer(store: store).drainAvailableCaptures()
-        let continuedValue = try await store.fetchWorkItem(id: startedTarget.id)
-        let continued = try XCTUnwrap(continuedValue)
-        let replayFallback = try await store.fetchWorkItem(captureEnvelopeID: replayEnvelope.id)
+        _ = try await makeDrainer(store: store).drainAvailableCaptures()
+        let desk = try await unwrapDesk(store)
 
-        XCTAssertEqual(report.replayedCaptureCount, 1)
-        XCTAssertEqual(Set(continued.materials.map(\.id)), [replayEnvelope.id, entryID])
-        XCTAssertNil(replayFallback)
-        XCTAssertEqual(continued.state, .done, "capture append must not reopen human-completed Work")
+        XCTAssertEqual(desk.materials.count, 2)
+        XCTAssertTrue(desk.materials.contains { $0.textContent == "Visible note" })
+        XCTAssertTrue(desk.materials.contains { $0.textContent == "Distinct source" })
+        XCTAssertEqual(Set(desk.materials.map(\.id)).count, 2)
+    }
+
+    // MARK: - Acknowledgement follows the write
+
+    /// Acknowledgement is the only thing that deletes a capture's bytes, so it
+    /// runs after — never before — the materials read back out of the store.
+    func testTheQueueIsConsumedOnlyOnceTheMaterialsReadBackFromTheStore() async throws {
+        let store = ConversationStore(inMemory: true)
+        let payload = Data("bytes the queue may only drop afterwards".utf8)
+        let envelope = WorkCaptureEnvelope(
+            note: "With an attachment",
+            source: .shareExtension,
+            entries: [
+                .init(
+                    kind: .file,
+                    sequence: 0,
+                    relativePath: "payload-000.bin",
+                    displayName: "notes.bin",
+                    mimeType: "application/octet-stream",
+                    byteCount: Int64(payload.count)
+                )
+            ]
+        )
+        try publish(envelope, payloads: ["payload-000.bin": payload])
+
+        let inbox = WorkCaptureInbox(baseURL: root)
+        let drainer = WorkCaptureDrainer(inbox: inbox, store: store, sourceDevice: "test-device")
+        _ = try await drainer.drainAvailableCaptures()
+
+        let desk = try await unwrapDesk(store)
+        let entry = try XCTUnwrap(envelope.entries.first)
+        XCTAssertEqual(Set(desk.materials.map(\.id)), [envelope.id, entry.id],
+                       "every material the capture wrote reads back before the claim is consumed")
+        let pending = try await inbox.pendingCount()
+        XCTAssertEqual(pending, 0, "a durable import consumes its claim")
+        let queueDirectory = root.appendingPathComponent(envelope.id.uuidString, isDirectory: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queueDirectory.path),
+                       "acknowledgement removes the queue copy of the bytes")
+        let fileBytes = try await store.loadWorkMaterialPayload(id: entry.id)
+        XCTAssertEqual(fileBytes, payload, "the desk holds the bytes the queue gave up")
     }
 
     /// The drainer's byte-preserving promise: a persistence failure must put the
@@ -203,9 +276,6 @@ final class WorkCaptureDrainerTests: XCTestCase {
         let store = ConversationStore(inMemory: true)
         let otherOwner = try await store.createWorkItem(
             WorkItemDraft(content: WorkItemContent(title: "Already owns the identity"))
-        )
-        let target = try await store.createWorkItem(
-            WorkItemDraft(content: WorkItemContent(title: "Capture destination"))
         )
         // A material ID may belong to exactly one item, so reusing it as an
         // envelope entry ID makes the second write fail through the public API
@@ -224,11 +294,12 @@ final class WorkCaptureDrainerTests: XCTestCase {
         )
 
         let payload = Data("shared bytes that must survive".utf8)
+        let imageID = UUID()
         let envelope = WorkCaptureEnvelope(
             source: .shareExtension,
-            targetWorkItemID: target.id,
             entries: [
                 .init(
+                    id: imageID,
                     kind: .image,
                     sequence: 0,
                     relativePath: "payload-000.png",
@@ -252,12 +323,22 @@ final class WorkCaptureDrainerTests: XCTestCase {
 
         let pending = try await inbox.pendingCount()
         XCTAssertEqual(pending, 1, "a failed import must return the capture to the queue, not consume it")
+        let desk = try await unwrapDesk(store)
+        XCTAssertEqual(desk.materials.map(\.id), [imageID],
+                       "the card written before the failure stays; replay repairs the rest")
         let restored = root
             .appendingPathComponent(envelope.id.uuidString, isDirectory: true)
             .appendingPathComponent("payload-000.png", isDirectory: false)
         let restoredBytes = try Data(contentsOf: restored)
         XCTAssertEqual(restoredBytes, payload,
                        "the queue holds the only copy of a shared file until the import commits")
+    }
+
+    // MARK: - Helpers
+
+    private func unwrapDesk(_ store: ConversationStore) async throws -> WorkItemRecord {
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        return try XCTUnwrap(deskValue, "every capture resolves the one desk")
     }
 
     private func makeDrainer(store: ConversationStore) -> WorkCaptureDrainer {

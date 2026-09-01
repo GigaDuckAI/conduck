@@ -288,9 +288,9 @@ struct ConduckApp: App {
                     openWindow(id: "main")
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .openWorkboardDeepLink)) { _ in
-                    // Preserving a Chat turn as Work deep-links to the new item.
-                    // Foreground the singleton main window before
-                    // PersonalWorkbenchView selects the card.
+                    // Preserving a Chat turn as Work deep-links to the desk.
+                    // Foreground the singleton main window; PersonalWorkbenchView
+                    // consumes the same event and switches to Work.
                     openWindow(id: "main")
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .showWorkboard)) { _ in
@@ -348,10 +348,6 @@ struct ConduckApp: App {
                 }
                 .keyboardShortcut("2", modifiers: .command)
             }
-            // Work's project actions live on the sidebar row, which this
-            // window's own toggle can collapse. This menu is the route that
-            // survives it, and the only keyboard route to any of them.
-            WorkboardProjectCommands()
         }
         // No `.defaultLaunchBehavior(.presented)` — under Option A launch is
         // always `.accessory` (quiet), so the default `.automatic` instantiates
@@ -442,7 +438,6 @@ struct ConduckApp: App {
         Task {
             await SettingsManager.shared.performInitialSync()
             await FileTransferCapabilityRefresher.refreshIfNeeded()
-            await WorkboardUploadJournal.shared.reconcile()
         }
 
         // 2. Privacy hygiene. Two independent reclaims, deliberately NOT chained
@@ -642,7 +637,6 @@ struct ConduckApp: App {
                     continuation.resume()
                 }
             }
-            await WorkboardUploadJournal.shared.reconcile()
         }
     }
 }

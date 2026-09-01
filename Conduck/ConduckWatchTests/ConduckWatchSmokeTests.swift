@@ -33,24 +33,30 @@ final class ConduckWatchSmokeTests: XCTestCase {
         }
     }
 
-    func testWorkboardCapturePersistsOnlyAnInertBrief() async throws {
+    func testWorkboardCapturePersistsOnlyAnInertNoteOnTheDesk() async throws {
         let store = ConversationStore(inMemory: true)
         let capture = WatchWorkboardCapture(
             title: "Prepare launch review",
             objective: "Collect launch risks before deciding what to send."
         )
 
-        let returnedTitle = try await store.createInertWatchWorkboardCapture(capture)
+        let returnedTitle = try await store.upsertDeskMaterial(capture)
         let context = await store.newReadContext()
-        let counts = try await context.perform { [context] in
+        let rows = try await context.perform { [context] in
             func count(_ entityName: String) throws -> Int {
                 try context.count(for: NSFetchRequest<NSFetchRequestResult>(entityName: entityName))
             }
             let itemRequest = NSFetchRequest<NSDictionary>(entityName: "WorkItem")
             itemRequest.resultType = .dictionaryResultType
-            itemRequest.propertiesToFetch = ["title", "objective", "preferredGatewayRef"]
+            itemRequest.propertiesToFetch = ["id", "title", "objective", "preferredGatewayRef"]
+            let materialRequest = NSFetchRequest<NSDictionary>(entityName: "WorkMaterial")
+            materialRequest.resultType = .dictionaryResultType
+            materialRequest.propertiesToFetch = [
+                "workItemID", "kind", "title", "textContent", "storageMode", "sequence", "sourceDevice",
+            ]
             return (
                 items: try context.fetch(itemRequest),
+                materials: try context.fetch(materialRequest),
                 dispatches: try count("WorkDispatch"),
                 conversations: try count("Conversation"),
                 messages: try count("Message")
@@ -58,13 +64,91 @@ final class ConduckWatchSmokeTests: XCTestCase {
         }
 
         XCTAssertEqual(returnedTitle, capture.title)
-        XCTAssertEqual(counts.items.count, 1)
-        XCTAssertEqual(counts.items.first?["title"] as? String, capture.title)
-        XCTAssertEqual(counts.items.first?["objective"] as? String, capture.objective)
-        XCTAssertNil(counts.items.first?["preferredGatewayRef"] as? String)
-        XCTAssertEqual(counts.dispatches, 0)
-        XCTAssertEqual(counts.conversations, 0)
-        XCTAssertEqual(counts.messages, 0)
+        XCTAssertEqual(rows.items.count, 1)
+        XCTAssertEqual(rows.items.first?["id"] as? UUID, Constants.workboardDeskItemID)
+        // The desk owns no editable brief: nothing displays a title or an
+        // objective on it, so the wrist must never write one.
+        XCTAssertNil(rows.items.first?["title"] as? String)
+        XCTAssertNil(rows.items.first?["objective"] as? String)
+        XCTAssertNil(rows.items.first?["preferredGatewayRef"] as? String)
+        XCTAssertEqual(rows.materials.count, 1)
+        XCTAssertEqual(rows.materials.first?["workItemID"] as? UUID, Constants.workboardDeskItemID)
+        XCTAssertEqual(rows.materials.first?["kind"] as? String, "note")
+        XCTAssertEqual(rows.materials.first?["title"] as? String, capture.title)
+        XCTAssertEqual(rows.materials.first?["textContent"] as? String, capture.objective)
+        XCTAssertEqual(rows.materials.first?["storageMode"] as? String, "metadataOnly")
+        XCTAssertEqual((rows.materials.first?["sequence"] as? NSNumber)?.intValue, 0)
+        XCTAssertEqual(rows.materials.first?["sourceDevice"] as? String, "watch")
+        XCTAssertEqual(rows.dispatches, 0)
+        XCTAssertEqual(rows.conversations, 0)
+        XCTAssertEqual(rows.messages, 0)
+    }
+
+    /// The desk is created once and appended to thereafter. A second wrist
+    /// capture that minted a second desk row would split the board in two on
+    /// every other device.
+    func testSecondWatchCaptureAppendsToTheSameDeskInsteadOfCreatingASecondOne() async throws {
+        let store = ConversationStore(inMemory: true)
+        let first = WatchWorkboardCapture(title: "First", objective: "First thought.")
+        let second = WatchWorkboardCapture(title: "Second", objective: "Second thought.")
+
+        _ = try await store.upsertDeskMaterial(first)
+        _ = try await store.upsertDeskMaterial(second)
+
+        let context = await store.newReadContext()
+        let board = try await context.perform { [context] in
+            let itemRequest = NSFetchRequest<NSDictionary>(entityName: "WorkItem")
+            itemRequest.resultType = .dictionaryResultType
+            itemRequest.propertiesToFetch = ["id"]
+            let materialRequest = NSFetchRequest<NSDictionary>(entityName: "WorkMaterial")
+            materialRequest.resultType = .dictionaryResultType
+            materialRequest.propertiesToFetch = ["workItemID", "title", "sequence"]
+            materialRequest.sortDescriptors = [NSSortDescriptor(key: "sequence", ascending: true)]
+            return (
+                items: try context.fetch(itemRequest),
+                materials: try context.fetch(materialRequest)
+            )
+        }
+
+        XCTAssertEqual(board.items.count, 1)
+        XCTAssertEqual(board.items.first?["id"] as? UUID, Constants.workboardDeskItemID)
+        XCTAssertEqual(board.materials.count, 2)
+        XCTAssertEqual(board.materials.map { $0["title"] as? String }, [first.title, second.title])
+        XCTAssertEqual(
+            board.materials.map { ($0["sequence"] as? NSNumber)?.intValue },
+            [0, 1]
+        )
+        XCTAssertEqual(
+            Set(board.materials.compactMap { $0["workItemID"] as? UUID }),
+            [Constants.workboardDeskItemID]
+        )
+    }
+
+    /// Replaying one capture — a retried intent, a re-delivered Shortcut run —
+    /// returns the card that is already there rather than adding a second one.
+    func testReplayingOneWatchCaptureReturnsTheSameCardWithoutASecondRow() async throws {
+        let store = ConversationStore(inMemory: true)
+        let capture = WatchWorkboardCapture(title: "Once", objective: "Only once.")
+        let id = UUID()
+
+        let firstTitle = try await store.upsertDeskMaterial(capture, id: id)
+        let replayedTitle = try await store.upsertDeskMaterial(
+            WatchWorkboardCapture(title: "Rewritten", objective: "Rewritten."),
+            id: id
+        )
+
+        let context = await store.newReadContext()
+        let counts = try await context.perform { [context] in
+            func count(_ entityName: String) throws -> Int {
+                try context.count(for: NSFetchRequest<NSFetchRequestResult>(entityName: entityName))
+            }
+            return (items: try count("WorkItem"), materials: try count("WorkMaterial"))
+        }
+
+        XCTAssertEqual(firstTitle, capture.title)
+        XCTAssertEqual(replayedTitle, capture.title)
+        XCTAssertEqual(counts.items, 1)
+        XCTAssertEqual(counts.materials, 1)
     }
 }
 

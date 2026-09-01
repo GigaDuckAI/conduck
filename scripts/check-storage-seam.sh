@@ -107,9 +107,6 @@ CONTAINER_ALLOWLIST=(
   # Production Workboard payload storage resolves the App Group here; app and
   # persistence tests inject an isolated temporary vault instead.
   "Conduck/Conduck/Services/Workboard/WorkAssetVault.swift"
-  # Production dispatch recovery resolves the App Group here; journal tests use
-  # its injected `init(baseURL:fileManager:)` with an isolated temporary root.
-  "Conduck/Conduck/Services/Workboard/WorkboardUploadJournal.swift"
   "Conduck/Conduck/Services/ShareTargetsSnapshotWriter.swift"
   "Conduck/Conduck/Services/ConversationStore.swift"
   "Conduck/Conduck/MenuBar/DictationService.swift"

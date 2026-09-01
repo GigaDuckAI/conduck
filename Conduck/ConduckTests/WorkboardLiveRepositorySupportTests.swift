@@ -3,10 +3,9 @@
 // ConduckTests
 // WorkboardLiveRepositorySupportTests.swift
 //
-// The three seams the live board reads on every refresh: the batched vault URL
-// lookup behind the preview wave, the batched turn lookup behind every run's
-// displayed result, and the per-item search haystack that the sidebar filter
-// would otherwise rebuild on each keystroke.
+// The batched seams behind a board refresh: the vault URL lookup that feeds the
+// preview wave, and the batched turn lookup that resolves many messages in one
+// fetch without borrowing another conversation's turn.
 
 import Foundation
 import XCTest
@@ -41,11 +40,10 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
         XCTAssertTrue(resolved.isEmpty)
     }
 
-    /// One refresh resolves the displayed turn of every run on the board, so the
-    /// read is batched into a single fetch. It must still make the ownership
-    /// proof the single-id read makes: a run whose stored link names a different
-    /// conversation resolves to nothing rather than borrowing another thread's
-    /// turn.
+    /// Many displayed turns resolve in one fetch rather than one read each. The
+    /// batch must still make the ownership proof the single-id read makes: a
+    /// link naming a different conversation resolves to nothing rather than
+    /// borrowing another thread's turn.
     func testBatchedTurnLookupSpansConversationsAndRefusesAMispairedLink() async throws {
         let store = ConversationStore(inMemory: true)
         let first = try await store.createConversation(backend: "hermes")
@@ -84,69 +82,5 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
 
         let none = try await store.fetchMessages(conversationIDsByMessageID: [:])
         XCTAssertTrue(none.isEmpty)
-    }
-
-    func testSearchReachesEveryBriefMaterialAndRunFieldRegardlessOfCase() {
-        let item = WorkboardItemSnapshot(
-            title: "Quarterly Plan",
-            objective: "Ship The Board",
-            context: "Founder Review",
-            desiredResult: "Approved Copy",
-            constraints: "No New Vendors",
-            materials: [
-                WorkboardMaterialSnapshot(
-                    kind: .note,
-                    name: "Pricing Note",
-                    detail: "Available On This Device",
-                    textContent: "Anchor At Twenty"
-                )
-            ],
-            runs: [
-                WorkboardRunSnapshot(
-                    state: .replied,
-                    gatewayRef: .builtin(.openrouter),
-                    gatewayName: "OpenRouter",
-                    sentPrompt: "Draft The Announcement",
-                    resultMarkdown: "Here Is A Draft",
-                    failureMessage: "Timed Out"
-                )
-            ]
-        )
-
-        // Deliberately lowercase needles against a title-cased fixture: the
-        // matcher folds BOTH operands, which is why the corpus is stored
-        // verbatim rather than as a second lowercased copy of the whole board.
-        for needle in [
-            "quarterly plan",
-            "ship the board",
-            "founder review",
-            "approved copy",
-            "no new vendors",
-            "pricing note",
-            "available on this device",
-            "anchor at twenty",
-            "openrouter",
-            "draft the announcement",
-            "here is a draft",
-            "timed out"
-        ] {
-            XCTAssertTrue(
-                WorkboardPresentationLogic.matches(item, needle: needle),
-                "Search must still reach \(needle)"
-            )
-        }
-        XCTAssertTrue(
-            item.searchCorpus.contains("Quarterly Plan"),
-            "The corpus keeps the brief's own casing; folding is the matcher's job"
-        )
-        XCTAssertFalse(WorkboardPresentationLogic.matches(item, needle: "unrelated"))
-    }
-
-    func testSearchCorpusOfAnEmptyBriefCarriesNoContent() {
-        let item = WorkboardItemSnapshot()
-
-        XCTAssertTrue(
-            item.searchCorpus.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        )
     }
 }

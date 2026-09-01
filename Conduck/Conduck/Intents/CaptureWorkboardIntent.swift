@@ -4,8 +4,16 @@
 // CaptureWorkboardIntent.swift
 //
 // A headless, text-first capture lane for Siri, the Action Button, and custom
-// Shortcuts. It creates an inert private Workboard draft and has intentionally no
-// gateway, conversation, or dispatch dependency. Capturing can never equal Send.
+// Shortcuts. It appends one inert note card to the single Work desk and has
+// intentionally no gateway, conversation, or dispatch dependency. Capturing can
+// never equal Send.
+//
+// Every identifier here is frozen: the intent type name, its title/description/
+// parameter keys and the `parameterSummary` phrasing are what an installed
+// Shortcut is bound to, so changing any of them silently breaks a Shortcut the
+// person already built. The desk it writes to is resolved by
+// `ConversationStore.upsertDeskMaterial`, which owns desk identity, rank and
+// crash repair for every capture surface.
 
 #if !os(watchOS)
 import AppIntents
@@ -59,15 +67,30 @@ struct CaptureWorkboardIntent: AppIntent {
             .map { String($0.prefix(72)) }
             ?? String(localized: "workboard.item.untitled", defaultValue: "Untitled brief")
 
-        let record = try await ConversationStore.shared.createWorkItem(
-            WorkItemDraft(content: WorkItemContent(title: title, objective: normalized))
+        // Each run of the Shortcut is its own capture, so the material id is
+        // minted here rather than derived from the text: two runs carrying the
+        // same words are two cards the person asked for, not a replay. The id
+        // is still what the desk op keys idempotency on, so a retry of THIS
+        // invocation cannot double-post.
+        //
+        // Rank is deliberately not stated. A headless lane cannot see the board,
+        // and `upsertDeskMaterial` decides the append position inside its own
+        // write transaction.
+        let record = try await ConversationStore.shared.upsertDeskMaterial(
+            WorkMaterialDraft(
+                kind: .note,
+                title: title,
+                textContent: normalized,
+                storageMode: .metadataOnly,
+                sourceDevice: SourceDevice.current
+            )
         )
         let confirmation = String(
             localized: "intent.workboardCapture.confirmation",
             defaultValue: "Added to Workboard. Nothing was sent."
         )
         return .result(
-            value: record.content.title,
+            value: record.title,
             dialog: IntentDialog(stringLiteral: confirmation)
         )
     }

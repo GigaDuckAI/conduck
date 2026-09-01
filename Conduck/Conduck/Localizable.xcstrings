@@ -22475,6 +22475,17 @@
         }
       }
     },
+    "workboard.desk.empty.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Whatever you collect lands here as a card you can move and resize."
+          }
+        }
+      }
+    },
     "workboard.dispatch.failed.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24807,6 +24818,17 @@
         }
       }
     },
+    "workboard.workspace.composer.prompt" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add to Work…"
+          }
+        }
+      }
+    },
     "workboard.workspace.composer.prompt.existing" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24836,6 +24858,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Dropped image %1$lld.%2$@"
+          }
+        }
+      }
+    },
+    "workboard.workspace.drop.overlay.caption" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Files, photos, screenshots, links and text will be added here. Nothing is sent."
           }
         }
       }
@@ -24880,6 +24913,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "A private draft is created only after the first item is safely stored. Nothing is sent."
+          }
+        }
+      }
+    },
+    "workboard.workspace.drop.overlay.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Drop into Work"
           }
         }
       }
