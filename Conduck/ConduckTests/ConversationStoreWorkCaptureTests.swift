@@ -7,8 +7,18 @@ import XCTest
 @testable import Conduck
 
 final class ConversationStoreWorkCaptureTests: XCTestCase {
+
+    /// Every store here mints a vault directory of its own that nothing else
+    /// removes; the fixture empties them when the class is done.
+    private let isolated = IsolatedWorkStores()
+
+    override func tearDown() async throws {
+        await isolated.cleanUp()
+        try await super.tearDown()
+    }
+
     func testJustAppendedMessageCopiesLocalSourcesAndReferencesGatewayFiles() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let conversation = try await store.createConversation(backend: "hermes")
         let imageBytes = Data([0xFF, 0xD8, 0xFF, 0xD9])
         let textBytes = Data("source notes".utf8)
@@ -97,7 +107,7 @@ final class ConversationStoreWorkCaptureTests: XCTestCase {
     }
 
     func testRepeatedAndConcurrentCaptureProduceOneItemAndOneMaterialSet() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let conversation = try await store.createConversation(backend: "openclaw")
         let payload = Data("one source".utf8)
         let message = try await store.appendMessage(
@@ -143,7 +153,7 @@ final class ConversationStoreWorkCaptureTests: XCTestCase {
     }
 
     func testZeroByteLocalFileRemainsARealAvailableSource() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let conversation = try await store.createConversation(backend: "hermes")
         let message = try await store.appendMessage(
             role: "user",
@@ -182,7 +192,7 @@ final class ConversationStoreWorkCaptureTests: XCTestCase {
     /// whole "Add to Work" on a length the person never saw — an agent reply of
     /// any size already succeeds this way.
     func testAnOversizedUserTurnIsCapturedAsAMaterialRatherThanRefused() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let conversation = try await store.createConversation(backend: "hermes")
         let pastedLog = "Line one of the log\n"
             + String(repeating: "x", count: WorkItemContentLimits.maximumFieldCharacters)

@@ -1552,24 +1552,50 @@ struct ContentView: View {
             }
 
             if pending.metadata.resolvedDestination == .work {
-                // The desk's voice sheet published this recording as its own
-                // card before transcription was attempted, under this same
-                // capture id. Repair THAT card: the recording is the material
-                // and the words belong on it, so publishing them as a second,
-                // note-shaped capture would put one utterance on the board
-                // twice and leave the recording beside it still untranscribed.
-                // A false answer means this capture owns no recording card —
-                // the Shortcuts route never publishes one — and the ordinary
-                // publication below is then the only way the words land.
-                let attached = (try? await WorkVoiceCaptureCoordinator.attachTranscript(
+                // A GigaAction capture can also carry a screenshot, and the
+                // retry record holds the only copy until it lands. Publish it
+                // FIRST, under an id derived from the capture's — the capture id
+                // itself names the recording, and a screenshot published there
+                // is answered by the recording and silently dropped. Both halves
+                // are idempotent, so a capture recovered twice still has one
+                // picture.
+                if let screenshot = pending.workImageData {
+                    _ = try await WorkVoiceScreenshotCoordinator.publish(
+                        screenshot,
+                        forCapture: pending.metadata.id,
+                        createdAt: pending.metadata.createdAt
+                    )
+                }
+                // The recording became its own card before transcription was
+                // attempted, under this same capture id. Repair THAT card: the
+                // recording is the material and the words belong on it, so
+                // publishing them as a second, note-shaped capture would put one
+                // utterance on the board twice and leave the recording beside it
+                // still untranscribed. `.recordingMissing` and `.notAudio` mean
+                // this capture owns no recording card, and only then is the
+                // note-shaped publication how the words land — under a derived
+                // id, so the desk cannot answer it with a card already standing
+                // at the capture's own.
+                //
+                // A THROW is a different fact: the store refused the write, so
+                // the words are stored nowhere. It must reach the catch below
+                // with the retry INTACT — collapsing it into "there was no
+                // recording" publishes a note the desk answers with the
+                // recording, and the clear beneath deletes the only copy of the
+                // audio those words came from.
+                switch try await WorkVoiceCaptureCoordinator.attachTranscript(
                     recoveredTranscript,
                     toRecording: pending.metadata.id
-                )) ?? false
-                if !attached {
+                ) {
+                case .attached:
+                    break
+                case .recordingMissing, .notAudio:
                     _ = try await WorkCaptureRetryCoordinator.publish(
                         transcript: recoveredTranscript,
-                        rawImageData: pending.workImageData,
-                        captureID: pending.metadata.id,
+                        rawImageData: nil,
+                        captureID: WorkVoiceCaptureCoordinator.fallbackNoteID(
+                            forCapture: pending.metadata.id
+                        ),
                         createdAt: pending.metadata.createdAt
                     )
                 }

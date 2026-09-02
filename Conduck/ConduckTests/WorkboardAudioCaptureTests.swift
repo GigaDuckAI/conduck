@@ -9,11 +9,11 @@
 // the words later land on that same card rather than beside it, and that a
 // transcription which never succeeds leaves the recording standing anyway.
 //
-// The retry lane is the same property one app launch later: it names the card
-// by the capture's own id, so the recovered words repair the recording instead
-// of arriving as a second, note-shaped capture. The two source guards at the
-// end pin the ordering and the single capture identity, because no assertion
-// that can be written without a microphone can reach either one.
+// The ordering is asserted from INSIDE the recorder: a stub speech hop stands
+// where the provider does and reads the desk back before it answers, so nothing
+// here depends on how the source is spelled. The same stub proves the other
+// half — a capture the desk refused is a retryable error the person can finish,
+// never a quiet fall back to typing the words into a composer.
 
 import XCTest
 @testable import Conduck
@@ -77,38 +77,6 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         XCTAssertEqual(desk.materials.count, 1)
     }
 
-    func testTheRecordingIsCopiedRatherThanMovedFromTheCapturesTemporaryFile() async throws {
-        let store = ConversationStore(inMemory: true)
-        let captureID = UUID()
-        let recording = Self.recordingBytes
-        // The recorder writes the same compressed bytes to a temporary file for
-        // the transcription hop and removes that file itself. Publication must
-        // therefore leave the file alone AND survive its removal.
-        let temporary = FileManager.default.temporaryDirectory
-            .appendingPathComponent("conduck-inapp-\(UUID().uuidString).m4a")
-        try recording.write(to: temporary)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-
-        _ = try await WorkVoiceCaptureCoordinator.publishRecording(
-            captureID: captureID,
-            audio: recording,
-            fileExtension: "m4a",
-            mimeType: "audio/mp4",
-            store: store
-        )
-
-        XCTAssertTrue(
-            FileManager.default.fileExists(atPath: temporary.path),
-            "the capture's own temporary file is not moved, consumed or deleted by publication"
-        )
-        try FileManager.default.removeItem(at: temporary)
-        let payload = try await store.loadWorkMaterialPayload(id: captureID)
-        XCTAssertEqual(
-            payload, recording,
-            "the desk holds its own durable copy, so the temp file's removal costs nothing"
-        )
-    }
-
     // MARK: - Phase 2: the words join the recording they came from
 
     func testTheTranscriptLandsOnTheSameCardRatherThanASecondOne() async throws {
@@ -116,12 +84,12 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         let captureID = UUID()
         let published = try await Self.publish(captureID: captureID, in: store)
 
-        let attached = try await WorkVoiceCaptureCoordinator.attachTranscript(
+        let outcome = try await WorkVoiceCaptureCoordinator.attachTranscript(
             "  Ferry leaves at 07:30\nask about the bikes  ",
             toRecording: captureID,
             store: store
         )
-        XCTAssertTrue(attached)
+        XCTAssertEqual(outcome, .attached)
 
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
@@ -142,6 +110,97 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         XCTAssertEqual(rows.count, 1, "one logical card, one physical row")
     }
 
+    /// CloudKit cannot enforce Core Data uniqueness, so two offline devices can
+    /// import one logical card as several physical rows and the canonical read
+    /// picks the newest. A writer that touched only the row it fetched first
+    /// would look correct through that read and lose the words the moment the
+    /// other row won.
+    func testTheTranscriptReachesEveryPhysicalRowOfADuplicatedCard() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        _ = try await Self.publish(captureID: captureID, in: store)
+        // NEWER than the row publication wrote: with equal stamps the read would
+        // pick the touched row anyway and prove nothing.
+        await store._duplicateWorkMaterialRowForTesting(
+            id: captureID,
+            updatedAt: Date().addingTimeInterval(600)
+        )
+        let seededRows = await store._workMaterialRowsForTesting(id: captureID)
+        XCTAssertEqual(seededRows.count, 2, "the fixture must actually be two physical rows")
+
+        let outcome = try await WorkVoiceCaptureCoordinator.attachTranscript(
+            "the ferry leaves at seven",
+            toRecording: captureID,
+            store: store
+        )
+        XCTAssertEqual(outcome, .attached)
+
+        let rows = await store._workMaterialRowsForTesting(id: captureID)
+        XCTAssertEqual(rows.count, 2, "a text edit adds no rows and removes none")
+        for row in rows {
+            XCTAssertEqual(
+                row.textContent, "the ferry leaves at seven",
+                "every physical row carries the words, whichever one the read picks"
+            )
+            XCTAssertEqual(row.title, "the ferry leaves at seven")
+        }
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.count, 1, "still ONE logical card")
+        XCTAssertEqual(desk.materials.first?.textContent, "the ferry leaves at seven")
+    }
+
+    /// The words arrive more than once by design — every retry surface
+    /// re-attaches under the same id — so an identical second delivery must be
+    /// a defined no-op: no save, no desk bump. A rewrite would spend a CloudKit
+    /// round trip on identical bytes and advance the desk's revision under
+    /// whatever board mutation is in flight.
+    func testAnIdenticalSecondDeliveryOfTheTranscriptWritesNothing() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        _ = try await Self.publish(captureID: captureID, in: store)
+        _ = try await WorkVoiceCaptureCoordinator.attachTranscript(
+            "the ferry leaves at seven",
+            toRecording: captureID,
+            store: store
+        )
+        let firstRows = await store._workMaterialRowsForTesting(id: captureID)
+        let deskValueAfterFirst = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let deskAfterFirst = try XCTUnwrap(deskValueAfterFirst)
+
+        let outcome = try await WorkVoiceCaptureCoordinator.attachTranscript(
+            "the ferry leaves at seven",
+            toRecording: captureID,
+            store: store
+        )
+
+        XCTAssertEqual(outcome, .attached, "the words are on the card; that is the answer")
+        let secondRows = await store._workMaterialRowsForTesting(id: captureID)
+        XCTAssertEqual(
+            secondRows.map(\.updatedAt), firstRows.map(\.updatedAt),
+            "no row was rewritten, so no row's stamp moved"
+        )
+        let deskValueAfterSecond = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let deskAfterSecond = try XCTUnwrap(deskValueAfterSecond)
+        XCTAssertEqual(
+            deskAfterSecond.updatedAt, deskAfterFirst.updatedAt,
+            "the desk's own revision must not advance for a write that did not happen"
+        )
+
+        // …and a DIFFERENT transcript for the same recording still lands.
+        let corrected = try await WorkVoiceCaptureCoordinator.attachTranscript(
+            "the ferry leaves at seven thirty",
+            toRecording: captureID,
+            store: store
+        )
+        XCTAssertEqual(corrected, .attached)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertEqual(
+            deskValue?.materials.first?.textContent, "the ferry leaves at seven thirty",
+            "the no-op is about identical values, not about refusing a second write"
+        )
+    }
+
     func testAFailedTranscriptionLeavesThePlayableRecordingStanding() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
@@ -160,12 +219,12 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         XCTAssertEqual(payload, Self.recordingBytes)
 
         // …and the retry that succeeds an hour later still finds it.
-        let attached = try await WorkVoiceCaptureCoordinator.attachTranscript(
+        let outcome = try await WorkVoiceCaptureCoordinator.attachTranscript(
             "the words that arrived late",
             toRecording: captureID,
             store: store
         )
-        XCTAssertTrue(attached)
+        XCTAssertEqual(outcome, .attached)
         let repairedValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let repaired = try XCTUnwrap(repairedValue)
         XCTAssertEqual(repaired.materials.count, 1)
@@ -175,35 +234,42 @@ final class WorkboardAudioCaptureTests: XCTestCase {
     func testATranscriptIsRefusedForACaptureThatOwnsNoRecording() async throws {
         let store = ConversationStore(inMemory: true)
 
-        let attached = try await WorkVoiceCaptureCoordinator.attachTranscript(
+        let outcome = try await WorkVoiceCaptureCoordinator.attachTranscript(
             "words with nowhere to land",
             toRecording: UUID(),
             store: store
         )
 
-        XCTAssertFalse(
-            attached,
+        XCTAssertEqual(
+            outcome, .recordingMissing,
             """
-            The Shortcuts route publishes no recording; a false answer is what \
-            sends its words down the ordinary path.
+            The Shortcuts route publishes no recording; this answer — and only \
+            this answer — is what sends its words down the ordinary path.
             """
         )
         let desk = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         XCTAssertNil(desk, "a refused transcript creates no desk row and no card")
     }
 
-    func testAnEmptyTranscriptIsRefusedAndLeavesTheCardUntouched() async throws {
+    func testAnEmptyTranscriptWritesNothingAndStillNamesTheRecording() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
         _ = try await Self.publish(captureID: captureID, in: store)
 
-        let attached = try await WorkVoiceCaptureCoordinator.attachTranscript(
+        let outcome = try await WorkVoiceCaptureCoordinator.attachTranscript(
             "   \n  ",
             toRecording: captureID,
             store: store
         )
 
-        XCTAssertFalse(attached)
+        XCTAssertEqual(
+            outcome, .attached,
+            """
+            Silence asks for nothing, and the recording is standing fine. \
+            Reporting it missing would invite a fallback publication of silence \
+            beside the card it belongs to.
+            """
+        )
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
         let card = try XCTUnwrap(desk.materials.first)
@@ -234,13 +300,13 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         let seededDesk = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let before = try XCTUnwrap(seededDesk?.materials.first)
 
-        let attached = try await WorkVoiceCaptureCoordinator.attachTranscript(
+        let outcome = try await WorkVoiceCaptureCoordinator.attachTranscript(
             "spoken words that belong to a different capture",
             toRecording: captureID,
             store: store
         )
 
-        XCTAssertFalse(attached)
+        XCTAssertEqual(outcome, .notAudio)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
         let card = try XCTUnwrap(desk.materials.first)
@@ -260,12 +326,12 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         let published = try await Self.publish(captureID: pendingRetryID, in: store)
         XCTAssertNil(published.textContent)
 
-        let attached = try await WorkVoiceCaptureCoordinator.attachTranscript(
+        let outcome = try await WorkVoiceCaptureCoordinator.attachTranscript(
             "recovered on the second attempt",
             toRecording: pendingRetryID,
             store: store
         )
-        XCTAssertTrue(attached)
+        XCTAssertEqual(outcome, .attached)
 
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
@@ -278,112 +344,374 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         XCTAssertEqual(payload, Self.recordingBytes)
     }
 
-    func testTheFallbackPublicationCannotPutTheSameUtteranceOnTheBoardTwice() async throws {
-        let store = ConversationStore(inMemory: true)
-        let pendingRetryID = UUID()
-        _ = try await Self.publish(captureID: pendingRetryID, in: store)
-        _ = try await WorkVoiceCaptureCoordinator.attachTranscript(
-            "recovered on the second attempt",
-            toRecording: pendingRetryID,
-            store: store
+    /// A fallback publication is the answer to `.recordingMissing` /
+    /// `.notAudio`, and it cannot use the capture id: the desk write is
+    /// idempotent BY id, so a note published there answers with the card that
+    /// already sits on it and the words are lost with no error anywhere.
+    func testTheFallbackNoteIdIsDerivedFromTheCaptureAndCannotCollideWithIt() async throws {
+        let captureID = UUID(uuidString: "9F2C7A10-4B31-4E52-9A77-0C1D5E6F8A03")!
+        let derived = WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID)
+
+        XCTAssertNotEqual(derived, captureID, "a fallback note must not land on the recording")
+        XCTAssertEqual(
+            derived, WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID),
+            "derived, not random: a replayed retry has to reach the note it already published"
+        )
+        XCTAssertEqual(
+            derived.uuidString, "D08E8FB3-6044-50B7-BCFD-3E88E0770438",
+            """
+            The derivation is a wire value in all but name — two devices \
+            replaying one capture must reach the same note id, so a change here \
+            duplicates every offline retry.
+            """
+        )
+        XCTAssertNotEqual(
+            derived,
+            WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: UUID()),
+            "different captures, different notes"
         )
 
-        // The retry's fallback publishes an envelope whose note takes the
-        // capture id as its material id. Should it ever run beside a surviving
-        // recording — a partially replayed retry, a future caller that forgets
-        // the check — the desk write answers with the card that is already
-        // there rather than adding a note beside it.
-        let fallback = try await store.upsertDeskMaterial(
+        // …and the collision it exists to avoid is real: a note published under
+        // the capture id answers with the recording, unchanged and wordless.
+        let store = ConversationStore(inMemory: true)
+        _ = try await Self.publish(captureID: captureID, in: store)
+        let collided = try await store.upsertDeskMaterial(
             WorkMaterialDraft(
-                id: pendingRetryID,
+                id: captureID,
                 kind: .note,
                 title: "recovered on the second attempt",
                 textContent: "recovered on the second attempt",
                 storageMode: .metadataOnly
             )
         )
+        XCTAssertEqual(collided.kind, .audio, "the recording wins; the note is never inserted")
+        XCTAssertNil(collided.textContent, "and the words it carried went nowhere")
 
-        XCTAssertEqual(fallback.kind, .audio, "the recording wins; the note is never inserted")
+        let fallback = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                id: derived,
+                kind: .note,
+                title: "recovered on the second attempt",
+                textContent: "recovered on the second attempt",
+                storageMode: .metadataOnly
+            )
+        )
+        XCTAssertEqual(fallback.kind, .note, "under the derived id the words reach the desk")
         XCTAssertEqual(fallback.textContent, "recovered on the second attempt")
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertEqual(deskValue?.materials.count, 2)
+    }
+
+    // MARK: - The recorder's own orchestration
+
+    /// The ordering claim, asserted from inside the recorder rather than from
+    /// how its source is spelled: the stub speech hop stands exactly where the
+    /// provider does, and the card is already on the desk WITH READABLE BYTES
+    /// when it is called.
+    @MainActor
+    func testTranscriptionBeginsOnlyAfterTheRecordingIsADurableReadableCard() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.capturedAudioForTesting = Self.recordingBytes
+
+        var hopRan = false
+        var fileExistedAtTheHop = false
+        var cardKindAtTheHop: WorkMaterialKind?
+        var payloadAtTheHop: Data?
+        recorder.transcriptionHopForTesting = { url in
+            hopRan = true
+            fileExistedAtTheHop = FileManager.default.fileExists(atPath: url.path)
+            let desk = try? await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+            if let card = desk?.materials.first {
+                cardKindAtTheHop = card.kind
+                payloadAtTheHop = try? await store.loadWorkMaterialPayload(id: card.id)
+            }
+            return .success("the ferry leaves at seven")
+        }
+
+        let result = await recorder._finishCaptureForTesting()
+
+        XCTAssertTrue(hopRan, "the stub must actually stand in the production path")
+        XCTAssertTrue(
+            fileExistedAtTheHop,
+            "the provider is handed a file that exists"
+        )
+        XCTAssertEqual(
+            cardKindAtTheHop, .audio,
+            "the recording is ALREADY a card when transcription begins"
+        )
+        XCTAssertEqual(
+            payloadAtTheHop, Self.recordingBytes,
+            "…and its bytes are already readable, not merely promised"
+        )
+        XCTAssertEqual(try result.get(), "the ferry leaves at seven")
+        let materialID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.count, 1, "one capture, one card")
+        XCTAssertEqual(desk.materials.first?.id, materialID)
+        XCTAssertEqual(desk.materials.first?.textContent, "the ferry leaves at seven")
+        XCTAssertFalse(
+            recorder.canRetryWorkCapture,
+            "a capture whose card owns the words owes nothing and offers no retry"
+        )
+    }
+
+    /// The failure the ordering exists for. The recorder's own temporary copy
+    /// is cleaned on the way out — a partial or abandoned one would sit in the
+    /// scratch directory for a day — while the desk's copy, taken before the
+    /// hop, survives it.
+    @MainActor
+    func testAFailedTranscriptionCleansTheTemporaryFileAndLeavesTheCardStanding() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.capturedAudioForTesting = Self.recordingBytes
+
+        var temporaryURL: URL?
+        var fileExistedAtTheHop = false
+        recorder.transcriptionHopForTesting = { url in
+            temporaryURL = url
+            fileExistedAtTheHop = FileManager.default.fileExists(atPath: url.path)
+            return .failure(.sttProviderUnreachable)
+        }
+
+        let result = await recorder._finishCaptureForTesting()
+
+        XCTAssertTrue(fileExistedAtTheHop, "the provider is handed a file that exists")
+        guard case .failure(let error) = result else {
+            return XCTFail("a refused transcription is a failure, not a transcript")
+        }
+        XCTAssertEqual(error.errorCode, AppError.sttProviderUnreachable.errorCode)
+        let temporary = try XCTUnwrap(temporaryURL)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: temporary.path),
+            "the recorder's own copy is removed on the way out, on every path"
+        )
+
+        let materialID = try XCTUnwrap(
+            recorder.workRecordingMaterialID,
+            "the recording is on the desk even though the words never arrived"
+        )
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let card = try XCTUnwrap(deskValue?.materials.first)
+        XCTAssertEqual(card.id, materialID)
+        XCTAssertEqual(card.kind, .audio)
+        XCTAssertNil(card.textContent)
+        let survivingPayload = try await store.loadWorkMaterialPayload(id: materialID)
+        XCTAssertEqual(
+            survivingPayload, Self.recordingBytes,
+            "the desk's copy is its own, and outlives the file the hop was given"
+        )
+        XCTAssertTrue(
+            recorder.canRetryWorkCapture,
+            "the capture still owes its words, so it is the retry's subject"
+        )
+        XCTAssertEqual(
+            recorder.pendingWorkCapture?.id, materialID,
+            """
+            ONE identity for the capture: the card's id is the pending capture's \
+            id, which is the id the retry lane carries. A second UUID anywhere \
+            in that chain is what makes recovered words unable to find the \
+            recording they came from.
+            """
+        )
+    }
+
+    /// Try Again finishes the capture that stopped, on the card it already
+    /// published — it does not record a second time, and no second card appears.
+    @MainActor
+    func testRetryingAFailedTranscriptionFinishesTheSameCard() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.capturedAudioForTesting = Self.recordingBytes
+
+        var hops = 0
+        recorder.transcriptionHopForTesting = { _ in
+            hops += 1
+            return hops == 1 ? .failure(.sttProviderUnreachable) : .success("recovered on the retry")
+        }
+
+        _ = await recorder._finishCaptureForTesting()
+        let firstCardID = try XCTUnwrap(recorder.workRecordingMaterialID)
+
+        let result = await recorder.retryWorkCapture()
+
+        XCTAssertEqual(try result.get(), "recovered on the retry")
+        XCTAssertEqual(hops, 2, "the retry re-transcribes the SAME pending bytes")
+        XCTAssertEqual(
+            recorder.workRecordingMaterialID, firstCardID,
+            "the words land on the card the first attempt published"
+        )
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.count, 1, "no second card, no second recording")
+        XCTAssertEqual(desk.materials.first?.textContent, "recovered on the retry")
+        XCTAssertFalse(recorder.canRetryWorkCapture, "the capture is finished")
+    }
+
+    /// The transcription copy has ONE owner, and it runs on the path that
+    /// creates the mess: a write that fails part way. Nothing is left at that
+    /// path afterwards — the generic scratch sweeper would not reclaim a
+    /// stranded partial for a day.
+    @MainActor
+    func testARefusedTranscriptionCopyStrandsNothingAndKeepsTheCard() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.capturedAudioForTesting = Self.recordingBytes
+        recorder.transcriptionHopForTesting = { _ in .failure(.sttProviderUnreachable) }
+
+        _ = await recorder._finishCaptureForTesting()
+        let capture = try XCTUnwrap(recorder.pendingWorkCapture)
+        // A directory where the copy goes: the write cannot succeed, and only
+        // an owner that runs on the failing path clears what it leaves.
+        try FileManager.default.createDirectory(
+            at: capture.transcriptionFileURL, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: capture.transcriptionFileURL) }
+
+        let result = await recorder.retryWorkCapture()
+
+        guard case .failure(let error) = result else {
+            return XCTFail("a capture whose bytes cannot be written out is not a transcript")
+        }
+        XCTAssertEqual(error.errorCode, AppError.audioMissingData.errorCode)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: capture.transcriptionFileURL.path),
+            "the refused copy leaves nothing at its path"
+        )
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let card = try XCTUnwrap(deskValue?.materials.first)
+        XCTAssertEqual(card.id, capture.id, "the recording is untouched by any of it")
+        XCTAssertTrue(card.hasPayload)
+    }
+
+    /// A desk that refuses the recording is a retryable error, never a silent
+    /// hand-off of the words to a composer: the sheet's success path reads
+    /// `workRecordingMaterialID`, and a nil there with a `.success` result is
+    /// exactly how a recording becomes typed text with no card behind it.
+    @MainActor
+    func testAPublicationFailureIsARetryableErrorRatherThanATextFallback() async throws {
+        let broken = try Self.unusableStore()
+        let brokenRefuses = await Self.refusesWrites(broken)
+        XCTAssertTrue(brokenRefuses, "the fixture must actually refuse a desk write")
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = broken
+        recorder.capturedAudioForTesting = Self.recordingBytes
+
+        var hops = 0
+        recorder.transcriptionHopForTesting = { _ in
+            hops += 1
+            return .success("the words that must not be handed over")
+        }
+
+        let result = await recorder._finishCaptureForTesting()
+
+        guard case .failure(let error) = result else {
+            return XCTFail("a capture with no card must not report success")
+        }
+        XCTAssertTrue(error.isRetryable, "the same bytes, written again, normally land")
+        XCTAssertEqual(hops, 0, "a recording that never reached the desk is not transcribed on")
+        XCTAssertNil(recorder.workRecordingMaterialID)
+        XCTAssertTrue(
+            recorder.canRetryWorkCapture,
+            "the bytes are still held, so the person can finish this capture"
+        )
+        if case .error(let surfaced) = recorder.state {
+            XCTAssertTrue(surfaced.isRetryable)
+        } else {
+            XCTFail("the sheet must show a retryable error, not an idle sheet")
+        }
+    }
+
+    /// The other half of the same rule: the card landed, the words did not, and
+    /// the store refused the write. The transcript is HELD — the retry attaches
+    /// it without a second round trip — instead of being reported successful
+    /// beside a recording still waiting for it.
+    @MainActor
+    func testAnAttachFailureHoldsTheWordsAndTheRetryFinishesTheSameCard() async throws {
+        let store = ConversationStore(inMemory: true)
+        let broken = try Self.unusableStore()
+        let brokenRefuses = await Self.refusesWrites(broken)
+        XCTAssertTrue(brokenRefuses, "the fixture must actually refuse a desk write")
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.capturedAudioForTesting = Self.recordingBytes
+
+        var hops = 0
+        recorder.transcriptionHopForTesting = { [weak recorder] _ in
+            hops += 1
+            // The card is published by now; break the store between the two
+            // phases so the attachment — and only the attachment — fails.
+            recorder?.workStoreForTesting = broken
+            return .success("the ferry leaves at seven")
+        }
+
+        let failed = await recorder._finishCaptureForTesting()
+
+        guard case .failure(let error) = failed else {
+            return XCTFail("a card that never got its words must not report success")
+        }
+        XCTAssertTrue(error.isRetryable)
+        let cardID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        XCTAssertEqual(
+            recorder.pendingWorkCapture?.transcript, "the ferry leaves at seven",
+            "the words are held with the capture, not dropped and not published elsewhere"
+        )
+        let strandedValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertNil(
+            strandedValue?.materials.first?.textContent,
+            "the desk write really did not happen"
+        )
+
+        recorder.workStoreForTesting = store
+        let repaired = await recorder.retryWorkCapture()
+
+        XCTAssertEqual(try repaired.get(), "the ferry leaves at seven")
+        XCTAssertEqual(hops, 1, "the held words need no second transcription")
+        XCTAssertEqual(recorder.workRecordingMaterialID, cardID)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(desk.materials.count, 1)
+        XCTAssertEqual(desk.materials.first?.textContent, "the ferry leaves at seven")
+        XCTAssertFalse(recorder.canRetryWorkCapture)
     }
 
-    // MARK: - Source guards: the ordering, and the one capture identity
+    /// The one path that may still hand the words to a composer: the capture
+    /// owns no recording at all. Deleting the card mid-flight is the reachable
+    /// way there, and it must not become a retry the person can never satisfy.
+    @MainActor
+    func testACardDeletedDuringTranscriptionReleasesTheWordsToTheComposer() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.capturedAudioForTesting = Self.recordingBytes
 
-    func testTheRecordingIsPublishedBeforeTheTranscriptionHop() throws {
-        // The file's own header names several of these calls in prose, and an
-        // ordering guard that reads a comment proves nothing about the code, so
-        // the search starts at the declaration.
-        let recorder = try Self.recorderBody()
-
-        let publish = try XCTUnwrap(
-            recorder.range(of: "WorkVoiceCaptureCoordinator.publishRecording("),
-            "the Work lane must publish its recording inside the recorder"
-        )
-        for hop in [
-            "AudioCompressor.compress(",
-            "STTClient.shared.transcribe(",
-            "AppleSpeechRunner.transcribe(",
-            "WorkVoiceCaptureCoordinator.attachTranscript("
-        ] {
-            let range = try XCTUnwrap(recorder.range(of: hop), "\(hop) no longer exists")
-            if hop == "AudioCompressor.compress(" {
-                XCTAssertLessThan(
-                    range.lowerBound, publish.lowerBound,
-                    "the card carries the COMPRESSED artifact, which must already exist"
-                )
-            } else {
-                XCTAssertLessThan(
-                    publish.lowerBound, range.lowerBound,
-                    """
-                    Publication moved after \(hop). The whole point of the two \
-                    phases is that transcription is the step that fails, so a \
-                    recording published after it is a recording lost to it.
-                    """
-                )
+        recorder.transcriptionHopForTesting = { _ in
+            let desk = try? await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+            if let card = desk?.materials.first {
+                try? await store.deleteWorkMaterial(id: card.id)
             }
+            return .success("the words outlive the card")
         }
 
-        XCTAssertEqual(
-            recorder.components(separatedBy: "if retryDestination == .work {").count - 1, 1,
-            "exactly one gate: Chat captures publish no card, and their lane is untouched"
+        let result = await recorder._finishCaptureForTesting()
+
+        XCTAssertEqual(try result.get(), "the words outlive the card")
+        XCTAssertNil(
+            recorder.workRecordingMaterialID,
+            "no card owns these words, which is what sends them to the composer"
         )
-        XCTAssertTrue(
-            recorder.contains("audio: uploadData"),
-            """
-            The card is published from the compressed bytes already in hand. \
-            Handing it the temporary file's URL instead would tie the desk's copy \
-            to a file three separate paths delete out from under it.
-            """
-        )
-        XCTAssertEqual(
-            recorder.components(separatedBy: "removeItem(at: audioFileURL)").count - 1, 4,
-            "the four paths that own the transcription temp file still remove it"
+        XCTAssertFalse(
+            recorder.canRetryWorkCapture,
+            "there is nothing left to retry — a deleted card does not come back"
         )
     }
 
-    func testOneCaptureIdentityNamesBothTheCardAndThePendingRetryRecord() throws {
-        let recorder = try Self.recorderBody()
-
-        XCTAssertEqual(
-            recorder.components(separatedBy: "let captureID = UUID()").count - 1, 1,
-            "one capture, one identity — minted once, before anything durable is written"
-        )
-        XCTAssertTrue(
-            recorder.contains("captureID: captureID"),
-            "the card is named by it"
-        )
-        XCTAssertTrue(
-            recorder.contains("id: captureID,"),
-            """
-            The pending-retry record is named by it too. A second UUID here is \
-            what would make a recovered transcript unable to find the recording \
-            it came from, and publish a note beside it instead.
-            """
-        )
-    }
+    // MARK: - Source guard: the two retry surfaces stay in step
 
     /// Both surfaces that recover a parked transcript repair the recording
     /// card first and publish only when there is none. A Work voice capture can
@@ -391,6 +719,9 @@ final class WorkboardAudioCaptureTests: XCTestCase {
     /// pending-retry record is one store — so a surface that publishes
     /// unconditionally leaves its recovered words beside an untranscribed
     /// recording that is still waiting for them.
+    ///
+    /// Source-scoped deliberately: both call sites live inside a SwiftUI view's
+    /// action and a menu-bar service, neither of which this suite can mount.
     func testEveryRetrySurfaceRepairsTheRecordingBeforeItPublishes() throws {
         for path in [
             "Conduck/ContentView.swift",
@@ -415,8 +746,44 @@ final class WorkboardAudioCaptureTests: XCTestCase {
     // MARK: - Fixtures
 
     /// Stands in for a compressed 16 kHz mono AAC voice note: small, so the
-    /// storage policy picks the synced lane exactly as it does in the app.
+    /// storage policy picks the synced lane exactly as it does in the app, and
+    /// not decodable as audio, so `AudioCompressor` returns it untouched.
     private static let recordingBytes = Data(repeating: 0x7F, count: 4_096)
+
+    /// A store that cannot mount, so every operation on it throws. It stands
+    /// for the transient desk failure — a full disk, a protected-data blackout
+    /// — that must never be mistaken for "this capture has no card". The URL
+    /// names a DIRECTORY, which SQLite cannot open as a database file.
+    private static func unusableStore() throws -> ConversationStore {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "conduck-unusable-\(UUID().uuidString).sqlite",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        return ConversationStore(inMemory: false, storeURL: directory)
+    }
+
+    /// Proves the broken fixture is really broken: a test that passed because
+    /// the store quietly worked would assert nothing at all.
+    private static func refusesWrites(_ store: ConversationStore) async -> Bool {
+        do {
+            _ = try await store.upsertDeskMaterial(
+                WorkMaterialDraft(
+                    id: UUID(),
+                    kind: .note,
+                    title: "probe",
+                    textContent: "probe",
+                    storageMode: .metadataOnly
+                )
+            )
+            return false
+        } catch {
+            return true
+        }
+    }
 
     @discardableResult
     private static func publish(
@@ -432,20 +799,8 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         )
     }
 
-    /// The recorder's source from its declaration onward, with the file header
-    /// dropped: the header names several of the calls the ordering guard
-    /// compares, and a guard satisfied by a comment holds nothing.
-    private static func recorderBody() throws -> String {
-        let whole = try source("Conduck/Services/InAppAudioRecorder.swift")
-        let declaration = try XCTUnwrap(
-            whole.range(of: "final class InAppAudioRecorder {"),
-            "the recorder's declaration moved; this guard reads the wrong region"
-        )
-        return String(whole[declaration.lowerBound...])
-    }
-
     /// `.../Conduck/Conduck` — the project container holding the app sources.
-    /// Derived from this file's compile-time path so the source guards do not
+    /// Derived from this file's compile-time path so the source guard does not
     /// depend on the test runner's working directory.
     private static func source(_ relativePath: String) throws -> String {
         let container = URL(fileURLWithPath: #filePath)  // .../ConduckTests/<this>

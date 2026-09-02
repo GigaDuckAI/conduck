@@ -1098,6 +1098,21 @@ actor ConversationStore {
     /// closes the same-process window in which two panes could both conclude
     /// that one provisional Work id has no durable owner yet.
     var workInitialMaterialClaims: Set<UUID> = []
+
+    /// Material ids whose PAYLOAD is being published or replaced right now.
+    ///
+    /// A payload and the material row naming it commit in separate
+    /// transactions, so between them a second writer can find the first
+    /// writer's blob already complete, adopt it without inserting a row of its
+    /// own, and commit a card that names bytes it did not write — which the
+    /// first writer's rollback then takes away. Every path that can insert or
+    /// adopt a payload for one material holds that material's claim for its
+    /// WHOLE publication (staging, blob save, row save, confirmation), so
+    /// within a process "the row I inserted is the only row I may delete" is
+    /// true by construction. Keyed by material rather than by owner because
+    /// Work is one desk: an owner-wide claim would queue every capture behind
+    /// a several-hundred-megabyte reattach.
+    var workMaterialPublicationClaims: Set<UUID> = []
     #endif
 
     /// In-process retry claims close the actor-reentrancy window around
@@ -1256,6 +1271,16 @@ actor ConversationStore {
     /// cover, so a signed suite run can never read or write the founder's real
     /// App Group data.
     private let isIsolatedTestStore: Bool
+
+    #if !os(watchOS)
+    /// The vault directory an ISOLATED store minted for itself, so a test can
+    /// remove it again. Every `init(inMemory:storeURL:)` gets a unique
+    /// temporary vault and nothing owns its lifetime, so a suite that stores
+    /// ceiling-sized payloads leaves tens of megabytes per case behind until
+    /// the simulator is wiped. nil on the production store, whose vault is the
+    /// person's own and must never be removable from a test.
+    private let isolatedVaultBaseURL: URL?
+    #endif
     #endif
 
     /// One-shot store-load task. Created by the first `ensureLoaded()` caller;
@@ -1296,6 +1321,9 @@ actor ConversationStore {
     private init() {
         #if CONDUCK_TESTING
         self.isIsolatedTestStore = false
+        #if !os(watchOS)
+        self.isolatedVaultBaseURL = nil
+        #endif
         #endif
         #if !os(watchOS)
         self.workAssetVault = .shared
@@ -1414,12 +1442,18 @@ actor ConversationStore {
         self.isIsolatedTestStore = true
         #endif
         #if !os(watchOS)
-        self.workAssetVault = WorkAssetVault(
-            baseURL: FileManager.default.temporaryDirectory.appendingPathComponent(
-                "conduck-workasset-tests-\(UUID().uuidString)",
-                isDirectory: true
-            )
+        // Unique per store so an in-memory Core Data test can never read,
+        // reclaim or remove the person's real Workboard files. The directory is
+        // remembered under CONDUCK_TESTING so a suite can hand its bytes back —
+        // see `_removeIsolatedVaultDirectoryForTesting()`.
+        let isolatedVault = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "conduck-workasset-tests-\(UUID().uuidString)",
+            isDirectory: true
         )
+        self.workAssetVault = WorkAssetVault(baseURL: isolatedVault)
+        #if CONDUCK_TESTING
+        self.isolatedVaultBaseURL = isolatedVault
+        #endif
         #endif
         let container = NSPersistentContainer(name: "Conversations")
 
@@ -4605,6 +4639,80 @@ actor ConversationStore {
                 blobPayload: includingPayload ? blob?.value(forKey: "payload") as? Data : nil
             )
         }
+    }
+
+    /// TEST SEAM — stand between a committed row and the vault confirmation
+    /// that proves its leaf, and optionally answer for that confirmation.
+    ///
+    /// WHY IT HAS TO EXIST. The three `confirmPublication` refusal branches run
+    /// AFTER Core Data has committed, so what they do is caller-visible and
+    /// non-transactional: an already-published card, a preserved (or discarded)
+    /// set of previous bytes, a change notification, and whether a replay can
+    /// still repair the card. A crash cannot stand in for them — it runs no
+    /// code — and the vault will not refuse a leaf it just wrote, so nothing
+    /// short of a hook between the save and the proof can reach them. The
+    /// closure is awaited at exactly that point: returning nil runs the real
+    /// confirmation over whatever the closure did to the leaf, and returning a
+    /// Bool forces the answer without touching the disk.
+    ///
+    /// Gated on the isolated test store as well as the flag, so a signed suite
+    /// run can never hold up a publication into the founder's real data.
+    var publicationConfirmationHookForTesting: (
+        @Sendable (WorkPublicationSite, UUID, String, Int64) async -> Bool?
+    )?
+
+    func _setPublicationConfirmationHookForTesting(
+        _ hook: (@Sendable (WorkPublicationSite, UUID, String, Int64) async -> Bool?)?
+    ) {
+        guard isIsolatedTestStore else { return }
+        publicationConfirmationHookForTesting = hook
+    }
+
+    /// How many times the board projection resolved its two batch questions.
+    struct ProjectionBatchCountsForTesting: Sendable, Hashable {
+        let vaultReadability: Int
+        let blobCompleteness: Int
+    }
+
+    /// TEST SEAM — count the batch resolutions one projection pass performs.
+    ///
+    /// WHY IT HAS TO EXIST. "Availability is resolved once per fetch, not once
+    /// per card" is a claim about how many times the projection hops onto the
+    /// vault actor and into the payload store, and the RESULT of a per-card
+    /// loop is identical to the result of a batch — a board of ten cards reads
+    /// the same either way. Nothing observable to a caller distinguishes them,
+    /// so the counts have to be observable instead.
+    var projectionVaultReadabilityCallsForTesting = 0
+    var projectionBlobCompletenessCallsForTesting = 0
+
+    func _resetProjectionBatchCountsForTesting() {
+        guard isIsolatedTestStore else { return }
+        projectionVaultReadabilityCallsForTesting = 0
+        projectionBlobCompletenessCallsForTesting = 0
+    }
+
+    func _projectionBatchCountsForTesting() -> ProjectionBatchCountsForTesting {
+        ProjectionBatchCountsForTesting(
+            vaultReadability: projectionVaultReadabilityCallsForTesting,
+            blobCompleteness: projectionBlobCompletenessCallsForTesting
+        )
+    }
+
+    /// TEST SEAM — remove the vault directory an isolated store minted for
+    /// itself, payload leaves and staging markers together.
+    ///
+    /// WHY IT HAS TO EXIST. Nothing owns that directory's lifetime: the store
+    /// creates it in `init(inMemory:storeURL:)` and neither actor removes it,
+    /// so a suite whose cases each publish a ceiling-sized payload leaves tens
+    /// of megabytes per case in the simulator's temporary directory until the
+    /// device is wiped. A test cannot clean it up itself either — the path is
+    /// generated inside the initializer and never handed out.
+    ///
+    /// Refuses anything but an isolated store, so the person's own vault is
+    /// unreachable from here even in a signed run.
+    func _removeIsolatedVaultDirectoryForTesting() {
+        guard isIsolatedTestStore, let isolatedVaultBaseURL else { return }
+        try? FileManager.default.removeItem(at: isolatedVaultBaseURL)
     }
     #endif
 

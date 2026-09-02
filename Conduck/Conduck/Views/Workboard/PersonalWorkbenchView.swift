@@ -17,6 +17,7 @@
 #if !os(watchOS)
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 #if os(macOS)
 /// Gives the native macOS conversation shell access to the Work destination so
@@ -363,29 +364,21 @@ final class PersonalWorkbenchRouter {
     /// `materialRequestID` so a dismissal cannot reclaim a NEWER request's work.
     private var presentedRequestID: UUID?
 
-    func openConversation(_ id: UUID) {
-        #if !os(macOS)
-        destination = .chats
-        #endif
-        NotificationCenter.default.post(
-            name: .openConversationDeepLink,
-            object: nil,
-            userInfo: [NotificationDeepLink.conversationIDKey: id.uuidString]
-        )
-    }
-
-    func openGatewaySettings() {
-        #if !os(macOS)
-        destination = .chats
-        #endif
-        NotificationCenter.default.post(name: .openPersonalAISettings, object: nil)
-    }
-
     func present(_ material: WorkboardMaterialSnapshot) async {
         closeMaterial()
         let requestID = UUID()
         materialRequestID = requestID
         do {
+            // Opening, previewing, sharing and playing all run through this one
+            // presenter, so the readability gate belongs HERE and not only in
+            // the surface that called it: a caller that skipped the desk's own
+            // gate must not be able to open a thumbnail in place of the image,
+            // or hand a share sheet bytes this device does not hold.
+            guard WorkboardCardActionPolicy.allows(.open, when: material.availability) else {
+                throw material.availability == .syncPending
+                    ? WorkbenchPreviewError.syncPending
+                    : WorkbenchPreviewError.unavailable
+            }
             switch material.kind {
             case .note:
                 commit(
@@ -448,7 +441,10 @@ final class PersonalWorkbenchRouter {
                 guard let data = try await ConversationStore.shared.loadWorkMaterialPayload(id: material.id) else {
                     throw WorkbenchPreviewError.unavailable
                 }
-                let filename = Self.safePreviewFilename(material.name)
+                let filename = Self.previewFilename(
+                    displayName: material.name,
+                    mimeType: material.mimeType
+                )
                 let url = try await Task.detached(priority: .userInitiated) {
                     let directory = FileManager.default.temporaryDirectory
                         .appendingPathComponent("Conduck-Workboard-Preview", isDirectory: true)
@@ -525,6 +521,33 @@ final class PersonalWorkbenchRouter {
         try? FileManager.default.removeItem(at: directory)
     }
 
+    /// The name a disposable preview copy carries.
+    ///
+    /// A card's NAME is a title, not a filename — a recording's is "Voice note",
+    /// and a captured file's can be the first line of its own text — while Quick
+    /// Look, `ShareLink` and every receiving app decide what a file IS from its
+    /// extension alone. The stored mime type is the only description of the
+    /// bytes that reaches this layer, so a title with no extension takes one
+    /// from there and a title that already carries one keeps it.
+    ///
+    /// A trailing fragment only counts as an extension when the system can name
+    /// a type for it: a title such as "Meeting v1.2" ends in something that
+    /// looks like one and describes nothing, and treating it as one would leave
+    /// the payload's own type unstated.
+    ///
+    /// Internal so the tests can drive the real mapping instead of a copy of it.
+    nonisolated static func previewFilename(displayName: String, mimeType: String?) -> String {
+        let filename = safePreviewFilename(displayName)
+        let existing = (filename as NSString).pathExtension
+        let namesAType = !existing.isEmpty
+            && UTType(filenameExtension: existing).map { !$0.isDynamic } == true
+        guard !namesAType,
+              let mimeType,
+              let preferred = UTType(mimeType: mimeType)?.preferredFilenameExtension
+        else { return filename }
+        return "\(filename).\(preferred)"
+    }
+
     private nonisolated static func safePreviewFilename(_ rawValue: String) -> String {
         let replaced = rawValue
             .replacingOccurrences(of: "/", with: "-")
@@ -575,13 +598,26 @@ final class PersonalWorkbenchRouter {
 }
 
 private enum WorkbenchPreviewError: LocalizedError {
+    /// The bytes are not on this device and nothing but the person can bring
+    /// them back, so the copy names the repair.
     case unavailable
+    /// The bytes are on their way through the person's own iCloud. Waiting is
+    /// the whole answer, so this must never read as a request to replace them.
+    case syncPending
 
     var errorDescription: String? {
-        String(
-            localized: "workboard.material.preview.unavailable",
-            defaultValue: "This material is not available on this device. Reattach it here to open or send it."
-        )
+        switch self {
+        case .unavailable:
+            return String(
+                localized: "workboard.material.preview.unavailable",
+                defaultValue: "This material is not available on this device. Reattach it here to open it."
+            )
+        case .syncPending:
+            return String(
+                localized: "workboard.material.preview.syncPending",
+                defaultValue: "This material is still arriving from iCloud. It will open once it lands on this device."
+            )
+        }
     }
 }
 
@@ -712,11 +748,9 @@ final class PersonalWorkbenchModel {
     init() {
         let router = PersonalWorkbenchRouter()
         let repository = WorkboardLiveRepository(
-            openConversation: { id in router.openConversation(id) },
             openMaterial: { material in
                 Task { @MainActor in await router.present(material) }
-            },
-            openGatewaySettings: { router.openGatewaySettings() }
+            }
         )
 
         let workboardViewModel = WorkboardViewModel(dependencies: repository.makeDependencies())

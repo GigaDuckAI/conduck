@@ -11,8 +11,18 @@ import XCTest
 @testable import Conduck
 
 final class WorkboardPersistenceTests: XCTestCase {
+
+    /// Every store here mints a vault directory of its own that nothing else
+    /// removes; the fixture empties them when the class is done.
+    private let isolated = IsolatedWorkStores()
+
+    override func tearDown() async throws {
+        await isolated.cleanUp()
+        try await super.tearDown()
+    }
+
     func testCaptureIdempotencyAndLocalMaterialPrivacy() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let captureID = UUID()
         let content = WorkItemContent(
             title: "Quarterly carrier review",
@@ -56,7 +66,7 @@ final class WorkboardPersistenceTests: XCTestCase {
     /// Erasing every conversation is a Chat operation. Collected material is the
     /// person's own desk and outlives it.
     func testDeleteAllConversationsPreservesWorkMaterials() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let conversation = try await store.createConversation(backend: "test")
         _ = try await store.appendMessage(
             role: "user",
@@ -91,7 +101,7 @@ final class WorkboardPersistenceTests: XCTestCase {
     // MARK: - Board arrangement
 
     func testCardSizeRoundTripsAndAnUnknownStoredSizeReadsAsStandard() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let item = try await store.createWorkItem(
             WorkItemDraft(content: WorkItemContent(title: "Arrangeable"))
         )
@@ -142,7 +152,7 @@ final class WorkboardPersistenceTests: XCTestCase {
     }
 
     func testResizingACardIsInvisibleToDivergence() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let item = try await store.createWorkItem(
             WorkItemDraft(content: WorkItemContent(
                 title: "Arranged brief",
@@ -176,7 +186,7 @@ final class WorkboardPersistenceTests: XCTestCase {
     }
 
     func testResizingWritesEveryDuplicateRowAndRefusesAnotherItemsMaterial() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let item = try await store.createWorkItem(
             WorkItemDraft(content: WorkItemContent(title: "Merged card"))
         )
@@ -218,7 +228,7 @@ final class WorkboardPersistenceTests: XCTestCase {
     }
 
     func testReorderingMaterialsRewritesSequenceAndAdvancesTheItemRevision() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let item = try await store.createWorkItem(
             WorkItemDraft(content: WorkItemContent(title: "Ordered brief"))
         )
@@ -258,7 +268,7 @@ final class WorkboardPersistenceTests: XCTestCase {
     }
 
     func testReorderingWritesEveryDuplicateRowAndRefusesAnIncompleteOrStaleOrder() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let item = try await store.createWorkItem(
             WorkItemDraft(content: WorkItemContent(title: "Merged order"))
         )

@@ -65,6 +65,25 @@ private final class RequeueDuringClaimFileManager: FileManager, @unchecked Senda
     }
 }
 
+/// Hands out a scripted sequence of claim generations, then reverts to fresh
+/// ones. Production mints a fresh UUID per attempt, which can never name a path
+/// that already exists, so aiming the claiming rename at an occupied
+/// destination is the only way to reach that branch at all.
+private nonisolated final class ScriptedGenerations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var scripted: [UUID]
+
+    init(_ scripted: [UUID]) {
+        self.scripted = scripted
+    }
+
+    func next() -> UUID {
+        lock.lock()
+        defer { lock.unlock() }
+        return scripted.isEmpty ? UUID() : scripted.removeFirst()
+    }
+}
+
 final class WorkCaptureInboxLeaseTests: XCTestCase {
     private var root: URL!
     private let anchor = Date(timeIntervalSince1970: 1_700_000_000)
@@ -599,5 +618,68 @@ final class WorkCaptureInboxLeaseTests: XCTestCase {
         let retried = try await inbox.claimNext(now: anchor)
         XCTAssertEqual(try XCTUnwrap(retried).id, id)
         XCTAssertEqual(try readLease(for: id).owner, inbox.ownerID)
+    }
+
+    func testAnOccupiedAcquisitionPathRefusesTheClaimAndTouchesNeitherDirectory() async throws {
+        // The claiming rename is the acquisition, so a destination that already
+        // exists must read as an ordinary claim race: nothing merged, nothing
+        // overwritten, and the capture still pending for the next generation.
+        let id = try writePublished()
+        let occupiedGeneration = UUID()
+        let generations = ScriptedGenerations([occupiedGeneration])
+        let inbox = WorkCaptureInbox(baseURL: root, makeGeneration: { generations.next() })
+
+        try FileManager.default.createDirectory(at: processingRoot, withIntermediateDirectories: true)
+        let occupied = processingRoot.appendingPathComponent(
+            WorkCaptureInbox.claimDirectoryName(
+                envelopeID: id,
+                claimedAt: anchor,
+                generation: occupiedGeneration
+            ),
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: occupied, withIntermediateDirectories: true)
+        try Data("another acquisition".utf8).write(
+            to: occupied.appendingPathComponent("manifest.json", isDirectory: false)
+        )
+
+        let refused = try await inbox.claimNext(now: anchor)
+        XCTAssertNil(refused, "A destination already taken is a claim race, not a claim")
+        XCTAssertEqual(
+            try childNames(of: occupied),
+            ["manifest.json"],
+            "The occupied acquisition keeps its own contents"
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: occupied.appendingPathComponent("manifest.json")),
+            Data("another acquisition".utf8)
+        )
+        XCTAssertEqual(
+            try childNames(of: root.appendingPathComponent(id.uuidString, isDirectory: true)),
+            ["manifest.json", "payload-000.pdf"],
+            "The refused capture stays exactly as its publisher wrote it"
+        )
+        let pending = try await inbox.pendingCount()
+        XCTAssertEqual(pending, 1)
+
+        // The next attempt mints a different generation, so the capture is
+        // claimable without any recovery pass.
+        let retried = try await inbox.claimNext(now: anchor)
+        let claim = try XCTUnwrap(retried)
+        XCTAssertEqual(claim.id, id)
+        XCTAssertNotEqual(claim.generation, occupiedGeneration)
+        XCTAssertEqual(
+            claimedURLs(for: id).count,
+            2,
+            "The occupied directory is still there beside the acquisition that succeeded"
+        )
+        let lease = try readLease(
+            at: claim.directoryURL.appendingPathComponent(
+                WorkCaptureInbox.leaseFilename,
+                isDirectory: false
+            )
+        )
+        XCTAssertEqual(lease.owner, inbox.ownerID)
+        XCTAssertEqual(lease.generation, claim.generation)
     }
 }

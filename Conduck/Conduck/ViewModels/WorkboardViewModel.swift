@@ -6,11 +6,17 @@
 // Presentation boundary for the private desk. Work is ONE desk at a
 // compile-time id, so this model holds a single board and loads nothing else:
 // a project row written by a build that predates the desk stays in the store
-// and never reaches a screen. The UI deliberately depends on immutable
-// snapshots and injected async operations instead of Core Data objects, so the
-// persistence layer can evolve its schema without leaking managed-object
-// lifetimes into SwiftUI. Nothing here leaves the device: every operation this
-// model can perform writes to the person's own private store.
+// and never reaches a screen. Because there is only one board, no operation
+// here takes a board id — the desk is the subject of every one of them.
+// The UI deliberately depends on immutable snapshots and injected async
+// operations instead of Core Data objects, so the persistence layer can evolve
+// its schema without leaking managed-object lifetimes into SwiftUI.
+//
+// The boundary, stated precisely: every operation writes to the person's own
+// private stores, and those stores carry the desk's metadata — and the payload
+// bytes eligible for it — through the person's private iCloud to their other
+// devices. Nothing here is sent to an AI or to a Conduck-operated server: this
+// model has no transport of any kind, and there is no server of ours anywhere.
 
 import Foundation
 import SwiftUI
@@ -193,12 +199,16 @@ enum WorkboardVoiceTarget: String, Identifiable, Hashable, Sendable {
 
     var id: String { rawValue }
 
+    /// The sheet's navigation title. It names the act the sheet performs —
+    /// recording — because the recording itself becomes the card and the
+    /// transcript is written onto it afterwards; a title promising only text
+    /// would misdescribe what the user is about to keep.
     var title: LocalizedStringResource {
         switch self {
         case .context:
             return LocalizedStringResource(
                 "workboard.voice.context",
-                defaultValue: "Add context and thoughts"
+                defaultValue: "Record a voice note"
             )
         }
     }
@@ -218,8 +228,10 @@ struct WorkboardTransientStatus: Identifiable, Equatable {
     let message: String
 }
 
-struct WorkboardWorkspaceImportState: Equatable {
-    let itemID: UUID
+/// Progress of the one import batch the desk can be running. There is a single
+/// board, so the state names no owner: it exists while a batch is in flight and
+/// is nil otherwise.
+struct WorkboardImportState: Equatable {
     var completedCount: Int
     let totalCount: Int
     var failedCount: Int
@@ -230,7 +242,7 @@ struct WorkboardWorkspaceImportState: Equatable {
     }
 }
 
-struct WorkboardWorkspaceImportReport: Equatable, Sendable {
+struct WorkboardImportReport: Equatable, Sendable {
     let addedCount: Int
     let failedCount: Int
 
@@ -362,9 +374,7 @@ final class WorkboardViewModel {
             WorkboardMaterialImport,
             @escaping @Sendable (Double) -> Void
         ) async throws -> WorkboardItemSnapshot
-        var openConversation: @MainActor (UUID) -> Void
         var openMaterial: @MainActor (WorkboardMaterialSnapshot) -> Void
-        var openGatewaySettings: @MainActor () -> Void
         /// `(orderedMaterialIDs, expectedDeskRevision) -> refreshed desk`.
         /// Rewriting sequence is board content, so it advances the desk
         /// revision and is refused when the drag was built on an order the
@@ -383,15 +393,16 @@ final class WorkboardViewModel {
     private(set) var desk: WorkboardItemSnapshot?
     var isLoading = false
     var loadError: String?
-    var workspaceImportState: WorkboardWorkspaceImportState?
-    /// Session-local composer drafts keyed by the board they belong to. Keeping
-    /// them above the detail view means collapsing or reopening the column
-    /// never discards half-written work.
-    var workspaceComposerDrafts: [UUID: String] = [:]
-    /// Boards whose composer holds text that would survive normalization. The
-    /// detail view reads this instead of the draft dictionary, so a keystroke
-    /// invalidates only what depends on emptiness, not the whole board.
-    private(set) var nonEmptyComposerDrafts: Set<UUID> = []
+    var importState: WorkboardImportState?
+    /// The desk's session-local composer draft. Keeping it above the detail view
+    /// means collapsing or reopening the column never discards half-written
+    /// work.
+    private(set) var composerDraft = ""
+    /// Whether the draft holds text that would survive normalization. It is
+    /// stored rather than derived from `composerDraft` on purpose: a surface
+    /// that only needs emptiness reads this and is invalidated when emptiness
+    /// flips, not on every keystroke.
+    private(set) var hasComposerDraft = false
 
     var notice: WorkboardNotice?
     var workspaceStatus: WorkboardTransientStatus?
@@ -409,29 +420,17 @@ final class WorkboardViewModel {
     /// Every capture mutation is serialized because each success advances the
     /// desk's optimistic revision, so capture is disabled while any of them is
     /// in flight rather than only on the card showing progress.
-    var isCapturingIntoAnyWorkspace: Bool {
-        isMutatingDesk || workspaceImportState != nil
+    var isCapturingIntoDesk: Bool {
+        isMutatingDesk || importState != nil
     }
 
-    func workspaceComposerDraft(for itemID: UUID) -> String {
-        workspaceComposerDrafts[itemID] ?? ""
-    }
-
-    func setWorkspaceComposerDraft(_ value: String, for itemID: UUID) {
-        if value.isEmpty {
-            workspaceComposerDrafts.removeValue(forKey: itemID)
-        } else {
-            workspaceComposerDrafts[itemID] = value
-        }
-        if WorkboardWorkspaceCaptureLogic.normalizedThought(value).isEmpty {
-            nonEmptyComposerDrafts.remove(itemID)
-        } else {
-            nonEmptyComposerDrafts.insert(itemID)
-        }
-    }
-
-    func hasComposerDraft(for itemID: UUID) -> Bool {
-        nonEmptyComposerDrafts.contains(itemID)
+    func setComposerDraft(_ value: String) {
+        composerDraft = value
+        let holdsAThought = !WorkboardWorkspaceCaptureLogic.normalizedThought(value).isEmpty
+        // Written only when it changes: observation fires on every assignment,
+        // so an unconditional write would invalidate the emptiness readers on
+        // each keystroke and cost them the coarse seam they exist for.
+        if hasComposerDraft != holdsAThought { hasComposerDraft = holdsAThought }
     }
 
     func load() async {
@@ -459,28 +458,20 @@ final class WorkboardViewModel {
         isLoading = false
     }
 
-    /// Resolves a board id against the only board there is. Anything but the
-    /// desk answers nil rather than a second board, so a surface that still
-    /// carries an id cannot address a row this model does not load.
-    func item(withID id: UUID) -> WorkboardItemSnapshot? {
-        guard let desk, desk.id == id else { return nil }
-        return desk
-    }
-
     /// Appends one chat-like thought without turning capture into execution.
     /// Every thought is a note card, so what the person typed stays a
     /// rearrangeable card. The thought is durable before this method returns.
     @discardableResult
-    func addWorkspaceThought(_ rawValue: String, to itemID: UUID) async -> Bool {
+    func addThought(_ rawValue: String) async -> Bool {
         let thought = WorkboardWorkspaceCaptureLogic.normalizedThought(rawValue)
         guard !thought.isEmpty else { return false }
 
-        await acquireWorkspaceMutation()
-        defer { releaseWorkspaceMutation() }
-        return await addWorkspaceThoughtUnlocked(thought, to: itemID)
+        await acquireDeskMutation()
+        defer { releaseDeskMutation() }
+        return await addThoughtUnlocked(thought)
     }
 
-    private func addWorkspaceThoughtUnlocked(_ thought: String, to itemID: UUID) async -> Bool {
+    private func addThoughtUnlocked(_ thought: String) async -> Bool {
         // One route for every thought, on the empty desk as much as on a desk
         // already full of cards. A first thought lands atomically: the store's
         // desk write publishes the desk row and the note in a single
@@ -490,25 +481,11 @@ final class WorkboardViewModel {
             name: WorkboardWorkspaceCaptureLogic.noteTitle(for: thought),
             textContent: thought
         )
-        let report = await importWorkspaceMaterialsUnlocked(
+        let report = await importMaterialsUnlocked(
             [material],
-            to: itemID,
             announcesResult: false
         )
         return report.addedCount == 1
-    }
-
-    /// Persists exactly what the pinned composer shows before anything else can
-    /// hide it.
-    @discardableResult
-    func flushWorkspaceComposer(itemID: UUID) async -> Bool {
-        let pending = WorkboardWorkspaceCaptureLogic.normalizedThought(
-            workspaceComposerDraft(for: itemID)
-        )
-        guard !pending.isEmpty else { return true }
-        guard await addWorkspaceThought(pending, to: itemID) else { return false }
-        setWorkspaceComposerDraft("", for: itemID)
-        return true
     }
 
     /// Imports a drop/picker batch serially. Every successful mutation advances
@@ -517,44 +494,37 @@ final class WorkboardViewModel {
     /// Partial success is never replayed as a whole batch, so a later retry
     /// cannot duplicate material the user already watched land.
     @discardableResult
-    func importWorkspaceMaterials(
+    func importMaterials(
         _ imports: [WorkboardMaterialImport],
-        to itemID: UUID,
         additionalFailureCount: Int = 0,
         announcesResult: Bool = true
-    ) async -> WorkboardWorkspaceImportReport {
-        await acquireWorkspaceMutation()
-        defer { releaseWorkspaceMutation() }
-        return await importWorkspaceMaterialsUnlocked(
+    ) async -> WorkboardImportReport {
+        await acquireDeskMutation()
+        defer { releaseDeskMutation() }
+        return await importMaterialsUnlocked(
             imports,
-            to: itemID,
             additionalFailureCount: additionalFailureCount,
             announcesResult: announcesResult
         )
     }
 
-    private func importWorkspaceMaterialsUnlocked(
+    private func importMaterialsUnlocked(
         _ imports: [WorkboardMaterialImport],
-        to itemID: UUID,
         additionalFailureCount: Int = 0,
         announcesResult: Bool = true
-    ) async -> WorkboardWorkspaceImportReport {
+    ) async -> WorkboardImportReport {
         let priorFailures = max(0, additionalFailureCount)
-        // Capture lands on the desk and nowhere else. A surface aiming at any
-        // other board is refused rather than redirected: silently rewriting the
-        // target would hide the caller's bug behind a card that appeared anyway.
-        guard itemID == Constants.workboardDeskItemID,
-              !imports.isEmpty || priorFailures > 0,
-              workspaceImportState == nil else {
-            return WorkboardWorkspaceImportReport(
+        guard !imports.isEmpty || priorFailures > 0,
+              importState == nil else {
+            return WorkboardImportReport(
                 addedCount: 0,
                 failedCount: imports.count + priorFailures
             )
         }
 
         if imports.isEmpty {
-            let report = WorkboardWorkspaceImportReport(addedCount: 0, failedCount: priorFailures)
-            if announcesResult { presentWorkspaceImportReport(report) }
+            let report = WorkboardImportReport(addedCount: 0, failedCount: priorFailures)
+            if announcesResult { presentImportReport(report) }
             return report
         }
 
@@ -564,8 +534,7 @@ final class WorkboardViewModel {
         // staged, so a cancelled or unreadable drop leaves no ghost desk.
         var current = desk
 
-        workspaceImportState = WorkboardWorkspaceImportState(
-            itemID: itemID,
+        importState = WorkboardImportState(
             completedCount: priorFailures,
             totalCount: imports.count + priorFailures,
             failedCount: priorFailures
@@ -585,14 +554,13 @@ final class WorkboardViewModel {
                     materialImport
                 ) { itemProgress in
                     Task { @MainActor [self] in
-                        guard var state = self.workspaceImportState,
-                              state.itemID == itemID else { return }
+                        guard var state = self.importState else { return }
                         let bounded = min(1, max(0, itemProgress))
                         state.completedCount = min(
                             state.totalCount,
                             priorFailures + index + (bounded >= 1 ? 1 : 0)
                         )
-                        self.workspaceImportState = state
+                        self.importState = state
                     }
                 }
                 current = refreshed
@@ -602,26 +570,26 @@ final class WorkboardViewModel {
                 failed += 1
                 if firstFailure == nil { firstFailure = error }
             }
-            if var state = workspaceImportState, state.itemID == itemID {
+            if var state = importState {
                 state.completedCount = priorFailures + index + 1
                 state.failedCount = failed
-                workspaceImportState = state
+                importState = state
             }
         }
 
-        workspaceImportState = nil
-        let report = WorkboardWorkspaceImportReport(addedCount: added, failedCount: failed)
+        importState = nil
+        let report = WorkboardImportReport(addedCount: added, failedCount: failed)
         if announcesResult {
-            presentWorkspaceImportReport(report)
+            presentImportReport(report)
         } else if report.hasFailures {
-            presentWorkspaceCaptureFailure(
+            presentCaptureFailure(
                 firstFailure ?? WorkboardLiveRepositoryError.missingPayload
             )
         }
         return report
     }
 
-    func presentWorkspaceImportReport(_ report: WorkboardWorkspaceImportReport) {
+    func presentImportReport(_ report: WorkboardImportReport) {
         guard report.addedCount > 0 || report.failedCount > 0 else { return }
         if report.failedCount == 0 {
             let message: String
@@ -660,7 +628,7 @@ final class WorkboardViewModel {
         }
     }
 
-    private func presentWorkspaceCaptureFailure(_ error: Error) {
+    private func presentCaptureFailure(_ error: Error) {
         notice = WorkboardNotice(
             kind: .error,
             title: LocalizedStringResource(
@@ -671,28 +639,26 @@ final class WorkboardViewModel {
         )
     }
 
-    /// Reattaches a device-local source directly from the spatial workspace.
-    /// It resolves the desk's latest revision immediately before mutation, so
-    /// a picker left open across a sync cannot write against a stale revision.
-    func reattachWorkspaceMaterial(
+    /// Reattaches a device-local source directly from the board. It resolves the
+    /// desk's latest revision immediately before mutation, so a picker left open
+    /// across a sync cannot write against a stale revision.
+    func reattachMaterial(
         _ material: WorkboardMaterialSnapshot,
-        in itemID: UUID,
         with replacement: WorkboardMaterialImport
     ) async {
-        await acquireWorkspaceMutation()
-        defer { releaseWorkspaceMutation() }
-        guard let current = item(withID: itemID),
+        await acquireDeskMutation()
+        defer { releaseDeskMutation() }
+        guard let current = desk,
               current.materials.contains(where: { $0.id == material.id }) else {
-            presentWorkspaceCaptureFailure(WorkboardLiveRepositoryError.itemNotFound)
+            presentCaptureFailure(WorkboardLiveRepositoryError.itemNotFound)
             return
         }
-        workspaceImportState = WorkboardWorkspaceImportState(
-            itemID: itemID,
+        importState = WorkboardImportState(
             completedCount: 0,
             totalCount: 1,
             failedCount: 0
         )
-        defer { workspaceImportState = nil }
+        defer { importState = nil }
         do {
             let refreshed = try await dependencies.replaceMaterial(
                 current.revision,
@@ -700,23 +666,22 @@ final class WorkboardViewModel {
                 replacement
             ) { progress in
                 Task { @MainActor [self] in
-                    guard var state = self.workspaceImportState,
-                          state.itemID == itemID else { return }
+                    guard var state = self.importState else { return }
                     state.completedCount = progress >= 1 ? 1 : 0
-                    self.workspaceImportState = state
+                    self.importState = state
                 }
             }
             adopt(refreshed)
-            presentWorkspaceImportReport(WorkboardWorkspaceImportReport(addedCount: 1, failedCount: 0))
+            presentImportReport(WorkboardImportReport(addedCount: 1, failedCount: 0))
         } catch {
-            presentWorkspaceCaptureFailure(error)
+            presentCaptureFailure(error)
         }
     }
 
     /// One capture mutation at a time. The lane is a plain queue because every
     /// capture advances the same desk revision, so two of them in flight would
     /// race each other into stale-revision refusals.
-    private func acquireWorkspaceMutation() async {
+    private func acquireDeskMutation() async {
         if !isMutatingDesk {
             isMutatingDesk = true
             return
@@ -726,7 +691,7 @@ final class WorkboardViewModel {
         }
     }
 
-    private func releaseWorkspaceMutation() {
+    private func releaseDeskMutation() {
         guard !deskMutationWaiters.isEmpty else {
             isMutatingDesk = false
             return
@@ -739,10 +704,9 @@ final class WorkboardViewModel {
     @discardableResult
     func reorderMaterial(
         _ materialID: UUID,
-        toInsertionIndex index: Int,
-        in itemID: UUID
+        toInsertionIndex index: Int
     ) async -> Bool {
-        await performMaterialReorder(in: itemID) { materials in
+        await performMaterialReorder { materials in
             WorkboardMaterialOrdering.order(
                 moving: materialID,
                 toInsertionIndex: index,
@@ -757,10 +721,9 @@ final class WorkboardViewModel {
     func reorderMaterial(
         _ materialID: UUID,
         relativeTo targetMaterialID: UUID,
-        placement: WorkboardReorderPlacement = .before,
-        in itemID: UUID
+        placement: WorkboardReorderPlacement = .before
     ) async -> Bool {
-        await performMaterialReorder(in: itemID) { materials in
+        await performMaterialReorder { materials in
             WorkboardMaterialOrdering.order(
                 moving: materialID,
                 relativeTo: targetMaterialID,
@@ -774,10 +737,9 @@ final class WorkboardViewModel {
     @discardableResult
     func moveMaterial(
         _ materialID: UUID,
-        direction: WorkboardMoveDirection,
-        in itemID: UUID
+        direction: WorkboardMoveDirection
     ) async -> Bool {
-        await performMaterialReorder(in: itemID) { materials in
+        await performMaterialReorder { materials in
             WorkboardMaterialOrdering.order(
                 moving: materialID,
                 direction: direction,
@@ -792,11 +754,9 @@ final class WorkboardViewModel {
     @discardableResult
     func setMaterialCardSize(
         _ size: WorkMaterialCardSize,
-        materialID: UUID,
-        in itemID: UUID
+        materialID: UUID
     ) async -> Bool {
         guard let setCardSize = dependencies.setMaterialCardSize,
-              item(withID: itemID) != nil,
               let materialIndex = desk?.materials
                   .firstIndex(where: { $0.id == materialID }) else { return false }
         let previous = desk?.materials[materialIndex].cardSize ?? .standard
@@ -826,10 +786,10 @@ final class WorkboardViewModel {
     /// own revision, so a removal racing an import is serialized rather than
     /// refused as stale. Removing the last card leaves the desk standing.
     @discardableResult
-    func removeMaterialFromBoard(_ materialID: UUID, in itemID: UUID) async -> Bool {
-        await acquireWorkspaceMutation()
-        defer { releaseWorkspaceMutation() }
-        guard let current = item(withID: itemID),
+    func removeMaterialFromBoard(_ materialID: UUID) async -> Bool {
+        await acquireDeskMutation()
+        defer { releaseDeskMutation() }
+        guard let current = desk,
               current.materials.contains(where: { $0.id == materialID }) else { return false }
         do {
             let refreshed = try await dependencies.removeMaterial(
@@ -857,13 +817,12 @@ final class WorkboardViewModel {
     /// canonical card order under the desk's optimistic revision, so a drag
     /// racing an import would otherwise be refused as stale.
     private func performMaterialReorder(
-        in itemID: UUID,
         plan: ([WorkboardMaterialSnapshot]) -> [UUID]?
     ) async -> Bool {
         guard let reorderMaterials = dependencies.reorderMaterials else { return false }
-        await acquireWorkspaceMutation()
-        defer { releaseWorkspaceMutation() }
-        guard let current = item(withID: itemID),
+        await acquireDeskMutation()
+        defer { releaseDeskMutation() }
+        guard let current = desk,
               let orderedIDs = plan(current.materials) else { return false }
 
         let previousMaterials = current.materials
@@ -915,10 +874,6 @@ final class WorkboardViewModel {
 
     func openMaterial(_ material: WorkboardMaterialSnapshot) {
         dependencies.openMaterial(material)
-    }
-
-    func openGatewaySettings() {
-        dependencies.openGatewaySettings()
     }
 
     /// Adopts a desk returned by one operation without letting it undo a newer

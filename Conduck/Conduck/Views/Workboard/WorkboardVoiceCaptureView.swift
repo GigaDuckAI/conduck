@@ -8,7 +8,9 @@
 // self-heal, selected-provider routing, retry preservation and duration cap).
 // The recorder publishes the recording as a playable card BEFORE the speech
 // hop, so a transcription that fails costs the words and never the audio; the
-// transcript is then written onto that same card. Nothing here reaches a
+// transcript is then written onto that same card. A capture that stopped part
+// way is finished by Try Again — the same card, the same bytes — and only the
+// separately labelled Record Again starts a second one. Nothing here reaches a
 // gateway.
 
 #if !os(watchOS)
@@ -196,9 +198,19 @@ struct WorkboardVoiceCaptureView: View {
             .keyboardShortcut(.return, modifiers: .command)
         case .error(let error):
             if error.isRetryable {
+                // Try Again finishes THIS capture — the recording it already
+                // published, or the words it already recognized — and only
+                // starts a new one when there is nothing left to finish.
+                // Recording again is the separate action, because it leaves the
+                // first card on the desk without its words and puts a second
+                // one beside it.
                 Button {
-                    recorder.dismissError()
-                    Task { await recorder.startRecording() }
+                    if recorder.canRetryWorkCapture {
+                        Task { handle(await recorder.retryWorkCapture()) }
+                    } else {
+                        recorder.dismissError()
+                        Task { await recorder.startRecording() }
+                    }
                 } label: {
                     Label(
                         LocalizedStringResource("workboard.voice.tryAgain", defaultValue: "Try Again"),
@@ -209,6 +221,22 @@ struct WorkboardVoiceCaptureView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(AppColors.brandAmber)
+                if recorder.canRetryWorkCapture {
+                    Button {
+                        recorder.dismissError()
+                        Task { await recorder.startRecording() }
+                    } label: {
+                        Label(
+                            LocalizedStringResource(
+                                "workboard.voice.recordAgain",
+                                defaultValue: "Record Again"
+                            ),
+                            systemImage: "mic.fill"
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.bordered)
+                }
             } else {
                 Button(LocalizedStringResource("common.close", defaultValue: "Close")) {
                     cancel()
@@ -297,9 +325,10 @@ struct WorkboardVoiceCaptureView: View {
             // The recording is already a card on the desk and the transcript is
             // already written onto it, so handing the same words to the
             // composer would put one utterance on the board twice. `onCancel`
-            // is this sheet's only dismissal hook. A recorder that published no
-            // card — Work storage refused the write — keeps the older
-            // behaviour, because a storage failure must not also cost the words.
+            // is this sheet's only dismissal hook. The composer is reached only
+            // when the capture turned out to own no recording at all — a
+            // storage failure is an error state, not a success, so it never
+            // arrives here.
             if recorder.workRecordingMaterialID != nil {
                 onCancel()
             } else {

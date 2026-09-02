@@ -2098,9 +2098,7 @@ enum Constants {
     ///
     /// `nonisolated` because the store and drainer actors resolve the desk off
     /// the main actor. `Constants.swift` is a member of the Watch target too, so
-    /// every surface reads this value rather than a copy;
-    /// `WorkboardDeskIdentityDriftTests` fails if the literal is ever restated
-    /// outside this file.
+    /// every surface reads this value rather than a copy.
     nonisolated static let workboardDeskItemID =
         UUID(uuidString: "DE5C0000-0000-4000-A000-000000000001")!
 

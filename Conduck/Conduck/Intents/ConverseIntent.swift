@@ -20,6 +20,18 @@
 //      the agent reply + fires the reply notification on success, or a failure
 //      notification on error — all independently of this perform() process.
 //
+// WORK DESTINATION, and why it is not a one-shot publication. Work KEEPS the
+// recording, so this lane compresses once and then spends those same bytes
+// three ways — the desk's audio card, the STT upload, and the preserved retry
+// copy — under ONE capture id, so a recovered transcript can always find the
+// recording it came from. The card is published BEFORE the STT hop: everything
+// that can fail below it (an unreadable key, a provider outage, an OS kill)
+// then costs the words and never the recording, and the transcript is written
+// onto that same card afterwards. The screenshot is a card of its own under an
+// id DERIVED from the capture's, because the capture id already names the
+// recording. Chat retains no audio: its upload is the Shortcut's own recording,
+// byte for byte, and nothing on that branch touches Workboard persistence.
+//
 // Active conversation: resolve via the TTL-aware headless pointer
 // (`SettingsManager.resolveActiveConversationID`); if stale/absent — OR the
 // pointed-at `Conversation` row hasn't imported via CloudKit yet (the pointer
@@ -228,12 +240,39 @@ struct ConverseIntent: AppIntent {
         print("[Conduck] Audio: \(originalAudioData.count) bytes, Language: \(preferredLanguage ?? "auto")")
         #endif
 
+        // ONE set of bytes for the whole capture, and Work is the only
+        // destination that earns the compression pass: it KEEPS the recording,
+        // so the card, the STT upload and the preserved retry copy must all be
+        // the same payload — a card holding bytes the transcript was never made
+        // from is a card of something else. Chat retains nothing, so its upload
+        // stays the Shortcut's own recording, byte for byte, and the extension
+        // below stays the `.m4a` the Record Audio action produces.
+        // `AudioCompressor.compress` never throws; it falls back to the input's
+        // untouched bytes and says so through `format`, which is where the
+        // extension and mime type come from rather than a second mapping here.
+        let uploadData: Data
+        let audioFileExtension: String
+        // Non-nil for exactly one destination — the card needs a mime type and
+        // Chat has no card — so binding it below is the destination test
+        // restated in the type rather than a second, driftable condition.
+        let workAudioMIMEType: String?
+        if destination == .work {
+            let compression = await Self.compressForWork(originalAudioData)
+            uploadData = compression.data
+            audioFileExtension = compression.fileExtension
+            workAudioMIMEType = compression.mimeType
+        } else {
+            uploadData = originalAudioData
+            audioFileExtension = "m4a"
+            workAudioMIMEType = nil
+        }
+
         // Write audio to disk for STTClient (which takes a file URL +
         // `defer`-deletes on exit per the audio-cleanup mandate).
         let audioFileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("conduck-stt-\(UUID().uuidString).m4a")
+            .appendingPathComponent("conduck-stt-\(UUID().uuidString).\(audioFileExtension)")
         do {
-            try originalAudioData.write(to: audioFileURL)
+            try uploadData.write(to: audioFileURL)
         } catch {
             throw AppError.audioMissingData
         }
@@ -247,8 +286,13 @@ struct ConverseIntent: AppIntent {
         // app to retry.
         let retryDestination: PendingRetryDestination = destination == .work ? .work : .chat
         let pendingWorkImageData = destination == .work ? screenshotFile?.data : nil
+        // ONE identity for this capture, minted before anything durable is
+        // written. It names the recording's desk card AND the pending-retry
+        // record, so a retry an app launch later repairs that same card instead
+        // of publishing the recovered words a second time beside it.
+        let captureID = UUID()
         let pendingMetadata = PendingRetryMetadata(
-            id: UUID(),
+            id: captureID,
             createdAt: Date(),
             audioFileURL: audioFileURL,
             preferredLanguage: preferredLanguage,
@@ -257,7 +301,7 @@ struct ConverseIntent: AppIntent {
             destination: retryDestination
         )
         let guardToken = await PendingRetryGuard.arm(
-            audio: originalAudioData,
+            audio: uploadData,
             metadata: pendingMetadata,
             workImageData: pendingWorkImageData,
             // A Work-only first run does not need reply-notification
@@ -265,6 +309,34 @@ struct ConverseIntent: AppIntent {
             // deferred recovery notice if the intent is interrupted.
             requestNotificationAuthorization: destination == .chat
         )
+
+        // PHASE 1 of the Work voice capture, and the position is the feature:
+        // the recording becomes a desk card BEFORE transcription is attempted,
+        // so the key verdict below, the STT hop, and an OS kill in between each
+        // cost the words and never the recording. The coordinator COPIES these
+        // bytes; the temporary file written above stays this method's alone.
+        //
+        // A failure here is deliberately swallowed. Transcription has not been
+        // attempted yet, and abandoning it to report a storage error would trade
+        // the words for the card; `attachTranscript` answers `.recordingMissing`
+        // for exactly this state and the note-shaped publication below is then
+        // the way the words land. The line carries the FACT only — no
+        // transcript, no bytes — and ships in Release, because a store that
+        // cannot be opened in a headless intent process is precisely what a
+        // DEBUG-only print never shows.
+        if destination == .work, let workAudioMIMEType {
+            do {
+                _ = try await WorkVoiceCaptureCoordinator.publishRecording(
+                    captureID: captureID,
+                    audio: uploadData,
+                    fileExtension: audioFileExtension,
+                    mimeType: workAudioMIMEType,
+                    createdAt: pendingMetadata.createdAt
+                )
+            } catch {
+                Self.log.error("ConverseIntent: Work recording card not published")
+            }
+        }
 
         // Pre-flight the KEY, on the same terms and for the same reason as the
         // destination below: AFTER `arm` and OUTSIDE the `do`, so each verdict is
@@ -454,12 +526,51 @@ struct ConverseIntent: AppIntent {
             CompletionFeedbackPlayer.play(mode: "sound")
 
             if destination == .work {
-                _ = try await WorkCaptureRetryCoordinator.publish(
-                    transcript: transcript,
-                    rawImageData: pendingWorkImageData,
-                    captureID: pendingMetadata.id,
-                    createdAt: pendingMetadata.createdAt
-                )
+                // The screenshot is a card of its own, published FIRST because
+                // it is the only artifact still held nowhere but the retry
+                // record: a refusal here has to leave that record standing, and
+                // it does — the throw reaches the catch chain below with
+                // `transcriptCaptured` already true, so the guard stays armed.
+                // Its id is derived from the capture's, never equal to it: the
+                // capture id names the recording, and a screenshot published
+                // there is answered by the recording and dropped.
+                if let pendingWorkImageData {
+                    _ = try await WorkVoiceScreenshotCoordinator.publish(
+                        pendingWorkImageData,
+                        forCapture: captureID,
+                        createdAt: pendingMetadata.createdAt
+                    )
+                }
+
+                // PHASE 2. The words belong ON the recording this capture
+                // already published, not beside it. `.recordingMissing` and
+                // `.notAudio` are the only answers that mean this capture owns
+                // no recording card — phase 1 failed, or the id names something
+                // that is not a recording — and only then is a note-shaped
+                // publication how the words land, under a derived id so it
+                // cannot be answered by a card that is already there.
+                //
+                // A THROW is neither of those. It says the store refused the
+                // write, so the words are stored NOWHERE; collapsing it into
+                // "there was no recording" would publish a note the desk then
+                // answers with the recording, and the disarm below would delete
+                // the only remaining copy of what was said.
+                switch try await WorkVoiceCaptureCoordinator.attachTranscript(
+                    transcript,
+                    toRecording: captureID
+                ) {
+                case .attached:
+                    break
+                case .recordingMissing, .notAudio:
+                    _ = try await WorkCaptureRetryCoordinator.publish(
+                        transcript: transcript,
+                        rawImageData: nil,
+                        captureID: WorkVoiceCaptureCoordinator.fallbackNoteID(
+                            forCapture: captureID
+                        ),
+                        createdAt: pendingMetadata.createdAt
+                    )
+                }
                 await PendingRetryGuard.disarm(guardToken)
                 return .result(value: transcript)
             }
@@ -538,6 +649,26 @@ struct ConverseIntent: AppIntent {
             // so let the user decide via the in-app retry card).
             throw AppError.unknown(error)
         }
+    }
+
+    // MARK: - Work payload
+
+    /// The one compression pass a Work capture gets, and the format truth that
+    /// comes with it.
+    ///
+    /// `@MainActor` for isolation rather than for the work: `AudioFormat`'s
+    /// `fileExtension` and `mimeType` are main-actor members and `perform()` is
+    /// nonisolated, so reading them there is a concurrency violation waiting for
+    /// the language mode to catch up. Hopping once here also keeps the mapping
+    /// where `AudioCompressor` put it — a `.original` fallback carries the
+    /// input's untouched bytes and says so through `format`, and a second
+    /// mapping in this file could contradict that.
+    @MainActor
+    private static func compressForWork(
+        _ audioData: Data
+    ) async -> (data: Data, fileExtension: String, mimeType: String) {
+        let result = await AudioCompressor.compress(audioData)
+        return (result.data, result.format.fileExtension, result.format.mimeType)
     }
 
     // MARK: - Terminal step — agent converse hop

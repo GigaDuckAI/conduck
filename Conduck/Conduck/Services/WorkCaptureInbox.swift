@@ -215,6 +215,12 @@ actor WorkCaptureInbox {
     /// not let one instance's bookkeeping speak for the other's.
     private var activeClaims: [UUID: UUID] = [:]
     private var didScaffold = false
+    /// Mints the generation spelled into each claimed directory's name. Only an
+    /// isolated-directory inbox can substitute it, and only so that the claiming
+    /// rename's destination-exists branch is reachable at all: production mints
+    /// a fresh UUID per attempt, which can never name a path that already
+    /// exists, so that branch is otherwise dead to every test.
+    private let makeGeneration: @Sendable () -> UUID
 
     private var temporaryURL: URL { baseURL.appendingPathComponent("tmp", isDirectory: true) }
     private var processingURL: URL { baseURL.appendingPathComponent("processing", isDirectory: true) }
@@ -222,11 +228,17 @@ actor WorkCaptureInbox {
     private init() {
         self.baseURL = Self.defaultBaseURL()
         self.fileManager = .default
+        self.makeGeneration = { UUID() }
     }
 
-    init(baseURL: URL, fileManager: FileManager = .default) {
+    init(
+        baseURL: URL,
+        fileManager: FileManager = .default,
+        makeGeneration: @escaping @Sendable () -> UUID = { UUID() }
+    ) {
         self.baseURL = baseURL
         self.fileManager = fileManager
+        self.makeGeneration = makeGeneration
     }
 
     nonisolated static var productionBaseURL: URL { defaultBaseURL() }
@@ -293,11 +305,15 @@ actor WorkCaptureInbox {
     ) throws -> UUID {
         try ensureScaffold()
         let id = captureID
-        let temporary = temporaryURL.appendingPathComponent(
-            "\(id.uuidString)-\(UUID().uuidString)",
-            isDirectory: true
+        let publisher = WorkCaptureDirectoryPublisher(
+            inboxURL: baseURL,
+            fileSystem: WorkCaptureFileManagerFileSystem(fileManager: fileManager)
         )
-        let published = baseURL.appendingPathComponent(id.uuidString, isDirectory: true)
+        // The capture id is caller-owned and replayable, so the staging name
+        // carries a discriminator: two attempts at one capture must never share
+        // a private directory.
+        let stagingName = "\(id.uuidString)-\(UUID().uuidString)"
+        let published = publisher.publishedURL(for: id)
 
         // Caller-owned identity makes GigaAction recovery idempotent. If the
         // intent was killed after its atomic move but before it cleared the
@@ -338,32 +354,34 @@ actor WorkCaptureInbox {
             source: .app,
             entries: entries
         )
-        try envelope.validateForPublication()
-        let manifest = try envelope.encoded()
-        guard manifest.count <= WorkCaptureEnvelope.maximumManifestBytes else {
-            throw InboxError.filesystemFailure
-        }
 
+        // The same staging → validate → atomic-rename transaction both share
+        // extensions publish through, so an in-app capture cannot be left half
+        // written by a shape this queue has never exercised.
+        var staged: URL?
         var didPublish = false
         defer {
-            if !didPublish { try? fileManager.removeItem(at: temporary) }
+            // `commit` clears up after its own refusals; this covers the window
+            // between opening the staging directory and reaching it.
+            if !didPublish, let staged { publisher.discard(staged) }
         }
         do {
-            try fileManager.createDirectory(at: temporary, withIntermediateDirectories: false)
+            let staging = try publisher.beginStaging(named: stagingName)
+            staged = staging
             if let imageData, let relativePath = entries.first?.relativePath {
-                try imageData.write(
-                    to: temporary.appendingPathComponent(relativePath),
-                    options: [.atomic, .completeFileProtection]
+                try publisher.fileSystem.writeProtected(
+                    imageData,
+                    to: staging.appendingPathComponent(relativePath, isDirectory: false)
                 )
             }
-            try manifest.write(
-                to: temporary.appendingPathComponent(Self.manifestFilename),
-                options: [.atomic, .completeFileProtection]
-            )
-            try fileManager.moveItem(at: temporary, to: published)
+            try publisher.commit(envelope, staging: staging)
             didPublish = true
             postLocalChange()
             return id
+        } catch let failure as WorkCaptureEnvelope.PublicationValidationFailure {
+            // A refused envelope is the caller's contract violation, not a
+            // transient fault, and must not be reported as one.
+            throw failure
         } catch {
             // Another process may have won the same deterministic publication
             // between the existence check and atomic move. Its complete
@@ -392,7 +410,7 @@ actor WorkCaptureInbox {
         try ensureScaffold()
         for id in try pendingEnvelopeIDs() {
             let published = baseURL.appendingPathComponent(id.uuidString, isDirectory: true)
-            let generation = UUID()
+            let generation = makeGeneration()
             let claimed = processingURL.appendingPathComponent(
                 Self.claimDirectoryName(envelopeID: id, claimedAt: now, generation: generation),
                 isDirectory: true

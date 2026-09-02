@@ -93,9 +93,8 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         let harness = Harness()
         let viewModel = makeViewModel(harness: harness)
 
-        let added = await viewModel.addWorkspaceThought(
-            "  Compare the launch plans\nwith the latest notes.  ",
-            to: Constants.workboardDeskItemID
+        let added = await viewModel.addThought(
+            "  Compare the launch plans\nwith the latest notes.  "
         )
 
         XCTAssertTrue(added)
@@ -105,7 +104,7 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
             [nil],
             "a desk row that does not exist yet has no revision to compare"
         )
-        let desk = viewModel.item(withID: Constants.workboardDeskItemID)
+        let desk = viewModel.desk
         XCTAssertEqual(desk?.materials.map(\.kind), [.note])
         XCTAssertEqual(
             desk?.materials.first?.textContent,
@@ -120,18 +119,14 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         let viewModel = makeViewModel(harness: harness)
         await viewModel.load()
 
-        let added = await viewModel.addWorkspaceThought(
-            "Customer interviews favor the smaller launch.",
-            to: Constants.workboardDeskItemID
+        let added = await viewModel.addThought(
+            "Customer interviews favor the smaller launch."
         )
 
         XCTAssertTrue(added)
         XCTAssertEqual(harness.importedNames, ["Customer interviews favor the smaller launch."])
         XCTAssertEqual(harness.importExpectedRevisions, [7])
-        XCTAssertEqual(
-            viewModel.item(withID: Constants.workboardDeskItemID)?.materials.count,
-            1
-        )
+        XCTAssertEqual(viewModel.desk?.materials.count, 1)
     }
 
     func testBatchImportPreservesSuccessesAndAdvancesOnlySuccessfulRevisions() async {
@@ -140,46 +135,17 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         let viewModel = makeViewModel(harness: harness)
         await viewModel.load()
 
-        let report = await viewModel.importWorkspaceMaterials(
-            [
-                WorkboardMaterialImport(kind: .note, name: "First", textContent: "One"),
-                WorkboardMaterialImport(kind: .file, name: "Unreadable"),
-                WorkboardMaterialImport(kind: .link, name: "Third", urlString: "https://example.com")
-            ],
-            to: Constants.workboardDeskItemID
-        )
+        let report = await viewModel.importMaterials([
+            WorkboardMaterialImport(kind: .note, name: "First", textContent: "One"),
+            WorkboardMaterialImport(kind: .file, name: "Unreadable"),
+            WorkboardMaterialImport(kind: .link, name: "Third", urlString: "https://example.com")
+        ])
 
-        XCTAssertEqual(report, WorkboardWorkspaceImportReport(addedCount: 2, failedCount: 1))
+        XCTAssertEqual(report, WorkboardImportReport(addedCount: 2, failedCount: 1))
         XCTAssertEqual(harness.importExpectedRevisions, [3, 4, 4])
         XCTAssertEqual(harness.importedNames, ["First", "Third"])
-        XCTAssertEqual(
-            viewModel.item(withID: Constants.workboardDeskItemID)?.materials.map(\.name),
-            ["First", "Third"]
-        )
-        XCTAssertNil(viewModel.workspaceImportState)
-    }
-
-    func testCaptureAimedAtAnyBoardButTheDeskIsRefusedWithoutReachingTheStore() async {
-        let harness = Harness(item: makeDesk(revision: 3))
-        let viewModel = makeViewModel(harness: harness)
-        await viewModel.load()
-
-        let added = await viewModel.addWorkspaceThought("A stray thought", to: UUID())
-        let report = await viewModel.importWorkspaceMaterials(
-            [WorkboardMaterialImport(kind: .note, name: "Stray", textContent: "Stray")],
-            to: UUID()
-        )
-
-        XCTAssertFalse(added)
-        XCTAssertEqual(report, WorkboardWorkspaceImportReport(addedCount: 0, failedCount: 1))
-        XCTAssertTrue(
-            harness.importedNames.isEmpty,
-            "Work is one desk: a capture aimed elsewhere is refused, never redirected"
-        )
-        XCTAssertEqual(
-            viewModel.item(withID: Constants.workboardDeskItemID)?.materials.count,
-            0
-        )
+        XCTAssertEqual(viewModel.desk?.materials.map(\.name), ["First", "Third"])
+        XCTAssertNil(viewModel.importState)
     }
 
     func testFirstThoughtAndDropShareOneSerializedMutationLane() async {
@@ -195,22 +161,16 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
             },
             removeMaterial: { _, _ in throw TestError.unexpectedCall },
             replaceMaterial: { _, _, _, _ in throw TestError.unexpectedCall },
-            openConversation: { _ in },
-            openMaterial: { _ in },
-            openGatewaySettings: {}
+            openMaterial: { _ in }
         ))
 
         let thoughtTask = Task { @MainActor in
-            await viewModel.addWorkspaceThought(
-                "First thought",
-                to: Constants.workboardDeskItemID
-            )
+            await viewModel.addThought("First thought")
         }
         await waitUntil { gate.pending.count == 1 }
         let dropTask = Task { @MainActor in
-            await viewModel.importWorkspaceMaterials(
-                [WorkboardMaterialImport(kind: .note, name: "Second", textContent: "Second")],
-                to: Constants.workboardDeskItemID
+            await viewModel.importMaterials(
+                [WorkboardMaterialImport(kind: .note, name: "Second", textContent: "Second")]
             )
         }
         for _ in 0..<10 { await Task.yield() }
@@ -227,7 +187,7 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
         let thoughtAdded = await thoughtTask.value
         let dropReport = await dropTask.value
         XCTAssertTrue(thoughtAdded)
-        XCTAssertEqual(dropReport, WorkboardWorkspaceImportReport(addedCount: 1, failedCount: 0))
+        XCTAssertEqual(dropReport, WorkboardImportReport(addedCount: 1, failedCount: 0))
         XCTAssertEqual(gate.startedNames, ["First thought", "Second"])
         // An absent token publishes the desk with its first card; the drop then
         // runs against the revision that write returned.
@@ -287,9 +247,7 @@ final class WorkboardWorkspaceCaptureTests: XCTestCase {
             },
             removeMaterial: { _, _ in throw TestError.unexpectedCall },
             replaceMaterial: { _, _, _, _ in throw TestError.unexpectedCall },
-            openConversation: { _ in },
-            openMaterial: { _ in },
-            openGatewaySettings: {}
+            openMaterial: { _ in }
         ))
     }
 }

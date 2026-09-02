@@ -19,9 +19,7 @@ import Foundation
 final class WorkboardLiveRepository {
     private let store: ConversationStore
     private let captureDrainer: WorkCaptureDrainer
-    private let openConversationHandler: @MainActor (UUID) -> Void
     private let openMaterialHandler: @MainActor (WorkboardMaterialSnapshot) -> Void
-    private let openGatewaySettingsHandler: @MainActor () -> Void
     private var localThumbnailCache: [UUID: CachedLocalThumbnail] = [:]
 
     private struct CachedLocalThumbnail {
@@ -39,12 +37,13 @@ final class WorkboardLiveRepository {
     /// awaiting continuation in the process, not a throughput knob.
     private static let maximumConcurrentThumbnailDecodes = 4
 
+    /// Opening a card is the ONE route out of the desk this adapter carries.
+    /// The desk reaches no conversation and no gateway: it is an inert surface,
+    /// so a handler for either would be a door with nothing behind it.
     init(
         store: ConversationStore = .shared,
         captureInbox: WorkCaptureInbox = .shared,
-        openConversation: @escaping @MainActor (UUID) -> Void,
-        openMaterial: @escaping @MainActor (WorkboardMaterialSnapshot) -> Void,
-        openGatewaySettings: @escaping @MainActor () -> Void
+        openMaterial: @escaping @MainActor (WorkboardMaterialSnapshot) -> Void
     ) {
         self.store = store
         self.captureDrainer = WorkCaptureDrainer(
@@ -52,9 +51,7 @@ final class WorkboardLiveRepository {
             store: store,
             sourceDevice: SourceDevice.current
         )
-        self.openConversationHandler = openConversation
         self.openMaterialHandler = openMaterial
-        self.openGatewaySettingsHandler = openGatewaySettings
     }
 
     func makeDependencies() -> WorkboardViewModel.Dependencies {
@@ -78,9 +75,7 @@ final class WorkboardLiveRepository {
                     onProgress: onProgress
                 )
             },
-            openConversation: { [self] id in openConversationHandler(id) },
             openMaterial: { [self] material in openMaterialHandler(material) },
-            openGatewaySettings: { [self] in openGatewaySettingsHandler() },
             reorderMaterials: { [self] orderedMaterialIDs, expectedRevision in
                 try await reorderMaterials(
                     orderedMaterialIDs,
@@ -360,7 +355,7 @@ final class WorkboardLiveRepository {
         case .unavailableOnThisDevice:
             parts.append(String(
                 localized: "workboard.material.unavailableHere",
-                defaultValue: "Reattach on this device before sending"
+                defaultValue: "Reattach on this device to open"
             ))
         case .syncedPending:
             parts.append(String(

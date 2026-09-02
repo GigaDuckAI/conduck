@@ -23,18 +23,22 @@ import AppIntents
 import CoreData
 import Foundation
 
+/// One note card's worth of prepared text: the wrist's shape of the same
+/// thought the iOS `CaptureWorkboardIntent` hands `WorkMaterialDraft`, so the
+/// field names are the material's, not a heading's.
 nonisolated struct WatchWorkboardCapture: Equatable, Sendable {
     let title: String
-    let objective: String
+    let textContent: String
 }
 
 nonisolated enum WatchWorkboardCaptureText {
     /// Mirrors `WorkCaptureEnvelope.maximumNoteCharacters`, the bound every
-    /// other capture ingress enforces. The Watch target does not compile the
-    /// envelope, so the value is restated here; a Shortcut can pipe a whole
-    /// document into this parameter, and an unbounded note is both
-    /// unexportable to CloudKit and a cost on every board load.
-    static let maximumObjectiveCharacters = 16_000
+    /// other capture ingress enforces — named identically so the source guard
+    /// comparing the two spellings has something to compare. The Watch target
+    /// does not compile the envelope, so the value is restated here; a Shortcut
+    /// can pipe a whole document into this parameter, and an unbounded note is
+    /// both unexportable to CloudKit and a cost on every board load.
+    static let maximumNoteCharacters = 16_000
 
     static func prepare(_ rawValue: String) throws -> WatchWorkboardCapture {
         let normalized = rawValue
@@ -44,7 +48,7 @@ nonisolated enum WatchWorkboardCaptureText {
         guard !normalized.isEmpty else { throw WatchWorkboardCaptureError.emptyThought }
         // Refuse rather than truncate: a silently shortened note looks like a
         // successful capture and loses the part the person cared about.
-        guard normalized.count <= maximumObjectiveCharacters else {
+        guard normalized.count <= maximumNoteCharacters else {
             throw WatchWorkboardCaptureError.thoughtTooLong
         }
 
@@ -55,7 +59,7 @@ nonisolated enum WatchWorkboardCaptureText {
             .first(where: { !$0.isEmpty })
             .map { String($0.prefix(72)) }
             ?? String(localized: "workboard.item.untitled", defaultValue: "Untitled note")
-        return WatchWorkboardCapture(title: title, objective: normalized)
+        return WatchWorkboardCapture(title: title, textContent: normalized)
     }
 }
 
@@ -159,7 +163,7 @@ extension ConversationStore {
             row.setValue("note", forKey: "kind")
             row.setValue(capture.title, forKey: "title")
             row.setValue("", forKey: "caption")
-            row.setValue(capture.objective, forKey: "textContent")
+            row.setValue(capture.textContent, forKey: "textContent")
             row.setValue(NSNumber(value: 0), forKey: "byteSize")
             row.setValue(NSNumber(value: Int32(clamping: (highestRank ?? -1) + 1)), forKey: "sequence")
             row.setValue("metadataOnly", forKey: "storageMode")

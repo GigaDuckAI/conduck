@@ -109,15 +109,15 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
         let viewModel = await makeViewModelShowingDesk(harness: harness)
         let ids = materials.map(\.id)
 
-        let moved = await viewModel.reorderMaterial(ids[2], toInsertionIndex: 0, in: item.id)
+        let moved = await viewModel.reorderMaterial(ids[2], toInsertionIndex: 0)
 
         XCTAssertTrue(moved)
         XCTAssertEqual(harness.reorderedOrders, [[ids[2], ids[0], ids[1]]])
         XCTAssertEqual(harness.reorderRevisions, [9], "the drag carries the order the person saw")
-        let stored = viewModel.item(withID: item.id)?.materials ?? []
+        let stored = viewModel.desk?.materials ?? []
         XCTAssertEqual(stored.map(\.id), [ids[2], ids[0], ids[1]])
         XCTAssertEqual(stored.map(\.sequence), [0, 1, 2], "ranks stay dense")
-        XCTAssertGreaterThan(viewModel.item(withID: item.id)?.revision ?? 0, 9)
+        XCTAssertGreaterThan(viewModel.desk?.revision ?? 0, 9)
         XCTAssertNil(viewModel.notice)
     }
 
@@ -128,16 +128,16 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
         let viewModel = await makeViewModelShowingDesk(harness: harness)
         let ids = materials.map(\.id)
 
-        let movedLater = await viewModel.moveMaterial(ids[0], direction: .later, in: item.id)
+        let movedLater = await viewModel.moveMaterial(ids[0], direction: .later)
         XCTAssertTrue(movedLater)
         XCTAssertEqual(harness.reorderedOrders, [[ids[1], ids[0], ids[2]]])
 
         // The first card is now second; moving it earlier restores the order.
-        let movedBack = await viewModel.moveMaterial(ids[0], direction: .earlier, in: item.id)
+        let movedBack = await viewModel.moveMaterial(ids[0], direction: .earlier)
         XCTAssertTrue(movedBack)
         XCTAssertEqual(harness.reorderedOrders.last, [ids[0], ids[1], ids[2]])
 
-        let refusedMove = await viewModel.moveMaterial(ids[0], direction: .earlier, in: item.id)
+        let refusedMove = await viewModel.moveMaterial(ids[0], direction: .earlier)
         XCTAssertFalse(refusedMove, "the first card cannot move earlier")
         XCTAssertEqual(harness.reorderedOrders.count, 2, "a refused move never reaches the store")
     }
@@ -154,13 +154,12 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
         let moved = await viewModel.reorderMaterial(
             ids[0],
             relativeTo: ids[2],
-            placement: .after,
-            in: item.id
+            placement: .after
         )
 
         XCTAssertFalse(moved)
-        XCTAssertEqual(viewModel.item(withID: item.id)?.materials.map(\.id), ids)
-        XCTAssertEqual(viewModel.item(withID: item.id)?.materials.map(\.sequence), [0, 1, 2])
+        XCTAssertEqual(viewModel.desk?.materials.map(\.id), ids)
+        XCTAssertEqual(viewModel.desk?.materials.map(\.sequence), [0, 1, 2])
         XCTAssertNotNil(viewModel.notice, "a lost drag is never silent")
     }
 
@@ -177,29 +176,29 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
             revision: 12
         )
 
-        let moved = await viewModel.reorderMaterial(ids[0], toInsertionIndex: 3, in: item.id)
+        let moved = await viewModel.reorderMaterial(ids[0], toInsertionIndex: 3)
 
         XCTAssertFalse(moved)
         XCTAssertEqual(harness.loadCount, 1)
         XCTAssertEqual(
-            viewModel.item(withID: item.id)?.materials.map(\.id),
+            viewModel.desk?.materials.map(\.id),
             [ids[2], ids[0], ids[1]]
         )
     }
 
-    func testUnknownItemAndUnchangedOrderNeverReachTheStore() async {
+    func testAnUnchangedOrderAndAnUnknownCardNeverReachTheStore() async {
         let materials = makeMaterials(count: 2)
         let item = makeDesk(materials: materials, revision: 3)
         let harness = BoardHarness(item: item)
         let viewModel = await makeViewModelShowingDesk(harness: harness)
         let ids = materials.map(\.id)
 
-        let unchanged = await viewModel.reorderMaterial(ids[0], toInsertionIndex: 1, in: item.id)
-        let unknownItem = await viewModel.reorderMaterial(ids[0], toInsertionIndex: 0, in: UUID())
+        let unchanged = await viewModel.reorderMaterial(ids[0], toInsertionIndex: 1)
+        let unknownCard = await viewModel.reorderMaterial(UUID(), toInsertionIndex: 0)
         XCTAssertFalse(unchanged)
         XCTAssertFalse(
-            unknownItem,
-            "a board that is not the desk is not a board this model can rearrange"
+            unknownCard,
+            "a card the desk does not hold is not a card this model can rearrange"
         )
         XCTAssertTrue(harness.reorderedOrders.isEmpty)
         XCTAssertNil(viewModel.notice)
@@ -213,21 +212,17 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
         let harness = BoardHarness(item: item)
         let viewModel = await makeViewModelShowingDesk(harness: harness)
 
-        let resized = await viewModel.setMaterialCardSize(
-            .large,
-            materialID: materials[1].id,
-            in: item.id
-        )
+        let resized = await viewModel.setMaterialCardSize(.large, materialID: materials[1].id)
 
         XCTAssertTrue(resized)
         XCTAssertEqual(harness.cardSizeWrites.count, 1)
         XCTAssertEqual(harness.cardSizeWrites[0].materialID, materials[1].id)
         XCTAssertEqual(harness.cardSizeWrites[0].size, .large)
         XCTAssertEqual(
-            viewModel.item(withID: item.id)?.materials.map(\.cardSize),
+            viewModel.desk?.materials.map(\.cardSize),
             [.standard, .large]
         )
-        XCTAssertEqual(viewModel.item(withID: item.id)?.revision, 9)
+        XCTAssertEqual(viewModel.desk?.revision, 9)
         XCTAssertTrue(harness.reorderedOrders.isEmpty)
     }
 
@@ -239,22 +234,17 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
 
         let unchanged = await viewModel.setMaterialCardSize(
             .standard,
-            materialID: materials[0].id,
-            in: item.id
+            materialID: materials[0].id
         )
         XCTAssertTrue(unchanged)
         XCTAssertTrue(harness.cardSizeWrites.isEmpty)
 
         harness.cardSizeFails = true
-        let resized = await viewModel.setMaterialCardSize(
-            .small,
-            materialID: materials[0].id,
-            in: item.id
-        )
+        let resized = await viewModel.setMaterialCardSize(.small, materialID: materials[0].id)
 
         XCTAssertFalse(resized)
         XCTAssertEqual(
-            viewModel.item(withID: item.id)?.materials.map(\.cardSize),
+            viewModel.desk?.materials.map(\.cardSize),
             [.standard, .standard]
         )
         XCTAssertNotNil(viewModel.notice)
@@ -269,12 +259,12 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
         let viewModel = await makeViewModelShowingDesk(harness: harness)
         let ids = materials.map(\.id)
 
-        let removed = await viewModel.removeMaterialFromBoard(ids[1], in: item.id)
+        let removed = await viewModel.removeMaterialFromBoard(ids[1])
 
         XCTAssertTrue(removed)
         XCTAssertEqual(harness.removedMaterialIDs, [ids[1]])
         XCTAssertEqual(harness.removeRevisions, [7], "the item's own revision is the CAS token")
-        XCTAssertEqual(viewModel.item(withID: item.id)?.materials.map(\.id), [ids[0], ids[2]])
+        XCTAssertEqual(viewModel.desk?.materials.map(\.id), [ids[0], ids[2]])
         XCTAssertNil(viewModel.notice)
     }
 
@@ -284,15 +274,15 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
         let harness = BoardHarness(item: item)
         let viewModel = await makeViewModelShowingDesk(harness: harness)
 
-        let unknown = await viewModel.removeMaterialFromBoard(UUID(), in: item.id)
+        let unknown = await viewModel.removeMaterialFromBoard(UUID())
         XCTAssertFalse(unknown)
         XCTAssertTrue(harness.removedMaterialIDs.isEmpty)
 
         harness.removeFails = true
-        let failed = await viewModel.removeMaterialFromBoard(materials[0].id, in: item.id)
+        let failed = await viewModel.removeMaterialFromBoard(materials[0].id)
         XCTAssertFalse(failed)
         XCTAssertEqual(
-            viewModel.item(withID: item.id)?.materials.count,
+            viewModel.desk?.materials.count,
             2,
             "a refused removal leaves the board alone"
         )
@@ -383,9 +373,7 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
                 return harness.item
             },
             replaceMaterial: { _, _, _, _ in throw TestError.unexpectedCall },
-            openConversation: { _ in },
             openMaterial: { _ in },
-            openGatewaySettings: {},
             reorderMaterials: { [harness] orderedIDs, expectedRevision in
                 harness.reorderedOrders.append(orderedIDs)
                 harness.reorderRevisions.append(expectedRevision)

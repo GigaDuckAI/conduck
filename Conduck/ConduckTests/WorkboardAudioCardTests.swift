@@ -3,12 +3,14 @@
 // ConduckTests
 // WorkboardAudioCardTests.swift
 //
-// The two parts of the desk's audio card that are decidable without audio
-// hardware: the transport's clock/progress arithmetic, and the exclusivity
-// registry that makes starting one card stop another. Playback itself needs a
-// real `AVAudioPlayer` and a real session, so it is a founder-QA item; these
-// hold the rules that decide what the person is shown and which card owns
-// output, which is where a silent regression would actually live.
+// The parts of the desk's audio card that are decidable without audio
+// hardware: the transport's clock/progress arithmetic, the exclusivity registry
+// that makes starting one card stop another, the audio-output claim (who may
+// deactivate the session, and what a live capture or a refused activation does
+// to a tap), and the card's presentation rules — which affordances a card
+// offers and what each one says it will do. Playback itself needs a real
+// `AVAudioPlayer` and a real session, so it is a founder-QA item; these hold
+// the rules where a silent regression would actually live.
 
 import XCTest
 @testable import Conduck
@@ -201,7 +203,271 @@ final class WorkboardAudioCardTests: XCTestCase {
         await gate.open()
     }
 
+    // MARK: - Audio output ownership
+
+    /// A client of the audio-output claim. Plain object identity is all the
+    /// arbiter keys on.
+    private final class OutputClient {}
+
+    private struct SessionRefused: Error {}
+
+    func testOnlyTheClientThatClaimedOutputCanDeactivateTheSession() {
+        let counts = SessionCounts()
+        let output = WorkboardAudioOutput(
+            captureIsLive: { false },
+            activateSession: { counts.activations += 1 },
+            deactivateSession: { counts.deactivations += 1 }
+        )
+        let first = OutputClient()
+        let second = OutputClient()
+
+        XCTAssertEqual(output.claim(for: first), .granted)
+        XCTAssertEqual(output.claim(for: second), .granted)
+        XCTAssertEqual(counts.activations, 2)
+
+        // A terminal from the card that already LOST output. An unconditional
+        // release would deactivate the session under the card now playing.
+        output.release(for: first)
+        XCTAssertEqual(counts.deactivations, 0, "Only the holder may deactivate the session.")
+        XCTAssertTrue(output.currentHolder === second)
+
+        output.release(for: second)
+        XCTAssertEqual(counts.deactivations, 1)
+        XCTAssertNil(output.currentHolder)
+    }
+
+    func testAClaimTheSessionRefusedLeavesNoHolderAndNeverDeactivates() {
+        let counts = SessionCounts()
+        let output = WorkboardAudioOutput(
+            captureIsLive: { false },
+            activateSession: { counts.activations += 1; throw SessionRefused() },
+            deactivateSession: { counts.deactivations += 1 }
+        )
+        let client = OutputClient()
+
+        XCTAssertEqual(output.claim(for: client), .sessionUnavailable)
+        // Nothing was brought up, so nothing may be torn down: a later release
+        // must not deactivate a session this client never owned.
+        XCTAssertNil(output.currentHolder)
+        output.release(for: client)
+        XCTAssertEqual(counts.deactivations, 0)
+    }
+
+    func testALiveCaptureIsRefusedBeforeTheSessionIsTouched() {
+        let counts = SessionCounts()
+        let output = WorkboardAudioOutput(
+            captureIsLive: { true },
+            activateSession: { counts.activations += 1 },
+            deactivateSession: { counts.deactivations += 1 }
+        )
+
+        XCTAssertEqual(output.claim(for: OutputClient()), .captureIsLive)
+        XCTAssertEqual(counts.activations, 0, "A live capture must not have its session reconfigured.")
+        XCTAssertNil(output.currentHolder)
+    }
+
+    func testTheHolderReclaimingDoesNotReactivateTheSession() {
+        let counts = SessionCounts()
+        let output = WorkboardAudioOutput(
+            captureIsLive: { false },
+            activateSession: { counts.activations += 1 },
+            deactivateSession: { counts.deactivations += 1 }
+        )
+        let client = OutputClient()
+
+        XCTAssertEqual(output.claim(for: client), .granted)
+        XCTAssertEqual(output.claim(for: client), .granted)
+
+        XCTAssertEqual(counts.activations, 1, "A second claim by the holder rides the route it already has.")
+    }
+
+    // MARK: - The player's session discipline
+
+    func testALiveCaptureRefusesTheCardWithoutClaimingAnything() async {
+        let registry = WorkboardAudioExclusivity()
+        let output = StubOutput()
+        output.captureIsLive = true
+        let player = WorkboardAudioCardPlayer(
+            exclusivity: registry,
+            output: output,
+            speechBus: SpeechExclusivity()
+        )
+
+        player.toggle { Data("not audio".utf8) }
+        await settle(until: { player.phase == .blocked })
+
+        XCTAssertTrue(output.claims.isEmpty, "A refusal must not claim output on its way to saying no.")
+        XCTAssertNil(registry.currentHolder, "A refused card must not stop the card that is playing.")
+        // The refusal is about the moment, not the recording: the next tap
+        // must still mean "play".
+        XCTAssertTrue(player.willStartPlayback)
+    }
+
+    func testASessionThatRefusesToActivateFailsTheCardInsteadOfPlayingBlind() async {
+        let registry = WorkboardAudioExclusivity()
+        let output = StubOutput()
+        output.nextClaim = .sessionUnavailable
+        let player = WorkboardAudioCardPlayer(
+            exclusivity: registry,
+            output: output,
+            speechBus: SpeechExclusivity()
+        )
+
+        player.toggle { Data("not audio".utf8) }
+        await settle(until: { player.phase == .failed })
+
+        // `AVAudioPlayer.play()` can return true into a session that permits no
+        // output, so a refused activation is the answer — not a transport that
+        // looks like it is playing.
+        XCTAssertEqual(player.phase, .failed)
+        XCTAssertNil(registry.currentHolder)
+        XCTAssertTrue(output.releases.isEmpty, "Nothing was claimed, so nothing is released.")
+    }
+
+    func testAMicrophoneClaimStopsACardThatIsBringingAudioUp() async {
+        let bus = SpeechExclusivity()
+        let registry = WorkboardAudioExclusivity()
+        let player = WorkboardAudioCardPlayer(
+            exclusivity: registry,
+            output: StubOutput(),
+            speechBus: bus
+        )
+        let gate = Gate()
+
+        player.toggle {
+            await gate.wait()
+            return Data("not audio".utf8)
+        }
+        XCTAssertEqual(player.phase, .loading)
+
+        // The mic's own call: stop every registered party. The card is a party
+        // from the moment it starts reading bytes, so a capture starting during
+        // the read cannot be raced to output.
+        bus.claim(nil)
+
+        XCTAssertEqual(player.phase, .idle)
+        await gate.open()
+    }
+
+    func testTheBusCannotStopACardThatIsNotProducingAudio() {
+        let bus = SpeechExclusivity()
+        let player = WorkboardAudioCardPlayer(
+            exclusivity: WorkboardAudioExclusivity(),
+            output: StubOutput(),
+            speechBus: bus
+        )
+
+        bus.register(player)
+        bus.claim(nil)
+
+        // Every claim broadcasts to every party; an idle card has nothing to
+        // stop and must not report a state change for someone else's audio.
+        XCTAssertEqual(player.phase, .idle)
+    }
+
+    // MARK: - Presentation rules
+
+    func testTheLoadingPhaseOffersCancelRatherThanPlay() {
+        // Activating a loading card cancels the payload read, so announcing
+        // "Play" would describe the opposite of what the tap does.
+        XCTAssertEqual(WorkboardAudioCardPresentation.transportAction(for: .loading), .cancelLoading)
+        XCTAssertEqual(WorkboardAudioCardPresentation.transportAction(for: .playing), .pause)
+        XCTAssertEqual(WorkboardAudioCardPresentation.transportAction(for: .idle), .play)
+        XCTAssertEqual(WorkboardAudioCardPresentation.transportAction(for: .paused), .play)
+        XCTAssertEqual(WorkboardAudioCardPresentation.transportAction(for: .failed), .play)
+        XCTAssertEqual(WorkboardAudioCardPresentation.transportAction(for: .blocked), .play)
+    }
+
+    func testOpenIsOfferedOnlyForReadableBytesAndOnlyWhenTheBoardWiredIt() {
+        let everyAvailability: [WorkboardMaterialAvailability] =
+            [.available, .localOnly, .syncPending, .unavailableOnThisDevice]
+        for availability in everyAvailability {
+            XCTAssertFalse(
+                WorkboardAudioCardPresentation.showsOpenAction(
+                    availability: availability,
+                    hasOpenAction: false
+                ),
+                "A card with no open action must not offer Open (\(availability))."
+            )
+            XCTAssertEqual(
+                WorkboardAudioCardPresentation.showsOpenAction(
+                    availability: availability,
+                    hasOpenAction: true
+                ),
+                availability.isAvailable,
+                "Open must be offered exactly for bytes this device can read (\(availability))."
+            )
+        }
+    }
+
+    func testTheUnavailableChipIsAnActionOnlyWhenReattachIsWired() {
+        XCTAssertEqual(
+            WorkboardAudioCardPresentation.chip(for: .unavailableOnThisDevice, hasReattachAction: true),
+            .reattach
+        )
+        XCTAssertTrue(WorkboardAudioCardChip.reattach.isAction)
+
+        // With nowhere to send the person, the corner states the fact instead
+        // of naming a repair the card cannot perform.
+        XCTAssertEqual(
+            WorkboardAudioCardPresentation.chip(for: .unavailableOnThisDevice, hasReattachAction: false),
+            .notOnThisDevice
+        )
+        XCTAssertFalse(WorkboardAudioCardChip.notOnThisDevice.isAction)
+    }
+
+    func testTheOtherAvailabilityStatesAreNeverActionsWhateverIsWired() {
+        for hasReattach in [true, false] {
+            XCTAssertNil(
+                WorkboardAudioCardPresentation.chip(for: .available, hasReattachAction: hasReattach),
+                "Bytes that are here need no chip."
+            )
+            XCTAssertEqual(
+                WorkboardAudioCardPresentation.chip(for: .syncPending, hasReattachAction: hasReattach),
+                .syncPending
+            )
+            XCTAssertEqual(
+                WorkboardAudioCardPresentation.chip(for: .localOnly, hasReattachAction: hasReattach),
+                .localOnly
+            )
+        }
+        // A card waiting for iCloud is repaired by the sync landing, not by the
+        // person, so its chip is never a control.
+        XCTAssertFalse(WorkboardAudioCardChip.syncPending.isAction)
+        XCTAssertFalse(WorkboardAudioCardChip.localOnly.isAction)
+    }
+
     // MARK: - Helpers
+
+    /// Reference-typed tallies so the injected session closures can count
+    /// without the test capturing mutable locals across escapes.
+    private final class SessionCounts {
+        var activations = 0
+        var deactivations = 0
+    }
+
+    /// The audio-output claim under test control: it records who asked, answers
+    /// what the case needs, and keeps the same ownership rule the real arbiter
+    /// does.
+    @MainActor
+    private final class StubOutput: WorkboardAudioOutputArbiter {
+        var captureIsLive = false
+        var nextClaim: WorkboardAudioOutputClaim = .granted
+        private(set) var claims: [ObjectIdentifier] = []
+        private(set) var releases: [ObjectIdentifier] = []
+        private(set) weak var holder: AnyObject?
+
+        func claim(for client: AnyObject) -> WorkboardAudioOutputClaim {
+            claims.append(ObjectIdentifier(client))
+            if nextClaim == .granted { holder = client }
+            return nextClaim
+        }
+
+        func release(for client: AnyObject) {
+            releases.append(ObjectIdentifier(client))
+            if holder === client { holder = nil }
+        }
+    }
 
     /// Spins the main actor until `condition` holds, so an assertion never
     /// races a payload read that hops off and back.

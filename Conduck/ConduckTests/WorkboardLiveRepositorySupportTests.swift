@@ -19,8 +19,8 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let vault = WorkAssetVault(baseURL: directory)
 
-        let present = try await vault.store(Data("bytes".utf8), suggestedExtension: "png")
-        let removed = try await vault.store(Data("gone".utf8), suggestedExtension: "png")
+        let present = try await vault.store(bytes: Data("bytes".utf8), suggestedExtension: "png").key
+        let removed = try await vault.store(bytes: Data("gone".utf8), suggestedExtension: "png").key
         try await vault.remove(removed)
 
         let resolved = await vault.urls(for: [present, removed, "../escape.png", present])

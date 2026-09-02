@@ -43,16 +43,20 @@ final class WorkboardDeskViewModelTests: XCTestCase {
         await viewModel.load()
 
         XCTAssertNil(viewModel.desk, "the desk row does not exist yet, and a project is not one")
-        XCTAssertNil(viewModel.item(withID: legacy.id), "a project id resolves to no board")
 
-        let added = await viewModel.addWorkspaceThought(
-            "A thought that belongs on the desk",
-            to: Constants.workboardDeskItemID
-        )
+        let added = await viewModel.addThought("A thought that belongs on the desk")
 
         XCTAssertTrue(added)
-        XCTAssertEqual(viewModel.desk?.id, Constants.workboardDeskItemID)
-        XCTAssertNil(viewModel.item(withID: legacy.id))
+        XCTAssertEqual(
+            viewModel.desk?.id,
+            Constants.workboardDeskItemID,
+            "the only board this model can hold is the desk"
+        )
+        XCTAssertEqual(
+            viewModel.desk?.materials.map(\.name),
+            ["A thought that belongs on the desk"],
+            "the project's card is on no board this model loads"
+        )
         // Invisible, never deleted: the project row and its card stay exactly
         // as they were, so a build that brings projects back finds them whole.
         let preservedValue = try await store.fetchWorkItem(id: legacy.id)
@@ -72,10 +76,7 @@ final class WorkboardDeskViewModelTests: XCTestCase {
         let beforeCapture = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         XCTAssertNil(beforeCapture, "an untouched desk owns no row")
 
-        let added = await viewModel.addWorkspaceThought(
-            "First thought",
-            to: Constants.workboardDeskItemID
-        )
+        let added = await viewModel.addThought("First thought")
 
         XCTAssertTrue(added)
         let desk = try XCTUnwrap(viewModel.desk)
@@ -99,16 +100,10 @@ final class WorkboardDeskViewModelTests: XCTestCase {
         let viewModel = makeViewModel(store: store)
         await viewModel.load()
 
-        let addedFirst = await viewModel.addWorkspaceThought(
-            "First thought",
-            to: Constants.workboardDeskItemID
-        )
+        let addedFirst = await viewModel.addThought("First thought")
         XCTAssertTrue(addedFirst)
         let firstRevision = try XCTUnwrap(viewModel.desk?.revision)
-        let addedSecond = await viewModel.addWorkspaceThought(
-            "Second thought",
-            to: Constants.workboardDeskItemID
-        )
+        let addedSecond = await viewModel.addThought("Second thought")
         XCTAssertTrue(addedSecond)
 
         let desk = try XCTUnwrap(viewModel.desk)
@@ -129,17 +124,11 @@ final class WorkboardDeskViewModelTests: XCTestCase {
         let store = ConversationStore(inMemory: true)
         let viewModel = makeViewModel(store: store)
         await viewModel.load()
-        let added = await viewModel.addWorkspaceThought(
-            "Only thought",
-            to: Constants.workboardDeskItemID
-        )
+        let added = await viewModel.addThought("Only thought")
         XCTAssertTrue(added)
         let materialID = try XCTUnwrap(viewModel.desk?.materials.first?.id)
 
-        let removed = await viewModel.removeMaterialFromBoard(
-            materialID,
-            in: Constants.workboardDeskItemID
-        )
+        let removed = await viewModel.removeMaterialFromBoard(materialID)
 
         XCTAssertTrue(removed)
         XCTAssertEqual(viewModel.desk?.materials.count, 0)
@@ -150,10 +139,7 @@ final class WorkboardDeskViewModelTests: XCTestCase {
         let stored = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         XCTAssertNotNil(stored, "the desk row survives its last card")
 
-        let addedAgain = await viewModel.addWorkspaceThought(
-            "A later thought",
-            to: Constants.workboardDeskItemID
-        )
+        let addedAgain = await viewModel.addThought("A later thought")
         XCTAssertTrue(addedAgain)
         XCTAssertEqual(viewModel.desk?.materials.map(\.name), ["A later thought"])
         let boardsAfterReuse = try await store.fetchWorkItems()
@@ -187,10 +173,7 @@ final class WorkboardDeskViewModelTests: XCTestCase {
         )
 
         // A capture on top of the merge stays one desk and keeps both cards.
-        let addedAfterMerge = await viewModel.addWorkspaceThought(
-            "Captured after the merge",
-            to: Constants.workboardDeskItemID
-        )
+        let addedAfterMerge = await viewModel.addThought("Captured after the merge")
         XCTAssertTrue(addedAfterMerge)
         XCTAssertEqual(
             viewModel.desk?.materials.map(\.name).sorted(),
@@ -205,9 +188,7 @@ final class WorkboardDeskViewModelTests: XCTestCase {
         let repository = WorkboardLiveRepository(
             store: store,
             captureInbox: WorkCaptureInbox(baseURL: temporaryDirectory()),
-            openConversation: { _ in },
-            openMaterial: { _ in },
-            openGatewaySettings: {}
+            openMaterial: { _ in }
         )
         return WorkboardViewModel(dependencies: repository.makeDependencies())
     }

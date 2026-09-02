@@ -13,8 +13,18 @@ import XCTest
 @testable import Conduck
 
 final class WorkboardChatCaptureTests: XCTestCase {
+
+    /// Every store here mints a vault directory of its own that nothing else
+    /// removes; the fixture empties them when the class is done.
+    private let isolated = IsolatedWorkStores()
+
+    override func tearDown() async throws {
+        await isolated.cleanUp()
+        try await super.tearDown()
+    }
+
     func testCapturingATurnAppendsItToTheDeskUnderTheMessageIdentity() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let conversation = try await store.createConversation(backend: "hermes")
         let message = try await store.appendMessage(
             role: "user",
@@ -46,7 +56,7 @@ final class WorkboardChatCaptureTests: XCTestCase {
     }
 
     func testASecondCaptureOfTheSameTurnReturnsTheExistingCardWithoutADuplicate() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let conversation = try await store.createConversation(backend: "hermes")
         let payload = Data("one source".utf8)
         let message = try await store.appendMessage(
@@ -96,7 +106,7 @@ final class WorkboardChatCaptureTests: XCTestCase {
     }
 
     func testCaptureAppendsAfterTheCardsTheDeskAlreadyHolds() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         _ = try await store.upsertDeskMaterial(
             WorkMaterialDraft(kind: .note, title: "Earlier", textContent: "collected earlier")
         )
@@ -120,7 +130,7 @@ final class WorkboardChatCaptureTests: XCTestCase {
     }
 
     func testAttachmentsThatCannotBeCopiedAreReportedRatherThanDropped() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let conversation = try await store.createConversation(backend: "hermes")
         let textBytes = Data("source notes".utf8)
         let local = AttachmentDraft(
@@ -191,7 +201,7 @@ final class WorkboardChatCaptureTests: XCTestCase {
     }
 
     func testCaptureMintsNoWorkItemOfItsOwn() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let first = try await store.createConversation(backend: "hermes")
         let second = try await store.createConversation(backend: "openclaw")
         let firstMessage = try await store.appendMessage(
@@ -230,7 +240,7 @@ final class WorkboardChatCaptureTests: XCTestCase {
     /// for good, so a repeat republishes every attachment this device can still
     /// read and lets the store decide whether that is a repair or a no-op.
     func testRecapturingATurnRestagesAnAttachmentWhoseSyncedBytesAreGone() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let conversation = try await store.createConversation(backend: "hermes")
         let payload = Data("the source the card promises".utf8)
         let message = try await store.appendMessage(
@@ -294,7 +304,7 @@ final class WorkboardChatCaptureTests: XCTestCase {
     /// desk: it has to adopt them, because reporting a failure would leave the
     /// person with a turn that can never be captured again.
     func testATurnCapturedByAnOlderBuildIsAdoptedOntoTheDeskRatherThanFailing() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let conversation = try await store.createConversation(backend: "hermes")
         let payload = Data("the attachment the older build copied".utf8)
         let message = try await store.appendMessage(
@@ -369,5 +379,76 @@ final class WorkboardChatCaptureTests: XCTestCase {
         let legacyValue = try await store.fetchWorkItem(id: message.id)
         let legacy = try XCTUnwrap(legacyValue, "the item the older build minted is never deleted")
         XCTAssertTrue(legacy.materials.isEmpty)
+    }
+
+    /// A chat recapture states the turn it belongs to, and that is what
+    /// licenses adoption. A card parked under an owner row with nothing to do
+    /// with the turn is therefore refused rather than dragged onto the desk —
+    /// the attachment reports as failed and the card it collided with keeps its
+    /// owner and its bytes. Reported, not silent: the person is told the turn
+    /// did not fully capture.
+    func testAChatRecaptureNeverAdoptsACardParkedByAnUnrelatedCapture() async throws {
+        let store = isolated.make()
+        let conversation = try await store.createConversation(backend: "hermes")
+        let payload = Data("the attachment this turn carries".utf8)
+        let message = try await store.appendMessage(
+            role: "user",
+            text: "Keep this turn",
+            conversationID: conversation.id,
+            sourceDevice: "test",
+            attachments: [
+                AttachmentDraft(
+                    mimeType: "text/plain",
+                    filename: "source.txt",
+                    data: payload,
+                    thumbnailData: nil,
+                    width: 0,
+                    height: 0,
+                    byteSize: payload.count,
+                    sequence: 0
+                )
+            ]
+        )
+        let localPayloads = try await store.loadLocalAttachmentPayloads(for: message.id)
+        let attachmentID = try XCTUnwrap(localPayloads.keys.first)
+
+        // Someone else's capture, which happens to hold a card under the same
+        // identifier this turn's attachment carries.
+        let strangerID = UUID()
+        let strangerBytes = Data("bytes belonging to another capture entirely".utf8)
+        _ = try await store.createWorkItem(
+            WorkItemDraft(
+                id: strangerID,
+                captureEnvelopeID: strangerID,
+                content: WorkItemContent(title: "Shared from Safari")
+            )
+        )
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                id: attachmentID,
+                kind: .file,
+                title: "theirs.txt",
+                filename: "theirs.txt",
+                mimeType: "text/plain",
+                payload: strangerBytes
+            ),
+            to: strangerID
+        )
+
+        let receipt = try await store.captureMessageToWork(message, conversationID: conversation.id)
+
+        XCTAssertEqual(receipt.failedMaterialCount, 1,
+                       "the attachment could not be published, and the banner says so")
+        XCTAssertEqual(receipt.addedMaterialCount, 1, "the turn's words still reached the desk")
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.map(\.id), [message.id],
+                       "a card this turn cannot account for never joins the desk")
+        let rows = await store._workMaterialRowsForTesting(id: attachmentID)
+        XCTAssertEqual(Set(rows.compactMap(\.workItemID)), [strangerID])
+        let strangerPayload = try await store.loadWorkMaterialPayload(id: attachmentID)
+        XCTAssertEqual(strangerPayload, strangerBytes,
+                       "and its payload is not replaced by the bytes this turn was carrying")
     }
 }

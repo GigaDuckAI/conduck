@@ -21,6 +21,16 @@ import CryptoKit
 
 final class WorkboardBlobPublicationTests: XCTestCase {
 
+    /// Every store here mints a vault directory of its own that nothing else
+    /// removes; the fixture empties them when the class is done.
+    private let isolated = IsolatedWorkStores()
+
+    override func tearDown() async throws {
+        await isolated.cleanUp()
+        try await super.tearDown()
+    }
+
+
     private func hex(_ payload: Data) -> String {
         SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
     }
@@ -31,10 +41,366 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         try await store.fetchWorkItem(id: Constants.workboardDeskItemID)?.materials ?? []
     }
 
+
+    /// A desk card whose payload is device-local. A zero-length or oversized
+    /// payload is what puts one there through the capture lane; the fixture
+    /// route below is what makes a SMALL device-local payload possible, which
+    /// is the shape a reattach has to be able to put back.
+    private func vaultCard(
+        in store: ConversationStore,
+        payload: Data,
+        name: String
+    ) async throws -> WorkMaterialRecord {
+        if try await store.fetchWorkItem(id: Constants.workboardDeskItemID) == nil {
+            _ = try await store.upsertDeskMaterial(
+                WorkMaterialDraft(kind: .note, title: "desk", textContent: "desk")
+            )
+        }
+        return try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                kind: .file,
+                title: name,
+                filename: name,
+                mimeType: "application/octet-stream",
+                payload: payload
+            ),
+            to: Constants.workboardDeskItemID
+        )
+    }
+
+    /// A file on disk the reattach cases can hand over, cleaned up by the
+    /// caller's `defer`.
+    private func temporaryFile(_ bytes: Data, extension ext: String = "bin") throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("blob-publication-\(UUID().uuidString).\(ext)")
+        try bytes.write(to: url, options: .atomic)
+        return url
+    }
+
+    /// Take the leaf away between the save and the proof — the reclamation in
+    /// another process that the staging guard exists to stop, arriving in the
+    /// one window it cannot cover. Returning nil lets the REAL confirmation run
+    /// over what the closure did, so the refusal is the production one.
+    private func removeLeafBeforeConfirming(
+        _ store: ConversationStore,
+        at site: WorkPublicationSite
+    ) async {
+        let vault = await store.workAssetVault
+        await store._setPublicationConfirmationHookForTesting { hitSite, _, key, _ in
+            guard hitSite == site else { return nil }
+            try? await vault.remove(key)
+            return nil
+        }
+    }
+
+    // MARK: - The row records what the leaf holds
+
+    /// A vault row's `byteSize` is measured off the leaf, not taken from the
+    /// caller. The two halves are one change: the confirmation compares the
+    /// leaf against that column, so a column carrying a claim would either
+    /// refuse a healthy publication or, left uncompared, let a truncated leaf
+    /// pass as whole.
+    func testAVaultRowRecordsTheBytesTheLeafHoldsRatherThanTheCallersClaim() async throws {
+        let store = isolated.make()
+        _ = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(kind: .note, title: "desk", textContent: "desk")
+        )
+        let payload = Data("twenty bytes exactly".utf8)
+        let card = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                kind: .file,
+                title: "claimed.bin",
+                filename: "claimed.bin",
+                mimeType: "application/octet-stream",
+                payload: payload,
+                // Deliberately wrong, and nothing downstream may believe it.
+                byteSize: 9_999
+            ),
+            to: Constants.workboardDeskItemID
+        )
+
+        XCTAssertEqual(card.storageMode, .localVault)
+        XCTAssertEqual(
+            card.byteSize, Int64(payload.count),
+            "the row records the length the leaf holds, never the size the caller declared"
+        )
+        let rows = await store._workMaterialRowsForTesting(id: card.id)
+        XCTAssertEqual(Set(rows.compactMap(\.byteSize)), [Int64(payload.count)])
+        XCTAssertEqual(
+            card.availability, .availableLocally,
+            "and the publication confirmed against that same number rather than the claim"
+        )
+        let loaded = try await store.loadWorkMaterialPayload(id: card.id)
+        XCTAssertEqual(loaded, payload)
+    }
+
+    // MARK: - A leaf that will not read back after the row committed
+
+    /// The refusal branch of a fresh desk capture. It runs after Core Data has
+    /// committed, so the card is real and the person can see it — reporting a
+    /// bare failure would leave a caller that minted this id for this attempt
+    /// free to retry under a new one and strand the card it already published.
+    func testAFreshPublicationThatCannotProveItsLeafReportsTheCommittedCard() async throws {
+        let store = isolated.make()
+        await removeLeafBeforeConfirming(store, at: .deskPublish)
+
+        // A zero-length payload takes the device-local lane, which is the lane
+        // with a leaf to lose.
+        let draft = WorkMaterialDraft(
+            kind: .file,
+            title: "empty.bin",
+            filename: "empty.bin",
+            mimeType: "application/octet-stream",
+            payload: Data()
+        )
+        let posted = expectation(forNotification: .conversationsDidChange, object: nil)
+
+        do {
+            _ = try await store.upsertDeskMaterial(draft)
+            XCTFail("a payload the vault cannot read back is not a durable capture")
+        } catch let failure as WorkMaterialCommittedUnavailableError {
+            XCTAssertEqual(failure.record.id, draft.id)
+            XCTAssertEqual(
+                failure.record.availability, .unavailableOnThisDevice,
+                "the error carries the card as it stands, which is the point of carrying it"
+            )
+        }
+        await fulfillment(of: [posted], timeout: 2)
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.map(\.id), [draft.id],
+                       "the card committed; the board must not be told otherwise")
+        XCTAssertEqual(desk.materials.first?.availability, .unavailableOnThisDevice)
+
+        // And it is repairable rather than a dead end: the replay carrying the
+        // same bytes restores the lane the card claims.
+        await store._setPublicationConfirmationHookForTesting(nil)
+        let repaired = try await store.upsertDeskMaterial(draft)
+        XCTAssertEqual(repaired.availability, .availableLocally)
+        let rows = await store._workMaterialRowsForTesting(id: draft.id)
+        XCTAssertEqual(rows.count, 1, "the repair is the same card, never a second one")
+    }
+
+    /// The same rule at the arbitrary-owner insert, which returns its record
+    /// rather than re-reading it and so had its own way of hiding the card.
+    func testAnArbitraryInsertThatCannotProveItsLeafReportsItsCommittedCard() async throws {
+        let store = isolated.make()
+        _ = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(kind: .note, title: "desk", textContent: "desk")
+        )
+        await removeLeafBeforeConfirming(store, at: .arbitraryInsert)
+
+        let materialID = UUID()
+        do {
+            _ = try await store.addWorkMaterial(
+                WorkMaterialDraft(
+                    id: materialID,
+                    kind: .file,
+                    title: "inserted.bin",
+                    filename: "inserted.bin",
+                    mimeType: "application/octet-stream",
+                    payload: Data("bytes that will not read back".utf8)
+                ),
+                to: Constants.workboardDeskItemID
+            )
+            XCTFail("an insert whose leaf cannot be proved is not a durable publication")
+        } catch let failure as WorkMaterialCommittedUnavailableError {
+            XCTAssertEqual(failure.record.id, materialID)
+            XCTAssertEqual(failure.record.availability, .unavailableOnThisDevice)
+        }
+
+        let rows = await store._workMaterialRowsForTesting(id: materialID)
+        XCTAssertEqual(rows.count, 1, "the row committed before the proof was asked for")
+    }
+
+    // MARK: - A reattach that cannot prove its leaf
+
+    /// The bytes a reattach replaces are the only copy the card had — the
+    /// picked file belongs to the person, not to the app. So a replacement
+    /// whose leaf will not read back must not cost them the payload it was
+    /// replacing: the old keys stay, and the rows go back to naming them.
+    func testAReattachThatCannotProveItsLeafKeepsTheBytesItWasReplacing() async throws {
+        let store = isolated.make()
+        let original = Data("the copy the card already had".utf8)
+        let card = try await vaultCard(in: store, payload: original, name: "original.bin")
+        let oldKey = try XCTUnwrap(card.localVaultKey)
+
+        let replacement = try temporaryFile(Data())
+        defer { try? FileManager.default.removeItem(at: replacement) }
+        await removeLeafBeforeConfirming(store, at: .reattach)
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        do {
+            _ = try await store.replaceWorkMaterialPayloadFile(
+                id: card.id,
+                from: replacement,
+                byteSize: 0,
+                filename: replacement.lastPathComponent,
+                mimeType: "application/octet-stream",
+                sourceDevice: "test",
+                expectedOwnerRevision: WorkboardRevision.value(for: desk.updatedAt)
+            )
+            XCTFail("a replacement the vault cannot read back must be reported as failed")
+        } catch WorkboardStoreError.materialPayloadUnavailable {
+            // Expected: nothing is left committed, so there is no card to adopt.
+        }
+
+        let rows = await store._workMaterialRowsForTesting(id: card.id)
+        XCTAssertEqual(Set(rows.compactMap(\.localVaultKey)), [oldKey],
+                       "the card names the payload it had before the failed swap")
+        XCTAssertEqual(Set(rows.compactMap(\.storageMode)), ["localVault"])
+        XCTAssertEqual(Set(rows.compactMap(\.byteSize)), [Int64(original.count)])
+        let keptLeaf = await store.workAssetVault.contains(oldKey)
+        XCTAssertTrue(keptLeaf, "the only surviving copy of the person's bytes stays on disk")
+        let loaded = try await store.loadWorkMaterialPayload(id: card.id)
+        XCTAssertEqual(loaded, original)
+        let restoredValue = try await store
+            .fetchWorkItem(id: Constants.workboardDeskItemID)?.materials
+            .first { $0.id == card.id }
+        let restored = try XCTUnwrap(restoredValue)
+        XCTAssertEqual(restored.availability, .availableLocally)
+        XCTAssertEqual(restored.filename, "original.bin",
+                       "the metadata the swap overwrote comes back with the lane")
+    }
+
+    /// A card whose payload was a BLOB cannot be put back: retiring the old
+    /// blob rows is part of the swap's own transaction and their bytes are
+    /// gone. Pointing it back at the synced lane would leave it claiming a
+    /// payload nothing holds, which is worse than the unreadable leaf it names
+    /// — that one a reattach can replace. So the card keeps the new pointer and
+    /// the failure carries it.
+    func testAReattachOffTheSyncedLaneReportsTheCommittedCardItCannotRestore() async throws {
+        let store = isolated.make()
+        let payload = Data("the synced copy".utf8)
+        let draft = WorkMaterialDraft(
+            kind: .file,
+            title: "synced.txt",
+            filename: "synced.txt",
+            mimeType: "text/plain",
+            payload: payload,
+            byteSize: Int64(payload.count)
+        )
+        let published = try await store.upsertDeskMaterial(draft)
+        XCTAssertEqual(published.storageMode, .syncedPayload)
+
+        let replacement = try temporaryFile(Data())
+        defer { try? FileManager.default.removeItem(at: replacement) }
+        await removeLeafBeforeConfirming(store, at: .reattach)
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        do {
+            _ = try await store.replaceWorkMaterialPayloadFile(
+                id: draft.id,
+                from: replacement,
+                byteSize: 0,
+                filename: replacement.lastPathComponent,
+                mimeType: "application/octet-stream",
+                sourceDevice: "test",
+                expectedOwnerRevision: WorkboardRevision.value(for: desk.updatedAt)
+            )
+            XCTFail("a replacement the vault cannot read back must be reported as failed")
+        } catch let failure as WorkMaterialCommittedUnavailableError {
+            XCTAssertEqual(failure.record.id, draft.id)
+            XCTAssertEqual(failure.record.storageMode, .localVault)
+            XCTAssertEqual(failure.record.availability, .unavailableOnThisDevice)
+        }
+
+        // Still repairable by the person: a reattach that CAN be proved lands.
+        await store._setPublicationConfirmationHookForTesting(nil)
+        let recovered = Data("the copy that finally lands".utf8)
+        let second = try temporaryFile(recovered, extension: "txt")
+        defer { try? FileManager.default.removeItem(at: second) }
+        let afterValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let after = try XCTUnwrap(afterValue)
+        _ = try await store.replaceWorkMaterialPayloadFile(
+            id: draft.id,
+            from: second,
+            byteSize: Int64(recovered.count),
+            filename: "recovered.txt",
+            mimeType: "text/plain",
+            sourceDevice: "test",
+            expectedOwnerRevision: WorkboardRevision.value(for: after.updatedAt)
+        )
+        let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
+        XCTAssertEqual(loaded, recovered)
+    }
+
+    // MARK: - One publication per material at a time
+
+    /// A payload and the row naming it commit separately, so a second writer
+    /// arriving inside that gap finds a complete blob, adopts it without
+    /// writing a row of its own, and commits a card the first writer's rollback
+    /// then takes the bytes from. Two reattaches of one card across two iPad
+    /// scenes are exactly that pair. The claim is what makes it impossible: no
+    /// second caller may begin publishing this material's payload while another
+    /// is still inside its own publication.
+    ///
+    /// Observed by completion order, because that is what mutual exclusion IS.
+    /// The reattach holds for 400 ms after its save; the replay is launched
+    /// 120 ms in and does no I/O of its own, so unclaimed it would finish while
+    /// the reattach is still holding — which is the interleaving the finding
+    /// describes, and which the recorded order refuses.
+    func testOneMaterialsPayloadIsPublishedByOneCallerAtATime() async throws {
+        let store = isolated.make()
+        let original = Data("the copy the card already had".utf8)
+        let card = try await vaultCard(in: store, payload: original, name: "contended.bin")
+        let replacement = try temporaryFile(Data())
+        defer { try? FileManager.default.removeItem(at: replacement) }
+
+        let timeline = PublicationTimeline()
+        await store._setPublicationConfirmationHookForTesting { site, _, _, _ in
+            guard site == .reattach else { return nil }
+            await timeline.append("reattach-held")
+            try? await Task.sleep(for: .milliseconds(400))
+            await timeline.append("reattach-released")
+            return nil
+        }
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        async let reattached: WorkMaterialRecord? = store.replaceWorkMaterialPayloadFile(
+            id: card.id,
+            from: replacement,
+            byteSize: 0,
+            filename: replacement.lastPathComponent,
+            mimeType: "application/octet-stream",
+            sourceDevice: "test",
+            expectedOwnerRevision: WorkboardRevision.value(for: desk.updatedAt)
+        )
+
+        try await Task.sleep(for: .milliseconds(120))
+        let replay = Task {
+            _ = try await store.upsertDeskMaterial(
+                WorkMaterialDraft(
+                    id: card.id,
+                    kind: .file,
+                    title: "contended.bin",
+                    filename: "contended.bin",
+                    mimeType: "application/octet-stream",
+                    payload: original
+                )
+            )
+            await timeline.append("replay-done")
+        }
+        _ = try await reattached
+        try await replay.value
+
+        let events = await timeline.events
+        XCTAssertEqual(
+            events, ["reattach-held", "reattach-released", "replay-done"],
+            """
+            A second publication of this material's payload began while the first was still             inside its own. That is the window in which one caller adopts the other's blob and             the other's rollback deletes it.
+            """
+        )
+    }
+
     // MARK: - Lane selection
 
     func testAPayloadUnderTheCeilingBecomesABlobTheCardNamesButDoesNotHold() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("zone rate card, revision four".utf8)
         let draft = WorkMaterialDraft(
             kind: .file,
@@ -73,7 +439,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     }
 
     func testAPayloadAboveTheCeilingTakesTheVaultAndAReplayRestoresIt() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data(
             repeating: 0x5A,
             count: Int(Constants.workboardSyncCeilingBytes) + 1
@@ -84,13 +450,19 @@ final class WorkboardBlobPublicationTests: XCTestCase {
             filename: "capture.bin",
             mimeType: "application/octet-stream",
             payload: payload,
-            byteSize: Int64(payload.count)
+            // Deliberately wrong. A declared size is a claim about bytes the
+            // caller may never have handed over, and a row that records the
+            // claim gives `confirmPublication` nothing a truncated leaf could
+            // fail against.
+            byteSize: Int64(payload.count) + 4_096
         )
 
         let published = try await store.upsertDeskMaterial(draft)
         XCTAssertEqual(published.storageMode, .localVault,
                        "one byte over the ceiling is a device-local payload with reattach")
         XCTAssertEqual(published.availability, .availableLocally)
+        XCTAssertEqual(published.byteSize, Int64(payload.count),
+                       "the row records the length the leaf holds, not the caller's claim")
         let key = try XCTUnwrap(published.localVaultKey)
         let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
         XCTAssertTrue(blobs.isEmpty, "nothing over the ceiling may reach the payload store")
@@ -114,7 +486,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     // MARK: - Interrupted publications
 
     func testABlobLeftByACrashIsAdoptedByTheReplayRatherThanDuplicated() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("the screenshot that survived the crash".utf8)
         let draft = WorkMaterialDraft(
             kind: .image,
@@ -146,7 +518,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     }
 
     func testACardWhosePayloadStoreWasLostIsIncompleteUntilAReplayRestagesIt() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("the note attached to the invoice".utf8)
         let draft = WorkMaterialDraft(
             kind: .file,
@@ -180,7 +552,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     }
 
     func testACardMayClaimSyncedBytesThatHaveNotArrived() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         // The state an import produces when the material record lands before
         // its blob record. The chip that renders it is the projection's, and it
         // reads exactly the completeness this asserts.
@@ -206,7 +578,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     // MARK: - Duplicates and disagreement
 
     func testDuplicateBlobsResolveToTheNewestCompleteRow() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let original = Data("the first device's copy".utf8)
         let draft = WorkMaterialDraft(
             kind: .file,
@@ -245,7 +617,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     }
 
     func testAnIncompleteBlobNeverWinsAndIsNeverDeleted() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("the whole payload".utf8)
         let draft = WorkMaterialDraft(
             kind: .file,
@@ -279,7 +651,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     }
 
     func testAReplayCarryingOtherBytesReplacesTheBlobPairedWithTheCard() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let materialID = UUID()
         let stale = Data("the bytes an interrupted attempt wrote".utf8)
         let current = Data("the bytes the capture actually carries now".utf8)
@@ -311,7 +683,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     }
 
     func testAnIdenticalReplayWritesNothingAtAll() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("captured once, delivered twice".utf8)
         let draft = WorkMaterialDraft(
             kind: .file,
@@ -335,7 +707,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     // MARK: - Refused publications
 
     func testARefusedPublicationTakesBackOnlyTheBytesItWrote() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let existingPayload = Data("the card the person already has".utf8)
         let materialID = UUID()
         func draft(_ payload: Data) -> WorkMaterialDraft {
@@ -409,7 +781,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     /// the presence check miss the identical row that is already there, which
     /// is the same position a concurrent publication is in.
     func testARefusedPublicationLeavesAnIdenticalBlobItDidNotWrite() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let mine = Data("the bytes this capture carries".utf8)
         let draft = WorkMaterialDraft(
             kind: .file,
@@ -458,7 +830,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     /// The same rule on the reattach path, which is the one with no in-process
     /// claim serializing it: two reattaches of one card can genuinely overlap.
     func testARefusedReattachTakesBackOnlyTheBlobRowItWrote() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let mine = Data("the copy this reattach carries".utf8)
         let draft = WorkMaterialDraft(
             kind: .file,
@@ -508,7 +880,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     // MARK: - Reattach moves a card between the lanes
 
     func testReattachingASmallFileMovesACardOffTheVaultOntoTheSyncedLane() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let item = try await store.createWorkItem()
         let original = try await store.addWorkMaterial(
             WorkMaterialDraft(
@@ -554,7 +926,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     }
 
     func testReattachingAnUnsyncableFileMovesACardOffTheSyncedLaneWithItsBlob() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("the synced copy".utf8)
         let draft = WorkMaterialDraft(
             kind: .file,
@@ -623,7 +995,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     /// `.syncedPayload` while this same save deleted the blobs behind it —
     /// unreadable the moment that row wins the canonical read.
     func testReattachWritesEveryDuplicateRowSoNoneResurrectsTheOldLane() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("the payload the card is about to lose".utf8)
         let draft = WorkMaterialDraft(
             kind: .file,
@@ -677,5 +1049,15 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         XCTAssertTrue(blobs.isEmpty)
         let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
         XCTAssertEqual(loaded, Data())
+    }
+}
+
+/// Ordered events from inside a publication, so mutual exclusion can be
+/// observed rather than argued for.
+private actor PublicationTimeline {
+    private(set) var events: [String] = []
+
+    func append(_ event: String) {
+        events.append(event)
     }
 }

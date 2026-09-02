@@ -5,8 +5,12 @@
 //
 // The one-time duck beat shown on a first visit to Work. It carries the three
 // things the board surface itself does not say in-place — collect from
-// anywhere, arrange and resize freely, everything stays in your own iCloud — so
+// anywhere, arrange and resize freely, cards sync through your own iCloud — so
 // the board can stay de-texted and the affordances still get taught once.
+//
+// The third line must stay inside `WorkMaterialStoragePolicy`'s truth: a payload
+// over `Constants.workboardSyncCeilingBytes` is device-local behind a reattach,
+// so the line names that lane rather than promising every byte on every device.
 //
 // Register: warm INSTRUCTION, not a pitch. The user already chose Conduck; this
 // screen tells them how the board behaves and then gets out of the way. Chrome
@@ -89,7 +93,7 @@ struct WorkboardTutorialView: View {
                 symbol: "lock.shield.fill",
                 text: LocalizedStringResource(
                     "workboard.tutorial.point.review",
-                    defaultValue: "Everything stays in your iCloud, on all your devices."
+                    defaultValue: "Cards sync through your own iCloud — very large files stay on the device that captured them."
                 )
             )
         }

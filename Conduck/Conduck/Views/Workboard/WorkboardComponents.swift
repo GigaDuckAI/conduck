@@ -3,11 +3,13 @@
 // Conduck
 // WorkboardComponents.swift
 //
-// Shared visual language for the desk: the surface container, material glyphs,
-// the empty-desk placeholder, the add-material control and the oversized-import
-// confirm. Shape carries meaning before colour does, and custom controls reuse
-// the app's macOS pointer targets so the visible card is also the live hit
-// region.
+// Shared visual language for the desk: material glyphs, the empty-desk
+// placeholder, the add-material control and the oversized-import confirm. Shape
+// carries meaning before colour does, and custom controls reuse the app's macOS
+// pointer targets so the visible card is also the live hit region.
+//
+// There is no container view here on purpose: the WHOLE Work pane is the drop
+// target, and a bordered surface would read as the one place a drop lands.
 
 import SwiftUI
 import CoreTransferable
@@ -15,7 +17,6 @@ import UniformTypeIdentifiers
 
 enum WorkboardMetrics {
     static let contentMaxWidth: CGFloat = 920
-    static let surfaceCornerRadius: CGFloat = 16
     static let standardSpacing: CGFloat = 16
     static let generousSpacing: CGFloat = 24
     static let touchTarget: CGFloat = 44
@@ -66,28 +67,6 @@ extension View {
         #else
         self
         #endif
-    }
-}
-
-struct WorkboardSurface<Content: View>: View {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
-    var body: some View {
-        content
-            .padding(WorkboardMetrics.standardSpacing)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppColors.cardBackground, in: RoundedRectangle(
-                cornerRadius: WorkboardMetrics.surfaceCornerRadius,
-                style: .continuous
-            ))
-            .overlay {
-                RoundedRectangle(cornerRadius: WorkboardMetrics.surfaceCornerRadius, style: .continuous)
-                    .stroke(AppColors.borderSubtle, lineWidth: 1)
-            }
     }
 }
 
@@ -173,7 +152,8 @@ struct WorkboardEmptyState: View {
 /// interaction a conversation has. `Presentation` stays an enum with one case so
 /// a second mounting can be introduced without re-threading the call site, and a
 /// new route belongs in `AttachmentMenu` rather than forked here — one paperclip
-/// means one route list.
+/// means one route list. Every handler below is a route that menu actually
+/// offers: a closure this control cannot fire is a door that does not exist.
 struct WorkboardMaterialActions: View {
     enum Presentation: Equatable {
         case menu
@@ -184,10 +164,6 @@ struct WorkboardMaterialActions: View {
     let onTakePhoto: () -> Void
     let onPickFiles: () -> Void
     let onAddLink: () -> Void
-    /// `AttachmentMenu` carries no note route, so this handler has no reachable
-    /// trigger. It stays so the desk's note composer keeps a single owner while
-    /// the way back to it is decided.
-    let onAddNote: () -> Void
     var iconPointSize: CGFloat = 22
     var iconFrame: CGFloat = WorkboardMetrics.touchTarget
 
@@ -226,7 +202,7 @@ extension WorkboardLargeImportConfirming {
             return String.localizedStringWithFormat(
                 String(localized: LocalizedStringResource(
                     "workboard.material.large.confirm.message.one",
-                    defaultValue: "One large file (%@) is stored only on this device and may take a moment to copy now or send later."
+                    defaultValue: "One large file (%@) stays on this device instead of syncing to your other devices, and may take a moment to copy."
                 )),
                 formattedSize
             )
@@ -234,7 +210,7 @@ extension WorkboardLargeImportConfirming {
         return String.localizedStringWithFormat(
             String(localized: LocalizedStringResource(
                 "workboard.material.large.confirm.message",
-                defaultValue: "%1$lld large files (%2$@) are stored only on this device and may take a moment to copy now or send later."
+                defaultValue: "%1$lld large files (%2$@) stay on this device instead of syncing to your other devices, and may take a moment to copy."
             )),
             Int64(counts.count),
             formattedSize

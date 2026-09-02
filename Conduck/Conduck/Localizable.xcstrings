@@ -21676,6 +21676,28 @@
         }
       }
     },
+    "workboard.audio.busy" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Audio is in use right now"
+          }
+        }
+      }
+    },
+    "workboard.audio.cancelLoading" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancel Loading"
+          }
+        }
+      }
+    },
     "workboard.audio.failed" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -21749,6 +21771,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%1$@ of %2$@"
+          }
+        }
+      }
+    },
+    "workboard.audio.unavailableHere" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not on this device"
           }
         }
       }
@@ -22067,7 +22100,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%@ could not be copied from this device. Reattach it in Work if you need to send it."
+            "value" : "%@ could not be copied from this device. Reattach it in Work to open it."
           }
         }
       }
@@ -22222,17 +22255,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Add Link"
-          }
-        }
-      }
-    },
-    "workboard.material.addNote" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Add Note"
           }
         }
       }
@@ -22419,7 +22441,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "%1$lld large files (%2$@) are stored only on this device and may take a moment to copy now or send later."
+            "value" : "%1$lld large files (%2$@) stay on this device instead of syncing to your other devices, and may take a moment to copy."
           }
         }
       }
@@ -22430,7 +22452,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "One large file (%@) is stored only on this device and may take a moment to copy now or send later."
+            "value" : "One large file (%@) stays on this device instead of syncing to your other devices, and may take a moment to copy."
           }
         }
       }
@@ -22545,61 +22567,6 @@
         }
       }
     },
-    "workboard.material.note.body" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Note text"
-          }
-        }
-      }
-    },
-    "workboard.material.note.defaultName" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Note"
-          }
-        }
-      }
-    },
-    "workboard.material.note.footer" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Use a note when a thought should remain a separate, reusable material."
-          }
-        }
-      }
-    },
-    "workboard.material.note.name" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Note title (optional)"
-          }
-        }
-      }
-    },
-    "workboard.material.note.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Standalone Note"
-          }
-        }
-      }
-    },
     "workboard.material.open" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22655,13 +22622,24 @@
         }
       }
     },
+    "workboard.material.preview.syncPending" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This material is still arriving from iCloud. It will open once it lands on this device."
+          }
+        }
+      }
+    },
     "workboard.material.preview.unavailable" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "This material is not available on this device. Reattach it here to open or send it."
+            "value" : "This material is not available on this device. Reattach it here to open it."
           }
         }
       }
@@ -22727,7 +22705,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "“%@” will be removed from this private draft."
+            "value" : "“%@” will be removed from your Work desk."
           }
         }
       }
@@ -22771,7 +22749,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Reattach on this device before sending"
+            "value" : "Reattach on this device to open"
           }
         }
       }
@@ -22892,7 +22870,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Everything stays in your iCloud, on all your devices."
+            "value" : "Cards sync through your own iCloud — very large files stay on the device that captured them."
           }
         }
       }
@@ -22936,7 +22914,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Add context and thoughts"
+            "value" : "Record a voice note"
           }
         }
       }
@@ -22959,6 +22937,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Voice capture stopped. %@"
+          }
+        }
+      }
+    },
+    "workboard.voice.error.deskWrite" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Work couldn’t save this recording just now."
           }
         }
       }
@@ -23003,6 +22992,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Keeps the recording on your private desk and adds the words when they’re ready. Nothing is sent."
+          }
+        }
+      }
+    },
+    "workboard.voice.recordAgain" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Record Again"
           }
         }
       }

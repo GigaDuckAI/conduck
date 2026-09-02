@@ -7,6 +7,11 @@
 // the cross-process publication guard: the App Group vault is written by the
 // app, the share extensions and the headless intent process, so reclamation
 // must never mistake a leaf another process is publishing for a crash orphan.
+//
+// The other half of the same boundary: serving a payload means opening it, not
+// stating it, and a row records the length the leaf measured rather than the
+// one its caller declared — so these cases pin what an unreadable leaf, an
+// intentionally empty one, and each write path are allowed to claim.
 
 import Foundation
 import CoreData
@@ -35,6 +40,19 @@ final class WorkAssetVaultTests: XCTestCase {
         Date().addingTimeInterval(WorkAssetVault.stagingHorizon + 60)
     }
 
+    /// Write the claim a process that died mid-publication leaves behind: a
+    /// legible marker naming another instance, dated far enough back that no
+    /// clock skew can still be holding it open.
+    private func writeStaleClaim(at url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let claim = WorkAssetVault.StagingClaim(
+            owner: UUID(),
+            stagedAt: Date().addingTimeInterval(-WorkAssetVault.stagingHorizon * 2)
+        )
+        try encoder.encode(claim).write(to: url, options: .atomic)
+    }
+
     func testGeneratedKeysAreOpaqueSafeLeaves() {
         let id = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
         let key = WorkAssetVault.makeKey(id: id, suggestedExtension: "../../PDF")
@@ -51,10 +69,10 @@ final class WorkAssetVaultTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let vault = WorkAssetVault(baseURL: directory)
 
-        let keep = try await vault.store(Data("keep".utf8), suggestedExtension: "txt")
-        let remove = try await vault.store(Data("remove".utf8), suggestedExtension: "txt")
-        await vault.markReferenced(keep)
-        await vault.markReferenced(remove)
+        let keep = try await vault.store(bytes: Data("keep".utf8), suggestedExtension: "txt").key
+        let remove = try await vault.store(bytes: Data("remove".utf8), suggestedExtension: "txt").key
+        await vault.confirmPublication(of: keep)
+        await vault.confirmPublication(of: remove)
 
         let loaded = try await vault.data(for: keep)
         // Judged from beyond the horizon: both leaves are unreferenced, and only
@@ -76,10 +94,10 @@ final class WorkAssetVaultTests: XCTestCase {
         let vault = WorkAssetVault(baseURL: directory)
         let store = ConversationStore(inMemory: true)
 
-        let keep = try await vault.store(Data("referenced".utf8), suggestedExtension: "txt")
-        let remove = try await vault.store(Data("orphan".utf8), suggestedExtension: "txt")
-        await vault.markReferenced(keep)
-        await vault.markReferenced(remove)
+        let keep = try await vault.store(bytes: Data("referenced".utf8), suggestedExtension: "txt").key
+        let remove = try await vault.store(bytes: Data("orphan".utf8), suggestedExtension: "txt").key
+        await vault.confirmPublication(of: keep)
+        await vault.confirmPublication(of: remove)
         // The orphan predates the publication horizon; a leaf younger than that
         // is protected by age alone and would prove nothing about the fetch.
         try backdate(
@@ -117,13 +135,13 @@ final class WorkAssetVaultTests: XCTestCase {
 
         // Judged from beyond the horizon throughout, so the staged key — not the
         // file's age — is what has to hold the leaf.
-        let key = try await vault.store(Data("in flight".utf8), suggestedExtension: "txt")
+        let key = try await vault.store(bytes: Data("in flight".utf8), suggestedExtension: "txt").key
         let reclaimedWhileStaged = await vault.reclaimUnreferenced(
             keeping: [],
             now: pastTheHorizon
         )
         let existsWhileStaged = await vault.contains(key)
-        await vault.markReferenced(key)
+        await vault.confirmPublication(of: key)
         let reclaimedAfterPublication = await vault.reclaimUnreferenced(
             keeping: [],
             now: pastTheHorizon
@@ -144,10 +162,10 @@ final class WorkAssetVaultTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let vault = WorkAssetVault(baseURL: directory)
 
-        let key = try await vault.store(Data("fresh".utf8), suggestedExtension: "txt")
+        let key = try await vault.store(bytes: Data("fresh".utf8), suggestedExtension: "txt").key
         // Both in-process guards released: only the leaf's age can protect it,
         // which is the state a leaf staged by another process presents.
-        await vault.markReferenced(key)
+        await vault.confirmPublication(of: key)
 
         let reclaimedWhileYoung = await vault.reclaimUnreferenced(keeping: [])
         let survivesWhileYoung = await vault.contains(key)
@@ -170,8 +188,11 @@ final class WorkAssetVaultTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let vault = WorkAssetVault(baseURL: directory)
 
-        let key = try await vault.store(Data("left by a crash".utf8), suggestedExtension: "txt")
-        await vault.markReferenced(key)
+        let key = try await vault.store(
+            bytes: Data("left by a crash".utf8),
+            suggestedExtension: "txt"
+        ).key
+        await vault.confirmPublication(of: key)
         try backdate(try await vault.url(for: key), by: WorkAssetVault.stagingHorizon * 4)
 
         let reclaimed = await vault.reclaimUnreferenced(keeping: [])
@@ -190,7 +211,10 @@ final class WorkAssetVaultTests: XCTestCase {
         let publisher = WorkAssetVault(baseURL: directory)
         let reconciler = WorkAssetVault(baseURL: directory)
 
-        let key = try await publisher.store(Data("mid-publication".utf8), suggestedExtension: "txt")
+        let key = try await publisher.store(
+            bytes: Data("mid-publication".utf8),
+            suggestedExtension: "txt"
+        ).key
         let marker = stagingMarkerURL(in: directory, for: key)
         XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path),
                       "the claim must be legible to any other process")
@@ -201,9 +225,9 @@ final class WorkAssetVaultTests: XCTestCase {
         let reclaimedMidPublication = await reconciler.reclaimUnreferenced(keeping: [])
         let survivesMidPublication = await reconciler.contains(key)
 
-        // The row commits, the publisher releases its claim, and the database
-        // now names the leaf.
-        await publisher.markReferenced(key)
+        // The row commits, the publisher proves the leaf and releases its claim,
+        // and the database now names the leaf.
+        let confirmed = await publisher.confirmPublication(of: key)
         let markerCleared = FileManager.default.fileExists(atPath: marker.path)
         let reclaimedAfterCommit = await reconciler.reclaimUnreferenced(
             keeping: [key],
@@ -215,6 +239,7 @@ final class WorkAssetVaultTests: XCTestCase {
         XCTAssertEqual(reclaimedMidPublication, 0,
                        "another process's staging claim outranks the leaf's age")
         XCTAssertTrue(survivesMidPublication)
+        XCTAssertTrue(confirmed)
         XCTAssertFalse(markerCleared, "a published claim leaves no marker behind")
         XCTAssertEqual(reclaimedAfterCommit, 0)
         XCTAssertTrue(survivesAfterCommit)
@@ -229,13 +254,13 @@ final class WorkAssetVaultTests: XCTestCase {
         let reconciler = WorkAssetVault(baseURL: directory)
 
         let expired = try await crashed.store(
-            Data("never published".utf8),
+            bytes: Data("never published".utf8),
             suggestedExtension: "txt"
-        )
+        ).key
         let live = try await crashed.store(
-            Data("still publishing".utf8),
+            bytes: Data("still publishing".utf8),
             suggestedExtension: "txt"
-        )
+        ).key
         let expiredMarker = stagingMarkerURL(in: directory, for: expired)
         // Undecodable bytes still prove someone claimed the leaf, so the claim
         // is aged by its file — and an unrefreshed one expires.
@@ -277,13 +302,13 @@ final class WorkAssetVaultTests: XCTestCase {
         let vault = WorkAssetVault(baseURL: directory)
 
         let payload = Data("durable bytes".utf8)
-        let published = try await vault.store(payload, suggestedExtension: "txt")
+        let published = try await vault.store(bytes: payload, suggestedExtension: "txt").key
         let confirmed = await vault.confirmPublication(
             of: published,
             expectedByteCount: Int64(payload.count)
         )
 
-        let truncated = try await vault.store(Data("short".utf8), suggestedExtension: "txt")
+        let truncated = try await vault.store(bytes: Data("short".utf8), suggestedExtension: "txt").key
         let confirmedTruncated = await vault.confirmPublication(
             of: truncated,
             expectedByteCount: 4_096
@@ -306,6 +331,151 @@ final class WorkAssetVaultTests: XCTestCase {
         XCTAssertEqual(reclaimed, 0)
         XCTAssertTrue(truncatedSurvives)
         XCTAssertFalse(absent)
+    }
+
+    func testAnAbandonedClaimBesideAReferencedLeafIsSweptWithoutItsPayload() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("work-vault-stranded-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let publisher = WorkAssetVault(baseURL: directory)
+        let reconciler = WorkAssetVault(baseURL: directory)
+
+        let payload = Data("committed elsewhere".utf8)
+        let write = try await publisher.store(bytes: payload, suggestedExtension: "txt")
+        let marker = stagingMarkerURL(in: directory, for: write.key)
+        // The row committed in another process, so the database names this leaf
+        // for as long as its card lives; only the marker removal failed, and a
+        // claim nobody is refreshing then ages out.
+        try writeStaleClaim(at: marker)
+
+        let reclaimed = await reconciler.reclaimUnreferenced(keeping: [write.key])
+        let markerSurvives = FileManager.default.fileExists(atPath: marker.path)
+        let bytes = try await reconciler.data(for: write.key)
+
+        XCTAssertEqual(reclaimed, 0, "a referenced leaf is never a reclamation candidate")
+        XCTAssertFalse(
+            markerSurvives,
+            "an abandoned claim beside a permanently referenced leaf is reconsidered, not kept forever"
+        )
+        XCTAssertEqual(bytes, payload, "sweeping a claim never touches the payload it sat beside")
+    }
+
+    // MARK: - Readable bytes, not a stat-able path
+
+    func testAnUnreadableLeafIsNeitherServedNorConfirmable() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("work-vault-unreadable-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let vault = WorkAssetVault(baseURL: directory)
+
+        let write = try await vault.store(bytes: Data("shut away".utf8), suggestedExtension: "txt")
+        let leaf = directory.appendingPathComponent(write.key, isDirectory: false)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000],
+            ofItemAtPath: leaf.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o644],
+                ofItemAtPath: leaf.path
+            )
+        }
+
+        let contained = await vault.contains(write.key)
+        let resolved = await vault.urls(for: [write.key])
+        let readable = await vault.readableKeys(among: [write.key])
+        let confirmed = await vault.confirmPublication(
+            of: write.key,
+            expectedByteCount: write.byteCount
+        )
+        // A refused confirmation keeps the guard, and reclamation judges by
+        // existence: the bytes are still on disk and another process may well
+        // open them, so the pass that follows must not take them away.
+        let reclaimed = await vault.reclaimUnreferenced(keeping: [], now: pastTheHorizon)
+        let stillOnDisk = FileManager.default.fileExists(atPath: leaf.path)
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: leaf.path
+        )
+        let containedOnceReadable = await vault.contains(write.key)
+        let confirmedOnceReadable = await vault.confirmPublication(
+            of: write.key,
+            expectedByteCount: write.byteCount
+        )
+
+        XCTAssertFalse(contained, "a path that only stats is not payload this device can serve")
+        XCTAssertTrue(resolved.isEmpty)
+        XCTAssertTrue(readable.isEmpty)
+        XCTAssertFalse(
+            confirmed,
+            "a capture must not be acknowledged against a leaf `data(for:)` cannot open"
+        )
+        XCTAssertEqual(reclaimed, 0)
+        XCTAssertTrue(stillOnDisk, "unreadable here is not deletable — it may be readable elsewhere")
+        XCTAssertTrue(containedOnceReadable)
+        XCTAssertTrue(confirmedOnceReadable)
+    }
+
+    func testAReadableEmptyLeafIsValidPayload() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("work-vault-empty-leaf-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let vault = WorkAssetVault(baseURL: directory)
+
+        let write = try await vault.store(bytes: Data(), suggestedExtension: "bin")
+        let contained = await vault.contains(write.key)
+        let readable = await vault.readableKeys(among: [write.key])
+        let resolved = await vault.urls(for: [write.key])
+        let confirmed = await vault.confirmPublication(of: write.key, expectedByteCount: 0)
+        let bytes = try await vault.data(for: write.key)
+
+        XCTAssertEqual(write.byteCount, 0)
+        XCTAssertTrue(contained, "a payload the person chose to attach is a payload at any length")
+        XCTAssertEqual(readable, [write.key])
+        XCTAssertEqual(resolved.count, 1)
+        XCTAssertTrue(confirmed)
+        XCTAssertEqual(bytes, Data())
+    }
+
+    func testEveryWritePathReportsTheLengthItsLeafActuallyHolds() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("work-vault-measured-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let vault = WorkAssetVault(baseURL: directory)
+
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("work-vault-measured-source-\(UUID().uuidString).bin")
+        let payload = Data(repeating: 0x5A, count: 3_003)
+        try payload.write(to: source, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: source) }
+
+        let stored = try await vault.store(bytes: payload, suggestedExtension: "bin")
+        let copied = try await vault.storeFile(at: source, suggestedExtension: "bin")
+        let streamed = try await vault.storeFileStreaming(
+            at: source,
+            suggestedExtension: "bin",
+            expectedByteCount: Int64(payload.count),
+            onProgress: { _ in }
+        )
+        let duplicated = try await vault.copy(key: stored.key)
+
+        for write in [stored, copied, streamed, duplicated] {
+            let leaf = directory.appendingPathComponent(write.key, isDirectory: false)
+            let attributes = try FileManager.default.attributesOfItem(atPath: leaf.path)
+            let onDisk = try XCTUnwrap((attributes[.size] as? NSNumber)?.int64Value)
+
+            XCTAssertEqual(
+                write.byteCount, onDisk,
+                "a row records what the leaf holds, so every lane must measure it"
+            )
+            XCTAssertEqual(write.byteCount, Int64(payload.count))
+            let confirmed = await vault.confirmPublication(
+                of: write.key,
+                expectedByteCount: write.byteCount
+            )
+            XCTAssertTrue(confirmed, "the measured length is what confirmation compares against")
+        }
     }
 
     func testInMemoryStoresUseIndependentVaults() async throws {
@@ -387,10 +557,10 @@ final class WorkAssetVaultTests: XCTestCase {
         let vault = WorkAssetVault(baseURL: directory)
 
         let payload = Data("bytes to duplicate".utf8)
-        let original = try await vault.store(payload, suggestedExtension: "txt")
-        await vault.markReferenced(original)
+        let original = try await vault.store(bytes: payload, suggestedExtension: "txt").key
+        await vault.confirmPublication(of: original)
         let copy = try await vault.copy(key: original)
-        await vault.markReferenced(copy.key)
+        await vault.confirmPublication(of: copy.key)
 
         XCTAssertNotEqual(copy.key, original)
         XCTAssertEqual(copy.byteCount, Int64(payload.count))

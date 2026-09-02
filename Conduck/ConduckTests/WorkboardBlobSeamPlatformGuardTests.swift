@@ -21,10 +21,10 @@
 // directory), tracks the conditional-compilation regions line by line, and
 // pins which flags each seam sits under.
 //
-// It pins the exclusion in BOTH directions. `_mountedStoresForTesting` is the
-// Core-only topology seam — proving the wrist mounts `Core` alone is precisely
-// what it is for there — so widening the payload guard to swallow it would
-// blind the watch suite to the exclusion this whole design rests on.
+// The other direction — that `_mountedStoresForTesting` stays available on the
+// wrist — needs no source guard: `ConduckWatchSmokeTests` calls that seam from
+// the Watch suite, so the compiler refuses the build if it is ever swept into
+// the payload guard, and the call proves the Core-only mount at the same time.
 
 import XCTest
 
@@ -116,7 +116,10 @@ final class WorkboardBlobSeamPlatformGuardTests: XCTestCase {
             "struct MaterialBlobStoresForTesting",
             "func _writeMaterialAndBlobForTesting(",
             "struct MaterialBlobSnapshotForTesting",
-            "func _materialAndBlobForTesting("
+            "func _materialAndBlobForTesting(",
+            "var publicationConfirmationHookForTesting",
+            "var projectionVaultReadabilityCallsForTesting",
+            "func _removeIsolatedVaultDirectoryForTesting("
         ]
 
         for seam in payloadSeams {
@@ -137,23 +140,4 @@ final class WorkboardBlobSeamPlatformGuardTests: XCTestCase {
         }
     }
 
-    func testTheMountedStoreSeamStaysAvailableOnTheWatch() throws {
-        let (source, perLine) = try loadStoreSource()
-        let conditions = try self.conditions(
-            wrapping: "func _mountedStoresForTesting(", in: source, perLine
-        )
-
-        XCTAssertTrue(
-            conditions.contains("CONDUCK_TESTING"),
-            "`_mountedStoresForTesting` escaped #if CONDUCK_TESTING — a test seam must not ship."
-        )
-        XCTAssertFalse(
-            conditions.contains("!os(watchOS)"),
-            """
-            `_mountedStoresForTesting` was swept into the payload guard. It touches no blob row, \
-            and the wrist is where it earns its keep: mounting Core ALONE is the payload exclusion, \
-            and nothing else can observe it. Conditions found: \(conditions).
-            """
-        )
-    }
 }

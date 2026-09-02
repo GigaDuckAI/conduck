@@ -645,17 +645,18 @@ final class ShareViewController: UIViewController {
         }
 
         let fm = FileManager.default
-        let tmp = try workCaptureTmpDir(for: id)
+        let publisher = try workCapturePublisher()
+        let tmp = try publisher.beginStaging(named: id.uuidString)
         var didPublish = false
         defer {
-            // Publication is one atomic rename. Every earlier failure (including
-            // limits discovered after provider loading) removes the private tmp
-            // transaction immediately instead of leaving orphan payload bytes.
+            // Publication is one atomic rename inside `commit`. Every earlier
+            // failure (including limits discovered after provider loading)
+            // removes the private staging transaction immediately instead of
+            // leaving orphan payload bytes.
             if !didPublish {
-                try? fm.removeItem(at: tmp)
+                publisher.discard(tmp)
             }
         }
-        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
 
         var copiedItems: [SharedInboxManifestItem] = []
         var urls: [String] = []
@@ -775,8 +776,10 @@ final class ShareViewController: UIViewController {
             targetWorkItemID: nil,
             entries: entries
         )
+        // Validation, the manifest write and the publishing rename are ONE
+        // transaction: a refusal removes the staged bytes and publishes nothing.
         do {
-            try envelope.validateForPublication()
+            try publisher.commit(envelope, staging: tmp)
         } catch let failure as WorkCaptureEnvelope.PublicationValidationFailure {
             if failure == .emptyCapture {
                 throw ShareError.emptyCapture
@@ -785,19 +788,9 @@ final class ShareViewController: UIViewController {
                 throw ShareError.captureTooLarge
             }
             throw failure
-        }
-        let manifestData = try envelope.encoded()
-        guard manifestData.count <= WorkCaptureEnvelope.maximumManifestBytes else {
+        } catch WorkCaptureDirectoryPublisher.Failure.manifestTooLarge {
             throw ShareError.captureTooLarge
         }
-        try manifestData.write(
-            to: tmp.appendingPathComponent("manifest.json"),
-            options: [.atomic, .completeFileProtection]
-        )
-
-        let published = try workCaptureInboxDir()
-            .appendingPathComponent(id.uuidString, isDirectory: true)
-        try fm.moveItem(at: tmp, to: published)
         didPublish = true
     }
 
@@ -1016,10 +1009,14 @@ final class ShareViewController: UIViewController {
         return inbox
     }
 
+    /// The publisher owns the whole staging → validate → atomic-rename
+    /// transaction, so its failure paths are testable without a device.
+    private func workCapturePublisher() throws -> WorkCaptureDirectoryPublisher {
+        WorkCaptureDirectoryPublisher(inboxURL: try workCaptureInboxDir())
+    }
+
     private func workCaptureTmpDir(for id: UUID) throws -> URL {
-        try workCaptureInboxDir()
-            .appendingPathComponent("tmp", isDirectory: true)
-            .appendingPathComponent(id.uuidString, isDirectory: true)
+        try workCapturePublisher().stagingURL(named: id.uuidString)
     }
 
     /// Hint only. The durable directory is the source of truth because Darwin

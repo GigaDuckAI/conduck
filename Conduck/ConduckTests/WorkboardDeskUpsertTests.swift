@@ -12,20 +12,85 @@
 // stays beside it untouched. The payload cases fix the repair boundary — bytes
 // a row already claims are restored, bytes a row never claimed are refused.
 //
-// The adoption cases hold the upgrade boundary: a material a pre-desk build
-// parked under a per-capture owner row is re-homed by an explicit re-capture
-// rather than refused, because a refusal makes that capture fail on every
-// replay for ever.
+// The adoption cases hold the upgrade boundary from both sides: a material a
+// pre-desk build parked under a per-capture owner row is re-homed by a
+// re-capture that can PROVE it is the same capture, because a refusal makes that
+// capture fail on every replay for ever — and a re-capture that cannot prove it
+// is refused, because a matching UUID alone would let one card's bytes overwrite
+// another's.
 
+import CryptoKit
 import XCTest
 @testable import Conduck
 
 final class WorkboardDeskUpsertTests: XCTestCase {
 
+    /// Every store here mints a vault directory of its own that nothing else
+    /// removes; the fixture empties them when the class is done.
+    private let isolated = IsolatedWorkStores()
+
+    override func tearDown() async throws {
+        await isolated.cleanUp()
+        try await super.tearDown()
+    }
+
+    private func hex(_ payload: Data) -> String {
+        SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A card parked under a per-capture owner row a pre-desk build wrote, on
+    /// the SYNCED lane so it has a blob an adopting capture could replace.
+    /// Reaching that lane under a foreign owner takes two steps: the
+    /// arbitrary-owner fixture only ever writes the vault, and a reattach is
+    /// what re-decides the lane.
+    private func parkSyncedCard(
+        in store: ConversationStore,
+        id: UUID,
+        underOwner ownerID: UUID,
+        envelopeID: UUID?,
+        kind: WorkMaterialKind = .file,
+        payload: Data
+    ) async throws {
+        _ = try await store.createWorkItem(
+            WorkItemDraft(
+                id: ownerID,
+                captureEnvelopeID: envelopeID,
+                content: WorkItemContent(title: "Captured by an older build")
+            )
+        )
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                id: id,
+                kind: kind,
+                title: "parked.txt",
+                filename: "parked.txt",
+                mimeType: "text/plain",
+                payload: Data("placeholder".utf8)
+            ),
+            to: ownerID
+        )
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("parked-\(UUID().uuidString).txt")
+        try payload.write(to: source, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: source) }
+        let ownerValue = try await store.fetchWorkItem(id: ownerID)
+        let owner = try XCTUnwrap(ownerValue)
+        _ = try await store.replaceWorkMaterialPayloadFile(
+            id: id,
+            from: source,
+            byteSize: Int64(payload.count),
+            filename: "parked.txt",
+            mimeType: "text/plain",
+            sourceDevice: "older-build",
+            expectedOwnerRevision: WorkboardRevision.value(for: owner.updatedAt)
+        )
+    }
+
+
     // MARK: - Desk identity
 
     func testFirstCaptureCreatesTheDeskLazilyAtTheFixedIdentity() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let beforeCapture = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         XCTAssertNil(beforeCapture, "the desk must not exist before anything is captured")
 
@@ -46,7 +111,7 @@ final class WorkboardDeskUpsertTests: XCTestCase {
     }
 
     func testTwoConcurrentFirstCapturesBothLandOnOneDesk() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let dropped = WorkMaterialDraft(kind: .note, title: "Dropped", textContent: "from the app")
         let drained = WorkMaterialDraft(kind: .note, title: "Drained", textContent: "from the inbox")
 
@@ -70,7 +135,7 @@ final class WorkboardDeskUpsertTests: XCTestCase {
     }
 
     func testDeletingAMaterialLeavesTheDeskStanding() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let note = WorkMaterialDraft(kind: .note, title: "Scratch", textContent: "delete me")
         let material = try await store.upsertDeskMaterial(note)
         let createdValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
@@ -96,7 +161,7 @@ final class WorkboardDeskUpsertTests: XCTestCase {
     }
 
     func testDeskCoexistsWithALegacyProjectRow() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let legacyID = UUID()
         _ = try await store.createWorkItem(
             WorkItemDraft(id: legacyID, content: WorkItemContent(title: "Legacy project"))
@@ -120,7 +185,7 @@ final class WorkboardDeskUpsertTests: XCTestCase {
     // MARK: - Idempotency
 
     func testReplayingOneCaptureReturnsTheSameCardWithoutASecondRow() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("harbour schedule".utf8)
         let draft = WorkMaterialDraft(
             kind: .file,
@@ -147,7 +212,7 @@ final class WorkboardDeskUpsertTests: XCTestCase {
     }
 
     func testAFailedFirstCaptureLeavesNoDeskRow() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let missingURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("missing-desk-capture-\(UUID().uuidString).pdf")
 
@@ -177,7 +242,7 @@ final class WorkboardDeskUpsertTests: XCTestCase {
     // MARK: - Compare-and-swap
 
     func testOwnerRevisionIsRefusedWhenStaleAndWhenTheDeskDoesNotExistYet() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let first = WorkMaterialDraft(kind: .note, title: "One", textContent: "first")
 
         do {
@@ -223,7 +288,7 @@ final class WorkboardDeskUpsertTests: XCTestCase {
     /// is that the repair stays one card: a replay carrying the bytes restores
     /// them in place rather than publishing a second row beside the pending one.
     func testReplayRepairsACardWhoseSyncedBytesAreGone() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("recovered rate card".utf8)
         let draft = WorkMaterialDraft(
             kind: .file,
@@ -261,7 +326,7 @@ final class WorkboardDeskUpsertTests: XCTestCase {
     }
 
     func testRepairBytesOfferedToACardThatClaimsNoneAreRefused() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let note = WorkMaterialDraft(
             kind: .note,
             title: "Referenced only",
@@ -295,7 +360,7 @@ final class WorkboardDeskUpsertTests: XCTestCase {
     /// never publish — so an explicit re-capture re-homes the physical rows.
     /// The owner row they came from is a valid CloudKit record and stays.
     func testAMaterialUnderALegacyOwnerIsAdoptedByAnExplicitRecapture() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let legacyID = UUID()
         _ = try await store.createWorkItem(
             WorkItemDraft(
@@ -316,7 +381,8 @@ final class WorkboardDeskUpsertTests: XCTestCase {
         )
 
         let adopted = try await store.upsertDeskMaterial(
-            WorkMaterialDraft(id: sharedID, kind: .note, title: "Same id", textContent: "y")
+            WorkMaterialDraft(id: sharedID, kind: .note, title: "Same id", textContent: "y"),
+            legacyProvenance: .captureEnvelope(legacyID)
         )
 
         XCTAssertEqual(adopted.workItemID, Constants.workboardDeskItemID)
@@ -339,7 +405,8 @@ final class WorkboardDeskUpsertTests: XCTestCase {
         XCTAssertTrue(legacy.materials.isEmpty)
 
         let replayed = try await store.upsertDeskMaterial(
-            WorkMaterialDraft(id: sharedID, kind: .note, title: "Same id", textContent: "y")
+            WorkMaterialDraft(id: sharedID, kind: .note, title: "Same id", textContent: "y"),
+            legacyProvenance: .captureEnvelope(legacyID)
         )
         XCTAssertEqual(replayed.updatedAt, adopted.updatedAt,
                        "the capture after the adoption is an ordinary no-op")
@@ -352,7 +419,7 @@ final class WorkboardDeskUpsertTests: XCTestCase {
     /// the desk — the drained one adopted, the undrained one published — so the
     /// queue copy can finally be acknowledged.
     func testAPartiallyDrainedPreRewriteEnvelopeReplaysCleanOntoTheDesk() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let envelopeID = UUID()
         let legacy = try await store.createWorkItem(
             WorkItemDraft(
@@ -382,7 +449,8 @@ final class WorkboardDeskUpsertTests: XCTestCase {
         let undrainedID = UUID()
 
         _ = try await store.upsertDeskMaterial(
-            WorkMaterialDraft(id: noteID, kind: .note, title: "Shared text", textContent: "the link")
+            WorkMaterialDraft(id: noteID, kind: .note, title: "Shared text", textContent: "the link"),
+            legacyProvenance: .captureEnvelope(envelopeID)
         )
         _ = try await store.upsertDeskMaterial(
             WorkMaterialDraft(
@@ -392,10 +460,12 @@ final class WorkboardDeskUpsertTests: XCTestCase {
                 filename: "receipt.txt",
                 mimeType: "text/plain",
                 payload: payload
-            )
+            ),
+            legacyProvenance: .captureEnvelope(envelopeID)
         )
         _ = try await store.upsertDeskMaterial(
-            WorkMaterialDraft(id: undrainedID, kind: .note, title: "Web page", textContent: "https://example.org")
+            WorkMaterialDraft(id: undrainedID, kind: .note, title: "Web page", textContent: "https://example.org"),
+            legacyProvenance: .captureEnvelope(envelopeID)
         )
 
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
@@ -410,5 +480,155 @@ final class WorkboardDeskUpsertTests: XCTestCase {
         let survivor = try XCTUnwrap(legacyValue)
         XCTAssertEqual(survivor.captureEnvelopeID, envelopeID)
         XCTAssertTrue(survivor.materials.isEmpty)
+    }
+
+    /// The other half of adoption, and the one that decides what a matching
+    /// UUID is worth: nothing, on its own.
+    ///
+    /// A capture that names no capture of its own — every lane that mints its
+    /// ids per attempt — and one that names a DIFFERENT capture both meet the
+    /// same refusal, and the card they collided with keeps its owner, its bytes
+    /// and its blob. Without that gate the second capture would re-home a card
+    /// it has nothing to do with and, carrying bytes, replace the payload
+    /// behind it.
+    func testAMaterialIdParkedUnderAnUnrelatedOwnerIsRefusedRatherThanAdopted() async throws {
+        let store = isolated.make()
+        let sharedID = UUID()
+        let legacyOwnerID = UUID()
+        let theirEnvelope = UUID()
+        let theirBytes = Data("the payload the parked card actually holds".utf8)
+        try await parkSyncedCard(
+            in: store,
+            id: sharedID,
+            underOwner: legacyOwnerID,
+            envelopeID: theirEnvelope,
+            payload: theirBytes
+        )
+
+        let myBytes = Data("bytes from a capture that has nothing to do with it".utf8)
+        func collidingDraft() -> WorkMaterialDraft {
+            WorkMaterialDraft(
+                id: sharedID,
+                kind: .file,
+                title: "mine.txt",
+                filename: "mine.txt",
+                mimeType: "text/plain",
+                payload: myBytes,
+                byteSize: Int64(myBytes.count)
+            )
+        }
+
+        do {
+            _ = try await store.upsertDeskMaterial(collidingDraft())
+            XCTFail("a capture that names no provenance has no history to adopt")
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            // Expected.
+        }
+        do {
+            _ = try await store.upsertDeskMaterial(
+                collidingDraft(),
+                legacyProvenance: .captureEnvelope(UUID())
+            )
+            XCTFail("a capture naming a different envelope must not adopt this card")
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            // Expected.
+        }
+
+        let rows = await store._workMaterialRowsForTesting(id: sharedID)
+        XCTAssertEqual(Set(rows.compactMap(\.workItemID)), [legacyOwnerID],
+                       "the refused capture must not move a card it cannot account for")
+        let blobs = await store._workMaterialBlobRowsForTesting(materialID: sharedID)
+        XCTAssertEqual(blobs.count, 1)
+        XCTAssertEqual(blobs.first?.contentHash, hex(theirBytes),
+                       "a refused adoption must not replace the payload it collided with")
+        let loaded = try await store.loadWorkMaterialPayload(id: sharedID)
+        XCTAssertEqual(loaded, theirBytes)
+        let desk = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertTrue(desk?.materials.isEmpty ?? true, "nothing reached the desk")
+
+        // The capture that CAN account for it still adopts, so the refusal is
+        // about provenance and not about adoption having been switched off.
+        let adopted = try await store.upsertDeskMaterial(
+            collidingDraft(),
+            legacyProvenance: .captureEnvelope(theirEnvelope)
+        )
+        XCTAssertEqual(adopted.workItemID, Constants.workboardDeskItemID)
+    }
+
+    /// CloudKit can import a material row before the item that owns it. An
+    /// owner row that cannot be read is therefore not evidence of anything, and
+    /// adopting on the strength of a missing row is exactly how a capture would
+    /// move a card whose real history has not arrived yet. The capture is
+    /// refused; a later replay adopts once the owner lands.
+    func testAdoptionIsRefusedWhileTheLegacyOwnerCannotAccountForTheCard() async throws {
+        let store = isolated.make()
+        let sharedID = UUID()
+        let ownerID = UUID()
+        // An owner row with no capture identity on it at all — the shape a row
+        // whose `captureEnvelopeID` has not imported yet presents.
+        _ = try await store.createWorkItem(
+            WorkItemDraft(id: ownerID, content: WorkItemContent(title: "Half-arrived"))
+        )
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(id: sharedID, kind: .note, title: "Parked", textContent: "x"),
+            to: ownerID
+        )
+
+        do {
+            _ = try await store.upsertDeskMaterial(
+                WorkMaterialDraft(id: sharedID, kind: .note, title: "Mine", textContent: "y"),
+                legacyProvenance: .captureEnvelope(UUID())
+            )
+            XCTFail("an owner row that names no capture cannot license an adoption")
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            // Expected.
+        }
+
+        let rows = await store._workMaterialRowsForTesting(id: sharedID)
+        XCTAssertEqual(Set(rows.compactMap(\.workItemID)), [ownerID])
+    }
+
+    /// Two different materials sharing one UUID is what an id collision looks
+    /// like from inside the desk write. Re-homing across kinds would hand this
+    /// capture's bytes to whatever the other card was, so the kinds have to
+    /// agree even when the provenance does.
+    func testAdoptionIsRefusedWhenTheParkedRowIsADifferentKindOfCard() async throws {
+        let store = isolated.make()
+        let sharedID = UUID()
+        let ownerID = UUID()
+        let envelopeID = UUID()
+        _ = try await store.createWorkItem(
+            WorkItemDraft(
+                id: ownerID,
+                captureEnvelopeID: envelopeID,
+                content: WorkItemContent(title: "Captured by an older build")
+            )
+        )
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                id: sharedID,
+                kind: .file,
+                title: "receipt.txt",
+                filename: "receipt.txt",
+                mimeType: "text/plain",
+                payload: Data("a file the older build copied".utf8)
+            ),
+            to: ownerID
+        )
+
+        do {
+            _ = try await store.upsertDeskMaterial(
+                WorkMaterialDraft(id: sharedID, kind: .note, title: "A note", textContent: "y"),
+                legacyProvenance: .captureEnvelope(envelopeID)
+            )
+            XCTFail("a note must not adopt the rows of a file that shares its id")
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            // Expected.
+        }
+
+        let rows = await store._workMaterialRowsForTesting(id: sharedID)
+        XCTAssertEqual(Set(rows.compactMap(\.workItemID)), [ownerID])
+        let loaded = try await store.loadWorkMaterialPayload(id: sharedID)
+        XCTAssertEqual(loaded, Data("a file the older build copied".utf8))
     }
 }

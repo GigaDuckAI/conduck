@@ -19,6 +19,16 @@ import XCTest
 
 final class WorkboardBlobGCTests: XCTestCase {
 
+    /// Every store here mints a vault directory of its own that nothing else
+    /// removes; the fixture empties them when the class is done.
+    private let isolated = IsolatedWorkStores()
+
+    override func tearDown() async throws {
+        await isolated.cleanUp()
+        try await super.tearDown()
+    }
+
+
     private func syncedDraft(
         _ title: String,
         _ payload: Data,
@@ -38,7 +48,7 @@ final class WorkboardBlobGCTests: XCTestCase {
     // MARK: - Paired deletion
 
     func testDeletingACardDeletesItsPayloadInTheSameOperation() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("the courier quote".utf8)
         let draft = syncedDraft("quote.txt", payload)
         let published = try await store.upsertDeskMaterial(draft)
@@ -59,7 +69,7 @@ final class WorkboardBlobGCTests: XCTestCase {
     }
 
     func testEveryPhysicalBlobOfOneCardLeavesWithIt() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("the canonical copy".utf8)
         let draft = syncedDraft("merged.txt", payload)
         let published = try await store.upsertDeskMaterial(draft)
@@ -92,7 +102,7 @@ final class WorkboardBlobGCTests: XCTestCase {
     }
 
     func testDeletingOneCardLeavesEveryOtherPayloadStanding() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let doomedPayload = Data("the card being removed".utf8)
         let keptPayload = Data("the card that stays".utf8)
         let doomed = syncedDraft("doomed.txt", doomedPayload)
@@ -112,7 +122,7 @@ final class WorkboardBlobGCTests: XCTestCase {
     }
 
     func testADeleteScopedToAnotherOwnerTouchesNeitherCardNorPayload() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("still on the desk".utf8)
         let draft = syncedDraft("safe.txt", payload)
         _ = try await store.upsertDeskMaterial(draft)
@@ -129,7 +139,7 @@ final class WorkboardBlobGCTests: XCTestCase {
     // MARK: - No orphan sweep
 
     func testABlobWhoseCardHasNotArrivedIsNeverSweptAway() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("bytes that arrived before their card".utf8)
         let draft = syncedDraft("early.txt", payload)
         try await store._publishDeskMaterialBlobOnlyForTesting(draft)
@@ -155,7 +165,7 @@ final class WorkboardBlobGCTests: XCTestCase {
     // MARK: - Delete-all stays a Chat operation
 
     func testDeletingEveryConversationLeavesSyncedWorkPayloadsStanding() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let conversation = try await store.createConversation(backend: "test")
         _ = try await store.appendMessage(
             role: "user",

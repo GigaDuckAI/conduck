@@ -20,7 +20,10 @@
 // complete blob row on the synced lane and a present leaf on the vault lane.
 // And the claim's filesystem lease is renewed for as long as that import takes,
 // so a large or slow capture cannot age past the queue's stale horizon and be
-// reclaimed by another process mid-write.
+// reclaimed by another process mid-write. Losing that ownership is terminal: a
+// renewal that proves another acquisition holds the claim cancels the import,
+// which then writes no further material, acknowledges nothing, and releases
+// nothing it no longer owns.
 //
 // This type has no gateway dependency and no dispatch API: opening the app can
 // drain captures, but can never turn one into network work.
@@ -107,6 +110,23 @@ actor WorkCaptureDrainer {
     func _setImportHoldForTesting(_ hold: (@Sendable () async -> Void)?) {
         importHoldForTesting = hold
     }
+
+    /// TEST SEAM — hold one import open BETWEEN two of its material writes.
+    ///
+    /// WHY IT HAS TO EXIST. The interval the lease is FOR is the one in which a
+    /// capture's bytes are read and stored, and that interval is inside
+    /// `persist`: by the time the hold above is reached every byte of the
+    /// capture is already written. Nothing else in this type can park an import
+    /// there — a bounded envelope crosses that window in milliseconds — so a
+    /// takeover racing a slow byte import, and the cancellation that must stop
+    /// one, could otherwise only be raced rather than staged. The argument is
+    /// the number of materials already written, so a test can park at exactly
+    /// one write boundary. Nil on every production path.
+    private var materialWriteHoldForTesting: (@Sendable (Int) async -> Void)?
+
+    func _setMaterialWriteHoldForTesting(_ hold: (@Sendable (Int) async -> Void)?) {
+        materialWriteHoldForTesting = hold
+    }
     #endif
 
     /// Reconcile crash-stranded claims, then consume the queue oldest-first.
@@ -123,6 +143,10 @@ actor WorkCaptureDrainer {
         var importedMaterialCount = 0
 
         while true {
+            // A cancelled drain claims nothing further. The capture it would
+            // take could only be released again, and a queue entry is safest
+            // exactly where its publisher left it.
+            try Task.checkCancellation()
             let claim: WorkCaptureInbox.Claim?
             do {
                 claim = try await inbox.claimNext()
@@ -138,24 +162,7 @@ actor WorkCaptureDrainer {
             // Everything that touches the claimed directory happens under a
             // renewed lease — the release included, since it moves the very
             // files another process would otherwise be entitled to requeue.
-            let persisted = try await withLeaseHeartbeat(for: claim) {
-                do {
-                    let persisted = try await persist(claim)
-                    #if CONDUCK_TESTING
-                    await importHoldForTesting?()
-                    #endif
-                    try await confirmDurablyImported(persisted)
-                    try await inbox.acknowledge(claim)
-                    return persisted
-                } catch {
-                    // Best effort is deliberately only for the ownership
-                    // rollback. The original persistence error remains the
-                    // useful diagnosis; a failed release is repaired by
-                    // `reconcile` after relaunch.
-                    try? await inbox.release(claim)
-                    throw error
-                }
-            }
+            let persisted = try await importUnderRenewedLease(claim)
             if persisted.wasReplay {
                 replayedCaptureCount += 1
             } else {
@@ -177,7 +184,10 @@ actor WorkCaptureDrainer {
     /// entries by their captured sequence. Rank itself is decided inside the
     /// desk write, which is the only place that can count the desk's existing
     /// cards without racing a concurrent capture.
-    private func persist(_ claim: WorkCaptureInbox.Claim) async throws -> PersistedCapture {
+    private func persist(
+        _ claim: WorkCaptureInbox.Claim,
+        ownership: ImportOwnership
+    ) async throws -> PersistedCapture {
         let envelope = claim.envelope
         // A capture whose deterministic ids are already on the desk is the
         // replay of an import that was interrupted before its claim could be
@@ -195,6 +205,7 @@ actor WorkCaptureDrainer {
         // deterministic from the envelope, so a replay repairs the same card.
         let trimmedNote = envelope.note.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedNote.isEmpty {
+            try await requireImportMayContinue(ownership, atMaterialBoundary: materialIDs.count)
             let note = try await store.upsertDeskMaterial(
                 WorkMaterialDraft(
                     id: try Self.noteMaterialID(for: envelope),
@@ -204,12 +215,18 @@ actor WorkCaptureDrainer {
                     storageMode: .metadataOnly,
                     sourceDevice: sourceDevice,
                     createdAt: envelope.createdAt
-                )
+                ),
+                // A pre-desk drain of this same envelope minted an item of its
+                // own and recorded the envelope on it. Naming the envelope is
+                // what licenses the desk write to re-home those rows; without
+                // it a matching id is refused.
+                legacyProvenance: .captureEnvelope(envelope.id)
             )
             materialIDs.append(note.id)
         }
 
         for entry in envelope.entries.sorted(by: Self.entryOrder) {
+            try await requireImportMayContinue(ownership, atMaterialBoundary: materialIDs.count)
             let draft = try Self.materialDraft(
                 for: entry,
                 in: claim,
@@ -229,11 +246,15 @@ actor WorkCaptureDrainer {
                 record = try await store.upsertDeskMaterial(
                     draft,
                     sourceFileURL: payloadURL,
-                    sourceFileByteSize: byteSize
+                    sourceFileByteSize: byteSize,
+                    legacyProvenance: .captureEnvelope(envelope.id)
                 )
                 payloadBearingIDs.insert(record.id)
             } else {
-                record = try await store.upsertDeskMaterial(draft)
+                record = try await store.upsertDeskMaterial(
+                    draft,
+                    legacyProvenance: .captureEnvelope(envelope.id)
+                )
             }
             materialIDs.append(record.id)
         }
@@ -289,7 +310,61 @@ actor WorkCaptureDrainer {
         }
     }
 
-    /// Run one claim's import under a lease this drainer keeps renewing.
+    /// The gate every material write and the durability barrier pass. A claim
+    /// proven lost is terminal: another acquisition owns those bytes now, and
+    /// one more card written under it is a second import of the same capture.
+    /// A cancelled drain stops here too, rather than at whichever later `await`
+    /// happens to notice.
+    private func requireImportMayContinue(
+        _ ownership: ImportOwnership,
+        atMaterialBoundary boundary: Int? = nil
+    ) async throws {
+        #if CONDUCK_TESTING
+        if let boundary { await materialWriteHoldForTesting?(boundary) }
+        #endif
+        if await ownership.hasLostClaim { throw WorkCaptureInbox.InboxError.staleClaim }
+        try Task.checkCancellation()
+    }
+
+    /// Persist one claim, prove its bytes read back, and only then consume the
+    /// queue copy. The two operations that end a claim — the acknowledgement
+    /// that deletes it, the release that requeues it — may only run while this
+    /// drainer still owns it, so both are gated on the shared terminal state
+    /// rather than on the import merely having reached them.
+    private func persistAndAcknowledge(
+        _ claim: WorkCaptureInbox.Claim,
+        ownership: ImportOwnership
+    ) async throws -> PersistedCapture {
+        do {
+            let persisted = try await persist(claim, ownership: ownership)
+            #if CONDUCK_TESTING
+            await importHoldForTesting?()
+            #endif
+            try await requireImportMayContinue(ownership)
+            try await confirmDurablyImported(persisted)
+            // The claim ends here: `acknowledge` deletes the directory, so the
+            // marker the heartbeat can no longer read afterwards is this
+            // import's own finished work rather than another process's.
+            guard await ownership.endImport() else {
+                throw WorkCaptureInbox.InboxError.staleClaim
+            }
+            try await inbox.acknowledge(claim)
+            return persisted
+        } catch {
+            // Best effort is deliberately only for the ownership rollback. The
+            // original persistence error remains the useful diagnosis; a failed
+            // release is repaired by `reconcile` after relaunch. A claim proven
+            // lost is released by nobody: requeueing a directory another
+            // acquisition holds would hand away bytes it is reading.
+            if await ownership.endImport() {
+                try? await inbox.release(claim)
+            }
+            throw error
+        }
+    }
+
+    /// Run one claim's import under a lease this drainer keeps renewing, and
+    /// end that import the moment a renewal proves the claim is no longer its.
     ///
     /// `WorkCaptureInbox.staleClaimHorizon` is a filesystem fact other
     /// processes read: the app and a headless intent process both reconcile the
@@ -301,30 +376,64 @@ actor WorkCaptureDrainer {
     /// second drainer out of a directory this one is still reading and writing
     /// out of. The renewal covers persistence, the acknowledgement barrier and
     /// whichever of `acknowledge` or `release` ends the claim.
-    private func withLeaseHeartbeat<T>(
-        for claim: WorkCaptureInbox.Claim,
-        _ body: () async throws -> T
-    ) async throws -> T {
-        // Detached deliberately: a renewal is a hop onto the inbox actor and
-        // must not have to wait for the executor the import it protects is
-        // occupying.
-        let heartbeat = Task.detached(
-            priority: .utility
-        ) { [inbox, leaseHeartbeatInterval, now] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: leaseHeartbeatInterval)
-                guard !Task.isCancelled else { return }
-                // A refusal never stops the beat. The claim may already be
-                // gone — acknowledged, released, or taken over — in which case
-                // the import's own next inbox call is what surfaces it; or the
-                // marker may be momentarily unreadable, and giving up there
-                // would disarm the protection this loop exists to provide for
-                // the rest of a long import.
-                try? await inbox.refreshLease(claim, now: now())
+    ///
+    /// The renewal is a structured child rather than a detached task because
+    /// the beat and the import have to end together in both directions. A
+    /// cancelled drain must leave no beat restating ownership of a claim nobody
+    /// is importing; and a proven takeover must reach the import, because a
+    /// former owner that keeps writing is the one thing that makes the three
+    /// clocks — renewal, stale horizon, vault grace — stop describing a single
+    /// owner. A renewal is still a hop onto the inbox actor and never waits for
+    /// the executor the import occupies.
+    private func importUnderRenewedLease(
+        _ claim: WorkCaptureInbox.Claim
+    ) async throws -> PersistedCapture {
+        let ownership = ImportOwnership()
+        return try await withThrowingTaskGroup(of: PersistedCapture?.self) { group in
+            group.addTask { [inbox, leaseHeartbeatInterval, now] in
+                while !Task.isCancelled {
+                    do {
+                        try await Task.sleep(for: leaseHeartbeatInterval)
+                    } catch {
+                        return nil
+                    }
+                    guard !Task.isCancelled else { return nil }
+                    do {
+                        try await inbox.refreshLease(claim, now: now())
+                    } catch WorkCaptureInbox.InboxError.staleClaim {
+                        // The one refusal that ends the beat, and it ends the
+                        // import with it. A claim is generation-scoped, so a
+                        // marker this drainer can no longer prove it owns names
+                        // another acquisition — trying again cannot undo that.
+                        await ownership.recordLostClaim()
+                        return nil
+                    } catch {
+                        // A momentarily unreadable or unwritable marker is
+                        // transient, and giving up on it would disarm the
+                        // protection for the rest of a long import.
+                    }
+                }
+                return nil
             }
+            group.addTask { try await self.persistAndAcknowledge(claim, ownership: ownership) }
+
+            while let outcome = try await group.next() {
+                if let persisted = outcome {
+                    group.cancelAll()
+                    return persisted
+                }
+                guard await ownership.hasLostClaim else { continue }
+                // Cancel the import and let it unwind before the loss is
+                // surfaced: it must write no further material, and the claim
+                // must be left exactly where its new owner put it.
+                group.cancelAll()
+                _ = try? await group.next()
+                throw WorkCaptureInbox.InboxError.staleClaim
+            }
+            // The import returns a capture or throws, so the group cannot run
+            // dry while it is still the one thing being awaited.
+            throw CancellationError()
         }
-        defer { heartbeat.cancel() }
-        return try await body()
     }
 
     // MARK: - Deterministic capture mapping
@@ -450,6 +559,34 @@ actor WorkCaptureDrainer {
                 createdAt: createdAt
             )
         }
+    }
+}
+
+/// The terminal state one import shares with the heartbeat renewing its claim.
+/// A proven takeover has to reach the import — nothing else can stop it writing
+/// a further material or acknowledging a claim another process now owns — and
+/// the import has to be able to declare itself over, so that the marker its own
+/// acknowledgement or release removes is never read back as a takeover.
+private actor ImportOwnership {
+    private var claimIsLost = false
+    private var importHasEnded = false
+
+    var hasLostClaim: Bool { claimIsLost }
+
+    /// Record a takeover the heartbeat proved. Ignored once the import has
+    /// ended: from that point the claim is being deleted or requeued by this
+    /// drainer itself, and a refusal describes that rather than another
+    /// acquisition.
+    func recordLostClaim() {
+        guard !importHasEnded else { return }
+        claimIsLost = true
+    }
+
+    /// End the import, reporting whether it still owns its claim. Only an owner
+    /// may acknowledge or release.
+    func endImport() -> Bool {
+        importHasEnded = true
+        return !claimIsLost
     }
 }
 

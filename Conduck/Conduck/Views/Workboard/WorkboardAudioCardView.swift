@@ -20,13 +20,25 @@
 // holder as the next one claims it; the registry keeps a weak reference, so a
 // card scrolled out of existence cannot pin a player alive.
 //
-// AUDIO SESSION (iOS): the desk has no session owner of its own, and the
-// recorder that produces these notes leaves the shared session on `.record` and
-// inactive — playing into that is silence. So the card activates `.playback` /
-// `.spokenAudio` around its own playback exactly as the chat read-aloud path
-// does for its own, and releases it at every terminal. The release is
-// best-effort: `setActive(false)` throws busy while another leg still holds
-// audio I/O, which is precisely the case where releasing it would be wrong.
+// AUDIO OUTPUT: the desk has no session owner of its own, and the recorder that
+// produces these notes leaves the iOS session on `.record` and inactive —
+// playing into that is silence. `WorkboardAudioOutput` is the card family's one
+// claim on process audio: it REFUSES while a capture is live (a CarPlay voice
+// session, or any registered mic authority), it activates `.playback` /
+// `.spokenAudio` the way the chat read-aloud path does for its own, and it
+// records WHICH client holds the claim so only that client's release can
+// deactivate the session — a stale terminal from a card that already lost
+// output must never silence the card that took it. A refused activation is a
+// refusal, never a granted claim: `AVAudioPlayer.play()` is not trusted behind
+// a swallowed session error.
+//
+// SPEECH BUS: the card is also a `SpeechExclusivityParty`. It claims before
+// every start and resume, so a chat read-aloud stops rather than overlaps, and
+// a mic start (`claim(nil)`) stops a playing card. Registration is lazy — at
+// the first claim, not in `init` — because SwiftUI re-evaluates an `@State`
+// default initializer on every struct init and would otherwise churn the
+// registry with throwaway players. CarPlay registers no party, so nothing here
+// can preempt its exactly-once / deactivate-once invariants.
 //
 // TERMINALS: playback end is detected by the progress tick observing that the
 // player stopped, not by an `AVAudioPlayerDelegate` funnel. The card has no
@@ -41,13 +53,16 @@ import SwiftUI
 /// What the card's transport is doing. `failed` is a card whose bytes would not
 /// load or would not decode: it stays on the board and stays tappable, because
 /// the next tap is the only way to find out whether the bytes have since
-/// arrived.
+/// arrived. `blocked` is the same card refused for a reason that is not about
+/// the recording at all — a live capture owns audio — so it is stated as its
+/// own state rather than reported as a broken recording.
 enum WorkboardAudioPhase: Equatable, Sendable {
     case idle
     case loading
     case playing
     case paused
     case failed
+    case blocked
 }
 
 /// Elapsed/duration arithmetic and the transport's clock copy, kept out of the
@@ -81,6 +96,199 @@ enum WorkboardAudioTiming {
         hours > 0
             ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
             : String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+// MARK: - Presentation rules
+
+/// Which action a tap on the transport means. Named as an action rather than as
+/// a string so the rule — a loading card cancels, it does not play — is
+/// decidable without mounting the view, and so the label and the glyph cannot
+/// drift apart from what the tap does.
+enum WorkboardAudioTransportAction: Equatable, Sendable {
+    case play
+    case pause
+    case cancelLoading
+}
+
+/// What the availability corner says, and whether saying it is an ACTION. Only
+/// `reattach` is a control: it is offered exactly when the card was given
+/// somewhere to send the person, so the card never names a repair it cannot
+/// perform.
+enum WorkboardAudioCardChip: Equatable, Sendable {
+    case localOnly
+    case syncPending
+    case reattach
+    case notOnThisDevice
+
+    var isAction: Bool { self == .reattach }
+}
+
+/// The card's presentation decisions as pure functions. They live outside the
+/// view so what the person is shown — and what each affordance does — is
+/// decidable without a mounted `View` and without audio hardware.
+enum WorkboardAudioCardPresentation {
+    /// The transport's meaning for a phase. Activating a LOADING card cancels
+    /// the payload read, so it must not announce "Play".
+    static func transportAction(for phase: WorkboardAudioPhase) -> WorkboardAudioTransportAction {
+        switch phase {
+        case .playing: return .pause
+        case .loading: return .cancelLoading
+        case .idle, .paused, .failed, .blocked: return .play
+        }
+    }
+
+    /// Open is offered only for bytes this device can read — the board's one
+    /// permission policy decides that, so the audio card cannot open what a
+    /// source card beside it refuses — and only when the board gave the card
+    /// somewhere to open them.
+    static func showsOpenAction(
+        availability: WorkboardMaterialAvailability,
+        hasOpenAction: Bool
+    ) -> Bool {
+        WorkboardCardActionPolicy.allows(.open, when: availability) && hasOpenAction
+    }
+
+    /// The availability corner. `nil` for a card whose bytes are simply here.
+    /// The repair is named only where the policy permits one AND the board
+    /// wired somewhere for it to go.
+    static func chip(
+        for availability: WorkboardMaterialAvailability,
+        hasReattachAction: Bool
+    ) -> WorkboardAudioCardChip? {
+        switch availability {
+        case .available:
+            return nil
+        case .localOnly:
+            return .localOnly
+        case .syncPending:
+            return .syncPending
+        case .unavailableOnThisDevice:
+            let repairable = WorkboardCardActionPolicy.allows(.reattach, when: availability)
+            return repairable && hasReattachAction ? .reattach : .notOnThisDevice
+        }
+    }
+}
+
+// MARK: - Audio output claim
+
+/// The outcome of asking for process audio output.
+enum WorkboardAudioOutputClaim: Equatable, Sendable {
+    case granted
+    /// A capture owns audio — a CarPlay voice session, or a registered mic
+    /// authority. A live capture is sacred, so the card refuses rather than
+    /// reconfiguring the session out from under it.
+    case captureIsLive
+    /// The session refused to come up. The card must NOT fall through to
+    /// `AVAudioPlayer.play()` on the strength of a swallowed error.
+    case sessionUnavailable
+}
+
+/// The one claim on process audio the desk's cards make. A protocol so the
+/// player's discipline is decidable without a real `AVAudioSession`.
+@MainActor
+protocol WorkboardAudioOutputArbiter: AnyObject {
+    /// Live read, not a cached flag: the probe is asked at the moment of the
+    /// tap, because a capture can start between two taps.
+    var captureIsLive: Bool { get }
+    func claim(for client: AnyObject) -> WorkboardAudioOutputClaim
+    func release(for client: AnyObject)
+}
+
+/// Process audio output for the desk's audio cards.
+///
+/// OWNERSHIP is the point of the type: `release` deactivates only for the
+/// client that is still the holder, so a terminal arriving from a card that
+/// already lost output cannot deactivate the session under the card that took
+/// it. The holder is held weakly — a card that goes away without releasing
+/// reads as no holder rather than as a corpse that owns audio forever.
+///
+/// The capture probe and the two session calls are injected so the ownership
+/// rules can be exercised without audio hardware; the defaults are the real
+/// system state and the real shared session.
+@MainActor
+final class WorkboardAudioOutput: WorkboardAudioOutputArbiter {
+    static let shared = WorkboardAudioOutput()
+
+    /// `@MainActor` closure types, not plain ones: a default argument is
+    /// evaluated in the caller's (nonisolated) context, so the isolation has to
+    /// travel with the closure rather than with the call site.
+    private let captureProbe: @MainActor () -> Bool
+    private let activateSession: @MainActor () throws -> Void
+    private let deactivateSession: @MainActor () -> Void
+
+    private weak var holder: AnyObject?
+
+    init(
+        captureIsLive: @escaping @MainActor () -> Bool = { WorkboardAudioOutput.systemCaptureIsLive() },
+        activateSession: @escaping @MainActor () throws -> Void = { try WorkboardAudioOutput.activateSharedSession() },
+        deactivateSession: @escaping @MainActor () -> Void = { WorkboardAudioOutput.releaseSharedSession() }
+    ) {
+        self.captureProbe = captureIsLive
+        self.activateSession = activateSession
+        self.deactivateSession = deactivateSession
+    }
+
+    /// Test seam and assertion target — who, if anyone, may deactivate.
+    var currentHolder: AnyObject? { holder }
+
+    var captureIsLive: Bool { captureProbe() }
+
+    func claim(for client: AnyObject) -> WorkboardAudioOutputClaim {
+        guard !captureProbe() else { return .captureIsLive }
+        // Already ours: the session is configured and active, and re-activating
+        // would be a second claim on a route we already hold.
+        guard holder !== client else { return .granted }
+        do {
+            try activateSession()
+        } catch {
+            // The activation failed, so nothing was claimed. Leaving the holder
+            // unset is what keeps a later release from deactivating a session
+            // this client never brought up.
+            return .sessionUnavailable
+        }
+        holder = client
+        return .granted
+    }
+
+    func release(for client: AnyObject) {
+        guard holder === client else { return }
+        holder = nil
+        deactivateSession()
+    }
+
+    // MARK: System state
+
+    /// True while any capture that must not be played over is live. CarPlay's
+    /// process-wide mirror covers the car's voice session; the speech bus's
+    /// authority registry covers the app's own microphones.
+    private static func systemCaptureIsLive() -> Bool {
+        #if os(iOS)
+        if CarPlayRecordingService.anySessionActive { return true }
+        #endif
+        return SpeechExclusivity.shared.isRecordingActive
+    }
+
+    /// iOS only — macOS has no `AVAudioSession`, so the claim there is
+    /// ownership bookkeeping and the speech bus does the arbitration.
+    /// `.playback` keeps a voice note audible with the hardware silent switch
+    /// on (a tapped note is intentional playback), `.spokenAudio` is Apple's
+    /// mode for spoken word, `.duckOthers` dips music rather than stopping it.
+    private static func activateSharedSession() throws {
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try session.setActive(true, options: [])
+        #endif
+    }
+
+    /// Best-effort by design: `setActive(false)` throws busy while another leg
+    /// still holds audio I/O, which is precisely the case where releasing would
+    /// be wrong. `.notifyOthersOnDeactivation` un-ducks other apps' audio.
+    private static func releaseSharedSession() {
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 }
 
@@ -143,15 +351,31 @@ final class WorkboardAudioCardPlayer: WorkboardAudioExclusive {
     @ObservationIgnored private var ticker: Task<Void, Never>?
     @ObservationIgnored private var loading: Task<Void, Never>?
     @ObservationIgnored private let exclusivity: WorkboardAudioExclusivity
+    /// Injected shared collaborators, resolved on the main actor rather than as
+    /// default arguments: both singletons are main-actor state, and a default
+    /// argument is evaluated in the caller's context (a SwiftUI `@State`
+    /// initializer, which is not isolated).
+    @ObservationIgnored private let injectedOutput: (any WorkboardAudioOutputArbiter)?
+    @ObservationIgnored private let injectedSpeechBus: SpeechExclusivity?
 
     /// How often the progress bar and the clock are refreshed. Slow enough to
     /// cost nothing on a board of cards, fast enough that the bar reads as
     /// motion rather than as steps.
     private static let tickInterval = Duration.milliseconds(100)
 
-    init(exclusivity: WorkboardAudioExclusivity = .shared) {
+    init(
+        exclusivity: WorkboardAudioExclusivity = .shared,
+        output: (any WorkboardAudioOutputArbiter)? = nil,
+        speechBus: SpeechExclusivity? = nil
+    ) {
         self.exclusivity = exclusivity
+        self.injectedOutput = output
+        self.injectedSpeechBus = speechBus
     }
+
+    private var output: any WorkboardAudioOutputArbiter { injectedOutput ?? WorkboardAudioOutput.shared }
+
+    private var speechBus: SpeechExclusivity { injectedSpeechBus ?? .shared }
 
     var fraction: Double {
         WorkboardAudioTiming.fraction(elapsed: elapsed, duration: duration)
@@ -172,6 +396,11 @@ final class WorkboardAudioCardPlayer: WorkboardAudioExclusive {
             pause()
         case .paused:
             resume()
+        case .blocked:
+            // A refusal keeps whatever it already had: a clip that was refused
+            // mid-way resumes from its position, one that never started reads
+            // its bytes.
+            player == nil ? start(load: load) : resume()
         case .idle, .failed:
             start(load: load)
         case .loading:
@@ -203,6 +432,10 @@ final class WorkboardAudioCardPlayer: WorkboardAudioExclusive {
 
     private func start(load: @escaping () async throws -> Data?) {
         loading?.cancel()
+        // Registered before the bytes are even read, so a microphone starting
+        // during the read stops the card instead of racing it to output. The
+        // CLAIM waits until there is audio to produce.
+        speechBus.register(self)
         phase = .loading
         elapsed = 0
         duration = 0
@@ -219,13 +452,35 @@ final class WorkboardAudioCardPlayer: WorkboardAudioExclusive {
     }
 
     private func begin(with data: Data) {
+        // Probed BEFORE anything is claimed: a card refused for a live capture
+        // must not have stopped the card that was playing on its way to saying
+        // no.
+        guard !output.captureIsLive else {
+            phase = .blocked
+            return
+        }
         exclusivity.claim(self)
-        activateSession()
+        claimSpeechOutput()
+        switch output.claim(for: self) {
+        case .granted:
+            break
+        case .captureIsLive:
+            exclusivity.resign(self)
+            phase = .blocked
+            return
+        case .sessionUnavailable:
+            // The session refused. `AVAudioPlayer.play()` can still return true
+            // into a session that permits no output, so the refusal is the
+            // answer — not a silent transport that looks like it is playing.
+            exclusivity.resign(self)
+            phase = .failed
+            return
+        }
         do {
             let engine = try AVAudioPlayer(data: data)
             engine.prepareToPlay()
             guard engine.play() else {
-                releaseSession()
+                output.release(for: self)
                 exclusivity.resign(self)
                 phase = .failed
                 return
@@ -237,7 +492,7 @@ final class WorkboardAudioCardPlayer: WorkboardAudioExclusive {
             startTicking()
         } catch {
             // Undecodable bytes. Never logged — the recording is the person's.
-            releaseSession()
+            output.release(for: self)
             exclusivity.resign(self)
             phase = .failed
         }
@@ -248,7 +503,7 @@ final class WorkboardAudioCardPlayer: WorkboardAudioExclusive {
         stopTicking()
         // Un-duck other apps' audio while the note is parked; the resume path
         // activates again.
-        releaseSession()
+        output.release(for: self)
         phase = .paused
     }
 
@@ -257,8 +512,26 @@ final class WorkboardAudioCardPlayer: WorkboardAudioExclusive {
             phase = .idle
             return
         }
+        guard !output.captureIsLive else {
+            // The position is kept: the next tap resumes where the refusal
+            // caught it rather than restarting the note.
+            phase = .blocked
+            return
+        }
         exclusivity.claim(self)
-        activateSession()
+        claimSpeechOutput()
+        switch output.claim(for: self) {
+        case .granted:
+            break
+        case .captureIsLive:
+            exclusivity.resign(self)
+            phase = .blocked
+            return
+        case .sessionUnavailable:
+            teardown()
+            phase = .failed
+            return
+        }
         guard player.play() else {
             teardown()
             phase = .failed
@@ -266,6 +539,16 @@ final class WorkboardAudioCardPlayer: WorkboardAudioExclusive {
         }
         phase = .playing
         startTicking()
+    }
+
+    /// Silence every other speaker before this card produces audio. Registration
+    /// is lazy and idempotent, so a throwaway player from an `@State` default
+    /// initializer never enters the registry. The mic is never a registered
+    /// party, so this cannot stop a capture; CarPlay registers nothing, so this
+    /// cannot preempt the car's voice session either.
+    private func claimSpeechOutput() {
+        speechBus.register(self)
+        speechBus.claim(self)
     }
 
     /// The clip reached its end on its own. The card returns to the start so a
@@ -281,7 +564,7 @@ final class WorkboardAudioCardPlayer: WorkboardAudioExclusive {
         player = nil
         elapsed = 0
         duration = 0
-        releaseSession()
+        output.release(for: self)
         exclusivity.resign(self)
     }
 
@@ -311,24 +594,18 @@ final class WorkboardAudioCardPlayer: WorkboardAudioExclusive {
         ticker = nil
     }
 
-    // MARK: Session
+}
 
-    /// iOS only — macOS has no `AVAudioSession`. Both calls are best-effort:
-    /// a refused activation shows up as a failed start, and a refused release
-    /// means another leg still holds output, which is the one case where
-    /// releasing would be wrong.
-    private func activateSession() {
-        #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-        try? session.setActive(true, options: [])
-        #endif
-    }
+// MARK: - Speech bus
 
-    private func releaseSession() {
-        #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        #endif
+extension WorkboardAudioCardPlayer: SpeechExclusivityParty {
+    /// Preempted by another party on the speech bus — a chat read-aloud
+    /// starting, or a microphone claiming everything. A card that is not
+    /// producing audio has nothing to stop, so an idle one no-ops rather than
+    /// resigning a claim it does not hold.
+    func stopForSpeechExclusivity() {
+        guard phase == .playing || phase == .paused || phase == .loading else { return }
+        deactivate()
     }
 }
 
@@ -358,6 +635,14 @@ struct WorkboardAudioCardView: View {
     var loadPayload: (UUID) async throws -> Data? = { id in
         try await ConversationStore.shared.loadWorkMaterialPayload(id: id)
     }
+    /// Open the recording outside the transport (Quick Look / share). Offered
+    /// only for bytes this device can read, and only when the board gave the
+    /// card somewhere to open them.
+    var onOpen: (() -> Void)? = nil
+    /// Repair a recording whose local bytes are gone. When it is absent the
+    /// availability corner states the fact instead of naming an action the card
+    /// cannot perform.
+    var onReattach: (() -> Void)? = nil
     var onSetSize: ((WorkMaterialCardSize) -> Void)?
     var onMoveEarlier: (() -> Void)?
     var onMoveLater: (() -> Void)?
@@ -514,6 +799,7 @@ struct WorkboardAudioCardView: View {
         case .playing: return "pause.fill"
         case .loading: return "hourglass"
         case .failed: return "exclamationmark.triangle"
+        case .blocked: return "speaker.slash.fill"
         case .idle, .paused: return "play.fill"
         }
     }
@@ -569,6 +855,14 @@ struct WorkboardAudioCardView: View {
             .foregroundStyle(AppColors.warning)
             .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
+        } else if player.phase == .blocked {
+            // Not a broken recording — something else holds audio — so it is
+            // stated in the ordinary caption tint, not as a fault.
+            Text(busyCopy)
+                .font(.caption)
+                .foregroundStyle(AppColors.textTertiary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else if let transcript, !transcript.isEmpty {
             Text(verbatim: transcript)
                 .font(.caption)
@@ -581,6 +875,14 @@ struct WorkboardAudioCardView: View {
 
     private var transcript: String? {
         material.textContent?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Why a tap produced no audio when the recording itself is fine.
+    private var busyCopy: LocalizedStringResource {
+        LocalizedStringResource(
+            "workboard.audio.busy",
+            defaultValue: "Audio is in use right now"
+        )
     }
 
     private var cardFooter: some View {
@@ -598,39 +900,64 @@ struct WorkboardAudioCardView: View {
 
     /// The same availability vocabulary the other cards carry: a note waiting
     /// for iCloud says so and cannot be played, a note whose local bytes are
-    /// gone asks to be reattached.
+    /// gone offers the repair when the board wired one and otherwise states
+    /// plainly that the bytes are elsewhere.
     @ViewBuilder
     private var availabilityChip: some View {
-        if material.availability != .available {
-            HStack(spacing: 3) {
-                Image(systemName: availabilityGlyphName)
-                Text(availabilityLabel)
-                    .lineLimit(1)
+        if let chip = availabilityChipKind {
+            if chip.isAction, let onReattach {
+                Button(action: onReattach) { chipContent(chip) }
+                    .pointerIconButton(
+                        size: WorkboardMetrics.touchTarget,
+                        shape: .capsule,
+                        horizontalPadding: 4
+                    )
+            } else {
+                chipContent(chip)
             }
-            .font(.caption2)
-            .foregroundStyle(availabilityTint)
-            .accessibilityHidden(true)
         }
     }
 
-    private var availabilityGlyphName: String {
-        switch material.availability {
+    private func chipContent(_ chip: WorkboardAudioCardChip) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: chipGlyphName(chip))
+            Text(chipLabel(chip))
+                .lineLimit(1)
+        }
+        .font(.caption2)
+        .foregroundStyle(chipTint(chip))
+        // The card's own label carries the availability; a second reading of
+        // the chip would repeat it. The reattach ACTION stays reachable as a
+        // custom action on the card, which a nested control inside an
+        // `.ignore`d element would not be.
+        .accessibilityHidden(true)
+    }
+
+    private var availabilityChipKind: WorkboardAudioCardChip? {
+        WorkboardAudioCardPresentation.chip(
+            for: material.availability,
+            hasReattachAction: onReattach != nil
+        )
+    }
+
+    private func chipGlyphName(_ chip: WorkboardAudioCardChip) -> String {
+        switch chip {
         case .localOnly: return "internaldrive"
         case .syncPending: return "icloud.and.arrow.down"
-        case .available, .unavailableOnThisDevice: return "paperclip.badge.ellipsis"
+        case .reattach, .notOnThisDevice: return "paperclip.badge.ellipsis"
         }
     }
 
-    private var availabilityTint: Color {
-        switch material.availability {
+    private func chipTint(_ chip: WorkboardAudioCardChip) -> Color {
+        switch chip {
         case .localOnly: return AppColors.brandTeal
         case .syncPending: return AppColors.textTertiary
-        case .available, .unavailableOnThisDevice: return AppColors.warning
+        case .reattach, .notOnThisDevice: return AppColors.warning
         }
     }
 
-    private var availabilityLabel: LocalizedStringResource {
-        switch material.availability {
+    private func chipLabel(_ chip: WorkboardAudioCardChip) -> LocalizedStringResource {
+        switch chip {
         case .localOnly:
             return LocalizedStringResource(
                 "workboard.material.localOnly",
@@ -641,19 +968,24 @@ struct WorkboardAudioCardView: View {
                 "workboard.material.syncPending",
                 defaultValue: "Waiting for iCloud…"
             )
-        case .available, .unavailableOnThisDevice:
+        case .reattach:
             return LocalizedStringResource(
                 "workboard.material.reattach.short",
                 defaultValue: "Reattach"
+            )
+        case .notOnThisDevice:
+            return LocalizedStringResource(
+                "workboard.audio.unavailableHere",
+                defaultValue: "Not on this device"
             )
         }
     }
 
     /// Bytes that are not readable on this device cannot be played on it. The
-    /// readable cases are named by `isAvailable`, so a state added later fails
-    /// closed rather than opening a transport over nothing.
+    /// board's one permission policy names the readable cases, so a state added
+    /// later fails closed rather than opening a transport over nothing.
     private var isPlayable: Bool {
-        material.availability.isAvailable
+        WorkboardCardActionPolicy.allows(.play, when: material.availability)
     }
 
     // MARK: Actions
@@ -696,9 +1028,25 @@ struct WorkboardAudioCardView: View {
     private var cardMenuContent: some View {
         if isPlayable {
             Button(action: toggle) {
+                Label(transportActionTitle, systemImage: transportActionSymbol)
+            }
+        }
+        if showsOpenAction, let onOpen {
+            Button(action: onOpen) {
                 Label(
-                    transportActionTitle,
-                    systemImage: player.phase == .playing ? "pause.fill" : "play.fill"
+                    LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
+                    systemImage: "arrow.up.forward.app"
+                )
+            }
+        }
+        if availabilityChipKind?.isAction == true, let onReattach {
+            Button(action: onReattach) {
+                Label(
+                    LocalizedStringResource(
+                        "workboard.material.reattach.action",
+                        defaultValue: "Reattach or Replace"
+                    ),
+                    systemImage: "paperclip"
                 )
             }
         }
@@ -749,6 +1097,23 @@ struct WorkboardAudioCardView: View {
 
     @ViewBuilder
     private var cardAccessibilityActions: some View {
+        if showsOpenAction, let onOpen {
+            Button(
+                LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
+                action: onOpen
+            )
+        }
+        // The chip is drawn inside an element whose children are ignored, so
+        // the repair reaches VoiceOver as a custom action or not at all.
+        if availabilityChipKind?.isAction == true, let onReattach {
+            Button(
+                LocalizedStringResource(
+                    "workboard.material.reattach.action",
+                    defaultValue: "Reattach or Replace"
+                ),
+                action: onReattach
+            )
+        }
         if let onMoveEarlier {
             Button(
                 LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier"),
@@ -781,10 +1146,35 @@ struct WorkboardAudioCardView: View {
 
     // MARK: Accessibility
 
+    /// What the next activation DOES — including the loading phase, where it
+    /// cancels the payload read rather than starting playback.
     private var transportActionTitle: LocalizedStringResource {
-        player.phase == .playing
-            ? LocalizedStringResource("workboard.audio.pause", defaultValue: "Pause")
-            : LocalizedStringResource("workboard.audio.play", defaultValue: "Play")
+        switch WorkboardAudioCardPresentation.transportAction(for: player.phase) {
+        case .play:
+            return LocalizedStringResource("workboard.audio.play", defaultValue: "Play")
+        case .pause:
+            return LocalizedStringResource("workboard.audio.pause", defaultValue: "Pause")
+        case .cancelLoading:
+            return LocalizedStringResource(
+                "workboard.audio.cancelLoading",
+                defaultValue: "Cancel Loading"
+            )
+        }
+    }
+
+    private var transportActionSymbol: String {
+        switch WorkboardAudioCardPresentation.transportAction(for: player.phase) {
+        case .play: return "play.fill"
+        case .pause: return "pause.fill"
+        case .cancelLoading: return "xmark"
+        }
+    }
+
+    private var showsOpenAction: Bool {
+        WorkboardAudioCardPresentation.showsOpenAction(
+            availability: material.availability,
+            hasOpenAction: onOpen != nil
+        )
     }
 
     /// The label says what the card IS and what tapping it does; the value says
@@ -809,8 +1199,8 @@ struct WorkboardAudioCardView: View {
 
     private var accessibilityValue: Text {
         var parts: [String] = []
-        if material.availability != .available {
-            parts.append(String(localized: availabilityLabel))
+        if let chip = availabilityChipKind {
+            parts.append(String(localized: chipLabel(chip)))
         }
         switch player.phase {
         case .loading:
@@ -833,6 +1223,8 @@ struct WorkboardAudioCardView: View {
                 "workboard.audio.failed",
                 defaultValue: "This recording couldn’t be played"
             )))
+        case .blocked:
+            parts.append(String(localized: busyCopy))
         case .idle:
             break
         }

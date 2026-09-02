@@ -425,9 +425,9 @@ The hard part is not sending it, it is knowing when not to. "No gateway is confi
 
 ## Work is one desk, and nothing on it is sent
 
-Work is one desk per person, made by the first capture and never deleted. Every capture surface lands on it, and none has a gateway API: no code path leads from it to an AI. The Work/Chats shell preserves both sides' drafts while switching; GigaAction still defaults to Chat for installed-shortcut compatibility.
+Work is one desk per person, made by the first capture and never deleted. Every capture surface lands on it, and no code path leads from it to an AI. The Work/Chats shell preserves both sides' drafts; GigaAction defaults to Chat for installed-shortcut compatibility.
 
-The desk lives in the person's own private iCloud, bytes included: a payload within `Constants.workboardSyncCeilingBytes` rides CloudKit as its own blob row and reaches their other devices, and anything larger stays in the device-local vault behind a reattach. A voice note is kept as a playable card, made durable before the speech hop so a failed transcription costs the words and never the recording. External preview, open and share surfaces get disposable copies, never the vault's authoritative URL. Deploy model 16 to production CloudKit before release.
+The desk lives in the person's own private iCloud, bytes included: a payload within `Constants.workboardSyncCeilingBytes` rides CloudKit as a blob row, anything larger stays in the device-local vault behind a reattach, and neither is durable until its bytes read back at the length written. One process imports a capture, renewing its claim throughout. A recapture repairs a bytes-less card and adopts one an older build parked under a per-capture owner when provenance and kind match. A voice note, in the app or from a Shortcut, is a playable card made durable before the speech hop, so a failed transcription costs the words and never the recording. External surfaces get disposable copies, never the vault's authoritative URL. Deploy model 16 to production CloudKit before release.
 
 ---
 
@@ -500,7 +500,7 @@ Note a platform trap: a synchronizable keychain item is a genuinely *different* 
 
 **Identity** is a locally generated identifier in the keychain. There are no accounts.
 
-**Audio** never enters a conversation and never syncs with one. There is no audio entity in the database at all — though note that is a property of the code rather than of the schema, since the attachment entity holds arbitrary bytes and a free-text media type. A Work voice note is the one recording that is kept, a desk material rather than a conversation's audio.
+**Audio** never enters a conversation and never syncs with one; a Work voice note is a desk material instead. There is no audio entity in the database, though the attachment entity would permit one.
 
 It is *not* memory-only. Transcription and background upload both need a file on disk, so a recording is written to scratch storage and deleted when the operation ends, on success and failure alike, with a sweeper at launch for anything a crash stranded. Two paths deliberately hold a recording longer, both inside the app's own container and both bounded:
 

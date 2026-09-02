@@ -24,24 +24,29 @@ import CoreData
 final class WorkboardTwoStoreLoadTests: XCTestCase {
     private var storeURL: URL!
 
+    /// Every store here mints a vault directory of its own that nothing else
+    /// removes; the fixture empties them when the class is done.
+    private let isolated = IsolatedWorkStores()
+
     override func setUp() {
         super.setUp()
         storeURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("conduck-two-store-\(UUID().uuidString).sqlite")
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
+        await isolated.cleanUp()
         for url in [storeURL, expectedBlobStoreURL].compactMap({ $0 }) {
             removeStoreFiles(at: url)
         }
         storeURL = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     // MARK: - 1. The mount
 
     func testTheTestSeamMountsCoreAndThePayloadStoreWithTheExpectedPairing() async throws {
-        let store = ConversationStore(storeURL: storeURL)
+        let store = isolated.make(storeURL: storeURL)
         let mounted = try await store._mountedStoresForTesting()
 
         XCTAssertEqual(mounted.count, 2,
@@ -87,7 +92,7 @@ final class WorkboardTwoStoreLoadTests: XCTestCase {
     // MARK: - 2. Routing
 
     func testAMaterialAndItsBlobCommitInOneSaveIntoDifferentPhysicalStores() async throws {
-        let store = ConversationStore(storeURL: storeURL)
+        let store = isolated.make(storeURL: storeURL)
         let materialID = UUID()
 
         // The seam performs ONE `context.save()` and no `context.assign(_:to:)`
@@ -112,7 +117,7 @@ final class WorkboardTwoStoreLoadTests: XCTestCase {
         let materialID = UUID()
         let payload = Data((0..<(256 * 1024)).map { UInt8($0 % 251) })
 
-        let first = ConversationStore(storeURL: storeURL)
+        let first = isolated.make(storeURL: storeURL)
         _ = try await first._writeMaterialAndBlobForTesting(
             materialID: materialID,
             title: "Survives a relaunch",
@@ -120,7 +125,7 @@ final class WorkboardTwoStoreLoadTests: XCTestCase {
         )
         try await first._unloadForTesting()
 
-        let second = ConversationStore(storeURL: storeURL)
+        let second = isolated.make(storeURL: storeURL)
         let remounted = try await second._mountedStoresForTesting()
         XCTAssertEqual(remounted.count, 2)
         let snapshot = try await second._materialAndBlobForTesting(materialID: materialID)
@@ -137,7 +142,7 @@ final class WorkboardTwoStoreLoadTests: XCTestCase {
     func testDeletingThePayloadStoreLeavesCoreIntactAndRecreatesBlobsEmpty() async throws {
         let materialID = UUID()
 
-        let first = ConversationStore(storeURL: storeURL)
+        let first = isolated.make(storeURL: storeURL)
         _ = try await first._writeMaterialAndBlobForTesting(
             materialID: materialID,
             title: "Metadata outlives its bytes",
@@ -154,7 +159,7 @@ final class WorkboardTwoStoreLoadTests: XCTestCase {
         removeStoreFiles(at: blobStoreURL)
         XCTAssertFalse(FileManager.default.fileExists(atPath: blobStoreURL.path))
 
-        let second = ConversationStore(storeURL: storeURL)
+        let second = isolated.make(storeURL: storeURL)
         let remounted = try await second._mountedStoresForTesting()
         XCTAssertEqual(remounted.count, 2,
                        "a missing payload store is recreated, not fatal")
@@ -170,7 +175,7 @@ final class WorkboardTwoStoreLoadTests: XCTestCase {
 
     func testTheWatchShapeOpensTheSameCoreFileCleanlyWithNoPayloadStore() async throws {
         let materialID = UUID()
-        let first = ConversationStore(storeURL: storeURL)
+        let first = isolated.make(storeURL: storeURL)
         _ = try await first._writeMaterialAndBlobForTesting(
             materialID: materialID,
             title: "Readable on the wrist",
@@ -227,25 +232,41 @@ final class WorkboardTwoStoreLoadTests: XCTestCase {
         let sampler = FootprintSampler()
         let baseline = sampler.start()
 
-        let store = ConversationStore(storeURL: storeURL)
+        let store = isolated.make(storeURL: storeURL)
         let materialID = UUID()
+        // Held across the whole measured window, deliberately. Created inline
+        // it can be released before the sampler's next tick, and the bound
+        // would then be met by a run that observed no allocation at all — a
+        // pass that proves nothing. Alive at `finish()`, its own pages are
+        // guaranteed to be in the number, which is what the lower bound below
+        // checks before the upper bound is allowed to mean anything.
+        let payload = Data(repeating: 0xC7, count: ceiling)
         let stores = try await store._writeMaterialAndBlobForTesting(
             materialID: materialID,
             title: "At the ceiling",
-            payload: Data(repeating: 0xC7, count: ceiling)
+            payload: payload
         )
         let peak = sampler.finish()
+        let growth = peak - baseline
+        withExtendedLifetime(payload) {}
 
         XCTAssertEqual(stores.blobStoreURL?.lastPathComponent,
                        expectedBlobStoreURL.lastPathComponent)
 
+        XCTAssertGreaterThanOrEqual(
+            growth, Int64(ceiling),
+            """
+            The measurement did not even see the fixture's own \(ceiling)-byte payload, so the \
+            bound below is vacuous: it would be met by a build that buffers the payload ten \
+            times over and released it between two samples.
+            """
+        )
         // Peak includes the test's OWN copy of the payload, so one whole
         // ceiling is already spent before Core Data sees a byte — measured
         // growth is 1.01× the ceiling, i.e. external storage adds a few hundred
         // KB and not a second copy. The bound is deliberately loose: it exists
         // to catch a build that buffers the payload several times over, not to
         // pin an allocator's exact behaviour.
-        let growth = peak - baseline
         XCTAssertLessThan(
             growth, Int64(ceiling) * 3,
             "peak footprint grew \(growth) bytes for a \(ceiling)-byte payload"

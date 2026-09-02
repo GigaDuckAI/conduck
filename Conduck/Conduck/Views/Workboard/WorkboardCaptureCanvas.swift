@@ -76,7 +76,7 @@ struct WorkboardCaptureCanvas: View {
     @State private var showsFileImporter = false
     @State private var materialPendingReattachment: WorkboardMaterialSnapshot?
     @State private var showsVoiceCapture = false
-    @State private var materialComposer: WorkboardMaterialComposerKind?
+    @State private var showsLinkComposer = false
     @State private var largeImportConfirmation: WorkboardWorkspaceLargeImportConfirmation?
     @State private var isAddingThought = false
     /// The shared account-level monitor, observed rather than copied: the desk
@@ -90,7 +90,7 @@ struct WorkboardCaptureCanvas: View {
     #endif
 
     private var isImporting: Bool {
-        viewModel.isCapturingIntoAnyWorkspace
+        viewModel.isCapturingIntoDesk
     }
 
     var body: some View {
@@ -126,24 +126,16 @@ struct WorkboardCaptureCanvas: View {
             }
             Task { await importPhotos(selection) }
         }
-        .sheet(item: activeMaterialComposer) { kind in
-            WorkboardTextMaterialSheet(kind: kind) { materialImport in
-                Task {
-                    await viewModel.importWorkspaceMaterials(
-                        [materialImport],
-                        to: Constants.workboardDeskItemID
-                    )
-                }
+        .sheet(isPresented: activeLinkComposerIsPresented) {
+            WorkboardTextMaterialSheet { materialImport in
+                Task { await viewModel.importMaterials([materialImport]) }
             }
         }
         .sheet(isPresented: activeVoiceCaptureIsPresented) {
             WorkboardVoiceCaptureView(
                 target: .context,
                 onTranscript: { transcript in
-                    viewModel.setWorkspaceComposerDraft(
-                        appending(transcript, to: composerText),
-                        for: Constants.workboardDeskItemID
-                    )
+                    viewModel.setComposerDraft(appending(transcript, to: composerText))
                     showsVoiceCapture = false
                     composerFocused = true
                 },
@@ -203,8 +195,8 @@ struct WorkboardCaptureCanvas: View {
         $showsVoiceCapture.gated(by: workbenchDestinationIsActive)
     }
 
-    private var activeMaterialComposer: Binding<WorkboardMaterialComposerKind?> {
-        $materialComposer.gated(by: workbenchDestinationIsActive)
+    private var activeLinkComposerIsPresented: Binding<Bool> {
+        $showsLinkComposer.gated(by: workbenchDestinationIsActive)
     }
 
     private var activeLargeImportConfirmation: Binding<WorkboardWorkspaceLargeImportConfirmation?> {
@@ -227,7 +219,7 @@ struct WorkboardCaptureCanvas: View {
         if showsFileImporter { showsFileImporter = false }
         if materialPendingReattachment != nil { materialPendingReattachment = nil }
         if showsVoiceCapture { showsVoiceCapture = false }
-        if materialComposer != nil { materialComposer = nil }
+        if showsLinkComposer { showsLinkComposer = false }
         #if os(iOS)
         if showsCamera { showsCamera = false }
         if showsCameraDeniedAlert { showsCameraDeniedAlert = false }
@@ -264,8 +256,7 @@ struct WorkboardCaptureCanvas: View {
     /// and disappears with it, so it costs the de-texted board nothing at rest.
     @ViewBuilder
     private var importProgress: some View {
-        if let state = viewModel.workspaceImportState,
-           state.itemID == Constants.workboardDeskItemID {
+        if let state = viewModel.importState {
             let progressText = String.localizedStringWithFormat(
                 String(localized: LocalizedStringResource(
                     "workboard.workspace.import.progress",
@@ -310,12 +301,17 @@ struct WorkboardCaptureCanvas: View {
         }
     }
 
+    /// The desk's one door to the preview router, and the gate in front of it.
+    /// `WorkboardCardActionPolicy` decides what this card's bytes allow, so a
+    /// card still waiting for iCloud reaches nothing: opening it would present a
+    /// thumbnail in place of the material, and offering to reattach it would ask
+    /// a person to repair bytes that are already on their way.
     private func openMaterial(_ material: WorkboardMaterialSnapshot) {
-        if material.availability == .unavailableOnThisDevice {
-            beginReattachment(material)
-        } else {
-            viewModel.openMaterial(material)
-        }
+        WorkboardCardActionPolicy.performPrimaryAction(
+            for: material.availability,
+            open: { viewModel.openMaterial(material) },
+            reattach: { beginReattachment(material) }
+        )
     }
 
     private func beginReattachment(_ material: WorkboardMaterialSnapshot) {
@@ -429,11 +425,7 @@ struct WorkboardCaptureCanvas: View {
             },
             onAddLink: {
                 guard workbenchDestinationIsActive else { return }
-                materialComposer = .link
-            },
-            onAddNote: {
-                guard workbenchDestinationIsActive else { return }
-                materialComposer = .note
+                showsLinkComposer = true
             },
             iconPointSize: attachmentIconPointSize,
             iconFrame: composerControlDiameter
@@ -499,8 +491,11 @@ struct WorkboardCaptureCanvas: View {
     }
 
     private var addThoughtButton: some View {
+        // The one statement of "this draft holds a thought" lives on the view
+        // model, so the button and the capture path cannot disagree about
+        // whether there is anything to add.
         let isDisabled = !workbenchDestinationIsActive
-            || cleanComposerText.isEmpty
+            || !viewModel.hasComposerDraft
             || isImporting
             || isAddingThought
         return CaptureCircleButton(
@@ -561,13 +556,13 @@ struct WorkboardCaptureCanvas: View {
     }
 
     private var composerText: String {
-        viewModel.workspaceComposerDraft(for: Constants.workboardDeskItemID)
+        viewModel.composerDraft
     }
 
     private var composerTextBinding: Binding<String> {
         Binding(
-            get: { viewModel.workspaceComposerDraft(for: Constants.workboardDeskItemID) },
-            set: { viewModel.setWorkspaceComposerDraft($0, for: Constants.workboardDeskItemID) }
+            get: { viewModel.composerDraft },
+            set: { viewModel.setComposerDraft($0) }
         )
     }
 
@@ -578,12 +573,9 @@ struct WorkboardCaptureCanvas: View {
               !isAddingThought else { return }
         isAddingThought = true
         Task {
-            let added = await viewModel.addWorkspaceThought(
-                thought,
-                to: Constants.workboardDeskItemID
-            )
+            let added = await viewModel.addThought(thought)
             if added {
-                viewModel.setWorkspaceComposerDraft("", for: Constants.workboardDeskItemID)
+                viewModel.setComposerDraft("")
                 let message = String(localized: LocalizedStringResource(
                     "workboard.workspace.thought.saved",
                     defaultValue: "Added to Work. Nothing was sent."
@@ -619,7 +611,7 @@ struct WorkboardCaptureCanvas: View {
 
     private func importPhotos(_ selection: [PhotosPickerItem]) async {
         defer { photoSelection = [] }
-        guard !viewModel.isCapturingIntoAnyWorkspace else { return }
+        guard !viewModel.isCapturingIntoDesk else { return }
         var items: [WorkboardResolvedImportItem] = []
         var failures = 0
         for (offset, pickerItem) in selection.enumerated() {
@@ -687,8 +679,8 @@ struct WorkboardCaptureCanvas: View {
     private func reattach(_ material: WorkboardMaterialSnapshot, from url: URL) async {
         let batch = await resolvedPickerBatch([url])
         guard case .file(let sourceURL, let name, let mimeType, let byteCount, _) = batch.items.first else {
-            viewModel.presentWorkspaceImportReport(
-                WorkboardWorkspaceImportReport(addedCount: 0, failedCount: 1 + batch.failedCount)
+            viewModel.presentImportReport(
+                WorkboardImportReport(addedCount: 0, failedCount: 1 + batch.failedCount)
             )
             return
         }
@@ -702,11 +694,7 @@ struct WorkboardCaptureCanvas: View {
         )
         let hasAccess = sourceURL.startAccessingSecurityScopedResource()
         defer { if hasAccess { sourceURL.stopAccessingSecurityScopedResource() } }
-        await viewModel.reattachWorkspaceMaterial(
-            material,
-            in: Constants.workboardDeskItemID,
-            with: replacement
-        )
+        await viewModel.reattachMaterial(material, with: replacement)
     }
 
     private func resolvedPickerBatch(_ urls: [URL]) async -> WorkboardResolvedImportBatch {
@@ -736,9 +724,8 @@ struct WorkboardCaptureCanvas: View {
     @MainActor
     private func importResolvedBatch(_ batch: WorkboardResolvedImportBatch) async {
         let mapped = WorkboardImportMapping.imports(from: batch)
-        await viewModel.importWorkspaceMaterials(
+        await viewModel.importMaterials(
             mapped.imports,
-            to: Constants.workboardDeskItemID,
             additionalFailureCount: batch.failedCount
         )
         for url in mapped.scopedURLs { url.stopAccessingSecurityScopedResource() }
@@ -778,7 +765,7 @@ private struct WorkboardPaneDropModifier: ViewModifier {
     @State private var largeImportConfirmation: WorkboardWorkspaceLargeImportConfirmation?
 
     private var isImporting: Bool {
-        viewModel.isCapturingIntoAnyWorkspace || dropSession != nil
+        viewModel.isCapturingIntoDesk || dropSession != nil
     }
 
     func body(content: Content) -> some View {
@@ -864,8 +851,8 @@ private struct WorkboardPaneDropModifier: ViewModifier {
             return (provider, route)
         }
         guard !routed.isEmpty else {
-            viewModel.presentWorkspaceImportReport(
-                WorkboardWorkspaceImportReport(addedCount: 0, failedCount: providers.count)
+            viewModel.presentImportReport(
+                WorkboardImportReport(addedCount: 0, failedCount: providers.count)
             )
             return !providers.isEmpty
         }
@@ -997,9 +984,8 @@ private struct WorkboardPaneDropModifier: ViewModifier {
     @MainActor
     private func importResolvedBatch(_ batch: WorkboardResolvedImportBatch) async {
         let mapped = WorkboardImportMapping.imports(from: batch)
-        await viewModel.importWorkspaceMaterials(
+        await viewModel.importMaterials(
             mapped.imports,
-            to: Constants.workboardDeskItemID,
             additionalFailureCount: batch.failedCount
         )
         for url in mapped.scopedURLs { url.stopAccessingSecurityScopedResource() }
@@ -1146,7 +1132,7 @@ private struct WorkboardMaterialBoard: View {
             Text(String.localizedStringWithFormat(
                 String(localized: LocalizedStringResource(
                     "workboard.material.remove.confirm.message",
-                    defaultValue: "“%@” will be removed from this private draft."
+                    defaultValue: "“%@” will be removed from your Work desk."
                 )),
                 material.name
             ))
@@ -1159,6 +1145,12 @@ private struct WorkboardMaterialBoard: View {
     /// actions, so footprint, order, drag and removal behave identically
     /// whichever one is drawn — the kind decides the CONTENT of the tile and
     /// nothing about its place on the board.
+    ///
+    /// Both cards are handed the open and reattach seams unconditionally and
+    /// gate them through `WorkboardCardActionPolicy` themselves. The board must
+    /// not pre-filter by availability: a card that decided for itself which
+    /// state may be repaired would be a second copy of that rule, and the two
+    /// copies are what let a tile and its menu disagree about the same card.
     @ViewBuilder
     private func card(for material: WorkboardMaterialSnapshot, at index: Int) -> some View {
         let onMoveEarlier: (() -> Void)? = index > 0
@@ -1174,6 +1166,8 @@ private struct WorkboardMaterialBoard: View {
                 grantedColumns: gridColumns,
                 boardPosition: index + 1,
                 boardCount: item.materials.count,
+                onOpen: { onOpen(material) },
+                onReattach: { onReattach(material) },
                 onSetSize: { size in setSize(size, for: material) },
                 onMoveEarlier: onMoveEarlier,
                 onMoveLater: onMoveLater,
@@ -1187,9 +1181,7 @@ private struct WorkboardMaterialBoard: View {
                 boardPosition: index + 1,
                 boardCount: item.materials.count,
                 onOpen: { onOpen(material) },
-                onReattach: material.availability == .unavailableOnThisDevice
-                    ? { onReattach(material) }
-                    : nil,
+                onReattach: { onReattach(material) },
                 onSetSize: { size in setSize(size, for: material) },
                 onMoveEarlier: onMoveEarlier,
                 onMoveLater: onMoveLater,
@@ -1212,8 +1204,7 @@ private struct WorkboardMaterialBoard: View {
         Task {
             await viewModel.reorderMaterial(
                 moving.materialID,
-                toInsertionIndex: index,
-                in: Constants.workboardDeskItemID
+                toInsertionIndex: index
             )
         }
         return true
@@ -1222,11 +1213,7 @@ private struct WorkboardMaterialBoard: View {
     private func setSize(_ size: WorkMaterialCardSize, for material: WorkboardMaterialSnapshot) {
         guard workbenchDestinationIsActive else { return }
         Task {
-            await viewModel.setMaterialCardSize(
-                size,
-                materialID: material.id,
-                in: Constants.workboardDeskItemID
-            )
+            await viewModel.setMaterialCardSize(size, materialID: material.id)
         }
     }
 
@@ -1236,12 +1223,8 @@ private struct WorkboardMaterialBoard: View {
     private func move(_ material: WorkboardMaterialSnapshot, direction: WorkboardMoveDirection) {
         guard workbenchDestinationIsActive else { return }
         Task {
-            guard await viewModel.moveMaterial(
-                      material.id,
-                      direction: direction,
-                      in: Constants.workboardDeskItemID
-                  ),
-                  let refreshed = viewModel.item(withID: Constants.workboardDeskItemID),
+            guard await viewModel.moveMaterial(material.id, direction: direction),
+                  let refreshed = viewModel.desk,
                   let index = refreshed.materials.firstIndex(where: { $0.id == material.id })
             else { return }
             AccessibilityAnnouncer.announce([
@@ -1257,10 +1240,7 @@ private struct WorkboardMaterialBoard: View {
     private func remove(_ material: WorkboardMaterialSnapshot) {
         guard workbenchDestinationIsActive else { return }
         Task {
-            await viewModel.removeMaterialFromBoard(
-                material.id,
-                in: Constants.workboardDeskItemID
-            )
+            await viewModel.removeMaterialFromBoard(material.id)
         }
     }
 }
@@ -1289,25 +1269,22 @@ private struct WorkboardSourceCard: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Button(action: onOpen) {
-                cardBody
-                    .padding(layoutSize == .small ? 9 : 12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    // The mosaic hands every card a fixed frame, so content that
-                    // cannot compress is clipped rather than allowed to bleed
-                    // over a neighbouring tile.
-                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                    .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .strokeBorder(AppColors.borderSubtle, lineWidth: 1)
-                    }
-                    .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            // A card whose bytes are still arriving is not a control: it is NOT
+            // wrapped in a button, so it carries no button trait and offers no
+            // activation that would do nothing. Its availability line is the
+            // answer, and the arrange actions stay reachable either way.
+            if let primaryAction {
+                Button(action: primaryAction) { tile }
+                    .choiceCardButton(cornerRadius: 13)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(accessibilitySummary)
+                    .accessibilityActions { cardAccessibilityActions }
+            } else {
+                tile
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(accessibilitySummary)
+                    .accessibilityActions { cardAccessibilityActions }
             }
-            .choiceCardButton(cornerRadius: 13)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(accessibilitySummary)
-            .accessibilityActions { cardAccessibilityActions }
 
             // Every action the menu carries is also an accessibility action on
             // the card itself, so the affordance is presentation only.
@@ -1323,6 +1300,48 @@ private struct WorkboardSourceCard: View {
         #if os(macOS)
         .onHover { hovering in isHovering = hovering }
         #endif
+    }
+
+    /// The tile itself, without any decision about whether it is a control.
+    /// The mosaic hands every card a fixed frame, so content that cannot
+    /// compress is clipped rather than allowed to bleed over a neighbouring
+    /// tile.
+    private var tile: some View {
+        cardBody
+            .padding(layoutSize == .small ? 9 : 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .strokeBorder(AppColors.borderSubtle, lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+    }
+
+    /// What this card's bytes allow. Asked once and consumed by the tile, the
+    /// menu and the VoiceOver actions alike, so no surface can offer an action
+    /// another one refuses.
+    private var permittedActions: Set<WorkboardCardAction> {
+        WorkboardCardActionPolicy.actions(for: material.availability)
+    }
+
+    private var openAction: (() -> Void)? {
+        permittedActions.contains(.open) ? onOpen : nil
+    }
+
+    private var reattachAction: (() -> Void)? {
+        permittedActions.contains(.reattach) ? onReattach : nil
+    }
+
+    /// The tile's single tap: open readable bytes, offer to bring back missing
+    /// ones, and do nothing at all while they are still arriving.
+    private var primaryAction: (() -> Void)? {
+        switch WorkboardCardActionPolicy.primaryAction(for: material.availability) {
+        case .open: return openAction
+        case .reattach: return reattachAction
+        case .play, .none: return nil
+        }
     }
 
     /// Pointer platforms reveal the control on hover so a resting board is
@@ -1486,16 +1505,21 @@ private struct WorkboardSourceCard: View {
         )))
     }
 
+    /// Open and Reattach are the two rows the bytes decide: a card offers
+    /// exactly the actions its availability permits, and a card that permits
+    /// neither still carries its arrange rows.
     @ViewBuilder
     private var cardMenuContent: some View {
-        Button(action: onOpen) {
-            Label(
-                LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
-                systemImage: "arrow.up.forward.square"
-            )
+        if let openAction {
+            Button(action: openAction) {
+                Label(
+                    LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
+                    systemImage: "arrow.up.forward.square"
+                )
+            }
         }
-        if let onReattach {
-            Button(action: onReattach) {
+        if let reattachAction {
+            Button(action: reattachAction) {
                 Label(
                     LocalizedStringResource(
                         "workboard.material.reattach.action",
@@ -1552,13 +1576,13 @@ private struct WorkboardSourceCard: View {
 
     @ViewBuilder
     private var cardAccessibilityActions: some View {
-        if let onReattach {
+        if let reattachAction {
             Button(
                 LocalizedStringResource(
                     "workboard.material.reattach.action",
                     defaultValue: "Reattach or Replace"
                 ),
-                action: onReattach
+                action: reattachAction
             )
         }
         if let onMoveEarlier {

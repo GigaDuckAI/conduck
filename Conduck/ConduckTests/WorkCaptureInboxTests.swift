@@ -294,31 +294,6 @@ final class WorkCaptureInboxTests: XCTestCase {
         XCTAssertNoThrow(try envelope.validateForPublication())
     }
 
-    func testShareWritersValidateAndRollbackBeforeAtomicPublication() throws {
-        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        let projectDirectory = testsDirectory.deletingLastPathComponent()
-        for relativePath in [
-            "ConduckShareExtension/ShareViewController.swift",
-            "ConduckShareExtensionMac/ShareViewController.swift",
-        ] {
-            let source = try String(
-                contentsOf: projectDirectory.appendingPathComponent(relativePath),
-                encoding: .utf8
-            )
-            let validation = try XCTUnwrap(source.range(of: "try envelope.validateForPublication()"))
-            let publication = try XCTUnwrap(
-                source.range(of: "try fm.moveItem(at: tmp, to: published)", range: validation.upperBound..<source.endIndex)
-            )
-            XCTAssertLessThan(validation.lowerBound, publication.lowerBound, relativePath)
-            XCTAssertTrue(source.contains("if !didPublish"), relativePath)
-            XCTAssertTrue(source.contains("try? fm.removeItem(at: tmp)"), relativePath)
-            XCTAssertTrue(
-                source.contains("targetWorkItemID: nil"),
-                "\(relativePath) must publish a targetless envelope — Work is one desk, so an appex can never name a destination"
-            )
-        }
-    }
-
     func testShareSurfacesUseDistinctWorkVocabularyAndAdaptivePrimaryActions() throws {
         let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let projectDirectory = testsDirectory.deletingLastPathComponent()
@@ -559,8 +534,8 @@ final class WorkCaptureInboxTests: XCTestCase {
     ///
     /// Without it, lowering the envelope's bound leaves the wrist accepting a
     /// longer dictation, confirming the capture out loud, and then having
-    /// `createWorkItem` refuse it — losing a brief the person has no other copy
-    /// of.
+    /// `upsertDeskMaterial` refuse the note — losing words the person has no
+    /// other copy of.
     func testTheWatchCaptureBoundStillRestatesTheEnvelopeBound() throws {
         let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let projectDirectory = testsDirectory.deletingLastPathComponent()
@@ -569,7 +544,7 @@ final class WorkCaptureInboxTests: XCTestCase {
                 .appendingPathComponent("ConduckWatch Watch App/WorkboardCaptureIntent.swift"),
             encoding: .utf8
         )
-        let expected = "maximumObjectiveCharacters = "
+        let expected = "maximumNoteCharacters = "
             + Self.swiftIntegerLiteral(WorkCaptureEnvelope.maximumNoteCharacters)
 
         XCTAssertTrue(

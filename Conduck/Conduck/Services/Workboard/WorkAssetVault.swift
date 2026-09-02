@@ -29,17 +29,30 @@
 // gap from both sides: a staging marker beside the leaf states the claim across
 // processes, and no leaf younger than `stagingHorizon` is reclaimed even
 // without one.
+//
+// A path that merely stats is not a payload. Every serve decision — does this
+// card have bytes, may this capture be acknowledged, is this publication
+// durable — asks whether the leaf is a regular file that OPENS for reading, and
+// compares its measured length when the caller knows one; a readable empty file
+// is valid payload, an unreadable one is not. Reclamation deliberately does not
+// use that predicate: it judges by existence, because deleting a leaf this
+// process merely cannot open would destroy bytes another process can serve.
 
 #if !os(watchOS)
 import Foundation
 
+/// The result of a vault write: the opaque leaf key, and the length the leaf
+/// ACTUALLY holds, measured from disk once the bytes have landed. A row records
+/// this size rather than the caller's declared one — a declared size is a claim
+/// about bytes the caller may never have written, and `confirmPublication`
+/// can only detect a truncated leaf by comparing against a measured length.
+struct WorkAssetVaultWrite: Sendable, Equatable {
+    let key: String
+    let byteCount: Int64
+}
+
 actor WorkAssetVault {
     static let shared = WorkAssetVault()
-
-    struct StoredFile: Sendable, Equatable {
-        let key: String
-        let byteCount: Int64
-    }
 
     enum VaultError: Error, Equatable {
         case unsafeKey
@@ -117,9 +130,16 @@ actor WorkAssetVault {
         return root.appendingPathComponent("WorkboardAssets", isDirectory: true)
     }
 
-    /// Store bytes under a generated opaque leaf. The caller persists the
-    /// returned key; source/display filenames never become filesystem paths.
-    func store(_ data: Data, id: UUID = UUID(), suggestedExtension: String? = nil) throws -> String {
+    /// Store bytes under a generated opaque leaf and report what the leaf holds.
+    /// The caller persists the returned key; source/display filenames never
+    /// become filesystem paths. A write that cannot be measured and reopened
+    /// afterwards has not published anything, so it fails rather than handing
+    /// back a key a row would promise bytes for.
+    func store(
+        bytes data: Data,
+        id: UUID = UUID(),
+        suggestedExtension: String? = nil
+    ) throws -> WorkAssetVaultWrite {
         try scaffold()
         let key = Self.makeKey(id: id, suggestedExtension: suggestedExtension)
         let destination = try resolvedURL(for: key)
@@ -133,8 +153,12 @@ actor WorkAssetVault {
             #else
             try data.write(to: destination, options: [.atomic])
             #endif
-            return key
+            guard let byteCount = readableByteCount(at: destination) else {
+                throw VaultError.writeFailed
+            }
+            return WorkAssetVaultWrite(key: key, byteCount: byteCount)
         } catch {
+            try? fileManager.removeItem(at: destination)
             endStaging(key)
             throw VaultError.writeFailed
         }
@@ -146,7 +170,7 @@ actor WorkAssetVault {
         at sourceURL: URL,
         id: UUID = UUID(),
         suggestedExtension: String? = nil
-    ) throws -> String {
+    ) throws -> WorkAssetVaultWrite {
         try scaffold()
         let key = Self.makeKey(
             id: id,
@@ -164,7 +188,10 @@ actor WorkAssetVault {
                 ofItemAtPath: destination.path
             )
             #endif
-            return key
+            guard let byteCount = readableByteCount(at: destination) else {
+                throw VaultError.writeFailed
+            }
+            return WorkAssetVaultWrite(key: key, byteCount: byteCount)
         } catch {
             try? fileManager.removeItem(at: destination)
             endStaging(key)
@@ -181,7 +208,7 @@ actor WorkAssetVault {
         suggestedExtension: String? = nil,
         expectedByteCount: Int64,
         onProgress: @escaping @Sendable (Double) -> Void
-    ) async throws -> StoredFile {
+    ) async throws -> WorkAssetVaultWrite {
         try scaffold()
         let key = Self.makeKey(
             id: id,
@@ -225,8 +252,14 @@ actor WorkAssetVault {
                 ofItemAtPath: destination.path
             )
             #endif
+            // What the handle wrote and what the leaf holds must agree before
+            // the copy is reported complete: the row records this number, and
+            // anything else on disk means something truncated the leaf.
+            guard let byteCount = readableByteCount(at: destination), byteCount == copied else {
+                throw VaultError.writeFailed
+            }
             onProgress(1)
-            return StoredFile(key: key, byteCount: copied)
+            return WorkAssetVaultWrite(key: key, byteCount: byteCount)
         } catch is CancellationError {
             try? fileManager.removeItem(at: destination)
             endStaging(key)
@@ -248,23 +281,38 @@ actor WorkAssetVault {
     /// an external opener, share sheet, or document editor; copy it first.
     func url(for key: String) throws -> URL {
         let url = try resolvedURL(for: key)
-        guard fileManager.fileExists(atPath: url.path) else { throw VaultError.missing }
+        guard readableByteCount(at: url) != nil else { throw VaultError.missing }
         return url
     }
 
     /// Resolve many leaves in a single hop. A board refresh needs a URL for every
     /// image material at once; asking key by key would queue that wave behind
-    /// every other vault write for the whole pass. Missing and unsafe keys are
-    /// simply absent from the result.
+    /// every other vault write for the whole pass. Unsafe keys and keys whose
+    /// bytes this device cannot serve are simply absent from the result.
     func urls(for keys: [String]) -> [String: URL] {
         var resolved: [String: URL] = [:]
         resolved.reserveCapacity(keys.count)
         for key in keys where resolved[key] == nil {
             guard let url = try? resolvedURL(for: key),
-                  fileManager.fileExists(atPath: url.path) else { continue }
+                  readableByteCount(at: url) != nil else { continue }
             resolved[key] = url
         }
         return resolved
+    }
+
+    /// Which of `keys` name payload this device can actually serve. Each leaf is
+    /// opened for reading and closed again without loading it, so a board's
+    /// worth of ceiling-sized files costs a handle apiece rather than their
+    /// bytes. A readable empty file counts: a zero-byte payload is a payload.
+    func readableKeys(among keys: Set<String>) -> Set<String> {
+        var readable: Set<String> = []
+        readable.reserveCapacity(keys.count)
+        for key in keys {
+            guard let url = try? resolvedURL(for: key),
+                  readableByteCount(at: url) != nil else { continue }
+            readable.insert(key)
+        }
+        return readable
     }
 
     /// Copy a vault object to a stable per-dispatch temporary URL. Vault
@@ -296,7 +344,7 @@ actor WorkAssetVault {
     /// level. Copying a card must never route a several-hundred-megabyte payload
     /// through `Data`, and each card owning its own leaf is what lets deleting
     /// one card reclaim its bytes without touching the other's.
-    func copy(key: String, id: UUID = UUID()) throws -> StoredFile {
+    func copy(key: String, id: UUID = UUID()) throws -> WorkAssetVaultWrite {
         let source = try resolvedURL(for: key)
         guard fileManager.fileExists(atPath: source.path) else { throw VaultError.missing }
         try scaffold()
@@ -311,8 +359,10 @@ actor WorkAssetVault {
                 ofItemAtPath: destination.path
             )
             #endif
-            let byteCount = fileByteCount(at: destination) ?? 0
-            return StoredFile(key: destinationKey, byteCount: byteCount)
+            guard let byteCount = readableByteCount(at: destination) else {
+                throw VaultError.writeFailed
+            }
+            return WorkAssetVaultWrite(key: destinationKey, byteCount: byteCount)
         } catch {
             try? fileManager.removeItem(at: destination)
             endStaging(destinationKey)
@@ -320,9 +370,13 @@ actor WorkAssetVault {
         }
     }
 
+    /// Whether this device can serve `key`'s bytes. A path that merely stats is
+    /// not payload: a card built on one reads `availableLocally` and licenses a
+    /// drainer to drop the only other copy of a capture the vault cannot open.
+    /// One key is the batch predicate with one member, deliberately — a single
+    /// card and a whole board must never disagree about what "available" means.
     func contains(_ key: String) -> Bool {
-        guard let url = try? resolvedURL(for: key) else { return false }
-        return fileManager.fileExists(atPath: url.path)
+        !readableKeys(among: [key]).isEmpty
     }
 
     func remove(_ key: String) throws {
@@ -332,30 +386,25 @@ actor WorkAssetVault {
         try fileManager.removeItem(at: url)
     }
 
-    /// Release the publication guard — the in-process staged key and the
-    /// cross-process marker both — after the matching `WorkMaterial.localVaultKey`
-    /// save has committed. A later reconciliation retains the file from the
-    /// authoritative database key set instead.
-    func markReferenced(_ key: String) {
-        endStaging(key)
-    }
-
     /// Prove a published leaf before its publication may be reported durable,
-    /// then release the guard. A caller that has just saved a row naming `key`
-    /// must not acknowledge the capture — or delete the source bytes it came
-    /// from — when the leaf is missing or the wrong length, because the row
-    /// would then promise a payload the vault cannot serve. A mismatch KEEPS the
-    /// guard, so the failed publication cannot be followed by a reclamation pass
-    /// deleting what is left of it.
+    /// then release the publication guard — the in-process staged key and the
+    /// cross-process marker both. This is the ONLY way a guard is released after
+    /// a write: a caller that has just saved a row naming `key` must not
+    /// acknowledge the capture — or delete the source bytes it came from — until
+    /// the leaf reads back, because the row would otherwise promise a payload
+    /// the vault cannot serve. A leaf that is present but unreadable or the
+    /// wrong length KEEPS the guard, so the reclamation that follows a failed
+    /// publication cannot delete what is left of it.
     @discardableResult
     func confirmPublication(of key: String, expectedByteCount: Int64? = nil) -> Bool {
         guard let url = try? resolvedURL(for: key) else { return false }
-        guard let byteCount = fileByteCount(at: url) else {
+        guard fileManager.fileExists(atPath: url.path) else {
             // Nothing on disk left to protect; the caller learns the publication
             // is not durable from the returned false.
             endStaging(key)
             return false
         }
+        guard let byteCount = readableByteCount(at: url) else { return false }
         if let expectedByteCount, expectedByteCount >= 0, byteCount != expectedByteCount {
             return false
         }
@@ -365,8 +414,12 @@ actor WorkAssetVault {
 
     /// Reclaim only valid vault leaves that neither the authoritative database
     /// nor a live staging claim names. Invalid/foreign directory entries are left
-    /// untouched. `now` is injectable so a test can age past the horizon without
-    /// sleeping; production always judges against the wall clock.
+    /// untouched, and a candidate is judged by EXISTENCE rather than by the
+    /// readability every serve path demands: a leaf this process cannot open may
+    /// be one another process can, and deleting it would destroy the payload
+    /// instead of reporting it unavailable. `now` is injectable so a test can age
+    /// past the horizon without sleeping; production always judges against the
+    /// wall clock.
     func reclaimUnreferenced(keeping keys: Set<String>, now: Date = Date()) -> Int {
         guard (try? scaffold()) != nil,
               let children = try? fileManager.contentsOfDirectory(
@@ -405,11 +458,17 @@ actor WorkAssetVault {
                 try? fileManager.removeItem(at: marker)
             }
         }
-        // A marker whose leaf is absent names nothing yet — an atomic write
-        // publishes its file only at the end — so it is swept solely once
-        // abandoned, never merely because the payload has not appeared.
+        // A marker is swept once its claim is abandoned and whatever happened to
+        // its leaf: a claim beside a leaf the database permanently names would
+        // otherwise never be reconsidered, since that leaf is never a candidate
+        // for the loop above. Only this process's own live claims are exempt —
+        // the database key set says nothing about who is mid-publication — and
+        // removing a marker never touches the payload it sat beside. A marker
+        // whose leaf is absent still names nothing yet (an atomic write
+        // publishes its file only at the end), so it too waits for abandonment
+        // rather than for the payload to appear.
         for (key, marker) in markers {
-            guard leaves[key] == nil, !protectedKeys.contains(key) else { continue }
+            guard !stagedKeys.contains(key) else { continue }
             guard isAbandonedStagingClaim(at: marker, now: now) else { continue }
             try? fileManager.removeItem(at: marker)
         }
@@ -523,7 +582,20 @@ actor WorkAssetVault {
         return now.timeIntervalSince(newest) >= Self.stagingHorizon
     }
 
-    private func fileByteCount(at url: URL) -> Int64? {
+    /// The length of `url` when it is payload this device can serve, nil when it
+    /// is not. Serving means a REGULAR file that opens for reading: a directory,
+    /// a symlink to nothing, a file whose permissions or data protection deny
+    /// this process — none of those is a payload, however well they stat, and a
+    /// row built on a stat alone promises bytes that `data(for:)` cannot
+    /// produce. The handle is closed without reading, so proving a
+    /// several-hundred-megabyte leaf costs a file descriptor rather than its
+    /// bytes; zero is a legitimate length and reads back as one.
+    private func readableByteCount(at url: URL) -> Int64? {
+        let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard values?.isRegularFile == true else { return nil }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        try? handle.close()
+        if let size = values?.fileSize { return Int64(size) }
         guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
               let size = attributes[.size] as? NSNumber else { return nil }
         return size.int64Value

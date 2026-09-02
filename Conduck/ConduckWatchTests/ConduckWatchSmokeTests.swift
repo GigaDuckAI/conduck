@@ -17,14 +17,14 @@ final class ConduckWatchSmokeTests: XCTestCase {
         let capture = try WatchWorkboardCaptureText.prepare("  \(firstLine)\r\nMore detail  ")
 
         XCTAssertEqual(capture.title, String(repeating: "a", count: 72))
-        XCTAssertEqual(capture.objective, "\(firstLine)\nMore detail")
+        XCTAssertEqual(capture.textContent, "\(firstLine)\nMore detail")
         XCTAssertThrowsError(try WatchWorkboardCaptureText.prepare(" \n "))
     }
 
     func testWorkboardCaptureRefusesAnOversizedThoughtInsteadOfTruncatingIt() throws {
-        let bound = WatchWorkboardCaptureText.maximumObjectiveCharacters
+        let bound = WatchWorkboardCaptureText.maximumNoteCharacters
         let atBound = try WatchWorkboardCaptureText.prepare(String(repeating: "a", count: bound))
-        XCTAssertEqual(atBound.objective.count, bound)
+        XCTAssertEqual(atBound.textContent.count, bound)
 
         XCTAssertThrowsError(
             try WatchWorkboardCaptureText.prepare(String(repeating: "a", count: bound + 1))
@@ -37,7 +37,7 @@ final class ConduckWatchSmokeTests: XCTestCase {
         let store = ConversationStore(inMemory: true)
         let capture = WatchWorkboardCapture(
             title: "Prepare launch review",
-            objective: "Collect launch risks before deciding what to send."
+            textContent: "Collect launch risks before deciding what to send."
         )
 
         let returnedTitle = try await store.upsertDeskMaterial(capture)
@@ -75,7 +75,7 @@ final class ConduckWatchSmokeTests: XCTestCase {
         XCTAssertEqual(rows.materials.first?["workItemID"] as? UUID, Constants.workboardDeskItemID)
         XCTAssertEqual(rows.materials.first?["kind"] as? String, "note")
         XCTAssertEqual(rows.materials.first?["title"] as? String, capture.title)
-        XCTAssertEqual(rows.materials.first?["textContent"] as? String, capture.objective)
+        XCTAssertEqual(rows.materials.first?["textContent"] as? String, capture.textContent)
         XCTAssertEqual(rows.materials.first?["storageMode"] as? String, "metadataOnly")
         XCTAssertEqual((rows.materials.first?["sequence"] as? NSNumber)?.intValue, 0)
         XCTAssertEqual(rows.materials.first?["sourceDevice"] as? String, "watch")
@@ -89,8 +89,8 @@ final class ConduckWatchSmokeTests: XCTestCase {
     /// every other device.
     func testSecondWatchCaptureAppendsToTheSameDeskInsteadOfCreatingASecondOne() async throws {
         let store = ConversationStore(inMemory: true)
-        let first = WatchWorkboardCapture(title: "First", objective: "First thought.")
-        let second = WatchWorkboardCapture(title: "Second", objective: "Second thought.")
+        let first = WatchWorkboardCapture(title: "First", textContent: "First thought.")
+        let second = WatchWorkboardCapture(title: "Second", textContent: "Second thought.")
 
         _ = try await store.upsertDeskMaterial(first)
         _ = try await store.upsertDeskMaterial(second)
@@ -128,12 +128,12 @@ final class ConduckWatchSmokeTests: XCTestCase {
     /// returns the card that is already there rather than adding a second one.
     func testReplayingOneWatchCaptureReturnsTheSameCardWithoutASecondRow() async throws {
         let store = ConversationStore(inMemory: true)
-        let capture = WatchWorkboardCapture(title: "Once", objective: "Only once.")
+        let capture = WatchWorkboardCapture(title: "Once", textContent: "Only once.")
         let id = UUID()
 
         let firstTitle = try await store.upsertDeskMaterial(capture, id: id)
         let replayedTitle = try await store.upsertDeskMaterial(
-            WatchWorkboardCapture(title: "Rewritten", objective: "Rewritten."),
+            WatchWorkboardCapture(title: "Rewritten", textContent: "Rewritten."),
             id: id
         )
 
@@ -149,6 +149,30 @@ final class ConduckWatchSmokeTests: XCTestCase {
         XCTAssertEqual(replayedTitle, capture.title)
         XCTAssertEqual(counts.items, 1)
         XCTAssertEqual(counts.materials, 1)
+    }
+
+    /// The payload exclusion, observed where it actually applies.
+    ///
+    /// `ConversationStore.storeDescriptions` returns the Core description ALONE
+    /// under `os(watchOS)`, and that omission IS how material bytes stay off the
+    /// wrist: no `Blobs` store means no `WorkMaterialBlob` row is mountable, so
+    /// CloudKit never has a reason to pull payloads onto a device with a watch's
+    /// storage. Nothing else can see it — an iOS-hosted test can only hand-build
+    /// a one-description container, which would stay green if the real watchOS
+    /// branch regressed to two stores. This runs the production code path in the
+    /// production build, so the regression is caught where it would happen.
+    func testTheWatchBuildMountsTheCoreStoreAloneAndNoPayloadStore() async throws {
+        let store = ConversationStore(inMemory: true)
+
+        let mounted = try await store._mountedStoresForTesting()
+
+        XCTAssertEqual(
+            mounted.map(\.configuration), ["Core"],
+            """
+            The wrist mounted \(mounted.map(\.configuration)) rather than Core alone. A Blobs \
+            store on watchOS puts every synced material payload on the watch.
+            """
+        )
     }
 }
 

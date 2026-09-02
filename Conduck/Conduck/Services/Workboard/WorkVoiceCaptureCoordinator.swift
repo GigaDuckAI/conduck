@@ -17,18 +17,66 @@
 // Both phases name the card by the capture's own id, which is also the id the
 // pending-retry record carries. That is what lets the retry surface repair THIS
 // card after the app has been closed and reopened, instead of publishing the
-// recovered words beside a recording that is already waiting for them. The two
-// ids being the same value is deliberate a second time: the retry lane's
-// fallback publication derives its note identity from that same id, so even a
-// fallback finds the recording card and returns it unchanged rather than
-// putting one utterance on the board twice.
+// recovered words beside a recording that is already waiting for them.
+//
+// A failure and an absence are different answers here. The store refusing a
+// write is transient and leaves a card that still wants its words, so it
+// throws; only a capture that owns no recording of its own reports it, and only
+// then may the words be published some other way — under
+// `fallbackNoteID(forCapture:)`, never under the capture id, because the desk
+// write is idempotent BY id and would answer a note published there with the
+// card that is already sitting on it.
 
 #if !os(watchOS)
 
 import CoreData
+import CryptoKit
 import Foundation
 
+/// Both spellings resolve to one type: consumers were specified against the
+/// unqualified name, and the coordinator owns it.
+typealias WorkVoiceAttachOutcome = WorkVoiceCaptureCoordinator.WorkVoiceAttachOutcome
+
+/// What a capture surface tells a person when the desk would not hold their
+/// recording. It rides `AppError.unknown` because the recorder's whole error
+/// channel is `AppError` and that taxonomy describes speech, not storage;
+/// `.unknown` is also the arm that reads as retryable, which this is — the same
+/// bytes, written again, normally land.
+enum WorkVoiceCaptureError: LocalizedError, Equatable {
+    /// The recording could not be written to the desk, or its transcript could
+    /// not be written onto the recording.
+    case deskWriteFailed
+
+    var errorDescription: String? {
+        String(
+            localized: "workboard.voice.error.deskWrite",
+            defaultValue: "Work couldn’t save this recording just now."
+        )
+    }
+}
+
 enum WorkVoiceCaptureCoordinator {
+
+    /// What became of a transcript handed to a capture id.
+    ///
+    /// The distinction is the whole reason this is not a `Bool`: a write that
+    /// FAILED throws, and a card that is genuinely not there answers here. Only
+    /// the two answers below `attached` say the words have nowhere to land, and
+    /// only they permit a caller to publish them some other way; a thrown error
+    /// means the words are still owed to a card that exists, so the caller must
+    /// keep its pending retry rather than complete the capture.
+    enum WorkVoiceAttachOutcome: Sendable, Equatable {
+        /// The recording carries the words — or already did, in which case
+        /// nothing was written.
+        case attached
+        /// No row anywhere carries this id: a phase-1 publication the desk
+        /// refused, or a card a person deleted while STT was in flight.
+        case recordingMissing
+        /// The id names a card that is not a recording — a legacy per-capture
+        /// material re-homed onto the desk, or a row a merge produced. Spoken
+        /// words must never be written onto it.
+        case notAudio
+    }
 
     /// PHASE 1 — the recording becomes a card, before anything is transcribed.
     ///
@@ -41,6 +89,10 @@ enum WorkVoiceCaptureCoordinator {
     ///
     /// Idempotent through the desk write: replaying one capture id returns the
     /// card that is already there instead of adding a second one.
+    ///
+    /// A throw means the recording is not on the desk. There is no answer for
+    /// that but to keep the bytes and try again — a capture whose card never
+    /// landed is not a capture that succeeded with words only.
     @discardableResult
     static func publishRecording(
         captureID: UUID,
@@ -67,26 +119,70 @@ enum WorkVoiceCaptureCoordinator {
 
     /// PHASE 2 — the words join the recording they came from.
     ///
-    /// Returns `false`, writing nothing, when this capture owns no recording
-    /// card: an empty transcript, a card the person has since deleted, or a
-    /// capture lane that never published one (the Shortcuts route, whose
-    /// pending-retry id can name an imported screenshot instead). A `false`
-    /// answer is what tells the retry surface to fall back to its ordinary
-    /// note-shaped publication, so the words are never dropped on the floor.
+    /// THROWS only when the store itself refused the write. That is a transient
+    /// failure over a card that exists, so the caller must keep the capture
+    /// pending — its bytes and its words — and offer a retry; treating it as
+    /// "there is no card" would strand a playable recording that is still
+    /// waiting for its transcript while the same words go somewhere else.
+    ///
+    /// `.recordingMissing` and `.notAudio` are the two answers that say the
+    /// words have nowhere to land here, and they are the only ones that permit
+    /// a fallback publication — under `fallbackNoteID(forCapture:)`, never
+    /// under the capture id itself.
+    ///
+    /// Idempotent: a second delivery of the same words writes nothing, bumps
+    /// nothing and notifies nobody, so a retried attachment cannot advance the
+    /// desk's revision under an unrelated board mutation.
     @discardableResult
     static func attachTranscript(
         _ transcript: String,
         toRecording captureID: UUID,
         store: ConversationStore = .shared
-    ) async throws -> Bool {
+    ) async throws -> WorkVoiceAttachOutcome {
+        // An empty transcript asks for nothing, so the store classifies the id
+        // and writes nothing. It must still answer truthfully about the card:
+        // reporting `.recordingMissing` for a recording that is standing fine
+        // would invite a fallback publication of silence beside it.
         let words = WorkboardWorkspaceCaptureLogic.normalizedThought(transcript)
-        guard !words.isEmpty else { return false }
         return try await store.applyWorkVoiceTranscript(
             materialID: captureID,
             transcript: words,
             title: title(forTranscript: words)
         )
     }
+
+    /// The material id a fallback publication must use when a capture owns no
+    /// recording card of its own.
+    ///
+    /// It cannot be the capture id: the desk write is idempotent BY id, so a
+    /// note published at the capture id of an existing card (a card the capture
+    /// id names that is not a recording, or a recording whose kind check
+    /// refused the words) answers with that card unchanged — no duplicate, but
+    /// no words either. Derived rather than random so a replayed retry lands on the one
+    /// note it already published instead of adding another, on every device:
+    /// UUIDv5 over a fixed namespace, so the answer is a pure function of the
+    /// capture id.
+    static func fallbackNoteID(forCapture id: UUID) -> UUID {
+        var hasher = Insecure.SHA1()
+        withUnsafeBytes(of: fallbackNoteNamespace.uuid) { hasher.update(bufferPointer: $0) }
+        withUnsafeBytes(of: id.uuid) { hasher.update(bufferPointer: $0) }
+        var bytes = Array(hasher.finalize().prefix(16))
+        // RFC 4122 §4.3: name-based, SHA-1 (version 5) and the standard variant.
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+
+    /// Compile-time namespace for `fallbackNoteID(forCapture:)`. A literal, in
+    /// the same spirit as the desk's own fixed id: two devices replaying one
+    /// capture must derive the same note id or the replay duplicates it.
+    private static let fallbackNoteNamespace =
+        UUID(uuidString: "DE5C0F00-0000-4000-A000-000000000001")!
 
     /// The card's name before there are any words to name it with, and again
     /// whenever a transcript turns out to carry no first line. Same shape as
@@ -107,7 +203,7 @@ enum WorkVoiceCaptureCoordinator {
     }
 
     /// Names the payload for the card's file line. The capture's own temporary
-    /// filename carries a random UUID that means nothing to a person.
+    /// filename is a machine identity that means nothing to a person.
     private static let recordingFilenameStem = "voice-note"
 }
 
@@ -124,10 +220,16 @@ private extension ConversationStore {
     /// one logical card as several rows, and whichever row wins the canonical
     /// read must carry the transcript rather than a stale empty one.
     ///
-    /// It refuses anything that is not a recording standing on the desk, and
-    /// returns false rather than throwing: the caller's fallback is to publish
-    /// the words some other way, which a thrown error would read as a reason to
-    /// abandon them.
+    /// It classifies anything that is not a recording standing on the desk
+    /// rather than throwing: the caller's fallback is to publish the words some
+    /// other way, which a thrown error would read as a reason to abandon them.
+    /// A throw here means only that the write itself failed.
+    ///
+    /// A delivery that asks for values every row already holds writes nothing,
+    /// bumps nothing and posts nothing. The words arrive more than once by
+    /// design — a retry surface re-attaches after an interrupted app launch —
+    /// and a rewrite would spend a CloudKit round trip on identical bytes and
+    /// advance the desk's revision under whatever board mutation is in flight.
     ///
     /// The `textContent` column is written unconditionally. Whether a card may
     /// SHOW text it stores is decided in one place, on the read path, by the
@@ -137,14 +239,14 @@ private extension ConversationStore {
         materialID: UUID,
         transcript: String,
         title: String
-    ) async throws -> Bool {
+    ) async throws -> WorkVoiceAttachOutcome {
         try await ensureLoaded()
         let context = newWriteContext()
-        let changed = try await context.perform { [context] () -> Bool in
+        let written = try await context.perform { [context] () -> (WorkVoiceAttachOutcome, Bool) in
             let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
             request.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
             let rows = try context.fetch(request)
-            guard !rows.isEmpty else { return false }
+            guard !rows.isEmpty else { return (.recordingMissing, false) }
             // Fails closed on every row: a merge that produced one row of a
             // different kind means this id no longer names one recording, and
             // guessing which row is the real one is how a screenshot acquires
@@ -152,7 +254,13 @@ private extension ConversationStore {
             guard rows.allSatisfy({ row in
                 WorkMaterialKind(stored: row.value(forKey: "kind") as? String) == .audio
                     && row.value(forKey: "workItemID") as? UUID == Constants.workboardDeskItemID
-            }) else { return false }
+            }) else { return (.notAudio, false) }
+
+            // Nothing was asked for, or every physical row already answers it.
+            guard !transcript.isEmpty, rows.contains(where: { row in
+                row.value(forKey: "textContent") as? String != transcript
+                    || row.value(forKey: "title") as? String != title
+            }) else { return (.attached, false) }
 
             let now = Date()
             for row in rows {
@@ -168,10 +276,12 @@ private extension ConversationStore {
                 row.setValue(now, forKey: "updatedAt")
             }
             try context.save()
-            return true
+            return (.attached, true)
         }
-        if changed { await postDidChange() }
-        return changed
+        // Only a save is worth a notification: a board that redraws for a write
+        // that did not happen is how a no-op becomes visible churn.
+        if written.1 { await postDidChange() }
+        return written.0
     }
 }
 
