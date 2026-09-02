@@ -19,6 +19,17 @@ import XCTest
 @testable import Conduck
 
 final class WorkAssetVaultTests: XCTestCase {
+    /// Every store here mints a vault directory of its own that nothing else
+    /// removes, and the cases below deliberately write real payload leaves into
+    /// them; the fixture empties them when the class is done. No case leaves a
+    /// task running, so teardown cannot race a vault operation.
+    private let isolated = IsolatedWorkStores()
+
+    override func tearDown() async throws {
+        await isolated.cleanUp()
+        try await super.tearDown()
+    }
+
     /// Age a vault leaf or marker on disk. Reclamation judges by timestamp, so
     /// a test fixture has to be genuinely old rather than merely unreferenced.
     private func backdate(_ url: URL, by interval: TimeInterval) throws {
@@ -92,7 +103,7 @@ final class WorkAssetVaultTests: XCTestCase {
             .appendingPathComponent("work-vault-reconcile-tests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let vault = WorkAssetVault(baseURL: directory)
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
 
         let keep = try await vault.store(bytes: Data("referenced".utf8), suggestedExtension: "txt").key
         let remove = try await vault.store(bytes: Data("orphan".utf8), suggestedExtension: "txt").key
@@ -479,8 +490,8 @@ final class WorkAssetVaultTests: XCTestCase {
     }
 
     func testInMemoryStoresUseIndependentVaults() async throws {
-        let firstStore = ConversationStore(inMemory: true)
-        let secondStore = ConversationStore(inMemory: true)
+        let firstStore = isolated.make()
+        let secondStore = isolated.make()
         let sharedMaterialID = UUID()
         let firstItem = try await firstStore.createWorkItem()
         let secondItem = try await secondStore.createWorkItem()
@@ -523,7 +534,7 @@ final class WorkAssetVaultTests: XCTestCase {
     }
 
     func testFilePayloadsNeverEnterTheMirroredModel() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let item = try await store.createWorkItem()
         let large = try await store.addWorkMaterial(
             WorkMaterialDraft(
@@ -586,7 +597,7 @@ final class WorkAssetVaultTests: XCTestCase {
         try payload.write(to: sourceURL, options: .atomic)
         defer { try? FileManager.default.removeItem(at: sourceURL) }
 
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let item = try await store.createWorkItem()
         let material = try await store.addWorkMaterialFile(
             WorkMaterialDraft(
@@ -613,7 +624,7 @@ final class WorkAssetVaultTests: XCTestCase {
         try Data().write(to: sourceURL, options: .atomic)
         defer { try? FileManager.default.removeItem(at: sourceURL) }
 
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let item = try await store.createWorkItem()
         let material = try await store.addWorkMaterialFile(
             WorkMaterialDraft(

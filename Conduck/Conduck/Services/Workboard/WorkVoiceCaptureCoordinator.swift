@@ -26,6 +26,15 @@
 // `fallbackNoteID(forCapture:)`, never under the capture id, because the desk
 // write is idempotent BY id and would answer a note published there with the
 // card that is already sitting on it.
+//
+// `recover(_:transcript:store:)` is the third and last entry point, and the one
+// every retry surface uses. A capture recovered hours later, in another
+// process, cannot see what this one saw, so the decision it has to make —
+// attach, republish then attach, or publish the words beside a card that is
+// gone — is made from the retry record's own `publicationState` rather than
+// from an absence, which is a fact with two opposite causes. Duplicating that
+// three-way decision at each surface is what let one of them republish a card a
+// person had deleted while another quietly dropped the words.
 
 #if !os(watchOS)
 
@@ -37,23 +46,8 @@ import Foundation
 /// unqualified name, and the coordinator owns it.
 typealias WorkVoiceAttachOutcome = WorkVoiceCaptureCoordinator.WorkVoiceAttachOutcome
 
-/// What a capture surface tells a person when the desk would not hold their
-/// recording. It rides `AppError.unknown` because the recorder's whole error
-/// channel is `AppError` and that taxonomy describes speech, not storage;
-/// `.unknown` is also the arm that reads as retryable, which this is — the same
-/// bytes, written again, normally land.
-enum WorkVoiceCaptureError: LocalizedError, Equatable {
-    /// The recording could not be written to the desk, or its transcript could
-    /// not be written onto the recording.
-    case deskWriteFailed
-
-    var errorDescription: String? {
-        String(
-            localized: "workboard.voice.error.deskWrite",
-            defaultValue: "Work couldn’t save this recording just now."
-        )
-    }
-}
+/// Same rule for the recovery answer.
+typealias WorkVoiceRecoveryOutcome = WorkVoiceCaptureCoordinator.WorkVoiceRecoveryOutcome
 
 enum WorkVoiceCaptureCoordinator {
 
@@ -76,6 +70,51 @@ enum WorkVoiceCaptureCoordinator {
         /// material re-homed onto the desk, or a row a merge produced. Spoken
         /// words must never be written onto it.
         case notAudio
+    }
+
+    /// What became of a capture recovered from `PendingRetryStore`.
+    ///
+    /// The caller's whole duty hangs on it: every case but `retryKept` is
+    /// TERMINAL — the words are on the desk and the durable record may be
+    /// released — while `retryKept` and a THROW both mean the record must stay
+    /// armed. `isTerminal` is the question to ask; matching on the individual
+    /// cases to decide it is how one surface starts clearing a retry the others
+    /// keep.
+    enum WorkVoiceRecoveryOutcome: Sendable, Equatable {
+        /// Why the capture was left for another attempt, with nothing written.
+        enum RetryKept: Sendable, Equatable {
+            /// The record is not a Work capture. Its transcript belongs to the
+            /// lane that armed it, and the desk must not be written at all.
+            case notAWorkCapture
+            /// There are no words yet. Recognition still owes this capture its
+            /// transcript, and a publication of silence beside the recording
+            /// would be worse than none.
+            case noTranscript
+        }
+
+        /// The words joined the recording that was already standing.
+        case attached
+        /// Phase one was KNOWN to have failed, so the recording was published
+        /// under the capture id from the parked bytes and the words joined it.
+        /// One card, exactly as the capture would have produced first time.
+        case republishedAndAttached
+        /// The capture owns no recording — deleted while recognition was in
+        /// flight, or an id that names somebody else's card — so the words
+        /// landed beside it under `fallbackNoteID(forCapture:)`.
+        case fallbackNotePublished
+        /// Nothing was written and the durable record must stay armed.
+        case retryKept(RetryKept)
+
+        /// Whether the capture is finished, and its durable record may be
+        /// released.
+        var isTerminal: Bool {
+            switch self {
+            case .attached, .republishedAndAttached, .fallbackNotePublished:
+                return true
+            case .retryKept:
+                return false
+            }
+        }
     }
 
     /// PHASE 1 — the recording becomes a card, before anything is transcribed.
@@ -148,6 +187,104 @@ enum WorkVoiceCaptureCoordinator {
             materialID: captureID,
             transcript: words,
             title: title(forTranscript: words)
+        )
+    }
+
+    /// RECOVERY — the whole of what a retry surface does to the desk, and the
+    /// only place the attach-or-fallback decision is made.
+    ///
+    /// Every surface that can recover a parked Work capture (the in-app retry
+    /// card, the menu-bar retry, the Shortcuts lane) calls this and nothing
+    /// else. They cannot see what the capture saw, and the question they face
+    /// has two opposite right answers behind one observation: an id that names
+    /// no card is either a publication the desk refused — the bytes in hand are
+    /// the only copy and belong back on the desk — or a card a person deleted
+    /// while recognition was in flight, which must stay deleted. The retry
+    /// record's `publicationState` is the only thing that tells them apart, and
+    /// a nil one (a record written before it was recorded) is UNKNOWN, so it
+    /// takes the conservative branch: attach, and publish the words beside a
+    /// missing card rather than resurrecting it.
+    ///
+    /// THROWS whatever the store threw, unchanged. That is a write that failed
+    /// over a capture that still exists, so the caller must keep its durable
+    /// record and surface a retry; nothing here clears anything, and clearing
+    /// on a terminal outcome is the caller's own act (`isTerminal`).
+    ///
+    /// Idempotent in all three branches — the republication, the attachment and
+    /// the fallback note are each keyed by a derived-or-given id the desk write
+    /// answers rather than duplicates — so a capture recovered twice, or on two
+    /// devices, still has exactly the cards it had after the first.
+    @discardableResult
+    static func recover(
+        _ pending: PendingRetryRecord,
+        transcript: String,
+        store: ConversationStore = .shared
+    ) async throws -> WorkVoiceRecoveryOutcome {
+        guard pending.metadata.resolvedDestination == .work else {
+            return .retryKept(.notAWorkCapture)
+        }
+        let words = WorkboardWorkspaceCaptureLogic.normalizedThought(transcript)
+        guard !words.isEmpty else { return .retryKept(.noTranscript) }
+
+        let captureID = pending.metadata.id
+        var republished = false
+        // The one state that licenses a republication: the desk is KNOWN never
+        // to have held this recording, so there is nothing to resurrect and the
+        // parked bytes are the only copy of it. Empty bytes name no recording
+        // at all, and the words fall through to the note-shaped answer below.
+        if pending.metadata.publicationState == .phaseOneFailed, !pending.audio.isEmpty {
+            let container = SourceAudioContainer.sniff(pending.audio)
+            _ = try await publishRecording(
+                captureID: captureID,
+                audio: pending.audio,
+                fileExtension: container.fileExtension,
+                mimeType: container.mimeType,
+                createdAt: pending.metadata.createdAt,
+                store: store
+            )
+            republished = true
+        }
+
+        switch try await attachTranscript(words, toRecording: captureID, store: store) {
+        case .attached:
+            return republished ? .republishedAndAttached : .attached
+        case .recordingMissing, .notAudio:
+            try await publishFallbackNote(
+                words,
+                forCapture: captureID,
+                createdAt: pending.metadata.createdAt,
+                store: store
+            )
+            return .fallbackNotePublished
+        }
+    }
+
+    /// The words as their own card, for a capture whose recording is not there
+    /// to carry them.
+    ///
+    /// It names itself from its first line, the way the recording would have
+    /// once it had words — a person who sees this card is looking at what they
+    /// said, and a capture-lane label would name a mechanism they never used.
+    /// Written straight to the desk rather than queued: the durable copy of
+    /// these words is the retry record the caller is still holding, so a
+    /// refused write must reach that caller as a throw and not be absorbed by a
+    /// second queue it would then have to be told to stop trusting.
+    private static func publishFallbackNote(
+        _ words: String,
+        forCapture captureID: UUID,
+        createdAt: Date,
+        store: ConversationStore
+    ) async throws {
+        _ = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                id: fallbackNoteID(forCapture: captureID),
+                kind: .note,
+                title: title(forTranscript: words),
+                textContent: words,
+                storageMode: .metadataOnly,
+                sourceDevice: SourceDevice.current,
+                createdAt: createdAt
+            )
         )
     }
 

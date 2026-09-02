@@ -119,6 +119,7 @@ final class WorkboardBlobSeamPlatformGuardTests: XCTestCase {
             "func _materialAndBlobForTesting(",
             "var publicationConfirmationHookForTesting",
             "var projectionVaultReadabilityCallsForTesting",
+            "var workMaterialPublicationLockHoldForTesting",
             "func _removeIsolatedVaultDirectoryForTesting("
         ]
 

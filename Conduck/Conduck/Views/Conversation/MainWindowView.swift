@@ -836,9 +836,6 @@ struct MainWindowView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
             consumeGatewayFixRoute()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .openPersonalAISettings)) { _ in
-            presentPersonalAISettings()
-        }
         .onReceive(NotificationCenter.default.publisher(for: .openSettingsWindow)) { _ in
             presentRequestedSettings()
         }
@@ -876,12 +873,6 @@ struct MainWindowView: View {
     private func consumeConversationDeepLink(_ note: Notification) {
         leaveSettingsForConversationAction()
         handleDeepLink(note)
-    }
-
-    private func presentPersonalAISettings() {
-        settingsInitialCategory = .personalAI
-        settingsInitialFocus = nil
-        showingSettings = true
     }
 
     private func presentRequestedSettings() {

@@ -34,6 +34,18 @@
 // with no card behind it has turned a recording into composer text nobody asked
 // for. Chat captures are untouched by all of it: their transcript IS the
 // artifact, and a conversation has no card to hold bytes.
+//
+// `PendingRetryStore` is ONE overwriting slot for the whole app, so this class
+// treats a claim on it as a resource with a lifetime rather than a fire-and-
+// forget save. It arms the slot only while a capture is genuinely unfinished;
+// it RELEASES the claim the moment the capture completes or the person starts
+// over, so nothing offers to re-transcribe an answered capture; it lets go of a
+// capture only once a replacement microphone is actually live, so a refused
+// start leaves the previous capture's Try Again exactly where it was; and it
+// declines to arm at all when doing so would evict a record holding the only
+// copy of some other lane's recording — this capture's audio is already a card
+// on the desk by then, so what it would spend is somebody else's audio to save
+// its own words.
 
 import Foundation
 import AVFoundation
@@ -106,8 +118,9 @@ final class InAppAudioRecorder {
     /// of its own — the Shortcuts lane publishes none, and a person can delete
     /// a card while speech recognition is in flight. Only then may the host
     /// hand the words to its own composer: a card that exists and could not be
-    /// written to is a retry, not a text fallback. Cleared at the start of
-    /// every recording so a second attempt can never claim the first one's card.
+    /// written to is a retry, not a text fallback. Cleared once a replacement
+    /// recording is actually live, so a second capture can never claim the
+    /// first one's card and a refused start never strands the first one.
     private(set) var workRecordingMaterialID: UUID?
 
     /// The Work capture this recorder is still holding: its bytes, the card it
@@ -178,6 +191,21 @@ final class InAppAudioRecorder {
     /// The desk store the Work lane publishes into.
     var workStoreForTesting: ConversationStore?
 
+    /// Stands in for the App-Group retry slot. `PendingRetryStore.shared` is a
+    /// process-global singleton over one file every capture test in the bundle
+    /// shares, and the claims here are about WHICH capture this class arms,
+    /// releases and refuses to evict — a property of this class, not of the
+    /// file format.
+    var retryLaneForTesting: (any PendingRetrySlotWriting)?
+
+    /// Stands in for the microphone coming up. There is no input device on a
+    /// simulator, and the claim this seam exists for is an ORDERING one: the
+    /// capture a new recording replaces is let go only after the replacement
+    /// microphone is live, so a refused start leaves the previous capture — and
+    /// the Try Again that finishes it — untouched. Returns whether the mic came
+    /// up, exactly as `AudioRecorder.startRecording()` does.
+    var microphoneStartForTesting: (@MainActor () async -> Bool)?
+
     /// Runs the capture the seams above describe. `stopAndUpload()` refuses
     /// unless the microphone is live, which no simulator run can arrange, and
     /// driving the orchestration is the whole point of the three seams.
@@ -196,6 +224,22 @@ final class InAppAudioRecorder {
         #endif
     }
 
+    /// The single retry slot this recorder arms, releases and reads.
+    private var retryLane: any PendingRetrySlotWriting {
+        #if CONDUCK_TESTING
+        return retryLaneForTesting ?? PendingRetryStore.shared
+        #else
+        return PendingRetryStore.shared
+        #endif
+    }
+
+    /// The capture whose claim on the single retry slot this recorder itself
+    /// armed, so it releases only what it took. A slot armed by another process
+    /// — a capture that outlived an app launch — belongs to whichever surface
+    /// recovers it, and clearing it from here would delete a recording this
+    /// recorder is not finishing.
+    private var armedDurableRetryID: UUID?
+
     /// Underlying capture engine. Composed (not inherited) so the
     /// AudioRecorder's `ObservableObject`-based timer callbacks stay in
     /// their existing shape without leaking into this view-facing API.
@@ -210,19 +254,23 @@ final class InAppAudioRecorder {
     /// (`= .recording`) — there's an `await recorder.startRecording()` gap (mic
     /// permission prompt / engine spin-up) where `state` is still `.idle`. Guards
     /// re-entry on a rapid double-tap (the `.idle` guard alone would let a second
-    /// tap fire a second `recorder.startRecording()` during that gap), and on
-    /// macOS it makes `isActivelyRecording` cover the startup window so an
-    /// auto-speak can't slip in before `.recording` is set.
+    /// tap fire a second `recorder.startRecording()` during that gap), and it
+    /// makes `isActivelyRecording` cover the startup window so no speaker or
+    /// desk card can start audio in the gap before `.recording` is set.
     private var isStarting = false
 
     init(retryDestination: PendingRetryDestination = .chat) {
         self.retryDestination = retryDestination
-        #if os(macOS)
-        // macOS has NO AVAudioSession arbitration, so the in-window composer mic
-        // joins the speech-exclusivity bus as a mic authority (mirrors the
-        // menu-bar `DictationService`): while this recorder is starting/recording,
-        // `claimForAutoSpeak` is refused so a reply can't auto-speak over a live
-        // capture. Weakly held; iOS/watch never register (the bus is inert there).
+        #if os(macOS) || os(iOS)
+        // The composer mic joins the speech-exclusivity bus as a mic authority
+        // (mirrors the menu-bar `DictationService`), so every playback surface
+        // can ask ONE question — is a capture live? — before producing audio.
+        // On macOS that is the only arbitration there is. On iOS the shared
+        // session still cuts playback the moment this recorder takes `.record`,
+        // but it tells no one: without this registration a desk audio card goes
+        // on reporting `.playing` over silence, and `claimForAutoSpeak` cannot
+        // refuse a reply that would speak into a live capture. Weakly held;
+        // watchOS never registers.
         SpeechExclusivity.shared.register(recordingAuthority: self)
         #endif
         // Bridge the AudioRecorder's "finished" callback into our state
@@ -260,18 +308,17 @@ final class InAppAudioRecorder {
 
     /// Begin recording. Transitions `state` to `.recording(startedAt:)` on
     /// success, `.error(...)` on permission / engine / mic-busy failure.
+    ///
+    /// A Work capture already in hand survives every failure path here: it is
+    /// released only on the line below the successful start, because a person
+    /// who tapped Record Again and was refused a microphone still has the first
+    /// capture's card on the desk and must still be able to finish it.
     func startRecording() async {
         guard case .idle = state, !isStarting else { return }
-        // A new recording is a new capture: it publishes its own card, and must
-        // never be mistaken for the previous one still standing on the desk.
-        // Abandoning the previous capture is the whole meaning of recording
-        // again — its card, if it got one, keeps its bytes on the desk.
-        workRecordingMaterialID = nil
-        pendingWorkCapture = nil
         // Hold a "starting" claim across the async gap below — `state` stays
         // `.idle` until `recorder.startRecording()` returns, so without this a
-        // rapid double-tap would fire a second capture, and (macOS) an auto-speak
-        // could slip in before `.recording` is set. Reset on EVERY exit path.
+        // rapid double-tap would fire a second capture, and audio could start in
+        // the gap before `.recording` is set. Reset on EVERY exit path.
         isStarting = true
         defer { isStarting = false }
 
@@ -307,9 +354,16 @@ final class InAppAudioRecorder {
             state = .error(.audioMicBusy)
             return
         }
-        // Lease held — silence every registered speaker before the mic comes up
-        // (a playing reply would otherwise bleed into the capture). The mic is
-        // never a registered party, so nothing stops it back. Mirrors `DictationService`.
+        #endif
+
+        #if os(macOS) || os(iOS)
+        // Silence every registered speaker before the mic comes up — a playing
+        // reply or desk voice note would otherwise bleed into the capture, and
+        // on iOS the session's own `.record` switch silences them WITHOUT
+        // telling them, leaving a card reporting playback over a dead route.
+        // The mic is never a registered party, so nothing stops it back;
+        // CarPlay registers nothing, so the car's voice session is out of reach
+        // of this broadcast. Mirrors `DictationService`.
         SpeechExclusivity.shared.claim(nil)
         #endif
 
@@ -317,7 +371,17 @@ final class InAppAudioRecorder {
             // Honor the start result: a `false` return / `.recordingFailed` means
             // the HAL rejected the start — surface an error instead of a fake
             // `.recording` that would capture nothing.
-            guard try await recorder.startRecording() else {
+            #if CONDUCK_TESTING
+            let started: Bool
+            if let stub = microphoneStartForTesting {
+                started = await stub()
+            } else {
+                started = try await recorder.startRecording()
+            }
+            #else
+            let started = try await recorder.startRecording()
+            #endif
+            guard started else {
                 state = .error(.audioMissingData)
                 return
             }
@@ -335,6 +399,12 @@ final class InAppAudioRecorder {
             state = .error(.unknown(error))
             return
         }
+
+        // The replacement microphone is live, so — and only now — the capture it
+        // replaces may be let go. Every path above this line is a refusal, and a
+        // refusal replaces nothing: releasing the capture there leaves its card
+        // standing wordless on the desk with nothing able to finish it.
+        await abandonPendingWorkCapture()
 
         // STABLE start instant — the `mm:ss` display ticks inside the indicator's
         // leaf `TimelineView`, so `state` no longer mutates every 0.1s (which was
@@ -742,6 +812,15 @@ final class InAppAudioRecorder {
                 return await failPendingWorkCapture(capture)
             }
         }
+
+        // The capture is finished: the words are on its card, or it owns no
+        // card and the host has them. Its claim on the single retry slot is
+        // released here, because a resolved claim left armed is one the retry
+        // card offers to re-transcribe — and one an unrelated capture will
+        // silently displace, deleting audio nobody is waiting for any more.
+        if retryDestination == .work, pendingWorkCapture == nil {
+            await releaseDurableRetry(for: capture.id)
+        }
         #endif
 
         CompletionFeedbackPlayer.play(mode: "sound")
@@ -806,20 +885,42 @@ final class InAppAudioRecorder {
         _ capture: VoiceCapture
     ) async -> Result<String, AppError> {
         pendingWorkCapture = capture
-        let surfaced = AppError.unknown(WorkVoiceCaptureError.deskWriteFailed)
-        // A desk write is not a speech verdict, so the STT taxonomy cannot
-        // answer for it — and when the card never landed these bytes are all
-        // that exists of the recording.
+        // A desk write is not a speech verdict, and the taxonomy answers for it
+        // in its own case: retryable, preserved, and carrying copy that names
+        // the desk rather than an unexpected error.
+        let surfaced = AppError.workDeskWriteFailed
         await preserveForRetry(
             error: surfaced,
             capture: capture,
-            preferredLanguage: nil,
-            ignoringTaxonomy: true
+            preferredLanguage: nil
         )
         state = .error(surfaced)
         return .failure(surfaced)
     }
     #endif
+
+    /// Let go of the Work capture a new recording replaces, and of its claim on
+    /// the single retry slot. Called only once a replacement microphone is
+    /// actually live: recording again is a deliberate replacement, and the card
+    /// this capture published — if it got one — keeps its bytes on the desk
+    /// either way. What must not survive is the durable claim, which the new
+    /// capture is about to need and whose recovery would re-transcribe a
+    /// recording the person has already replaced.
+    private func abandonPendingWorkCapture() async {
+        workRecordingMaterialID = nil
+        guard let abandoned = pendingWorkCapture else { return }
+        pendingWorkCapture = nil
+        await releaseDurableRetry(for: abandoned.id)
+    }
+
+    /// Release this recorder's own claim on the retry slot. Gated on the id it
+    /// armed, so a slot won by another capture in the meantime — or one this
+    /// process never armed at all — is left for whoever owns it.
+    private func releaseDurableRetry(for id: UUID) async {
+        guard armedDurableRetryID == id else { return }
+        armedDurableRetryID = nil
+        _ = await retryLane.clear(ifCurrentID: id)
+    }
 
     /// The ONE place this recorder hands a capture to the retry lane, so the
     /// pre-flight refusal, the STT failure and the desk-write failure cannot
@@ -831,19 +932,40 @@ final class InAppAudioRecorder {
     /// verdict from parking audio the user would only ever retry into the same
     /// refusal.
     ///
+    /// It records what a later recovery cannot work out for itself: the WORDS,
+    /// when recognition already succeeded and only the write onto the card
+    /// failed (so the retry attaches them instead of buying the same answer a
+    /// second time), and whether phase one PUBLISHED — the fact that separates
+    /// a recording the desk never held from a card a person deleted, which call
+    /// for opposite acts and look identical from the far side of a process
+    /// death.
+    ///
+    /// It also declines to arm at all when arming would evict a record holding
+    /// the only copy of a recording. The slot is one overwriting slot for the
+    /// whole app, and a capture whose own recording is already a card on the
+    /// desk owes only its words: spending somebody else's audio to save them is
+    /// the wrong trade in every direction. The words are still held in memory,
+    /// so the sheet's Try Again finishes this capture regardless; only a
+    /// process death costs them.
+    ///
     /// Best-effort: a save failure is logged inside the store and the caller
     /// still surfaces the original error — a silent swap to a storage error
     /// would tell the user the wrong thing about why their capture stopped.
-    ///
-    /// - Parameter ignoringTaxonomy: Set only by the desk-write failure, whose
-    ///   verdict the speech taxonomy does not describe.
     private func preserveForRetry(
         error: AppError,
         capture: VoiceCapture,
-        preferredLanguage: String?,
-        ignoringTaxonomy: Bool = false
+        preferredLanguage: String?
     ) async {
-        guard ignoringTaxonomy || error.shouldPreserveForRetry else { return }
+        guard error.shouldPreserveForRetry else { return }
+        let publicationState: PendingRetryPublicationState? = retryDestination == .work
+            ? (capture.materialID == nil ? .phaseOneFailed : .published)
+            : nil
+        if publicationState == .published,
+           let incumbent = await retryLane.currentSlot(),
+           incumbent.id != capture.id,
+           !incumbent.hasDurableRecording {
+            return
+        }
         let metadata = PendingRetryMetadata(
             id: capture.id,
             createdAt: Date(),
@@ -851,15 +973,22 @@ final class InAppAudioRecorder {
             preferredLanguage: preferredLanguage,
             attemptCount: 1,
             lastErrorCode: error.errorCode,
-            destination: retryDestination
+            destination: retryDestination,
+            transcript: capture.transcript,
+            publicationState: publicationState
         )
-        try? await PendingRetryStore.shared.save(audioData: capture.audio, metadata: metadata)
+        try? await retryLane.save(
+            audioData: capture.audio,
+            metadata: metadata,
+            workImageData: nil
+        )
+        armedDurableRetryID = capture.id
     }
 }
 
-#if os(macOS)
+#if os(macOS) || os(iOS)
 extension InAppAudioRecorder: RecordingExclusivityAuthority {
-    /// Mic-authority view for the macOS speech-exclusivity bus. True while the
+    /// Mic-authority view for the speech-exclusivity bus. True while the
     /// capture is STARTING or actively recording — NOT during `.processing` (the
     /// mic is released by then, so a reply may speak) and never on `.idle`/
     /// `.error`. Folds in `isStarting` so the startup gap is covered. Mirrors

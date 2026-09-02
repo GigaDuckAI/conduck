@@ -56,13 +56,17 @@ final class ThreadSpeaker {
     init(engine: SpeakEngine, now: @escaping () -> Date = { Date() }) {
         self.engine = engine
         self.now = now
-        #if os(macOS)
-        // Join the macOS exclusivity bus (weak registry — dies with the view).
-        // The PARTY is this state machine, not the engine: a preempting stop
-        // must reset the bubble's speak state, which an engine-level cancel
-        // can't (it never fires the guarded completion). macOS-only: on iOS
-        // the audio session arbitrates, and CarPlay's speaker must never be
-        // preemptible.
+        #if os(macOS) || os(iOS)
+        // Join the exclusivity bus (weak registry — dies with the view). The
+        // PARTY is this state machine, not the engine: a preempting stop must
+        // reset the bubble's speak state, which an engine-level cancel can't
+        // (it never fires the guarded completion). iOS registers too because
+        // the audio session arbitrates between APPS and not within this one: a
+        // read-aloud and a desk voice note on one session overlap, and a
+        // starting mic silences a reply at the OS level while the bubble goes
+        // on showing `.playing`. watchOS has one speaker and nothing to
+        // arbitrate against; CarPlay's speaker is a different `ReplyVoice`
+        // instance that registers nothing, so it stays unpreemptible.
         SpeechExclusivity.shared.register(self)
         #endif
         #if os(iOS)
@@ -173,9 +177,10 @@ final class ThreadSpeaker {
                 return
             case .paused:
                 // Resume from the paused position — no re-fetch, no restart.
-                #if os(macOS)
-                // Resuming is audio starting again — silence the other macOS
-                // speakers (e.g. an arrival speak that began while paused).
+                #if os(macOS) || os(iOS)
+                // Resuming is audio starting again — silence every other party
+                // (an arrival speak or a desk voice note that began while this
+                // reply was paused).
                 SpeechExclusivity.shared.claim(self)
                 #endif
                 #if os(iOS)
@@ -209,10 +214,10 @@ final class ThreadSpeaker {
         // is the ONLY clear site: pause/resume/loading-cancel taps on the same
         // message keep the marker, which still describes the latest attempt).
         fallbackVoiceMessageIDs.remove(messageID)
-        #if os(macOS)
-        // Silence every OTHER macOS speaker (the shared arrival/preview voice,
-        // another window's ThreadSpeaker) — `engine.cancel()` above only covers
-        // our own engine instance.
+        #if os(macOS) || os(iOS)
+        // Silence every OTHER party (the shared arrival/preview voice, another
+        // window's or column's ThreadSpeaker, a playing desk voice note) —
+        // `engine.cancel()` above only covers our own engine instance.
         SpeechExclusivity.shared.claim(self)
         #endif
         speakingMessageID = messageID
@@ -222,7 +227,7 @@ final class ThreadSpeaker {
         // Own the audio session for the chat read-aloud path — iOS has no other
         // caller that configures a playback session (ReplyVoice/SpeechPlayer ride
         // it; the recorder leaves it `.record`/inactive). Skipped while CarPlay
-        // owns the session. See `ChatPlaybackSession`.
+        // owns the session. See `SpokenAudioSession`.
         activatePlaybackSessionIfNeeded()
         #endif
 
@@ -348,7 +353,7 @@ final class ThreadSpeaker {
             clearSystemPauseMark()   // expired — keep it paused, drop auto eligibility
             return
         }
-        #if os(macOS)
+        #if os(macOS) || os(iOS)
         SpeechExclusivity.shared.claim(self)
         #endif
         clearSystemPauseMark()
@@ -383,10 +388,10 @@ final class ThreadSpeaker {
     /// resumes — UNLESS CarPlay owns the session, in which case we ride it
     /// untouched (preserving CarPlay's single-activate / deactivate-once
     /// invariant). `try?`: a failed activation just leaves prior behavior, never
-    /// a thrown error into the speak path. See `ChatPlaybackSession`.
+    /// a thrown error into the speak path. See `SpokenAudioSession`.
     private func activatePlaybackSessionIfNeeded() {
         guard !CarPlayRecordingService.anySessionActive else { return }
-        try? ChatPlaybackSession.configureAndActivate()
+        try? SpokenAudioSession.configureAndActivate()
     }
 
     /// Release the iOS chat playback session at a terminal state (completion or
@@ -395,7 +400,7 @@ final class ThreadSpeaker {
     /// session.
     private func deactivatePlaybackSessionIfNeeded() {
         guard !CarPlayRecordingService.anySessionActive else { return }
-        try? ChatPlaybackSession.deactivate()
+        try? SpokenAudioSession.deactivate()
     }
 
     // MARK: - iOS system-interruption reconciliation
@@ -484,11 +489,12 @@ final class ThreadSpeaker {
     #endif
 }
 
-#if os(macOS)
+#if os(macOS) || os(iOS)
 extension ThreadSpeaker: SpeechExclusivityParty {
-    /// Preempted by another macOS party (a different speaker starting, or the
-    /// mic). No-op when IDLE — every claim broadcasts to all registered
-    /// speakers, and an idle one has nothing to stop; without the guard each
+    /// Preempted by another party (a different speaker starting, a desk voice
+    /// note taking output, or the mic). No-op when IDLE — every claim
+    /// broadcasts to all registered speakers, and an idle one has nothing to
+    /// stop; without the guard each
     /// mic start / bubble tap / arrival speak would make every idle speaker
     /// announce a spurious "Stopped" to VoiceOver. When active, full `stop()`
     /// — resets the bubble's speak state and announces (the utterance

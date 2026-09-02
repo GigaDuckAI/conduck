@@ -1113,6 +1113,56 @@ actor ConversationStore {
     /// Work is one desk: an owner-wide claim would queue every capture behind
     /// a several-hundred-megabyte reattach.
     var workMaterialPublicationClaims: Set<UUID> = []
+
+    /// The same exclusion ACROSS processes, which the claim set above cannot
+    /// reach.
+    ///
+    /// The app and the headless intent process share one App Group sqlite and
+    /// Work's capture ids are deterministic, so both can publish one material at
+    /// the same instant: the second finds the first's blob complete, adopts it
+    /// without inserting a row, and commits a card the first's rollback then
+    /// deletes. Every publication of a material's payload therefore takes this
+    /// advisory file lock before it stages or looks a blob up, and holds it
+    /// through the material save, the confirmation and every rollback — so a
+    /// successor's publication of the same deterministic id cannot observe or
+    /// adopt a blob a predecessor is still able to take back.
+    ///
+    /// Lazily built rather than made in the initializer: the directory is
+    /// derived from the store's own Core file, so it is whatever that store was
+    /// pointed at, and a store nothing else can open needs no cross-process
+    /// lock at all.
+    private var workMaterialPublicationLockStorage: WorkMaterialPublicationLock?
+
+    /// Nil for an in-memory store — no other process can open one, so there is
+    /// nothing to exclude and the in-process claim above is the whole answer.
+    var workMaterialPublicationLock: WorkMaterialPublicationLock? {
+        if let workMaterialPublicationLockStorage { return workMaterialPublicationLockStorage }
+        guard let directory = Self.publicationLockDirectory(
+            besideCore: container.persistentStoreDescriptions.first?.url
+        ) else { return nil }
+        let lock = WorkMaterialPublicationLock(directoryURL: directory)
+        workMaterialPublicationLockStorage = lock
+        return lock
+    }
+
+    /// The lock directory for a store at `coreURL`: a sibling directory named
+    /// after the Core file. In production that is inside the App Group
+    /// container, which is what puts the app and the headless intent process on
+    /// the same lock — and it is derived rather than looked up, so no second
+    /// App Group query appears (`scripts/check-storage-seam.sh` allowlists those
+    /// by file).
+    ///
+    /// Nil for the in-memory placeholder `/dev/null`, which names no directory a
+    /// lock file could live in and no store a second process could open.
+    private static func publicationLockDirectory(besideCore coreURL: URL?) -> URL? {
+        guard let coreURL, coreURL.isFileURL, coreURL.path != "/dev/null" else { return nil }
+        return coreURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "\(coreURL.deletingPathExtension().lastPathComponent)-Locks",
+                isDirectory: true
+            )
+    }
     #endif
 
     /// In-process retry claims close the actor-reentrancy window around
@@ -4668,6 +4718,31 @@ actor ConversationStore {
         publicationConfirmationHookForTesting = hook
     }
 
+    /// TEST SEAM — hold a desk publication open INSIDE the cross-process
+    /// publication lock, after its payload is durable and before any material
+    /// row names it.
+    ///
+    /// WHY IT HAS TO EXIST. `WorkMaterialPublicationLock` is what stops a
+    /// successor process adopting a blob its predecessor can still take back,
+    /// and the only observable difference it makes is WHEN the successor's
+    /// publication runs. That window is a few microseconds wide in the real
+    /// protocol — the blob save and the material save are consecutive
+    /// statements — so nothing short of stopping the predecessor inside it can
+    /// put a second store instance in the position the defect needs. The
+    /// closure is awaited at exactly that point, so a second store publishing
+    /// the same id is provably blocked on the lock rather than merely slower.
+    ///
+    /// Gated on the isolated test store as well as the flag, so a signed suite
+    /// run can never hold a publication open over the founder's real data.
+    var workMaterialPublicationLockHoldForTesting: (@Sendable (UUID) async -> Void)?
+
+    func _setWorkMaterialPublicationLockHoldForTesting(
+        _ hold: (@Sendable (UUID) async -> Void)?
+    ) {
+        guard isIsolatedTestStore else { return }
+        workMaterialPublicationLockHoldForTesting = hold
+    }
+
     /// How many times the board projection resolved its two batch questions.
     struct ProjectionBatchCountsForTesting: Sendable, Hashable {
         let vaultReadability: Int
@@ -4698,21 +4773,32 @@ actor ConversationStore {
         )
     }
 
-    /// TEST SEAM — remove the vault directory an isolated store minted for
-    /// itself, payload leaves and staging markers together.
+    /// TEST SEAM — remove the directories an isolated store minted for itself:
+    /// the vault's payload leaves and staging markers, and the publication lock
+    /// files beside its Core file.
     ///
-    /// WHY IT HAS TO EXIST. Nothing owns that directory's lifetime: the store
-    /// creates it in `init(inMemory:storeURL:)` and neither actor removes it,
-    /// so a suite whose cases each publish a ceiling-sized payload leaves tens
-    /// of megabytes per case in the simulator's temporary directory until the
-    /// device is wiped. A test cannot clean it up itself either — the path is
-    /// generated inside the initializer and never handed out.
+    /// WHY IT HAS TO EXIST. Nothing owns those directories' lifetimes: the
+    /// store creates the vault in `init(inMemory:storeURL:)`, the lock
+    /// directory appears beside whatever file that store was pointed at, and
+    /// neither actor removes either — so a suite whose cases each publish a
+    /// ceiling-sized payload leaves tens of megabytes per case in the
+    /// simulator's temporary directory until the device is wiped. A test cannot
+    /// clean them up itself either: one path is generated inside the
+    /// initializer and never handed out, and the other is derived from a store
+    /// description a test does not read.
     ///
-    /// Refuses anything but an isolated store, so the person's own vault is
-    /// unreachable from here even in a signed run.
+    /// Refuses anything but an isolated store, so the person's own vault and the
+    /// App Group's live locks are unreachable from here even in a signed run.
     func _removeIsolatedVaultDirectoryForTesting() {
-        guard isIsolatedTestStore, let isolatedVaultBaseURL else { return }
-        try? FileManager.default.removeItem(at: isolatedVaultBaseURL)
+        guard isIsolatedTestStore else { return }
+        if let isolatedVaultBaseURL {
+            try? FileManager.default.removeItem(at: isolatedVaultBaseURL)
+        }
+        if let lockDirectory = Self.publicationLockDirectory(
+            besideCore: container.persistentStoreDescriptions.first?.url
+        ) {
+            try? FileManager.default.removeItem(at: lockDirectory)
+        }
     }
     #endif
 

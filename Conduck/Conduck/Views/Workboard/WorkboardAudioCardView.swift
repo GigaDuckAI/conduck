@@ -24,13 +24,13 @@
 // produces these notes leaves the iOS session on `.record` and inactive —
 // playing into that is silence. `WorkboardAudioOutput` is the card family's one
 // claim on process audio: it REFUSES while a capture is live (a CarPlay voice
-// session, or any registered mic authority), it activates `.playback` /
-// `.spokenAudio` the way the chat read-aloud path does for its own, and it
-// records WHICH client holds the claim so only that client's release can
-// deactivate the session — a stale terminal from a card that already lost
-// output must never silence the card that took it. A refused activation is a
-// refusal, never a granted claim: `AVAudioPlayer.play()` is not trusted behind
-// a swallowed session error.
+// session, or any registered mic authority), it brings the session up through
+// `SpokenAudioSession` — the one owner of that posture, shared with the chat
+// read-aloud path — and it records WHICH client holds the claim so only that
+// client's release can deactivate the session: a stale terminal from a card
+// that already lost output must never silence the card that took it. A refused
+// activation is a refusal, never a granted claim: `AVAudioPlayer.play()` is not
+// trusted behind a swallowed session error.
 //
 // SPEECH BUS: the card is also a `SpeechExclusivityParty`. It claims before
 // every start and resume, so a chat read-aloud stops rather than overlaps, and
@@ -270,24 +270,25 @@ final class WorkboardAudioOutput: WorkboardAudioOutputArbiter {
     }
 
     /// iOS only — macOS has no `AVAudioSession`, so the claim there is
-    /// ownership bookkeeping and the speech bus does the arbitration.
-    /// `.playback` keeps a voice note audible with the hardware silent switch
-    /// on (a tapped note is intentional playback), `.spokenAudio` is Apple's
-    /// mode for spoken word, `.duckOthers` dips music rather than stopping it.
+    /// ownership bookkeeping and the speech bus does the arbitration. The
+    /// session's category, mode and options belong to `SpokenAudioSession`, the
+    /// one owner the chat read-aloud path shares: a voice note and a spoken
+    /// reply are the same kind of output, so two copies of that posture on one
+    /// shared session would only be free to drift. The THROW is this surface's
+    /// own policy and stays here — a card must not play blind behind a
+    /// swallowed activation error.
     private static func activateSharedSession() throws {
         #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-        try session.setActive(true, options: [])
+        try SpokenAudioSession.configureAndActivate()
         #endif
     }
 
     /// Best-effort by design: `setActive(false)` throws busy while another leg
     /// still holds audio I/O, which is precisely the case where releasing would
-    /// be wrong. `.notifyOthersOnDeactivation` un-ducks other apps' audio.
+    /// be wrong.
     private static func releaseSharedSession() {
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        try? SpokenAudioSession.deactivate()
         #endif
     }
 }

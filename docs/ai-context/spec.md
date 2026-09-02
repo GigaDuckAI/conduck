@@ -425,9 +425,9 @@ The hard part is not sending it, it is knowing when not to. "No gateway is confi
 
 ## Work is one desk, and nothing on it is sent
 
-Work is one desk per person, made by the first capture and never deleted. Every capture surface lands on it, and no code path leads from it to an AI. The Work/Chats shell preserves both sides' drafts; GigaAction defaults to Chat for installed-shortcut compatibility.
+Work is one desk per person, made by the first capture and never deleted. Every capture surface lands on it, and no code path leads from it to an AI. The Work/Chats shell preserves both drafts; GigaAction defaults to Chat for installed-shortcut compatibility.
 
-The desk lives in the person's own private iCloud, bytes included: a payload within `Constants.workboardSyncCeilingBytes` rides CloudKit as a blob row, anything larger stays in the device-local vault behind a reattach, and neither is durable until its bytes read back at the length written. One process imports a capture, renewing its claim throughout. A recapture repairs a bytes-less card and adopts one an older build parked under a per-capture owner when provenance and kind match. A voice note, in the app or from a Shortcut, is a playable card made durable before the speech hop, so a failed transcription costs the words and never the recording. External surfaces get disposable copies, never the vault's authoritative URL. Deploy model 16 to production CloudKit before release.
+The desk lives in the person's own private iCloud, bytes included: a payload within `Constants.workboardSyncCeilingBytes` rides CloudKit, anything larger stays in the device-local vault behind a reattach, and neither is durable until its bytes read back at the length written. One process imports a capture, renewing its claim throughout; a recapture repairs a bytes-less card. A voice note, in the app or from a Shortcut, is a playable card made durable before the speech hop, so a failed transcription costs the words and never the recording; a retry republishes a recording whose first write failed and degrades one to a note only when its card is gone. External surfaces get disposable copies, never the vault's authoritative URL. Deploy model 16 to production CloudKit before release.
 
 ---
 

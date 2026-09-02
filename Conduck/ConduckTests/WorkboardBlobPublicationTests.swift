@@ -265,13 +265,15 @@ final class WorkboardBlobPublicationTests: XCTestCase {
                        "the metadata the swap overwrote comes back with the lane")
     }
 
-    /// A card whose payload was a BLOB cannot be put back: retiring the old
-    /// blob rows is part of the swap's own transaction and their bytes are
-    /// gone. Pointing it back at the synced lane would leave it claiming a
-    /// payload nothing holds, which is worse than the unreadable leaf it names
-    /// — that one a reattach can replace. So the card keeps the new pointer and
-    /// the failure carries it.
-    func testAReattachOffTheSyncedLaneReportsTheCommittedCardItCannotRestore() async throws {
+    /// The same rule for a card whose payload was a BLOB, which is the harder
+    /// half: the swap points the rows at the vault, and the old blob rows are
+    /// the only copy of what the card had. They are therefore retired BEHIND
+    /// the swap rather than inside it — a lane change is two logical operations
+    /// — so a confirmation that refuses can put the card back on the synced
+    /// lane with its bytes still there. Deleting them in the swap's own
+    /// transaction would mean a reattach reported as FAILED had already
+    /// destroyed the payload it was replacing, account-wide.
+    func testAReattachOffTheSyncedLaneKeepsTheBlobItWasReplacing() async throws {
         let store = isolated.make()
         let payload = Data("the synced copy".utf8)
         let draft = WorkMaterialDraft(
@@ -302,11 +304,29 @@ final class WorkboardBlobPublicationTests: XCTestCase {
                 expectedOwnerRevision: WorkboardRevision.value(for: desk.updatedAt)
             )
             XCTFail("a replacement the vault cannot read back must be reported as failed")
-        } catch let failure as WorkMaterialCommittedUnavailableError {
-            XCTAssertEqual(failure.record.id, draft.id)
-            XCTAssertEqual(failure.record.storageMode, .localVault)
-            XCTAssertEqual(failure.record.availability, .unavailableOnThisDevice)
+        } catch WorkboardStoreError.materialPayloadUnavailable {
+            // The card was put back, so nothing is committed for a caller to
+            // adopt — an ordinary refusal, not a committed-but-unavailable one.
         }
+
+        let rows = await store._workMaterialRowsForTesting(id: draft.id)
+        XCTAssertEqual(Set(rows.compactMap(\.storageMode)), ["syncedPayload"],
+                       "the card names the lane it was on before the failed swap")
+        XCTAssertEqual(Set(rows.map(\.localVaultKey)), [nil])
+        XCTAssertEqual(Set(rows.compactMap(\.byteSize)), [Int64(payload.count)])
+        let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
+        XCTAssertEqual(blobs.count, 1,
+                       "the only surviving copy of the person's bytes is still in the payload store")
+        XCTAssertEqual(blobs.first?.contentHash, hex(payload))
+        let survived = try await store.loadWorkMaterialPayload(id: draft.id)
+        XCTAssertEqual(survived, payload)
+        let restoredValue = try await store
+            .fetchWorkItem(id: Constants.workboardDeskItemID)?.materials
+            .first { $0.id == draft.id }
+        let restored = try XCTUnwrap(restoredValue)
+        XCTAssertEqual(restored.availability, .synced)
+        XCTAssertEqual(restored.filename, "synced.txt",
+                       "the metadata the swap overwrote comes back with the lane")
 
         // Still repairable by the person: a reattach that CAN be proved lands.
         await store._setPublicationConfirmationHookForTesting(nil)

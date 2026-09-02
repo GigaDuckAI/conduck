@@ -231,13 +231,10 @@ struct WorkboardCaptureCanvas: View {
         if composerFocused { composerFocused = false }
     }
 
-    /// The desk's sync notice, and the whole of it. It is driven by ACCOUNT
-    /// state — signed out, restricted, storage full — because those are the only
-    /// states a person can act on and the only ones that hold for every card at
-    /// once. A failed sync EVENT is deliberately not a trigger: card metadata and
-    /// card bytes are mirrored from two separate stores, so the most recent
-    /// failure can concern one payload while the rest of the desk is syncing
-    /// normally, and a banner is a claim about all of it.
+    /// The desk's sync notice, and the whole of it. Both halves of it —
+    /// whether there is one, and what it says — belong to
+    /// `WorkboardSyncBannerPolicy`, which states the reasoning; this view only
+    /// draws what the policy answers.
     ///
     /// The dismissal is the same sticky per-outage flag the conversation list's
     /// banner uses, on purpose: the account is broken in one place, so saying so
@@ -245,8 +242,11 @@ struct WorkboardCaptureCanvas: View {
     /// charged again.
     @ViewBuilder
     private var deskSyncBanner: some View {
-        if syncMonitor.showsBanner, let reason = syncMonitor.unavailableReason {
-            ICloudUnavailableBanner(reason: reason) {
+        if let message = WorkboardSyncBannerPolicy.message(
+            showsBanner: syncMonitor.showsBanner,
+            reason: syncMonitor.unavailableReason
+        ) {
+            WorkboardSyncBanner(message: message) {
                 syncMonitor.dismissBanner()
             }
         }

@@ -65,6 +65,34 @@ private final class RequeueDuringClaimFileManager: FileManager, @unchecked Senda
     }
 }
 
+/// Fails the next move OUT of a claimed directory, once. A release cannot be
+/// made to fail on a healthy filesystem, and what the failure does to this
+/// instance's own bookkeeping — not the fault itself — is the behaviour under
+/// test. One-shot so that the reconciliation which has to recover the capture
+/// afterwards runs against a working filesystem.
+private final class ReleaseMoveFaultFileManager: FileManager, @unchecked Sendable {
+    private let lock = NSLock()
+    private var isArmed = false
+
+    func armNextReleaseToFail() {
+        lock.lock()
+        isArmed = true
+        lock.unlock()
+    }
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        lock.lock()
+        let shouldFail = isArmed
+            && srcURL.deletingLastPathComponent().lastPathComponent == "processing"
+        if shouldFail { isArmed = false }
+        lock.unlock()
+        guard !shouldFail else {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError)
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
+    }
+}
+
 /// Hands out a scripted sequence of claim generations, then reverts to fresh
 /// ones. Production mints a fresh UUID per attempt, which can never name a path
 /// that already exists, so aiming the claiming rename at an occupied
@@ -681,5 +709,107 @@ final class WorkCaptureInboxLeaseTests: XCTestCase {
         )
         XCTAssertEqual(lease.owner, inbox.ownerID)
         XCTAssertEqual(lease.generation, claim.generation)
+    }
+
+    // MARK: - A release that cannot land
+
+    /// Reconciliation skips every directory the local bookkeeping still names,
+    /// because a live import must never have its bytes requeued underneath it.
+    /// A token kept past the end of that import inverts the protection: the
+    /// capture becomes invisible to this process for the life of the process,
+    /// and no foreground retry can reach it. So a refused release ends this
+    /// instance's interest in the claim while leaving the directory alone.
+    func testAReleaseRefusedByACollisionStopsHidingTheClaimFromReconciliation() async throws {
+        let id = try writePublished()
+        let inbox = WorkCaptureInbox(baseURL: root)
+        let claimResult = try await inbox.claimNext(now: anchor)
+        let claim = try XCTUnwrap(claimResult)
+
+        // The same capture id is pending again while this one is claimed, so
+        // the release has nowhere to put its directory back.
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(id.uuidString, isDirectory: true),
+            withIntermediateDirectories: false
+        )
+        do {
+            try await inbox.release(claim)
+            XCTFail("A release must not overwrite a capture already sitting at its destination")
+        } catch {
+            XCTAssertEqual(error as? WorkCaptureInbox.InboxError, .filesystemFailure)
+        }
+
+        XCTAssertEqual(
+            try childNames(of: try claimedURL(for: id)),
+            ["manifest.json", "payload-000.pdf", WorkCaptureInbox.leaseFilename],
+            "the refusal moves nothing and strips nothing"
+        )
+
+        let judgedAt = anchor.addingTimeInterval(WorkCaptureInbox.staleClaimHorizon + 5)
+        let blocked = await inbox.reconcile(now: judgedAt)
+        XCTAssertEqual(
+            blocked.collisionCount, 1,
+            "a directory this instance still counted as its own would never be looked at"
+        )
+        XCTAssertEqual(blocked.releasedClaimCount, 0, "and it still may not overwrite the collision")
+
+        // Once the colliding publication is gone the SAME process recovers the
+        // capture, rather than it waiting for a relaunch.
+        try FileManager.default.removeItem(
+            at: root.appendingPathComponent(id.uuidString, isDirectory: true)
+        )
+        let recovered = await inbox.reconcile(now: judgedAt)
+        XCTAssertEqual(recovered.releasedClaimCount, 1)
+        let pending = try await inbox.pendingCount()
+        XCTAssertEqual(pending, 1)
+        let retakenResult = try await inbox.claimNext(now: judgedAt)
+        let retaken = try XCTUnwrap(retakenResult)
+        XCTAssertEqual(retaken.id, id, "and the bytes come back to a drainer intact")
+        XCTAssertNotEqual(retaken.generation, claim.generation)
+    }
+
+    /// The same rule for a transient I/O fault: the marker has already gone with
+    /// the release attempt, so the directory is markerless in processing and the
+    /// stale horizon is what decides. It has to be reachable to decide at all.
+    func testAReleaseWhoseMoveFailsLeavesTheBytesRecoverableByReconciliation() async throws {
+        let id = try writePublished()
+        let faults = ReleaseMoveFaultFileManager()
+        let inbox = WorkCaptureInbox(baseURL: root, fileManager: faults)
+        let claimResult = try await inbox.claimNext(now: anchor)
+        let claim = try XCTUnwrap(claimResult)
+
+        faults.armNextReleaseToFail()
+        do {
+            try await inbox.release(claim)
+            XCTFail("A release whose move cannot land must surface the fault")
+        } catch {
+            XCTAssertEqual(error as? WorkCaptureInbox.InboxError, .filesystemFailure)
+        }
+
+        let stranded = try claimedURL(for: id)
+        XCTAssertEqual(
+            try childNames(of: stranded),
+            ["manifest.json", "payload-000.pdf"],
+            "the marker went with the release attempt; the capture did not"
+        )
+        XCTAssertEqual(
+            try Data(
+                contentsOf: stranded.appendingPathComponent("payload-000.pdf", isDirectory: false)
+            ),
+            Data("test".utf8),
+            "the queue still holds the only copy of the shared file"
+        )
+        let pendingAfterFailure = try await inbox.pendingCount()
+        XCTAssertEqual(pendingAfterFailure, 0, "the release really did not land")
+
+        let judgedAt = anchor.addingTimeInterval(WorkCaptureInbox.staleClaimHorizon + 5)
+        let report = await inbox.reconcile(now: judgedAt)
+        XCTAssertEqual(report.releasedClaimCount, 1)
+        XCTAssertFalse(report.encounteredFilesystemFailure)
+        let pending = try await inbox.pendingCount()
+        XCTAssertEqual(pending, 1)
+        let retakenResult = try await inbox.claimNext(now: judgedAt)
+        let retaken = try XCTUnwrap(retakenResult)
+        XCTAssertEqual(retaken.id, id)
+        XCTAssertNotEqual(retaken.generation, claim.generation)
     }
 }

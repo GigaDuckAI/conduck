@@ -8,10 +8,11 @@
 // share-sheet capture, a menu-bar capture and a GigaAction voice note all land
 // on `Constants.workboardDeskItemID` through `ConversationStore.upsertDeskMaterial`,
 // and `targetWorkItemID` — which the share extension cannot resolve from its
-// sandbox anyway — is carried by the envelope but never honoured here. Envelope
-// and entry UUIDs are reused as database identities, so a crash after any
-// individual write is repaired by replay rather than by making a second
-// material.
+// sandbox anyway — is never honoured as a destination: it is carried into the
+// desk write as evidence only, naming the item a build before the single desk
+// could have appended these same rows onto. Envelope and entry UUIDs are reused
+// as database identities, so a crash after any individual write is repaired by
+// replay rather than by making a second material.
 //
 // Two rules protect the bytes, because until a claim is acknowledged the queue
 // holds the only copy of a shared file. A claim is acknowledged only once every
@@ -216,11 +217,10 @@ actor WorkCaptureDrainer {
                     sourceDevice: sourceDevice,
                     createdAt: envelope.createdAt
                 ),
-                // A pre-desk drain of this same envelope minted an item of its
-                // own and recorded the envelope on it. Naming the envelope is
-                // what licenses the desk write to re-home those rows; without
-                // it a matching id is refused.
-                legacyProvenance: .captureEnvelope(envelope.id)
+                // Naming what a pre-desk drain of this same envelope could have
+                // written is what licenses the desk write to re-home those
+                // rows; without it a matching id is refused.
+                legacyProvenance: Self.legacyProvenance(of: envelope)
             )
             materialIDs.append(note.id)
         }
@@ -247,13 +247,13 @@ actor WorkCaptureDrainer {
                     draft,
                     sourceFileURL: payloadURL,
                     sourceFileByteSize: byteSize,
-                    legacyProvenance: .captureEnvelope(envelope.id)
+                    legacyProvenance: Self.legacyProvenance(of: envelope)
                 )
                 payloadBearingIDs.insert(record.id)
             } else {
                 record = try await store.upsertDeskMaterial(
                     draft,
-                    legacyProvenance: .captureEnvelope(envelope.id)
+                    legacyProvenance: Self.legacyProvenance(of: envelope)
                 )
             }
             materialIDs.append(record.id)
@@ -352,10 +352,12 @@ actor WorkCaptureDrainer {
             return persisted
         } catch {
             // Best effort is deliberately only for the ownership rollback. The
-            // original persistence error remains the useful diagnosis; a failed
-            // release is repaired by `reconcile` after relaunch. A claim proven
-            // lost is released by nobody: requeueing a directory another
-            // acquisition holds would hand away bytes it is reading.
+            // original persistence error remains the useful diagnosis; a release
+            // that cannot land abandons its own claim inside the inbox, so
+            // `reconcile` can recover the directory without waiting for a
+            // relaunch. A claim proven lost is released by nobody: requeueing a
+            // directory another acquisition holds would hand away bytes it is
+            // reading.
             if await ownership.endImport() {
                 try? await inbox.release(claim)
             }
@@ -437,6 +439,19 @@ actor WorkCaptureDrainer {
     }
 
     // MARK: - Deterministic capture mapping
+
+    /// What a replay of this envelope may re-home. A pre-desk drain had two
+    /// destinations: with no chosen target it minted a Work item of its own and
+    /// recorded the envelope on it, and with one it appended straight onto the
+    /// item the person picked, writing nothing on that owner row. The envelope
+    /// id accounts for the first; only the envelope's own `targetWorkItemID`
+    /// accounts for the second, which is why the target the drainer never
+    /// honours as a destination is still carried here as evidence.
+    private static func legacyProvenance(
+        of envelope: WorkCaptureEnvelope
+    ) -> WorkMaterialLegacyProvenance {
+        .captureEnvelope(envelope.id, legacyTargetWorkItemID: envelope.targetWorkItemID)
+    }
 
     private static func entryOrder(
         _ lhs: WorkCaptureEnvelope.Entry,

@@ -8,7 +8,7 @@
 // `defaultValue:` at runtime, so a guard that resolves the string proves
 // nothing about the row that ships.
 //
-// Three rules, each of which held false copy in front of a user before it
+// Four rules, each of which held false copy in front of a user before it
 // existed:
 //
 // (1) VOCABULARY. Work opens, keeps and removes; it never sends, dispatches,
@@ -18,7 +18,12 @@
 // `Constants.workboardSyncCeilingBytes` in the device-local vault behind a
 // reattach, so the tutorial's sync line must name that lane instead of
 // promising every byte on every device.
-// (3) BOTH DIRECTIONS OF THE CATALOG. A key referenced in source with no row
+// (3) TWO SURFACES WHOSE COPY IS ONLY TRUE KEY BY KEY. The voice sheet is the
+// one Work surface with an outbound destination — the speech provider the
+// person configured — so it must name it instead of denying it; the desk's
+// sync banner speaks about cards, because the shared Chat rows it would
+// otherwise borrow speak about conversations.
+// (4) BOTH DIRECTIONS OF THE CATALOG. A key referenced in source with no row
 // renders from its `defaultValue:` and can never be translated; a row no
 // source references is dead weight that outlives the surface it was written
 // for. Neither is visible in a diff.
@@ -47,6 +52,24 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
         "nothing is sent",
         "nothing was sent",
         "nothing has been sent"
+    ]
+
+    /// The Work strings whose lane DOES have an outbound hop, for which the
+    /// promise above is not stripped — the vocabulary rule has to see the word.
+    /// A recording handed to the voice sheet is transcribed by whichever
+    /// speech provider the person configured, and `STTClient`'s provider table
+    /// is mostly cloud vendors, so on every configuration but Apple's
+    /// on-device engine the audio leaves the device. `testTheVoiceSheetNames…`
+    /// below states the positive form of the same rule.
+    private static let outboundHopKeys: Set<String> = ["workboard.voice.privacy"]
+
+    /// The desk's own sync notice. Three rows, one per actionable account
+    /// state, kept separate from `sync.icloud.banner.*` because those say
+    /// "conversations" and the desk holds cards.
+    private static let deskSyncBannerKeys = [
+        "workboard.sync.banner.noAccount",
+        "workboard.sync.banner.restricted",
+        "workboard.sync.banner.quotaExceeded"
     ]
 
     private static let retiredWords = [
@@ -102,8 +125,10 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
             guard !Self.chatLaneKeys.contains(key), let value = englishValue(entry) else { continue }
 
             var scanned = value.lowercased()
-            for phrase in Self.inertnessPhrases {
-                scanned = scanned.replacingOccurrences(of: phrase, with: " ")
+            if !Self.outboundHopKeys.contains(key) {
+                for phrase in Self.inertnessPhrases {
+                    scanned = scanned.replacingOccurrences(of: phrase, with: " ")
+                }
             }
             let words = Set(scanned.split(whereSeparator: { !$0.isLetter }).map(String.init))
             let offenders = words.intersection(Self.retiredWords).sorted()
@@ -113,6 +138,67 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
                 "\(key) says \(offenders.joined(separator: ", ")): \(value)\n"
                     + "Work opens, keeps and removes. It has no gateway API, so a Work "
                     + "string may not describe sending, dispatching, or a draft."
+            )
+        }
+    }
+
+    /// The voice sheet is the one Work surface with a destination, so its
+    /// privacy line has to name that destination rather than deny it. The
+    /// inertness phrases are checked on the RAW value: the vocabulary scan
+    /// above deliberately stops exempting this key, and this is the assertion
+    /// that says why in the failure message.
+    func testTheVoiceSheetNamesTheSpeechProviderRatherThanPromisingInertness() throws {
+        let strings = try catalogStrings()
+        let value = try XCTUnwrap(
+            englishValue(try XCTUnwrap(strings["workboard.voice.privacy"])),
+            "the voice sheet's privacy line must carry an English value"
+        )
+        let lowered = value.lowercased()
+
+        for phrase in Self.inertnessPhrases {
+            XCTAssertFalse(
+                lowered.contains(phrase),
+                "the recording is handed to the speech provider the person configured, and "
+                    + "STTClient's table is mostly cloud vendors, so this line may not promise "
+                    + "that nothing is sent: \(value)"
+            )
+        }
+        XCTAssertFalse(
+            lowered.contains("nothing leaves"),
+            "same rule, said the other way round: \(value)"
+        )
+        XCTAssertTrue(
+            lowered.contains("speech provider"),
+            "the line has to name where the audio actually goes: \(value)"
+        )
+    }
+
+    /// The desk banner's three rows. They exist because the shared
+    /// `sync.icloud.banner.*` copy says "conversations" and the surface
+    /// rendering it is a desk of cards; a row that drifts back to the Chat
+    /// word puts a claim about the wrong data in front of the reader.
+    func testTheDeskSyncBannerSpeaksAboutCardsRatherThanConversations() throws {
+        let strings = try catalogStrings()
+
+        for key in Self.deskSyncBannerKeys {
+            let value = try XCTUnwrap(
+                englishValue(try XCTUnwrap(strings[key], "\(key) has no catalog row")),
+                "\(key) must carry an English value"
+            )
+            let lowered = value.lowercased()
+
+            XCTAssertTrue(
+                lowered.contains("card"),
+                "\(key) is the DESK's banner and has to name what the desk holds: \(value)"
+            )
+            XCTAssertFalse(
+                lowered.contains("conversation"),
+                "\(key) renders over a board of cards; only the Chat rows may say "
+                    + "conversations: \(value)"
+            )
+            XCTAssertTrue(
+                lowered.contains("icloud"),
+                "\(key) has to name the account the person can actually go and fix: \(value)"
             )
         }
     }

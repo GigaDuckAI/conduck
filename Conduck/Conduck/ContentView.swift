@@ -288,10 +288,6 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
                 consumeGatewayFixRoute()
             }
-            .onReceive(NotificationCenter.default.publisher(for: .openPersonalAISettings)) { _ in
-                guard settingsRoute == nil else { return }
-                settingsRoute = SettingsRoute(category: .personalAI)
-            }
             .onAppear { consumeGatewayFixRoute() }
         } else {
             phoneLayout
@@ -671,12 +667,6 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
                 consumeGatewayFixRoute()
             }
-            #if os(iOS)
-            .onReceive(NotificationCenter.default.publisher(for: .openPersonalAISettings)) { _ in
-                guard settingsRoute == nil else { return }
-                settingsRoute = SettingsRoute(category: .personalAI)
-            }
-            #endif
             .onAppear { consumeGatewayFixRoute() }
             #if os(iOS)
             .onChange(of: detailVM?.isAwaitingReply) { old, new in
@@ -1467,6 +1457,20 @@ struct ContentView: View {
             return
         }
 
+        // A Work capture whose WORDS are already parked owes the desk a write
+        // and nothing else: recognition succeeded and only that write failed.
+        // Everything between here and the upload — the key verdict, the staged
+        // file, the provider round trip — would be spent buying an answer this
+        // record already carries, and a key removed since would refuse a retry
+        // that needs none. This one finishes with no network at all.
+        if pending.metadata.resolvedDestination == .work,
+           let parked = pending.metadata.transcript?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !parked.isEmpty {
+            await finishWorkRetry(pending, transcript: parked)
+            return
+        }
+
         // ATOMIC snapshot — (presetID, apiKey, provider, customModel,
         // customConfig) in one actor hop, mirroring `DictationService.retryLast`.
         // The old `getAPIKey()` + bare `lookup` pair both raced a concurrent
@@ -1526,8 +1530,16 @@ struct ContentView: View {
         // (STTClient owns that file's lifecycle), so transcribing from that
         // path again failed on EVERY Retry tap. The App-Group copy in
         // `pending.audioData` is the real payload (mirrors retryLast).
+        //
+        // The container is read off those bytes rather than assumed: both
+        // capture lanes preserve COMPRESSED audio and `AudioCompressor` can
+        // return WAV, so a fixed `.m4a` name tells a provider something untrue
+        // about its own input and the stricter ones refuse it.
         let retryAudioURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("conduck_retry_\(UUID().uuidString).m4a")
+            .appendingPathComponent(
+                "conduck_retry_\(UUID().uuidString)"
+                + ".\(PendingRetryAudioFile.extension(for: pending.audioData))"
+            )
         do {
             try pending.audioData.write(to: retryAudioURL, options: [.atomic])
         } catch {
@@ -1551,72 +1563,20 @@ struct ContentView: View {
                 return
             }
 
+            // Work records take the desk lane and never reach a gateway from
+            // this surface, so they leave here rather than falling through to
+            // the converse path below. The release of the durable record is
+            // theirs to decide, not this method's: it happens only on an
+            // outcome that says a card now holds the words.
             if pending.metadata.resolvedDestination == .work {
-                // A GigaAction capture can also carry a screenshot, and the
-                // retry record holds the only copy until it lands. Publish it
-                // FIRST, under an id derived from the capture's — the capture id
-                // itself names the recording, and a screenshot published there
-                // is answered by the recording and silently dropped. Both halves
-                // are idempotent, so a capture recovered twice still has one
-                // picture.
-                if let screenshot = pending.workImageData {
-                    _ = try await WorkVoiceScreenshotCoordinator.publish(
-                        screenshot,
-                        forCapture: pending.metadata.id,
-                        createdAt: pending.metadata.createdAt
-                    )
-                }
-                // The recording became its own card before transcription was
-                // attempted, under this same capture id. Repair THAT card: the
-                // recording is the material and the words belong on it, so
-                // publishing them as a second, note-shaped capture would put one
-                // utterance on the board twice and leave the recording beside it
-                // still untranscribed. `.recordingMissing` and `.notAudio` mean
-                // this capture owns no recording card, and only then is the
-                // note-shaped publication how the words land — under a derived
-                // id, so the desk cannot answer it with a card already standing
-                // at the capture's own.
-                //
-                // A THROW is a different fact: the store refused the write, so
-                // the words are stored nowhere. It must reach the catch below
-                // with the retry INTACT — collapsing it into "there was no
-                // recording" publishes a note the desk answers with the
-                // recording, and the clear beneath deletes the only copy of the
-                // audio those words came from.
-                switch try await WorkVoiceCaptureCoordinator.attachTranscript(
-                    recoveredTranscript,
-                    toRecording: pending.metadata.id
-                ) {
-                case .attached:
-                    break
-                case .recordingMissing, .notAudio:
-                    _ = try await WorkCaptureRetryCoordinator.publish(
-                        transcript: recoveredTranscript,
-                        rawImageData: nil,
-                        captureID: WorkVoiceCaptureCoordinator.fallbackNoteID(
-                            forCapture: pending.metadata.id
-                        ),
-                        createdAt: pending.metadata.createdAt
-                    )
-                }
+                await finishWorkRetry(pending, transcript: recoveredTranscript)
+                return
             }
 
-            _ = await PendingRetryStore.shared.clear(ifCurrentID: pending.metadata.id)
-            PendingRetryGuard.cancelDeferredNotification(for: pending.metadata.id)
-
-            let newerRetryIsPending = await PendingRetryStore.shared.hasPending()
-            pendingRetryErrorCode = newerRetryIsPending
-                ? await PendingRetryStore.shared.pendingErrorCode()
-                : nil
-            pendingRetryIsRetryable = true
-            withAnimation { hasPendingRetry = newerRetryIsPending }
-            if pending.metadata.resolvedDestination == .chat {
-                // Legacy and explicit Chat records continue into the established
-                // converse path. Work records have already crossed their inert,
-                // deterministic publication boundary above and never reach a
-                // gateway from this retry surface.
-                _ = await sendTurn(recoveredTranscript)
-            }
+            await releasePendingRetry(id: pending.metadata.id)
+            // Legacy and explicit Chat records continue into the established
+            // converse path.
+            _ = await sendTurn(recoveredTranscript)
 
         } catch let error as AppError {
             let stillOwnsRetry = await PendingRetryStore.shared.updateAttemptIfCurrent(
@@ -1659,6 +1619,78 @@ struct ContentView: View {
                 presentRetryError(String(localized: "Couldn't send — try again in a minute."))  // xcstrings
             }
         }
+    }
+
+    /// Everything this surface does to the desk with a recovered Work capture,
+    /// and the only place it does it — reached both by a retry that had to buy
+    /// its words and by one whose words were already parked.
+    ///
+    /// The desk decision itself is not taken here. `recover` owns it, because
+    /// the question — attach, republish then attach, or write the words beside
+    /// a card that is gone — is answered from the record's own publication
+    /// verdict, which this surface cannot observe: an id naming no card is
+    /// either a publication the desk refused or a card a person deleted while
+    /// recognition was in flight, and they call for opposite acts. Duplicating
+    /// that decision at each surface is how one of them started resurrecting
+    /// deleted cards while another dropped the words.
+    ///
+    /// The release of the durable record sits BELOW the recovery and inside the
+    /// same `do`, so a store that refused the write skips it and the recording
+    /// survives to be recovered again — and a non-terminal outcome keeps it too.
+    @MainActor
+    private func finishWorkRetry(
+        _ pending: (audioData: Data, metadata: PendingRetryMetadata, workImageData: Data?),
+        transcript: String
+    ) async {
+        do {
+            // A GigaAction capture can also carry a screenshot, and the retry
+            // record holds the only copy until it lands. Publish it FIRST,
+            // under an id derived from the capture's — the capture id itself
+            // names the recording, and a screenshot published there is answered
+            // by the recording and silently dropped. Both halves are
+            // idempotent, so a capture recovered twice still has one picture.
+            if let screenshot = pending.workImageData {
+                _ = try await WorkVoiceScreenshotCoordinator.publish(
+                    screenshot,
+                    forCapture: pending.metadata.id,
+                    createdAt: pending.metadata.createdAt
+                )
+            }
+            let outcome = try await WorkVoiceCaptureCoordinator.recover(
+                PendingRetryRecord(pending),
+                transcript: transcript
+            )
+            guard outcome.isTerminal else {
+                presentRetryError(String(
+                    localized: "workboard.capture.retry.voice.message",
+                    defaultValue: "Couldn't add this recording to Work. Try again."
+                ))
+                return
+            }
+            await releasePendingRetry(id: pending.metadata.id)
+        } catch {
+            presentRetryError(String(
+                localized: "workboard.capture.retry.voice.message",
+                defaultValue: "Couldn't add this recording to Work. Try again."
+            ))
+        }
+    }
+
+    /// Retire the durable record a completed capture no longer needs, and
+    /// re-read the card's state from whatever is left in the single slot — a
+    /// newer capture may have taken it while this one was in flight, and its
+    /// diagnosis is the one the card must show.
+    @MainActor
+    private func releasePendingRetry(id: UUID) async {
+        _ = await PendingRetryStore.shared.clear(ifCurrentID: id)
+        PendingRetryGuard.cancelDeferredNotification(for: id)
+
+        let newerRetryIsPending = await PendingRetryStore.shared.hasPending()
+        pendingRetryErrorCode = newerRetryIsPending
+            ? await PendingRetryStore.shared.pendingErrorCode()
+            : nil
+        pendingRetryIsRetryable = true
+        withAnimation { hasPendingRetry = newerRetryIsPending }
     }
 
     /// Show the retry card's secondary error line.

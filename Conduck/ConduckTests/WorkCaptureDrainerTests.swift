@@ -16,6 +16,12 @@ import XCTest
 final class WorkCaptureDrainerTests: XCTestCase {
     private var root: URL!
 
+    /// Every store here mints a vault directory of its own that nothing else
+    /// removes, and the attachment cases write real payload leaves into them;
+    /// the fixture empties them when the class is done. No case leaves a task
+    /// running, so teardown cannot race a vault operation.
+    private let isolated = IsolatedWorkStores()
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         root = FileManager.default.temporaryDirectory
@@ -23,10 +29,11 @@ final class WorkCaptureDrainerTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
+        await isolated.cleanUp()
         if let root { try? FileManager.default.removeItem(at: root) }
         root = nil
-        try super.tearDownWithError()
+        try await super.tearDown()
     }
 
     // MARK: - Everything lands on the desk
@@ -35,7 +42,7 @@ final class WorkCaptureDrainerTests: XCTestCase {
     /// envelope carries no target and the store holds nothing at all, and the
     /// note still has to become a visible card: it is the whole capture.
     func testTheFirstTargetlessCaptureBecomesAMaterialOnAFreshDesk() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let before = try await store.fetchWorkItems()
         XCTAssertTrue(before.isEmpty, "nothing exists before the first capture")
 
@@ -64,7 +71,7 @@ final class WorkCaptureDrainerTests: XCTestCase {
     /// Two targetless captures from different surfaces converge on one desk
     /// rather than each minting a board of their own.
     func testCapturesFromDifferentSurfacesShareTheOneDesk() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let fromShareSheet = WorkCaptureEnvelope(
             note: "From the share sheet",
             source: .shareExtension,
@@ -87,7 +94,7 @@ final class WorkCaptureDrainerTests: XCTestCase {
     /// this small is within the sync ceiling, so it rides private CloudKit
     /// rather than staying in the device-local vault.
     func testTheNoteAndEveryAttachmentLandOnTheDeskTogether() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("the shared screenshot".utf8)
         let imageID = UUID()
         let textID = UUID()
@@ -127,7 +134,7 @@ final class WorkCaptureDrainerTests: XCTestCase {
     /// cannot be taught the desk from its sandbox, but nothing honours it: an
     /// item that still exists is left exactly as it was.
     func testANamedTargetIsIgnoredAndLeftUntouched() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let other = try await store.createWorkItem(WorkItemDraft(content: WorkItemContent(
             title: "Launch",
             objective: "Prepare the launch plan",
@@ -160,7 +167,7 @@ final class WorkCaptureDrainerTests: XCTestCase {
     /// takes the one path every capture takes, and no item is minted to carry
     /// the envelope.
     func testAnUnknownTargetStillLandsOnTheDesk() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let envelope = WorkCaptureEnvelope(
             note: "Keep this idea",
             source: .shareExtension,
@@ -183,7 +190,7 @@ final class WorkCaptureDrainerTests: XCTestCase {
     // MARK: - Replay
 
     func testReplayingTheSameEnvelopeYieldsOneMaterialSet() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let entryID = UUID()
         let envelope = WorkCaptureEnvelope(
             note: "Append once",
@@ -207,8 +214,57 @@ final class WorkCaptureDrainerTests: XCTestCase {
         XCTAssertEqual(desk.materials.count, 2, "replay repairs the same cards, it never adds more")
     }
 
+    /// The upgrade shape a build before the single desk left behind when the
+    /// person picked a destination: the drain appended straight onto the item
+    /// they chose and wrote nothing on that owner row, so the envelope id names
+    /// nothing there. Only the envelope's own target accounts for those rows,
+    /// which is why the drainer carries a target it never honours as a
+    /// destination — without it the replay is refused on every attempt for ever
+    /// and the capture can never be acknowledged.
+    func testAPartiallyDrainedTargetedCaptureReplaysOntoTheDesk() async throws {
+        let store = isolated.make()
+        let entryID = UUID()
+        let chosen = try await store.createWorkItem(WorkItemDraft(content: WorkItemContent(
+            title: "Launch",
+            objective: "Prepare the launch plan"
+        )))
+        // What the pre-desk drain wrote: the entry's own id, under the item the
+        // person selected, with the owner row left as it was.
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                id: entryID,
+                kind: .note,
+                title: "Shared text",
+                textContent: "One source",
+                storageMode: .metadataOnly
+            ),
+            to: chosen.id
+        )
+        let envelope = WorkCaptureEnvelope(
+            note: "Compare this with the plan",
+            source: .shareExtension,
+            targetWorkItemID: chosen.id,
+            entries: [.init(id: entryID, kind: .text, sequence: 0, text: "One source")]
+        )
+        try publish(envelope)
+
+        let report = try await makeDrainer(store: store).drainAvailableCaptures()
+
+        XCTAssertEqual(report.replayedCaptureCount + report.importedCaptureCount, 1,
+                       "the replay completes rather than being refused")
+        let desk = try await unwrapDesk(store)
+        XCTAssertEqual(Set(desk.materials.map(\.id)), [envelope.id, entryID],
+                       "the stranded card is re-homed onto the desk beside the note")
+        let leftBehindValue = try await store.fetchWorkItem(id: chosen.id)
+        let leftBehind = try XCTUnwrap(leftBehindValue)
+        XCTAssertTrue(leftBehind.materials.isEmpty,
+                      "and it is re-homed, not copied")
+        let pending = try await WorkCaptureInbox(baseURL: root).pendingCount()
+        XCTAssertEqual(pending, 0, "a capture that can never adopt can never be acknowledged")
+    }
+
     func testNoteIdentityNeverMasksAnEntryThatUsesTheEnvelopeID() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let envelopeID = UUID()
         let envelope = WorkCaptureEnvelope(
             id: envelopeID,
@@ -234,7 +290,7 @@ final class WorkCaptureDrainerTests: XCTestCase {
     /// Acknowledgement is the only thing that deletes a capture's bytes, so it
     /// runs after — never before — the materials read back out of the store.
     func testTheQueueIsConsumedOnlyOnceTheMaterialsReadBackFromTheStore() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("bytes the queue may only drop afterwards".utf8)
         let envelope = WorkCaptureEnvelope(
             note: "With an attachment",
@@ -275,7 +331,7 @@ final class WorkCaptureDrainerTests: XCTestCase {
     /// Swapping those two calls destroys a person's shared file on any transient
     /// write failure, and every other test here takes a path that succeeds.
     func testAPersistenceFailureReleasesTheClaimAndPreservesItsPayload() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
 
         let payload = Data("shared bytes that must survive".utf8)
         let unreadable = Data("bytes the store cannot read".utf8)

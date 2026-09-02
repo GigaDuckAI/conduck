@@ -452,6 +452,24 @@ final class WorkboardLiveRepository {
                 expectedOwnerRevision: expectedDeskRevision,
                 onProgress: onProgress
             )
+        } catch let committed as WorkMaterialCommittedUnavailableError {
+            // The card COMMITTED; only its bytes could not be proved readable
+            // afterwards, and it is on the desk reading unavailable. Reporting
+            // that as a failed import is what makes the person drop the same
+            // file again — and every drop mints a FRESH material id, so the
+            // repeat publishes a SECOND card beside the unreadable one instead
+            // of repairing it. The desk is returned with the committed card on
+            // it; the card's own availability is what says the bytes have not
+            // landed, and a reattach onto that card is the repair.
+            guard let refreshed = try await store.fetchWorkItem(
+                id: Constants.workboardDeskItemID
+            ), refreshed.materials.contains(where: { $0.id == committed.record.id }) else {
+                // The card the error carries is not on the desk after all, so
+                // there is nothing for the caller to adopt: this really is a
+                // failed import.
+                throw committed
+            }
+            return await snapshot(for: refreshed)
         } catch {
             if case WorkboardStoreError.staleRevision = error {
                 throw WorkboardLiveRepositoryError.staleDraft

@@ -4,9 +4,14 @@
 // PendingRetryStore.swift
 //
 // The retry record deliberately carries only the information needed to recover
-// the exact capture. The optional destination is additive: records written by
-// older releases decode as Chat, while Work captures can never fall through to
-// a gateway retry lane.
+// the exact capture. Every field beyond the original six is OPTIONAL on the
+// wire, and a record written by an older release decodes them as nil: the
+// destination decodes as Chat, so a Work capture can never fall through to a
+// gateway retry lane; the transcript decodes as "the words are still owed"; and
+// the publication state decodes as "unknown", which a Work recovery must treat
+// conservatively rather than as evidence either way. That is the only shape
+// change this record may ever take — a required field would strand every
+// recording already parked on a device mid-upgrade.
 //
 // Storage layout (App Groups, shared with Watch + Widget targets):
 //   pending_retry_audio_<destination>_<id>.m4a (raw AAC bytes; `.complete`)
@@ -19,15 +24,34 @@
 import Foundation
 import Darwin
 
-enum PendingRetryDestination: String, Codable, CaseIterable, Sendable {
+nonisolated enum PendingRetryDestination: String, Codable, CaseIterable, Sendable {
     case chat
     case work
+}
+
+/// What is known about a Work capture's PHASE ONE — the publication that puts
+/// the recording on the desk as a playable card before speech recognition is
+/// attempted — at the moment its retry was armed.
+///
+/// Optional on the wire: a record written before this existed decodes as nil,
+/// and nil means UNKNOWN. A recovery must never read it as proof that phase one
+/// landed, because the two states it cannot distinguish call for opposite acts —
+/// republishing a recording the desk never held, and honouring a card a person
+/// deleted while recognition was in flight.
+nonisolated enum PendingRetryPublicationState: String, Codable, Sendable {
+    /// The recording is a card on the desk under the capture id. An id that
+    /// names no card later is therefore a deletion, and the words belong beside
+    /// it rather than on a resurrected recording.
+    case published
+    /// The desk refused the recording. These bytes are the only copy of it, so
+    /// a recovery republishes the card under the capture id before attaching.
+    case phaseOneFailed
 }
 
 /// Metadata describing a pending retry audio file. Destination is optional on
 /// the wire for backwards compatibility; nil means Chat for every record made
 /// before Work existed.
-struct PendingRetryMetadata: Codable, Sendable {
+nonisolated struct PendingRetryMetadata: Codable, Sendable {
     /// Stable identifier for this pending retry. Useful for logging /
     /// diagnostics; not a primary key in any storage layer.
     let id: UUID
@@ -58,6 +82,20 @@ struct PendingRetryMetadata: Codable, Sendable {
     /// six-field records remain decodable without a migration.
     let destination: PendingRetryDestination?
 
+    /// The words this capture already produced, when recognition succeeded and
+    /// only the write onto the card failed. Optional for the same reason
+    /// `destination` is: records encoded before it existed decode as nil.
+    ///
+    /// Present means the provider has already been paid for these bytes, so a
+    /// recovery attaches these words instead of buying the same answer twice.
+    /// Nil means the words are still owed and the recovery must transcribe.
+    let transcript: String?
+
+    /// What is known about the recording's own publication, so a recovery can
+    /// tell "the desk never held this" from "somebody deleted it". Optional and
+    /// nil-means-unknown; see `PendingRetryPublicationState`.
+    let publicationState: PendingRetryPublicationState?
+
     var resolvedDestination: PendingRetryDestination { destination ?? .chat }
 
     init(
@@ -67,7 +105,9 @@ struct PendingRetryMetadata: Codable, Sendable {
         preferredLanguage: String?,
         attemptCount: Int,
         lastErrorCode: Int?,
-        destination: PendingRetryDestination? = nil
+        destination: PendingRetryDestination? = nil,
+        transcript: String? = nil,
+        publicationState: PendingRetryPublicationState? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -76,6 +116,8 @@ struct PendingRetryMetadata: Codable, Sendable {
         self.attemptCount = attemptCount
         self.lastErrorCode = lastErrorCode
         self.destination = destination
+        self.transcript = transcript
+        self.publicationState = publicationState
     }
 
     /// 10-minute TTL — anything older is considered stale and should be
@@ -85,11 +127,79 @@ struct PendingRetryMetadata: Codable, Sendable {
     }
 }
 
+/// What a retry surface recovered from the slot, reduced to the two things a
+/// Work recovery needs: which capture this is, and the bytes it parked. It is a
+/// value rather than the loader's tuple so a recovery cannot be handed a
+/// screenshot it has no business publishing, and the tuple initializer exists so
+/// a surface passes what `PendingRetryStore.load()` already gave it.
+nonisolated struct PendingRetryRecord: Sendable {
+    let metadata: PendingRetryMetadata
+    let audio: Data
+
+    init(metadata: PendingRetryMetadata, audio: Data) {
+        self.metadata = metadata
+        self.audio = audio
+    }
+
+    init(_ loaded: (audioData: Data, metadata: PendingRetryMetadata, workImageData: Data?)) {
+        self.init(metadata: loaded.metadata, audio: loaded.audioData)
+    }
+}
+
+/// Metadata-only view of whatever currently owns the single retry slot: which
+/// capture, which lane, and whether that capture's audio exists anywhere but
+/// here. A capture surface reads it BEFORE arming, so it can decline to evict a
+/// record that holds the only copy of a recording.
+nonisolated struct PendingRetrySlot: Sendable, Equatable {
+    let id: UUID
+    let destination: PendingRetryDestination
+    let publicationState: PendingRetryPublicationState?
+
+    /// True only for a Work capture whose recording is already a card on the
+    /// desk. Displacing such a record costs its transcript; displacing any
+    /// other costs the recording itself, which nothing can give back.
+    var hasDurableRecording: Bool {
+        destination == .work && publicationState == .published
+    }
+}
+
+/// Names the temporary file a retry surface writes recovered bytes to.
+///
+/// Both capture lanes preserve COMPRESSED bytes and `AudioCompressor` can
+/// return WAV, so the container is read off the bytes rather than assumed: a
+/// provider handed a `.m4a` name over RIFF is being told something untrue about
+/// its own input, and the stricter ones refuse it.
+enum PendingRetryAudioFile {
+    /// File extension WITHOUT the leading dot, for the bytes as they actually
+    /// are.
+    static func `extension`(for bytes: Data) -> String {
+        SourceAudioContainer.sniff(bytes).fileExtension
+    }
+}
+
+/// The three things a capture surface does to the single retry slot, named as
+/// one seam. It exists so a capture surface's OWN rules — which capture it
+/// arms, which it releases, and which incumbent it refuses to evict — can be
+/// asserted without writing to the process-global App-Group file that every
+/// other capture test in the bundle shares.
+nonisolated protocol PendingRetrySlotWriting: Sendable {
+    func save(
+        audioData: Data,
+        metadata: PendingRetryMetadata,
+        workImageData: Data?
+    ) async throws
+
+    @discardableResult
+    func clear(ifCurrentID id: UUID) async -> Bool
+
+    func currentSlot() async -> PendingRetrySlot?
+}
+
 /// Persists a single pending audio retry across app launches, so a network
 /// failure during in-app transcription leaves the user with a retry button
 /// rather than a lost recording. Singleton actor — concurrent callers
 /// serialize on the actor.
-actor PendingRetryStore {
+actor PendingRetryStore: PendingRetrySlotWriting {
     static let shared = PendingRetryStore()
 
     private init() { }
@@ -301,6 +411,27 @@ actor PendingRetryStore {
         }
     }
 
+    /// Who owns the slot right now — capture, lane, and whether that capture's
+    /// recording exists anywhere but here. Metadata only: no audio is loaded,
+    /// because the caller is deciding whether it may WRITE, not reading a
+    /// recording back. Mirrors `hasPending()`'s lazy-expiry purge; nil = nothing
+    /// pending.
+    func currentSlot() async -> PendingRetrySlot? {
+        let defaults = defaults
+        return try? withExclusiveLock {
+            guard let metadata = decodedMetadata(from: defaults) else { return nil }
+            if metadata.isExpired {
+                clearLocked(metadata: metadata, defaults: defaults)
+                return nil
+            }
+            return PendingRetrySlot(
+                id: metadata.id,
+                destination: metadata.resolvedDestination,
+                publicationState: metadata.publicationState
+            )
+        }
+    }
+
     /// Purge any pending retry whose metadata's `isExpired` is true. Called
     /// from `ConduckApp` on launch (privacy: don't leave stale audio
     /// sitting in App Groups storage indefinitely).
@@ -337,6 +468,10 @@ actor PendingRetryStore {
             guard let current = decodedMetadata(from: defaults), current.id == id else {
                 return false
             }
+            // Everything but the two diagnostic fields is carried forward
+            // verbatim. Dropping the words or the publication verdict here would
+            // silently cost a later recovery a provider round trip, or leave it
+            // unable to tell a refused publication from a deleted card.
             let updated = PendingRetryMetadata(
                 id: current.id,
                 createdAt: current.createdAt,
@@ -344,7 +479,9 @@ actor PendingRetryStore {
                 preferredLanguage: current.preferredLanguage,
                 attemptCount: current.attemptCount + 1,
                 lastErrorCode: lastErrorCode,
-                destination: current.destination
+                destination: current.destination,
+                transcript: current.transcript,
+                publicationState: current.publicationState
             )
             defaults.set(try JSONEncoder().encode(updated), forKey: Self.metadataKey)
             _ = defaults.synchronize()

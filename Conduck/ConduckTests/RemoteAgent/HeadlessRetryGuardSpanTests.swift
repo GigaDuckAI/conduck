@@ -54,10 +54,11 @@
 //     the provable-absence refusal's own, taken inline in that arm because code
 //     23 preserves nothing and the store's single slot is better spent on a
 //     capture that can succeed; and the catch chain's, gated on the words NOT
-//     yet existing as text. The third is Work's successful deterministic inbox
-//     publication, where the transcript has become durable without any gateway.
-//     The blackout arm sitting beside the first one disarms nothing — an unlock
-//     makes those exact bytes recover.
+//     yet existing as text. The third is Work's, taken on a TERMINAL outcome
+//     from the shared recovery — the one entry point every surface makes its
+//     desk decision through — where the transcript has become durable without
+//     any gateway. The blackout arm sitting beside the first one disarms
+//     nothing — an unlock makes those exact bytes recover.
 //
 //   Rule 2 — the disarm that does run sits BELOW the destination resolve and
 //     BELOW the store append, so every refusal on the way is still armed.
@@ -98,7 +99,8 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
     ///      that can. Its twin, the blackout arm, must NOT disarm — those bytes
     ///      succeed the moment the device is unlocked.
     ///
-    ///   2. the WORK publication boundary, after deterministic inert capture.
+    ///   2. the WORK boundary, taken on a TERMINAL outcome from the shared
+    ///      recovery — the words are on a card, so nothing is left to protect.
     ///
     ///   3. the CATCH CHAIN's, gated on the words not yet existing as text.
     ///
@@ -147,15 +149,21 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
             body.range(of: "PendingRetryGuard.disarm", range: workDisarm.upperBound..<body.endIndex),
             "The catch-chain disarm is missing."
         )
-        let workPublish = try XCTUnwrap(body.range(of: "WorkCaptureRetryCoordinator.publish")?.lowerBound)
+        let workPublish = try XCTUnwrap(
+            body.range(of: "WorkVoiceCaptureCoordinator.recover(")?.lowerBound,
+            "The Work lane no longer makes its desk decision through the shared recovery. Each "
+            + "surface deciding for itself is how one of them started resurrecting cards a person "
+            + "deleted while another dropped the words entirely."
+        )
         let transcriptRaised = try XCTUnwrap(body.range(of: "transcriptCaptured = true")?.lowerBound)
         XCTAssertLessThan(firstDisarm.lowerBound, gateAt,
                           "The absence arm's disarm belongs ABOVE the `do`, in the refusal it is about — "
                           + "below the gate it would be the catch chain's, which cannot tell 23 from 75.")
         XCTAssertLessThan(transcriptRaised, workPublish,
-                          "Work may publish only after STT produced a non-empty transcript.")
+                          "Work may reach the desk only after STT produced a non-empty transcript.")
         XCTAssertLessThan(workPublish, workDisarm.lowerBound,
-                          "The Work retry may clear only after deterministic publication succeeds.")
+                          "The Work retry may clear only after the recovery answers that the words are "
+                          + "on a card.")
         XCTAssertLessThan(workDisarm.lowerBound, gateAt,
                           "The Work terminal boundary should remain inside the successful `do`, not in the catch.")
         XCTAssertLessThan(gateAt, catchDisarm.lowerBound,

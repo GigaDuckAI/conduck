@@ -26,6 +26,16 @@ import XCTest
 final class WorkCaptureDrainerDurabilityTests: XCTestCase {
     private var root: URL!
 
+    /// Every store here mints a vault directory of its own that nothing else
+    /// removes, and one case stages a payload above the sync ceiling precisely
+    /// so that it takes the vault lane — so the leaves are large as well as
+    /// numerous. The fixture empties them when the class is done.
+    ///
+    /// Teardown cannot race a vault operation: every case that spawns a drain
+    /// awaits its outcome before returning, and an `async let` that a thrown
+    /// assertion skips is cancelled and awaited at scope exit.
+    private let isolated = IsolatedWorkStores()
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         root = FileManager.default.temporaryDirectory
@@ -36,10 +46,11 @@ final class WorkCaptureDrainerDurabilityTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
+        await isolated.cleanUp()
         if let root { try? FileManager.default.removeItem(at: root) }
         root = nil
-        try super.tearDownWithError()
+        try await super.tearDown()
     }
 
     // MARK: - The acknowledgement barrier proves bytes, not ids
@@ -49,7 +60,7 @@ final class WorkCaptureDrainerDurabilityTests: XCTestCase {
     /// Acknowledging such a card destroys the last copy of the payload, which is
     /// why presence of the row is not the barrier's question.
     func testAPendingSyncedCardBlocksAcknowledgementAndKeepsTheQueueCopy() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("bytes that must outlive a blob that never landed".utf8)
         let entryID = UUID()
         let envelope = WorkCaptureEnvelope(
@@ -107,7 +118,7 @@ final class WorkCaptureDrainerDurabilityTests: XCTestCase {
     /// device no longer has. A payload above `workboardSyncCeilingBytes` is what
     /// takes that lane, so the fixture is sized rather than forced.
     func testAMissingVaultLeafBlocksAcknowledgementAndKeepsTheQueueCopy() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data(
             repeating: 0x2A,
             count: Int(Constants.workboardSyncCeilingBytes) + 1
@@ -168,7 +179,7 @@ final class WorkCaptureDrainerDurabilityTests: XCTestCase {
     /// cards carry their whole content in the row has no payload to prove, and
     /// requiring one would refuse every note, shared text and link.
     func testACaptureWithoutBytesStillAcknowledges() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let envelope = WorkCaptureEnvelope(
             note: "No attachment at all",
             source: .app,
@@ -203,7 +214,7 @@ final class WorkCaptureDrainerDurabilityTests: XCTestCase {
     /// a second process reconciling past the horizon requeues a directory this
     /// drainer is still importing.
     func testTheHeartbeatKeepsASlowByteImportOwnedPastTheStaleHorizon() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let payload = Data("bytes the store is still copying".utf8)
         let entryID = UUID()
         let envelope = WorkCaptureEnvelope(
@@ -302,7 +313,7 @@ final class WorkCaptureDrainerDurabilityTests: XCTestCase {
     /// materials under a claim it cannot acknowledge and could requeue a
     /// directory another drainer is reading.
     func testAProvenTakeoverStopsTheImportBeforeItsNextMaterialWrite() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let firstEntry = UUID()
         let secondEntry = UUID()
         let envelope = WorkCaptureEnvelope(
@@ -384,7 +395,7 @@ final class WorkCaptureDrainerDurabilityTests: XCTestCase {
     /// the beat running, because giving up on the first fault would disarm the
     /// protection for the rest of a long import.
     func testATransientRenewalFailureDoesNotStopTheImport() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let entryID = UUID()
         let envelope = WorkCaptureEnvelope(
             note: "A capture whose marker is briefly unwritable",
@@ -455,7 +466,7 @@ final class WorkCaptureDrainerDurabilityTests: XCTestCase {
     /// outlive the import it protects: a beat still restating ownership of a
     /// claim nobody is draining would hold a capture hostage until the horizon.
     func testCancellingADrainMidImportRequeuesTheClaimAndStopsTheHeartbeat() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let entryID = UUID()
         let envelope = WorkCaptureEnvelope(
             note: "A capture whose drain is cancelled",

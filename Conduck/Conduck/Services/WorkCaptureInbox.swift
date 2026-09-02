@@ -509,11 +509,16 @@ actor WorkCaptureInbox {
     /// it. Nothing is dispatched and no bytes are lost. A UUID collision is kept
     /// in processing for explicit reconciliation rather than overwriting either
     /// directory.
+    ///
+    /// A release that cannot land ends this instance's interest in the claim all
+    /// the same: the import that held it is over either way, so the local token
+    /// goes and only the on-disk rules decide who recovers the directory.
     func release(_ claim: Claim) throws {
         try requireActive(claim)
         try requireLeaseOwnership(claim)
         let destination = baseURL.appendingPathComponent(claim.id.uuidString, isDirectory: true)
         guard !fileManager.fileExists(atPath: destination.path) else {
+            abandonLocalClaim(claim)
             throw InboxError.filesystemFailure
         }
         removeLease(in: claim.directoryURL)
@@ -522,8 +527,24 @@ actor WorkCaptureInbox {
             activeClaims.removeValue(forKey: claim.generation)
             postLocalChange()
         } catch {
+            abandonLocalClaim(claim)
             throw InboxError.filesystemFailure
         }
+    }
+
+    /// Drop this instance's bookkeeping for a claim it can no longer finish,
+    /// leaving the claimed directory exactly where it stands.
+    ///
+    /// `reconcile` skips every directory `activeClaims` still names, because a
+    /// live import must never have its bytes requeued underneath it. A token
+    /// held past the end of that import inverts the protection: no reconciliation
+    /// in this process can ever see the directory again, so a transient fault at
+    /// the moment of release strands the capture until the process dies, however
+    /// many times the app retries in the foreground. Nothing is deleted and
+    /// nothing is moved here — the lease, or the stale horizon over a directory
+    /// whose lease has already gone, is what decides who picks it up.
+    private func abandonLocalClaim(_ claim: Claim) {
+        activeClaims.removeValue(forKey: claim.generation)
     }
 
     /// Extends ownership of a claim whose durable import legitimately outlives

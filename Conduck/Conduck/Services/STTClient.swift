@@ -153,6 +153,30 @@ actor STTClient {
         try await provider.probe.validate(apiKey: apiKey, provider: provider, customConfig: customConfig)
     }
 
+    // MARK: - The audio part's own description
+
+    /// What the multipart audio part claims to be, read off the bytes it
+    /// carries.
+    ///
+    /// A fixed `audio/mp4` + `audio.m4a` pair is a claim about the CONTAINER,
+    /// and it is not always true: `AudioCompressor` answers WAV whenever AAC
+    /// encoding fails and passes the source container through untouched (CAF,
+    /// from CarPlay's tap), and every retry lane re-uploads whatever it
+    /// preserved. A provider handed RIFF bytes under an M4A name is being told
+    /// something false about its own input, and the stricter ones refuse it —
+    /// every attempt at that capture, forever. `SourceAudioContainer.sniff` is
+    /// the shared truth here and at the retry surfaces that name their staged
+    /// file, so the two can never describe one payload differently.
+    ///
+    /// `@MainActor` for isolation rather than for the work: `SourceAudioContainer`
+    /// is main-actor isolated and this actor is not, so the hop happens once
+    /// here instead of at each member read.
+    @MainActor
+    static func multipartAudioPart(for audioData: Data) async -> (mime: String, filename: String) {
+        let container = SourceAudioContainer.sniff(audioData)
+        return (container.mimeType, "audio.\(container.fileExtension)")
+    }
+
     // MARK: - Transcribe (multipart OR JSON upload)
 
     /// Foreground upload. Used by the iOS in-app mic + Shortcut path +
@@ -163,7 +187,9 @@ actor STTClient {
     /// this method via `defer` — succeed OR throw, the file does not survive.
     ///
     /// - Parameters:
-    ///   - audioFileURL: path to the audio file on disk (M4A AAC).
+    ///   - audioFileURL: path to the audio file on disk. Its container is read
+    ///     from the bytes (`SourceAudioContainer.sniff`), never assumed from
+    ///     the name — the multipart part's MIME and filename come from that.
     ///   - apiKey: bearer token / header value for the STT provider.
     ///   - language: optional ISO 639-1 hint (e.g., "en", "de"); nil = auto-detect.
     ///   - provider: the STT provider record (wire format, auth, caps, decoder).
@@ -283,10 +309,11 @@ actor STTClient {
                 // Mis-configured registry entry — multipart without field names.
                 throw AppError.sttDecodingFailure
             }
+            let part = await Self.multipartAudioPart(for: audioData)
             let (boundary, body) = STTMultipartBuilder.build(
                 audioData: audioData,
-                audioMIME: "audio/mp4",
-                audioFilename: "audio.m4a",
+                audioMIME: part.mime,
+                audioFilename: part.filename,
                 model: effModel,
                 language: language,
                 fieldNames: fields

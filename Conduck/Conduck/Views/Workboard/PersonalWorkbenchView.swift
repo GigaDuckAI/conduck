@@ -311,7 +311,6 @@ import AppKit
 extension Notification.Name {
     static let showWorkboard = Notification.Name("showWorkboard")
     static let showChats = Notification.Name("showChats")
-    static let openPersonalAISettings = Notification.Name("openPersonalAISettings")
     static let openWorkboardDeepLink = Notification.Name("openWorkboardDeepLink")
 }
 
@@ -875,12 +874,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 #endif
             }
             .onReceive(NotificationCenter.default.publisher(for: .openWorkboardDeepLink)) { _ in
-                routeWorkboardDeepLink()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .openPersonalAISettings)) { _ in
-                #if !os(macOS)
-                activateChatsIfNeeded()
-                #endif
+                workboardDeepLinkRoute.open()
             }
             .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
                 #if !os(macOS)
@@ -939,18 +933,13 @@ struct PersonalWorkbenchView<Chats: View>: View {
     }
     #endif
 
-    /// Every Work deep link resolves to the one desk
-    /// (`Constants.workboardDeskItemID`). A payload id names material that
-    /// landed on that desk, never a board to choose between, so a link that
-    /// carries no id routes exactly like one that does. The window itself is
-    /// foregrounded by the scene host, which consumes the same notification.
-    ///
-    /// The reload is REQUESTED from the refresh coordinator rather than run
-    /// here: it owns every board load, so a direct `load()` would open a second
-    /// reload path outside its visibility gate and serialization.
-    private func routeWorkboardDeepLink() {
-        model.router.destination = .work
-        model.scheduleRefresh()
+    /// The Work deep link's landing, as the value that owns it. The reasoning
+    /// lives with the type; what this shell owns is handing it the router it
+    /// reveals and the coordinator call it schedules through.
+    private var workboardDeepLinkRoute: WorkboardDeepLinkRoute {
+        WorkboardDeepLinkRoute(router: model.router) {
+            model.scheduleRefresh()
+        }
     }
 
     @ViewBuilder

@@ -257,11 +257,17 @@ struct WorkboardVoiceCaptureView: View {
         }
     }
 
+    /// The sheet's privacy line. It may not promise that nothing is sent: the
+    /// words come from whichever speech provider the person configured, and
+    /// `STTClient`'s table is mostly cloud vendors, so the recording leaves the
+    /// device on every configuration except Apple's on-device engine. What the
+    /// desk can promise is the boundary that actually holds — one destination,
+    /// chosen by the person, and no AI or server of ours behind it.
     private var privacyCopy: some View {
         Label(
             LocalizedStringResource(
                 "workboard.voice.privacy",
-                defaultValue: "Keeps the recording on your private desk and adds the words when they’re ready. Nothing is sent."
+                defaultValue: "Keeps the recording on your private desk and adds the words when they’re ready. The audio goes only to the speech provider you chose — never to an AI, never to a server of ours."
             ),
             systemImage: "lock.shield"
         )

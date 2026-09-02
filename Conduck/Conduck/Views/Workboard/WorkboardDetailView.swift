@@ -7,13 +7,19 @@
 // with them: this surface collects material and never sends any of it.
 //
 // Work is ONE desk at a compile-time identity, so this view resolves no item
-// and takes no id. It reads the view model's desk directly; a nil desk is the
-// state before the first capture created the row, not a missing board.
+// and takes no id. It renders a `WorkboardDeskPresentation.Desk` its host has
+// already resolved; the desk-before-its-first-card is one of that value's
+// states, not a missing board.
 
 import SwiftUI
 
 struct WorkboardDetailView: View {
     @Bindable var viewModel: WorkboardViewModel
+
+    /// The board to draw and the identity the composer, attach menu and
+    /// pane-wide drop write into — the same value in both states, so capture on
+    /// a desk with no row yet addresses the identity its first card lands on.
+    let desk: WorkboardDeskPresentation.Desk
 
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
@@ -24,17 +30,11 @@ struct WorkboardDetailView: View {
         defaultValue: "Work"
     )
 
-    /// The board the composer, attach menu and pane-wide drop write into. It is
-    /// the desk whether or not its row exists yet, so capture on an empty desk
-    /// addresses the same identity the first card lands on.
-    private var desk: WorkboardItemSnapshot {
-        viewModel.desk ?? WorkboardItemSnapshot(id: Constants.workboardDeskItemID)
-    }
-
     var body: some View {
         ScrollView {
             Group {
-                if desk.materials.isEmpty {
+                switch desk.board {
+                case .invitation:
                     WorkboardEmptyState(
                         title: LocalizedStringResource(
                             "workboard.empty.title",
@@ -45,10 +45,10 @@ struct WorkboardDetailView: View {
                             defaultValue: "Whatever you collect lands here as a card you can move and resize."
                         )
                     )
-                } else {
+                case .cards:
                     WorkboardCaptureCanvas(
                         viewModel: viewModel,
-                        item: desk,
+                        item: desk.item,
                         mode: .sources
                     )
                 }
@@ -62,7 +62,7 @@ struct WorkboardDetailView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             WorkboardCaptureCanvas(
                 viewModel: viewModel,
-                item: desk,
+                item: desk.item,
                 mode: .composer
             )
             // The bar owns its own inset (Chat's 16/12). Only the full-bleed

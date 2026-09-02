@@ -377,33 +377,61 @@ final class WorkboardAvailabilityTests: XCTestCase {
 
     // MARK: - Desk banner
 
-    /// KEPT AS A SOURCE GUARD, deliberately. What it pins is which state the
-    /// desk's banner is derived FROM, and the desk has no presentation model to
-    /// inject that state into: the banner is read inside the canvas view's
-    /// body, from the shared monitor. Converting it would mean mounting SwiftUI
-    /// — there is no UI test target, by decision — or extracting a desk
-    /// presentation layer that exists for this test alone. The behaviour it
-    /// stands in for is covered by `CloudSyncMonitorTests` and by the case
-    /// below, which holds that the three actionable reasons read differently.
-    func testTheDeskBannerReadsAccountStateRatherThanTheLastSyncEvent() throws {
-        let canvas = try source("Conduck/Views/Workboard/WorkboardCaptureCanvas.swift")
+    /// The banner is a function of ACCOUNT state and of nothing else. The only
+    /// input `WorkboardSyncBannerPolicy` takes is `CloudSyncMonitor.Reason`,
+    /// which exists for the three states a person can fix and for no sync EVENT
+    /// — card metadata and card bytes are mirrored from two separate stores, so
+    /// the most recent failure can concern one payload while the rest of the
+    /// desk syncs normally, and a banner claims the whole desk is stuck.
+    func testTheDeskBannerShowsOnlyForAnAccountStateThePersonCanFix() {
+        XCTAssertNotNil(
+            WorkboardSyncBannerPolicy.message(showsBanner: true, reason: .noAccount),
+            "an actionable account state is exactly what the banner exists for"
+        )
+        XCTAssertNil(
+            WorkboardSyncBannerPolicy.message(showsBanner: true, reason: nil),
+            """
+            No reason means no state the person can act on — a transient or \
+            healthy account, which the monitor never turns into a `Reason`.
+            """
+        )
+        XCTAssertNil(
+            WorkboardSyncBannerPolicy.message(showsBanner: false, reason: .quotaExceeded),
+            """
+            The desk honours the same sticky per-outage dismissal the \
+            conversation list does: one broken account, dismissed once.
+            """
+        )
+    }
 
-        XCTAssertTrue(canvas.contains("CloudSyncMonitor.shared"))
-        XCTAssertTrue(canvas.contains("syncMonitor.showsBanner"))
-        XCTAssertTrue(canvas.contains("syncMonitor.unavailableReason"))
-        XCTAssertTrue(
-            canvas.contains("ICloudUnavailableBanner("),
-            "the desk reuses the app's one sync banner rather than growing a second"
-        )
-        XCTAssertFalse(
-            canvas.contains("recentSyncEventLines"),
-            """
-            The desk banner reads sync EVENTS. Card metadata and card bytes are \
-            mirrored from two separate stores, so the most recent failure can \
-            concern one payload while the rest of the desk syncs normally — but a \
-            banner claims the whole desk is stuck, which only account state says.
-            """
-        )
+    /// The desk's banner says what a person looking at cards can check. Chat's
+    /// wording is about conversations, and reusing it here leaves the reader to
+    /// work out whether the desk in front of them is affected at all.
+    func testTheDeskBannerNamesCardsRatherThanConversations() {
+        for reason in [CloudSyncMonitor.Reason.noAccount, .restricted, .quotaExceeded] {
+            let desk = String(localized: WorkboardSyncBannerPolicy.message(for: reason))
+
+            XCTAssertFalse(
+                desk.localizedCaseInsensitiveContains("conversation"),
+                "the desk's \(reason) banner still talks about conversations: \(desk)"
+            )
+            XCTAssertTrue(
+                desk.localizedCaseInsensitiveContains("card"),
+                "the desk's \(reason) banner names nothing the reader can see: \(desk)"
+            )
+            XCTAssertNotEqual(
+                desk,
+                String(localized: reason.bannerMessage),
+                "the desk's \(reason) banner is Chat's sentence again"
+            )
+        }
+
+        // One slot showing the same sentence for "signed out", "restricted" and
+        // "storage full" would say that something is wrong and nothing about
+        // what to do.
+        let desk = [CloudSyncMonitor.Reason.noAccount, .restricted, .quotaExceeded]
+            .map { String(localized: WorkboardSyncBannerPolicy.message(for: $0)) }
+        XCTAssertEqual(Set(desk).count, 3)
     }
 
     func testEachActionableAccountReasonSaysSomethingDifferent() {

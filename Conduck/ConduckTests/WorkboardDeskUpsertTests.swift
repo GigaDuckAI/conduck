@@ -482,6 +482,123 @@ final class WorkboardDeskUpsertTests: XCTestCase {
         XCTAssertTrue(survivor.materials.isEmpty)
     }
 
+    /// The OTHER pre-desk drain, and the one a capture-envelope id cannot
+    /// account for: an envelope the person aimed at a Work item they had
+    /// already made. That drain appended straight onto the chosen item and
+    /// wrote nothing about the envelope on its owner row, so the envelope id
+    /// matches nothing there — and a replay carrying only the envelope is
+    /// refused for ever, which is the failure adoption exists to prevent.
+    ///
+    /// What licenses it is the envelope's own `targetWorkItemID`, and only for
+    /// the owner it names. The refusal half is asserted in the same case, from
+    /// the same fixture: the replay that does not carry the target — which is
+    /// every capture that mints its own ids, and was the only shape this
+    /// provenance had — still cannot move these rows, and neither can one
+    /// naming a different item.
+    func testAPartiallyDrainedTargetedPreRewriteEnvelopeReplaysCleanOntoTheDesk() async throws {
+        let store = isolated.make()
+        let envelopeID = UUID()
+        // The item the person picked in the share sheet: their own, made
+        // before this envelope existed, carrying no capture identity at all.
+        let target = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Trip receipts"))
+        )
+        XCTAssertNil(target.captureEnvelopeID,
+                     "the shape under test is an owner row that names no capture")
+
+        let noteID = UUID()
+        let fileID = UUID()
+        let payload = Data("the half the older build managed to copy".utf8)
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(id: noteID, kind: .note, title: "Share note", textContent: "the link"),
+            to: target.id
+        )
+        _ = try await store.addWorkMaterial(
+            WorkMaterialDraft(
+                id: fileID,
+                kind: .file,
+                title: "receipt.txt",
+                filename: "receipt.txt",
+                mimeType: "text/plain",
+                payload: payload
+            ),
+            to: target.id
+        )
+        // The entry the interrupted drain never reached.
+        let undrainedID = UUID()
+
+        func noteDraft() -> WorkMaterialDraft {
+            WorkMaterialDraft(id: noteID, kind: .note, title: "Share note", textContent: "the link")
+        }
+
+        // Without the target the replay is refused — the old shape of this
+        // provenance, and the state the finding describes: a capture that can
+        // never be acknowledged.
+        do {
+            _ = try await store.upsertDeskMaterial(
+                noteDraft(),
+                legacyProvenance: .captureEnvelope(envelopeID)
+            )
+            XCTFail("an envelope id alone accounts for nothing on an item the person chose")
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            // Expected.
+        }
+        // Nor does a target that is not the one this envelope named.
+        do {
+            _ = try await store.upsertDeskMaterial(
+                noteDraft(),
+                legacyProvenance: .captureEnvelope(envelopeID, legacyTargetWorkItemID: UUID())
+            )
+            XCTFail("a target the envelope did not name licenses nothing")
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            // Expected.
+        }
+        let stillParked = await store._workMaterialRowsForTesting(id: noteID)
+        XCTAssertEqual(Set(stillParked.compactMap(\.workItemID)), [target.id],
+                       "a refused adoption leaves the card exactly where it was")
+
+        let provenance = WorkMaterialLegacyProvenance.captureEnvelope(
+            envelopeID,
+            legacyTargetWorkItemID: target.id
+        )
+        _ = try await store.upsertDeskMaterial(noteDraft(), legacyProvenance: provenance)
+        _ = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                id: fileID,
+                kind: .file,
+                title: "receipt.txt",
+                filename: "receipt.txt",
+                mimeType: "text/plain",
+                payload: payload
+            ),
+            legacyProvenance: provenance
+        )
+        _ = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                id: undrainedID,
+                kind: .note,
+                title: "Web page",
+                textContent: "https://example.org"
+            ),
+            legacyProvenance: provenance
+        )
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.map(\.id), [noteID, fileID, undrainedID],
+                       "the drained entries are adopted and the undrained one is published")
+        let carried = try await store.loadWorkMaterialPayload(id: fileID)
+        XCTAssertEqual(carried, payload, "an adopted card keeps the bytes it already had")
+
+        let survivorValue = try await store.fetchWorkItem(id: target.id)
+        let survivor = try XCTUnwrap(
+            survivorValue,
+            "the item the person made is a valid CloudKit record and is never deleted"
+        )
+        XCTAssertEqual(survivor.content.title, "Trip receipts")
+        XCTAssertTrue(survivor.materials.isEmpty)
+    }
+
     /// The other half of adoption, and the one that decides what a matching
     /// UUID is worth: nothing, on its own.
     ///

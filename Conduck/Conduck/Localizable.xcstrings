@@ -22820,6 +22820,39 @@
         }
       }
     },
+    "workboard.sync.banner.noAccount" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "iCloud is signed out — your cards won’t sync across your devices."
+          }
+        }
+      }
+    },
+    "workboard.sync.banner.quotaExceeded" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your iCloud storage is full — new cards can’t sync to your other devices."
+          }
+        }
+      }
+    },
+    "workboard.sync.banner.restricted" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "iCloud is restricted on this device — your cards can’t sync."
+          }
+        }
+      }
+    },
     "workboard.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22991,7 +23024,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Keeps the recording on your private desk and adds the words when they’re ready. Nothing is sent."
+            "value" : "Keeps the recording on your private desk and adds the words when they’re ready. The audio goes only to the speech provider you chose — never to an AI, never to a server of ours."
           }
         }
       }

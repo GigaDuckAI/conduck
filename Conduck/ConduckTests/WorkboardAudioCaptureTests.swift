@@ -711,34 +711,51 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         )
     }
 
-    // MARK: - Source guard: the two retry surfaces stay in step
+    // MARK: - Call-site policy: the two retry surfaces decide nothing themselves
 
-    /// Both surfaces that recover a parked transcript repair the recording
-    /// card first and publish only when there is none. A Work voice capture can
-    /// be recovered on either — the sheet exists on iOS and on macOS, and the
-    /// pending-retry record is one store — so a surface that publishes
-    /// unconditionally leaves its recovered words beside an untranscribed
-    /// recording that is still waiting for them.
+    /// Neither surface that recovers a parked Work capture owns the desk
+    /// decision. Both hand the record to `WorkVoiceCaptureCoordinator.recover`
+    /// — ONCE — and act on the outcome it answers.
     ///
-    /// Source-scoped deliberately: both call sites live inside a SwiftUI view's
-    /// action and a menu-bar service, neither of which this suite can mount.
-    func testEveryRetrySurfaceRepairsTheRecordingBeforeItPublishes() throws {
+    /// What the decision actually is (attach, republish then attach, or write
+    /// the words beside a card that is gone) is asserted behaviourally against
+    /// a real store in `WorkVoiceRecoveryTests`; there is nothing left here for
+    /// a source guard to say about it, and saying it again in token order was
+    /// how a rule two files must share came to be spelled twice. What remains
+    /// is a CALL-SITE policy, and it is the half a behavioural test cannot
+    /// reach: both call sites live inside a SwiftUI view's action and a
+    /// menu-bar service, neither of which this suite can mount.
+    ///
+    /// The second half is the load-bearing one. A surface keeping its own
+    /// fallback publication beside the shared entry point is a second answer to
+    /// the same question — and the one it gives (publish the words, then clear
+    /// the record) is precisely what deleted the audio a deleted-card verdict
+    /// was never meant to license.
+    func testEveryRetrySurfaceMakesItsDeskDecisionThroughTheOneRecovery() throws {
         for path in [
             "Conduck/ContentView.swift",
             "Conduck/MenuBar/DictationService.swift",
         ] {
-            let text = try Self.source(path)
-            let attach = try XCTUnwrap(
-                text.range(of: "WorkVoiceCaptureCoordinator.attachTranscript("),
-                "\(path) recovers a Work transcript without offering it to the recording card"
+            let text = RefusalLaneSource.stripComments(try Self.source(path))
+
+            XCTAssertEqual(
+                text.components(separatedBy: "WorkVoiceCaptureCoordinator.recover(").count - 1, 1,
+                "\(path) must reach the shared recovery exactly once: none means it decides for "
+                + "itself again, and a second call site is the same decision spelled twice in one "
+                + "file, which is how the two surfaces drifted apart in the first place."
             )
-            let publish = try XCTUnwrap(
+            XCTAssertNil(
                 text.range(of: "WorkCaptureRetryCoordinator.publish("),
-                "\(path) no longer carries the fallback publication this guard orders"
+                "\(path) keeps a fallback publication of its own beside the shared recovery. That "
+                + "is a second answer to the question `recover` exists to answer, and it publishes "
+                + "the words under an id the caller chose — the shape that let a note be swallowed "
+                + "by the recording's own card while the retry record was cleared."
             )
-            XCTAssertLessThan(
-                attach.lowerBound, publish.lowerBound,
-                "\(path) publishes before it tries to repair, which duplicates the utterance"
+            XCTAssertNil(
+                text.range(of: "WorkVoiceCaptureCoordinator.attachTranscript("),
+                "\(path) attaches the transcript itself, so it is back to reading an absent card as "
+                + "one fact when it has two opposite causes — a publication the desk refused, and a "
+                + "card a person deleted while recognition was in flight."
             )
         }
     }

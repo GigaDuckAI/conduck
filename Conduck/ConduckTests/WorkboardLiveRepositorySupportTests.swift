@@ -7,12 +7,28 @@
 // preview wave, the batched turn lookup that resolves many messages in one fetch
 // without borrowing another conversation's turn, and the two pure projections
 // every card is drawn from — the kind it claims to be and the name it shows.
+//
+// Plus the one import outcome the adapter has to translate rather than pass on:
+// a capture whose card COMMITTED and whose bytes could not be proved afterwards
+// is not a failed import. Every drop mints a fresh material id, so a person told
+// it failed drops the file again and gets a SECOND card beside the unreadable
+// one; the desk carrying the committed card is what they get instead.
 
 import Foundation
 import XCTest
 @testable import Conduck
 
 final class WorkboardLiveRepositorySupportTests: XCTestCase {
+
+    /// Every store here mints a vault directory of its own that nothing else
+    /// removes; the fixture empties them when the class is done.
+    private let isolated = IsolatedWorkStores()
+
+    override func tearDown() async throws {
+        await isolated.cleanUp()
+        try await super.tearDown()
+    }
+
     func testBatchedURLLookupResolvesOnlyPresentSafeKeys() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("work-vault-urls-tests-\(UUID().uuidString)", isDirectory: true)
@@ -46,7 +62,7 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
     /// link naming a different conversation resolves to nothing rather than
     /// borrowing another thread's turn.
     func testBatchedTurnLookupSpansConversationsAndRefusesAMispairedLink() async throws {
-        let store = ConversationStore(inMemory: true)
+        let store = isolated.make()
         let first = try await store.createConversation(backend: "hermes")
         let second = try await store.createConversation(backend: "openclaw")
         let inFirst = try await store.appendMessage(
@@ -83,6 +99,93 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
 
         let none = try await store.fetchMessages(conversationIDsByMessageID: [:])
         XCTAssertTrue(none.isEmpty)
+    }
+
+    // MARK: - A committed capture whose bytes cannot be proved
+
+    /// The store commits the card and then fails to read its leaf back, so it
+    /// throws an error CARRYING that card. The adapter has to adopt it: the
+    /// alternative is a bare failure, and `WorkboardMaterialImport` defaults its
+    /// id to a fresh UUID, so the person's next drop of the same file publishes
+    /// a second card rather than repairing the first.
+    ///
+    /// The desk that comes back holds exactly one card, and that card says for
+    /// itself that its bytes are not here — which is what a reattach then fixes.
+    @MainActor
+    func testACommittedCaptureWhoseBytesCannotBeProvedComesBackAsTheCardItPublished() async throws {
+        let store = isolated.make()
+        let repository = WorkboardLiveRepository(
+            store: store,
+            captureInbox: WorkCaptureInbox(baseURL: temporaryDirectory()),
+            openMaterial: { _ in }
+        )
+        let dependencies = repository.makeDependencies()
+
+        // A zero-length file has no measurable payload to sync, so the policy
+        // sends it to the device-local vault — the lane whose publication is
+        // proved by reading the leaf back, and therefore the one that can
+        // refuse.
+        let source = temporaryDirectory().appendingPathComponent("receipt.bin")
+        try FileManager.default.createDirectory(
+            at: source.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: source, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+
+        // The reclamation in another process the staging guard cannot cover,
+        // arriving between the commit and the proof.
+        let vault = await store.workAssetVault
+        await store._setPublicationConfirmationHookForTesting { site, _, key, _ in
+            guard site == .deskPublish else { return nil }
+            try? await vault.remove(key)
+            return nil
+        }
+
+        let capture = WorkboardMaterialImport(
+            kind: .file,
+            name: "receipt.bin",
+            mimeType: "application/octet-stream",
+            fileURL: source,
+            byteCount: 0
+        )
+        let desk = try await dependencies.importMaterial(nil, capture) { _ in }
+
+        XCTAssertEqual(
+            desk.materials.map(\.id), [capture.id],
+            "the card the store committed is on the desk the import hands back"
+        )
+        XCTAssertEqual(desk.materials.first?.availability, .unavailableOnThisDevice,
+                       "the card itself says the bytes are not here; the import does not")
+
+        // And the repair route is open: a reattach that CAN be proved lands on
+        // the SAME card rather than beside it.
+        await store._setPublicationConfirmationHookForTesting(nil)
+        let recovered = Data("the copy that finally lands".utf8)
+        let replacement = source.deletingLastPathComponent()
+            .appendingPathComponent("recovered.txt")
+        try recovered.write(to: replacement, options: .atomic)
+        let repaired = try await dependencies.replaceMaterial(
+            desk.revision,
+            capture.id,
+            WorkboardMaterialImport(
+                id: capture.id,
+                kind: .file,
+                name: "recovered.txt",
+                mimeType: "text/plain",
+                fileURL: replacement,
+                byteCount: Int64(recovered.count)
+            )
+        ) { _ in }
+        XCTAssertEqual(repaired.materials.map(\.id), [capture.id])
+        XCTAssertEqual(repaired.materials.first?.availability, .available)
+    }
+
+    private func temporaryDirectory() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(
+            "workboard-repository-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
     }
 
     // MARK: - Card projections

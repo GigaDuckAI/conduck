@@ -219,66 +219,48 @@ final class WorkboardTwoStoreLoadTests: XCTestCase {
         }
     }
 
-    // MARK: - 6. Memory at the ceiling
+    // MARK: - 6. A payload at the ceiling
 
-    func testACeilingSizedPayloadStaysBoundedInPeakMemory() async throws {
-        // The ceiling is the largest single payload byte sync will ever hand
-        // Core Data. External binary storage is supposed to keep that a
-        // bounded cost — one copy in flight, not a pile of them — and the
-        // failure this guards against is a build where assigning the attribute
-        // buffers the payload several times over and the app is killed for
-        // memory on a device it was fine on before.
+    /// The largest single payload byte sync will ever hand Core Data goes
+    /// through the external-storage attribute whole, and comes back whole.
+    ///
+    /// WHAT THIS DELIBERATELY DOES NOT CLAIM. The property one would rather pin
+    /// here is the PEAK memory the write costs — a build that buffers the
+    /// payload several times over is killed on a device it was fine on before.
+    /// That is not measurable from inside this process: the write's transient
+    /// allocations can be made and released between any two samples of
+    /// `phys_footprint`, and unrelated allocations in the same window inflate
+    /// whatever a sampler does catch, so a bound written against it passes or
+    /// fails for reasons that have nothing to do with the subject. Measuring it
+    /// honestly needs a high-water mark from a dedicated helper process or an
+    /// allocator instrument, and this bundle has neither. An assertion that can
+    /// pass while the defect is present is worse than no assertion: it reads as
+    /// coverage. So the peak is UNCOVERED and recorded as such, and what is left
+    /// here is the part that is true — the ceiling-sized payload is durable and
+    /// reads back byte for byte.
+    func testACeilingSizedPayloadIsWrittenWholeAndReadBackWhole() async throws {
         let ceiling = Int(Constants.workboardSyncCeilingBytes)
-        let sampler = FootprintSampler()
-        let baseline = sampler.start()
-
         let store = isolated.make(storeURL: storeURL)
         let materialID = UUID()
-        // Held across the whole measured window, deliberately. Created inline
-        // it can be released before the sampler's next tick, and the bound
-        // would then be met by a run that observed no allocation at all — a
-        // pass that proves nothing. Alive at `finish()`, its own pages are
-        // guaranteed to be in the number, which is what the lower bound below
-        // checks before the upper bound is allowed to mean anything.
         let payload = Data(repeating: 0xC7, count: ceiling)
         let stores = try await store._writeMaterialAndBlobForTesting(
             materialID: materialID,
             title: "At the ceiling",
             payload: payload
         )
-        let peak = sampler.finish()
-        let growth = peak - baseline
-        withExtendedLifetime(payload) {}
 
         XCTAssertEqual(stores.blobStoreURL?.lastPathComponent,
-                       expectedBlobStoreURL.lastPathComponent)
+                       expectedBlobStoreURL.lastPathComponent,
+                       "a ceiling-sized payload belongs in the store the Watch never mounts")
 
-        XCTAssertGreaterThanOrEqual(
-            growth, Int64(ceiling),
-            """
-            The measurement did not even see the fixture's own \(ceiling)-byte payload, so the \
-            bound below is vacuous: it would be met by a build that buffers the payload ten \
-            times over and released it between two samples.
-            """
-        )
-        // Peak includes the test's OWN copy of the payload, so one whole
-        // ceiling is already spent before Core Data sees a byte — measured
-        // growth is 1.01× the ceiling, i.e. external storage adds a few hundred
-        // KB and not a second copy. The bound is deliberately loose: it exists
-        // to catch a build that buffers the payload several times over, not to
-        // pin an allocator's exact behaviour.
-        XCTAssertLessThan(
-            growth, Int64(ceiling) * 3,
-            "peak footprint grew \(growth) bytes for a \(ceiling)-byte payload"
-        )
-
-        // The bytes are on disk and readable, so the bound above was not bought
-        // by writing nothing.
         let snapshot = try await store._materialAndBlobForTesting(
-            materialID: materialID, includingPayload: false
+            materialID: materialID, includingPayload: true
         )
-        XCTAssertEqual(snapshot.blobByteSize, Int64(ceiling))
         XCTAssertEqual(snapshot.blobRowCount, 1)
+        XCTAssertEqual(snapshot.blobByteSize, Int64(ceiling))
+        XCTAssertEqual(snapshot.blobPayload?.count, ceiling,
+                       "external storage must return the payload whole, not truncated")
+        XCTAssertEqual(snapshot.blobPayload, payload)
     }
 
     // MARK: - Helpers
@@ -304,59 +286,5 @@ final class WorkboardTwoStoreLoadTests: XCTestCase {
             at: url.deletingLastPathComponent()
                 .appendingPathComponent(".\(stem.lastPathComponent)_SUPPORT")
         )
-    }
-}
-
-/// Peak `phys_footprint` over a window, sampled from a background thread.
-///
-/// `task_vm_info.ledger_phys_footprint_peak` is a PROCESS-lifetime high-water
-/// mark: in a suite that already peaked higher it reports no growth at all and
-/// a bound written against it passes vacuously. Polling the CURRENT footprint
-/// measures the window's own peak instead, which is the number the assertion
-/// is about.
-private final class FootprintSampler: @unchecked Sendable {
-    private let lock = NSLock()
-    private var peak: Int64 = 0
-    private var stopped = false
-
-    /// Begin sampling; returns the baseline the peak should be compared to.
-    @discardableResult
-    func start() -> Int64 {
-        let baseline = Self.currentFootprintBytes()
-        lock.withLock { peak = baseline }
-        Thread.detachNewThread { [self] in
-            while true {
-                let keepGoing = lock.withLock { () -> Bool in
-                    guard !stopped else { return false }
-                    peak = max(peak, Self.currentFootprintBytes())
-                    return true
-                }
-                guard keepGoing else { return }
-                Thread.sleep(forTimeInterval: 0.002)
-            }
-        }
-        return baseline
-    }
-
-    func finish() -> Int64 {
-        lock.withLock {
-            stopped = true
-            peak = max(peak, Self.currentFootprintBytes())
-            return peak
-        }
-    }
-
-    static func currentFootprintBytes() -> Int64 {
-        var info = task_vm_info_data_t()
-        var count = mach_msg_type_number_t(
-            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size
-        )
-        let result = withUnsafeMutablePointer(to: &info) { pointer in
-            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
-            }
-        }
-        guard result == KERN_SUCCESS else { return 0 }
-        return Int64(info.phys_footprint)
     }
 }

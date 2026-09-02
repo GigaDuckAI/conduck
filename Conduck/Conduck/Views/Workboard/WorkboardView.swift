@@ -225,7 +225,12 @@ struct WorkboardDetailColumn: View {
 
     @ViewBuilder
     var body: some View {
-        if viewModel.isLoading, viewModel.desk == nil {
+        switch WorkboardDeskPresentation.resolve(
+            isLoading: viewModel.isLoading,
+            loadError: viewModel.loadError,
+            desk: viewModel.desk
+        ) {
+        case .loading:
             VStack(spacing: 14) {
                 ProgressView()
                     .controlSize(.large)
@@ -240,7 +245,7 @@ struct WorkboardDetailColumn: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(AppColors.background.ignoresSafeArea())
             .workbenchNavigationTitle(Text(Self.deskTitle), isActive: isActive)
-        } else if let loadError = viewModel.loadError, viewModel.desk == nil {
+        case .loadFailed(let loadError):
             WorkboardEmptyState(
                 title: LocalizedStringResource(
                     "workboard.load.failed.title",
@@ -261,11 +266,11 @@ struct WorkboardDetailColumn: View {
             .accessibilityValue(Text(verbatim: loadError))
             .background(AppColors.background.ignoresSafeArea())
             .workbenchNavigationTitle(Text(Self.deskTitle), isActive: isActive)
-        } else {
+        case .desk(let desk):
             // One desk, one surface: the detail view draws both the board and
             // the desk-before-its-first-material state, so there is no second
             // empty-desk arm here to drift out of step with it.
-            WorkboardDetailView(viewModel: viewModel)
+            WorkboardDetailView(viewModel: viewModel, desk: desk)
         }
     }
 }
