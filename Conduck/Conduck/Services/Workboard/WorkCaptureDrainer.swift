@@ -33,7 +33,12 @@
 // So the card is published once more under
 // `WorkMaterialCollisionEscape.materialID(forCapture:)`, and only a refusal of
 // that id too retires the capture: its bytes are copied into `refused/` beside
-// the queue before the entry is acknowledged, and the drain carries on.
+// the queue before the entry is acknowledged, and the drain carries on. That
+// copy is staged under a scratch name and renamed into place only once every
+// file it should carry is there at the queue's own byte count, because the
+// existence of the destination proves nothing: a crash or a full disk between
+// two files leaves a directory that exists and is short, and acknowledging
+// against one destroys the only complete copy of what a person shared.
 //
 // This type has no gateway dependency and no dispatch API: opening the app can
 // drain captures, but can never turn one into network work.
@@ -103,6 +108,14 @@ actor WorkCaptureDrainer {
         }
     }
 
+    /// A staged copy of a refused capture that does not carry every byte the
+    /// queue still holds. It never becomes the retirement and the claim goes
+    /// back to the queue instead, because the original is at that moment the
+    /// only complete copy of the file in existence.
+    private struct RetirementIncomplete: Error {
+        let directoryURL: URL
+    }
+
     /// Where a capture goes that can never become cards. A sibling of
     /// `processing/` inside the inbox root, and deliberately not named for a
     /// UUID: the inbox counts only UUID-named children of that root as pending
@@ -111,6 +124,13 @@ actor WorkCaptureDrainer {
     private static let refusedDirectoryName = "refused"
 
     private static let refusalReasonFilename = "refusal.txt"
+
+    /// Role suffixes for the two kinds of directory in `refused/` that are NOT
+    /// retirements: a copy still being made and verified, and one displaced for
+    /// being incomplete. Only the envelope-named directory beside them is a
+    /// finished retirement, and only a rename ever creates that name.
+    private static let stagedRetirementSuffix = "staging"
+    private static let displacedRetirementSuffix = "incomplete"
 
     /// How often an active claim's lease is renewed. Deliberately several times
     /// below `WorkCaptureInbox.staleClaimHorizon` so that consecutive missed
@@ -176,6 +196,22 @@ actor WorkCaptureDrainer {
 
     func _setMaterialWriteHoldForTesting(_ hold: (@Sendable (Int) async -> Void)?) {
         materialWriteHoldForTesting = hold
+    }
+
+    /// TEST SEAM — reach a retirement's staged copy before it is verified.
+    ///
+    /// WHY IT HAS TO EXIST. What the verification refuses is a copy that landed
+    /// SHORT — a crash, a killed process or a full disk between two of the
+    /// files — and nothing in this type can produce one: `copyItem` either
+    /// completes or throws, and a throw is the other path entirely. Handing the
+    /// staging directory to a test is the only way to stage the state a crash
+    /// leaves behind, which is a directory that exists and is incomplete.
+    /// Called after the copy and before the check that decides whether it may
+    /// be renamed into place; nil on every production path.
+    private var retirementStagingHoldForTesting: (@Sendable (URL) -> Void)?
+
+    func _setRetirementStagingHoldForTesting(_ hold: (@Sendable (URL) -> Void)?) {
+        retirementStagingHoldForTesting = hold
     }
     #endif
 
@@ -530,13 +566,28 @@ actor WorkCaptureDrainer {
     /// carried across: it names an acquisition of a queue this directory has
     /// left.
     ///
+    /// A copy is never made in place. It is staged under a scratch name beside
+    /// the retirement, checked against the byte counts the claimed directory
+    /// itself carries, and only then renamed onto the envelope-named one — so
+    /// the only step that creates that name is atomic, and a destination that
+    /// exists is a destination something finished. The existence of a directory
+    /// is otherwise proof of nothing: a crash, a killed process or a full disk
+    /// between two files leaves one that exists and is short, and a later
+    /// refusal that believed it would write a reason beside half a file and
+    /// then acknowledge away the queue's complete original. For the same reason
+    /// a destination already in place is verified rather than trusted, and one
+    /// that fails is moved aside under a scratch name instead of deleted: it
+    /// holds bytes nobody else has.
+    ///
     /// Nothing sweeps `refused/`. It fills only when a UUIDv5-derived escape id
     /// also lands on a card of another kind, which is not a state a working
     /// device reaches; leaving the bytes is the cheaper mistake than deleting
     /// something a person shared.
     ///
-    /// Idempotent, and it deletes nothing it did not itself write. The
-    /// retirement is named for the ENVELOPE rather than for the acquisition
+    /// Idempotent, and the only bytes it removes are those of a staged copy
+    /// that did not become the retirement — which carries nothing the queue is
+    /// not still holding, since nothing is acknowledged until the rename lands.
+    /// The retirement is named for the ENVELOPE rather than for the acquisition
     /// that took it, so a retirement whose acknowledgement then failed — the
     /// entry goes back to the queue and refuses again on the next drain —
     /// writes no second copy of the same bytes. Two captures cannot share that
@@ -555,17 +606,133 @@ actor WorkCaptureDrainer {
             claim.id.uuidString,
             isDirectory: true
         )
-        if !fileManager.fileExists(atPath: destination.path) {
-            try fileManager.copyItem(at: claim.directoryURL, to: destination)
+        let expected = try Self.retirementContents(
+            of: claim.directoryURL,
+            fileManager: fileManager
+        )
+
+        if fileManager.fileExists(atPath: destination.path) {
+            if Self.holdsRetirement(expected, at: destination, fileManager: fileManager) {
+                // The retirement already stands. Its reason is rewritten rather
+                // than skipped, so a directory an interrupted attempt left
+                // still says why it is here.
+                try Self.writeRefusalReason(reason, in: destination)
+                return
+            }
+            try fileManager.moveItem(
+                at: destination,
+                to: refused.appendingPathComponent(
+                    Self.retirementScratchName(
+                        envelopeID: claim.id,
+                        role: Self.displacedRetirementSuffix,
+                        at: now()
+                    ),
+                    isDirectory: true
+                )
+            )
+        }
+
+        let staged = refused.appendingPathComponent(
+            Self.retirementScratchName(
+                envelopeID: claim.id,
+                role: Self.stagedRetirementSuffix,
+                at: now()
+            ),
+            isDirectory: true
+        )
+        do {
+            try fileManager.copyItem(at: claim.directoryURL, to: staged)
             try? fileManager.removeItem(
-                at: destination.appendingPathComponent(
+                at: staged.appendingPathComponent(
                     WorkCaptureInbox.leaseFilename,
                     isDirectory: false
                 )
             )
+            #if CONDUCK_TESTING
+            retirementStagingHoldForTesting?(staged)
+            #endif
+            guard Self.holdsRetirement(expected, at: staged, fileManager: fileManager) else {
+                throw RetirementIncomplete(directoryURL: staged)
+            }
+            // Written before the rename, so the envelope-named directory is
+            // complete — reason included — the instant it exists.
+            try Self.writeRefusalReason(reason, in: staged)
+            try fileManager.moveItem(at: staged, to: destination)
+        } catch {
+            try? fileManager.removeItem(at: staged)
+            throw error
         }
+    }
+
+    /// What a complete retirement of this claim carries: every regular file in
+    /// the claimed directory at the byte count it has there, minus the lease,
+    /// which names an acquisition of a queue the copy has left. A claimed
+    /// directory is flat — the inbox refuses a payload path carrying a
+    /// separator — so nothing here recurses.
+    private static func retirementContents(
+        of directory: URL,
+        fileManager: FileManager
+    ) throws -> [String: Int64] {
+        var contents: [String: Int64] = [:]
+        for url in try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) {
+            let name = url.lastPathComponent
+            guard name != WorkCaptureInbox.leaseFilename else { continue }
+            let attributes = try fileManager.attributesOfItem(atPath: url.path)
+            guard (attributes[.type] as? FileAttributeType) == .typeRegular,
+                  let size = attributes[.size] as? NSNumber else { continue }
+            contents[name] = size.int64Value
+        }
+        return contents
+    }
+
+    /// Whether `directory` holds all of them, whole. This is the question a
+    /// retirement turns on — the acknowledgement behind it destroys the queue's
+    /// copy — and neither the destination existing nor a file being present at
+    /// the right name answers it: an interrupted copy leaves both.
+    private static func holdsRetirement(
+        _ contents: [String: Int64],
+        at directory: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        for (name, size) in contents {
+            guard let attributes = try? fileManager.attributesOfItem(
+                atPath: directory.appendingPathComponent(name, isDirectory: false).path
+            ),
+                (attributes[.type] as? FileAttributeType) == .typeRegular,
+                let copied = attributes[.size] as? NSNumber,
+                copied.int64Value == size else { return false }
+        }
+        return true
+    }
+
+    /// A unique name for a directory in `refused/` that is not a retirement.
+    /// It borrows the inbox's claim-directory shape — envelope id, instant,
+    /// one generation UUID — because that is the naming this queue already uses
+    /// for "these bytes, this attempt", and adds a role so that a person
+    /// reading the container can tell a copy in flight from a displaced partial
+    /// and both from the retirement itself. Nothing parses it: the inbox counts
+    /// only UUID-named children of its root, and `refused/` is not one of them.
+    private static func retirementScratchName(
+        envelopeID: UUID,
+        role: String,
+        at instant: Date
+    ) -> String {
+        let name = WorkCaptureInbox.claimDirectoryName(
+            envelopeID: envelopeID,
+            claimedAt: instant,
+            generation: UUID()
+        )
+        return "\(name).\(role)"
+    }
+
+    /// Forensic text beside the retired bytes, never displayed. Atomic because
+    /// a half-written reason beside a whole capture is worse than none.
+    private static func writeRefusalReason(_ reason: String, in directory: URL) throws {
         try Data(reason.utf8).write(
-            to: destination.appendingPathComponent(
+            to: directory.appendingPathComponent(
                 Self.refusalReasonFilename,
                 isDirectory: false
             ),

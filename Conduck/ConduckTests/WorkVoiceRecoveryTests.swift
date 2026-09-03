@@ -731,6 +731,159 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         )
     }
 
+    /// r6a#1's in-app half. The desk's voice sheet and the app's retry card are
+    /// reachable on one screen and read one queue, so Try Again has to RESERVE
+    /// the parked recording before it touches it — and refuse when another
+    /// surface is already finishing that same recording.
+    ///
+    /// Refusing is not a failure: nothing is deleted, no second transcription is
+    /// bought for one recording, the capture stays finishable, and the sheet says
+    /// so. On the shape this replaced, both surfaces transcribed the same bytes
+    /// and whichever finished first deleted them from under the other.
+    @MainActor
+    func testTheSheetsRetryIsRefusedWhileAnotherSurfaceHoldsTheRecording() async throws {
+        let store = ConversationStore(inMemory: true)
+        let lane = RecordingRetryLane()
+        let recorder = Self.workRecorder(store: store, lane: lane)
+
+        var hops = 0
+        recorder.transcriptionHopForTesting = { _ in
+            hops += 1
+            return hops == 1 ? .failure(.sttProviderUnreachable) : .success("recovered on the retry")
+        }
+
+        _ = await recorder._finishCaptureForTesting()
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let bytesBefore = await lane.audio(id: captureID)
+        XCTAssertNotNil(bytesBefore, "the failed capture parked its bytes")
+
+        // The menu bar — or a Shortcut host, or a second window — takes it over.
+        await lane.reserveForAnotherSurface(id: captureID)
+
+        let refused = await recorder.retryWorkCapture()
+
+        guard case .failure = refused else {
+            return XCTFail("a retry that never ran must not report a transcript")
+        }
+        XCTAssertTrue(
+            recorder.retryRefusedBusy,
+            """
+            The sheet has nothing to say about this tap. It is the one state \
+            where the honest sentence is that the recording is being finished \
+            somewhere else, not that anything failed.
+            """
+        )
+        XCTAssertEqual(
+            hops, 1,
+            """
+            A second transcription of a recording another surface is already \
+            transcribing is two provider round trips, two charges and two \
+            answers for one thing said once.
+            """
+        )
+        let entryAfter = await lane.entry(id: captureID)
+        XCTAssertNotNil(entryAfter, "and NOTHING was deleted — the holder still has a capture to finish")
+        let bytesAfter = await lane.audio(id: captureID)
+        XCTAssertEqual(bytesAfter, bytesBefore, "byte for byte, the recording is untouched")
+        XCTAssertTrue(
+            recorder.canRetryWorkCapture,
+            "the capture is exactly as finishable as it was a moment ago"
+        )
+        XCTAssertEqual(
+            recorder.state, .error(.sttProviderUnreachable),
+            "and the state the sheet is showing is the one it was already showing"
+        )
+    }
+
+    /// The reservation is taken BEFORE the speech hop and given back the moment
+    /// a retry ends without finishing the capture — so the next tap, here or on
+    /// the retry card, takes it immediately instead of waiting out a lease.
+    @MainActor
+    func testARetryReservesBeforeItTranscribesAndHandsTheCaptureBackWhenItFails() async throws {
+        let store = ConversationStore(inMemory: true)
+        let lane = RecordingRetryLane()
+        let recorder = Self.workRecorder(store: store, lane: lane)
+
+        var reservedDuringHop: [Bool] = []
+        recorder.transcriptionHopForTesting = { _ in
+            reservedDuringHop.append(await lane.isReserved(id: recorder.pendingWorkCapture?.id ?? UUID()))
+            return .failure(.sttProviderUnreachable)
+        }
+
+        _ = await recorder._finishCaptureForTesting()
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        XCTAssertEqual(
+            reservedDuringHop, [false],
+            "the FIRST run reserves nothing — there is no queue entry until it fails"
+        )
+
+        _ = await recorder.retryWorkCapture()
+
+        XCTAssertEqual(
+            reservedDuringHop, [false, true],
+            """
+            The retry has to hold the capture while it transcribes. Reserving \
+            after the hop protects nothing: the window this closes is exactly \
+            the minutes the provider is thinking.
+            """
+        )
+        let reservationsTaken = await lane.reservations
+        XCTAssertEqual(reservationsTaken, [captureID], "and it reserved THIS capture, not the newest one")
+        let handedBack = await lane.releases
+        XCTAssertEqual(
+            handedBack, [captureID],
+            """
+            A retry that failed leaves the capture waiting, so the hold goes \
+            back at once. Keeping it would make the retry card refuse the person \
+            their own recording for the length of the lease.
+            """
+        )
+        let stillHeld = await lane.isReserved(id: captureID)
+        XCTAssertFalse(stillHeld)
+        let stillQueued = await lane.entry(id: captureID)
+        XCTAssertNotNil(stillQueued, "the entry itself is untouched by the release")
+    }
+
+    /// A capture the recorder armed but no longer HOLDS is not its to delete.
+    /// Record Again lets go of the first capture, and the lease-blind clear this
+    /// replaced deleted the recording the retry card was mid-transcription on.
+    @MainActor
+    func testRecordAgainLeavesARecordingAnotherSurfaceIsFinishing() async throws {
+        let store = ConversationStore(inMemory: true)
+        let lane = RecordingRetryLane()
+        let recorder = Self.workRecorder(store: store, lane: lane)
+        recorder.transcriptionHopForTesting = { _ in .failure(.sttProviderUnreachable) }
+
+        _ = await recorder._finishCaptureForTesting()
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let bytesBefore = await lane.audio(id: captureID)
+
+        // Another surface is finishing it when the person taps Record Again.
+        await lane.reserveForAnotherSurface(id: captureID)
+        recorder.microphoneStartForTesting = { true }
+        recorder.dismissError()
+        await recorder.startRecording()
+
+        guard case .recording = recorder.state else {
+            return XCTFail("the replacement capture must actually be recording")
+        }
+        let survivor = await lane.entry(id: captureID)
+        XCTAssertNotNil(
+            survivor,
+            """
+            The recorder let go of a capture it armed — which is right — but it \
+            does not own that recording any more, and the surface that does is \
+            transcribing those exact bytes.
+            """
+        )
+        let bytesAfter = await lane.audio(id: captureID)
+        XCTAssertEqual(bytesAfter, bytesBefore)
+        XCTAssertFalse(
+            recorder.canRetryWorkCapture,
+            "…and this sheet has still moved on: the replaced capture is no longer its subject"
+        )
+    }
+
     /// Record Again replaces a capture. Until the replacement microphone is
     /// actually live there is nothing to replace it WITH, so a refused start
     /// must leave the first capture — and the record that can still finish it —
@@ -855,7 +1008,13 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             first, transcript: "the ferry leaves at seven", store: store, queue: queue
         )
         XCTAssertTrue(firstOutcome.isTerminal)
-        _ = await lane.clear(ifCurrentID: first.id)
+        // Through the lane's OWN reservation, never the fabricated claim these
+        // fixtures carry: the queue has no lease-blind clear left, so finishing
+        // a capture means holding it first.
+        let firstReservation = await lane.claim(id: first.id, duration: 600)
+        let firstHold = try XCTUnwrap(firstReservation)
+        let firstCleared = await lane.clear(firstHold)
+        XCTAssertTrue(firstCleared)
 
         let stillQueued = await lane.queued
         XCTAssertEqual(
@@ -867,7 +1026,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             second, transcript: "ask about the bikes", store: store, queue: queue
         )
         XCTAssertTrue(secondOutcome.isTerminal)
-        _ = await lane.clear(ifCurrentID: second.id)
+        let secondReservation = await lane.claim(id: second.id, duration: 600)
+        let secondHold = try XCTUnwrap(secondReservation)
+        let secondCleared = await lane.clear(secondHold)
+        XCTAssertTrue(secondCleared)
 
         let emptied = await lane.queued
         XCTAssertTrue(emptied.isEmpty)
@@ -1135,22 +1297,57 @@ final class WorkVoiceRecoveryTests: XCTestCase {
 }
 
 /// An in-memory stand-in for the App-Group retry QUEUE, with the same rules the
-/// real one has: one entry per capture id, an arm that displaces nothing, and a
-/// clear that removes exactly the capture it names.
+/// real one has: one entry per capture id, an arm that displaces nothing, a
+/// reservation that names its holder, and a clear that removes exactly the
+/// capture it names and only for the holder that reserved it.
 ///
 /// The real store is a process-global singleton over one file every capture
 /// test in this bundle shares, and what these cases assert is which capture the
-/// recorder arms and releases — a property of the recorder, not of the wire
-/// format `PendingRetryDestinationTests` and `PendingRetryQueueTests` pin.
-private actor RecordingRetryLane: PendingRetryQueueWriting {
+/// recorder arms, RESERVES and releases — a property of the recorder, not of the
+/// wire format `PendingRetryDestinationTests` and `PendingRetryQueueTests` pin.
+///
+/// The lease rules mirrored here are the ones the recorder's behaviour depends
+/// on, and no others: an id already reserved is refused, a token that does not
+/// match writes nothing, and an expiry is a *stealable* reservation rather than
+/// a retired one (`PendingRetryLeaseTests` pins the real store's own version).
+private actor RecordingRetryLane: PendingRetryLaneReserving {
     private var entries: [(metadata: PendingRetryMetadata, audio: Data)] = []
+    private var leases: [UUID: (token: UUID, expiresAt: Date, duration: TimeInterval)] = [:]
 
     /// Every metadata this lane was ASKED to write, so a test can tell "the
     /// other capture survived untouched" from "it was rewritten in place".
     private(set) var saves: [PendingRetryMetadata] = []
 
+    /// Every reservation this lane granted, newest last, so a case can assert
+    /// that a retry reserved before it transcribed rather than after.
+    private(set) var reservations: [UUID] = []
+
+    /// Every reservation handed back unfinished, so a case can tell "released"
+    /// from "cleared" — the difference between a capture the next tap can take
+    /// and one that is gone.
+    private(set) var releases: [UUID] = []
+
+    /// Every renewal this lane was asked for, so a case can prove a live retry
+    /// keeps extending the hold it took.
+    private(set) var renewals: [UUID] = []
+
     init(seeded: PendingRetryMetadata? = nil, audio: Data = Data()) {
         if let seeded { entries = [(seeded, audio)] }
+    }
+
+    /// Pre-reserve a capture for SOMEBODY ELSE, so a case can put the recorder
+    /// in front of an entry another surface is already finishing.
+    @discardableResult
+    func reserveForAnotherSurface(id: UUID, duration: TimeInterval = 600) -> UUID {
+        let token = UUID()
+        leases[id] = (token, Date().addingTimeInterval(duration), duration)
+        return token
+    }
+
+    /// Whether a reservation is live over this capture right now.
+    func isReserved(id: UUID) -> Bool {
+        guard let lease = leases[id] else { return false }
+        return lease.expiresAt > Date()
     }
 
     /// Every capture still queued, newest first — the order the real store
@@ -1178,12 +1375,56 @@ private actor RecordingRetryLane: PendingRetryQueueWriting {
         saves.append(metadata)
         entries.removeAll { $0.metadata.id == metadata.id }
         entries.append((metadata, audioData))
+        // A re-arm is a new failure on a capture somebody may still be holding,
+        // never a reason to take it away from them — the real store carries the
+        // live reservation through `save` for the same reason.
+    }
+
+    // MARK: - The reservation half
+
+    func claim(id: UUID, duration: TimeInterval) async -> PendingRetryClaim? {
+        guard let entry = entries.first(where: { $0.metadata.id == id }) else { return nil }
+        if let lease = leases[id], lease.expiresAt > Date() { return nil }
+        let token = UUID()
+        leases[id] = (token, Date().addingTimeInterval(duration), duration)
+        reservations.append(id)
+        return PendingRetryClaim(
+            entry: PendingRetryEntry(
+                audioData: entry.audio,
+                metadata: entry.metadata,
+                workImageData: nil
+            ),
+            token: token
+        )
     }
 
     @discardableResult
-    func clear(ifCurrentID id: UUID) async -> Bool {
-        guard entries.contains(where: { $0.metadata.id == id }) else { return false }
-        entries.removeAll { $0.metadata.id == id }
+    func renew(_ claim: PendingRetryClaim) async -> Bool {
+        guard let lease = leases[claim.id], lease.token == claim.token else { return false }
+        leases[claim.id] = (
+            lease.token, Date().addingTimeInterval(lease.duration), lease.duration
+        )
+        renewals.append(claim.id)
+        return true
+    }
+
+    func confirmOwnership(_ claim: PendingRetryClaim) async -> Bool {
+        guard entries.contains(where: { $0.metadata.id == claim.id }) else { return false }
+        return leases[claim.id]?.token == claim.token
+    }
+
+    func release(_ claim: PendingRetryClaim) async {
+        guard leases[claim.id]?.token == claim.token else { return }
+        leases[claim.id] = nil
+        releases.append(claim.id)
+    }
+
+    @discardableResult
+    func clear(_ claim: PendingRetryClaim) async -> Bool {
+        guard leases[claim.id]?.token == claim.token else { return false }
+        guard entries.contains(where: { $0.metadata.id == claim.id }) else { return false }
+        entries.removeAll { $0.metadata.id == claim.id }
+        leases[claim.id] = nil
         return true
     }
 }

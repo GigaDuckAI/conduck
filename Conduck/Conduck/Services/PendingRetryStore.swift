@@ -57,6 +57,17 @@
 //           Anything under a tombstone is a deletion to be finished, never a
 //           capture to be adopted.
 //
+// THE SIDECAR IS AUTHORITATIVE over its index row, and that follows from the
+// orders above: every operation writes the sidecar first, so the two can only
+// disagree when a process died between them, and the sidecar is the newer half.
+// A reconciliation that reads a differing index row rewrites it from the
+// sidecar. An UNREADABLE sidecar is evidence of nothing — the file is protected
+// until first unlock, and a decode can fail on a truncated write — so its
+// capture DEFERS: the recording is kept, nothing is persisted, and the next read
+// tries again. Reconstructing a record from the filename instead loses the
+// verdict, the words and the language, and that lossy row would then be the
+// authority for ever.
+//
 // EXPIRY is a budget for a TRANSCRIPTION, not for a recording. Ten minutes is
 // the right window for words that can be bought from a provider again, so it
 // governs Chat retries and Work captures whose recording is already a card on
@@ -73,6 +84,25 @@
 // recordings materialised at once is how an iOS process dies before it can
 // offer any of them — and every later operation carries the token that
 // reservation minted.
+//
+// `claimNext` SELECTS; `claim(id:duration:)` ADDRESSES. The two are different
+// questions and only the retry surfaces ask the first one. A lane that armed a
+// capture itself — the guard, the recorder, a Shortcut's intent process, the
+// desk's voice sheet — holds the id it minted, and "the newest unreserved
+// capture" is not that capture whenever anything armed after it. Its own
+// duration is a parameter because the lanes' lifetimes differ by an order of
+// magnitude: an intent process that is killed announces a retry at 90 seconds,
+// so a ten-minute hold taken there would tell a person to tap a button the store
+// refuses them for another eight.
+//
+// A RESERVATION IS RENEWED, not sized for the worst case. A custom provider
+// request is allowed 300 seconds and is attempted three times, so a
+// transcription can outlast any fixed horizon short enough to give a capture
+// back promptly when its holder dies. `renew` extends the reservation by the
+// duration it was granted with, `confirmOwnership` is what a holder asks before
+// acting on a capture it has been transcribing for minutes, and a live
+// reservation also exempts its capture from the expiry sweep — the clock retires
+// captures nobody is finishing.
 
 import Foundation
 import Darwin
@@ -110,7 +140,9 @@ nonisolated enum PendingRetryPublicationState: String, Codable, Sendable {
 /// Metadata describing one queued capture. Destination is optional on the wire
 /// for backwards compatibility; nil means Chat for every record made before
 /// Work existed.
-nonisolated struct PendingRetryMetadata: Codable, Sendable {
+/// Equatable so the reconciliation can tell an index row that AGREES with its
+/// sidecar from one a crash left behind, and rewrite only the second.
+nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
     /// Stable identifier for this capture. It is the queue's KEY: the audio
     /// file, the screenshot, the desk card a Work capture publishes and the
     /// record recovered hours later all name themselves with it.
@@ -266,6 +298,22 @@ nonisolated struct PendingRetryLease: Codable, Sendable {
     let token: UUID
     let expiresAt: Date
 
+    /// How long this reservation was granted for, so a renewal extends it by
+    /// the holder's OWN horizon rather than by a default that belongs to a
+    /// different lane — a 90-second intent hold renewed for ten minutes is the
+    /// hazard the parameter exists to avoid.
+    ///
+    /// Optional on the wire for the reason every added field here is: a
+    /// reservation written before it existed decodes as nil, which reads as the
+    /// standard horizon.
+    let duration: TimeInterval?
+
+    init(token: UUID, expiresAt: Date, duration: TimeInterval? = nil) {
+        self.token = token
+        self.expiresAt = expiresAt
+        self.duration = duration
+    }
+
     func isLive(at now: Date) -> Bool { expiresAt > now }
 }
 
@@ -301,24 +349,6 @@ nonisolated struct PendingRetryClaim: Sendable {
     init(entry: PendingRetryEntry, token: UUID) {
         self.entry = entry
         self.token = token
-    }
-}
-
-/// What a Work recovery is handed, reduced to the two things it needs: which
-/// capture this is, and the bytes it parked. It is a value rather than the
-/// loaded entry so a recovery cannot be given a screenshot it has no business
-/// publishing.
-nonisolated struct PendingRetryRecord: Sendable {
-    let metadata: PendingRetryMetadata
-    let audio: Data
-
-    init(metadata: PendingRetryMetadata, audio: Data) {
-        self.metadata = metadata
-        self.audio = audio
-    }
-
-    init(_ entry: PendingRetryEntry) {
-        self.init(metadata: entry.metadata, audio: entry.audioData)
     }
 }
 
@@ -521,19 +551,21 @@ nonisolated enum PendingRetryQueue {
     }
 }
 
-/// What a capture surface does to the queue, named as one seam. It exists so a
-/// capture surface's OWN rules — which capture it arms and which it releases —
-/// can be asserted without writing to the process-global App-Group file every
-/// other capture test in the bundle shares.
+/// The durable write a capture surface makes when it parks a recording, named
+/// as one seam. It exists so a capture surface's OWN rule — which capture it
+/// arms — can be asserted without writing to the process-global App-Group file
+/// every other capture test in the bundle shares.
+///
+/// It carries the arm and NOTHING that ends a capture: every operation that
+/// finishes, restates or releases one is token-gated and lives on
+/// `PendingRetryLaneReserving`, which refines this. A seam that let a surface
+/// end a capture by id is what let two surfaces finish one recording.
 nonisolated protocol PendingRetryQueueWriting: Sendable {
     func save(
         audioData: Data,
         metadata: PendingRetryMetadata,
         workImageData: Data?
     ) async throws
-
-    @discardableResult
-    func clear(ifCurrentID id: UUID) async -> Bool
 }
 
 /// Persists pending audio retries across app launches, so a network failure
@@ -709,8 +741,7 @@ actor PendingRetryStore: PendingRetryQueueWriting {
                 }
                 guard chosen == nil else { continue }
                 if let surface, metadata.resolvedDestination != surface { continue }
-                if let lease = readSidecar(for: metadata.id, in: container)?.lease,
-                   lease.isLive(at: now) { continue }
+                if isReserved(metadata.id, in: container, at: now) { continue }
                 chosen = metadata
                 chosenURL = url
             }
@@ -719,30 +750,107 @@ actor PendingRetryStore: PendingRetryQueueWriting {
                 _ = finishLocked(doomed, from: entries, defaults: defaults, in: container)
             }
 
-            guard let chosen, let chosenURL, let audioData = readAudio(at: chosenURL) else {
-                return nil
-            }
-            let lease = PendingRetryLease(
-                token: UUID(),
-                expiresAt: now.addingTimeInterval(Self.claimLeaseDuration)
-            )
-            // A reservation that cannot be written is not a reservation. Better
-            // to offer nothing this tap than to hand two surfaces the same
-            // capture believing one of them holds it.
-            guard (try? writeSidecar(
-                PendingRetrySidecar(metadata: chosen, lease: lease),
+            guard let chosen, let chosenURL else { return nil }
+            return reserveLocked(
+                chosen,
+                at: chosenURL,
+                duration: Self.claimLeaseDuration,
+                now: now,
                 in: container
-            )) != nil else { return nil }
-
-            return PendingRetryClaim(
-                entry: PendingRetryEntry(
-                    audioData: audioData,
-                    metadata: chosen,
-                    workImageData: workImageData(for: chosen, in: container)
-                ),
-                token: lease.token
             )
         }
+    }
+
+    /// Reserve the capture this caller already knows the id of.
+    ///
+    /// This is the ARM side's primitive. A lane that minted a capture — the
+    /// guard, the recorder, a Shortcut's intent process, the desk's voice sheet
+    /// — addresses that capture and no other, and `claimNext`'s answer ("the
+    /// newest capture nobody has reserved") is a different capture the moment
+    /// anything armed after it.
+    ///
+    /// Nil when the capture is not queued, when somebody else's reservation is
+    /// still live over it, or when its recording cannot be read. A capture whose
+    /// recording is GONE is finished here, exactly as `claimNext` finishes one.
+    ///
+    /// `duration` is the caller's own horizon: a process that announces a retry
+    /// at 90 seconds must not hold the capture for ten minutes, because the hold
+    /// outlives the process and the person is told to tap a button the store
+    /// then refuses.
+    func claim(
+        id: UUID,
+        duration: TimeInterval = PendingRetryStore.claimLeaseDuration
+    ) async -> PendingRetryClaim? {
+        guard let container = containerURL else { return nil }
+        let defaults = defaults
+        return try? withExclusiveLock(in: container) { () -> PendingRetryClaim? in
+            let now = Date()
+            let entries = liveQueueLocked(from: defaults, in: container)
+            guard let metadata = entries.first(where: { $0.id == id }) else { return nil }
+            guard !isReserved(id, in: container, at: now) else { return nil }
+            guard let url = readableAudioURL(for: metadata, in: container) else {
+                _ = finishLocked([metadata], from: entries, defaults: defaults, in: container)
+                return nil
+            }
+            return reserveLocked(
+                metadata, at: url, duration: duration, now: now, in: container
+            )
+        }
+    }
+
+    /// Extend the reservation this claim holds, by the duration it was granted
+    /// with.
+    ///
+    /// A holder renews while it is still working: a custom provider request is
+    /// allowed 300 seconds and is attempted three times, so a transcription can
+    /// outlast a horizon short enough to give a capture back promptly when the
+    /// process holding it dies. False when the reservation is no longer this
+    /// holder's — somebody overtook it after it lapsed — and then nothing is
+    /// written.
+    @discardableResult
+    func renew(_ claim: PendingRetryClaim) async -> Bool {
+        guard let container = containerURL else { return false }
+        return (try? withExclusiveLock(in: container) { () -> Bool in
+            guard let sidecar = readSidecar(for: claim.id, in: container),
+                  let lease = sidecar.lease, lease.token == claim.token else { return false }
+            let horizon = lease.duration ?? Self.claimLeaseDuration
+            // The sidecar's own metadata, never the index row's: the sidecar is
+            // the authority, and a renewal must not quietly reinstate a record
+            // an interrupted write left behind.
+            return (try? writeSidecar(
+                PendingRetrySidecar(
+                    metadata: sidecar.metadata,
+                    lease: PendingRetryLease(
+                        token: lease.token,
+                        expiresAt: Date().addingTimeInterval(horizon),
+                        duration: lease.duration
+                    )
+                ),
+                in: container
+            )) != nil
+        }) ?? false
+    }
+
+    /// Does this claim still hold its capture? Reads only — no reservation is
+    /// taken, extended or dropped.
+    ///
+    /// It is the question a surface asks after minutes of transcription and
+    /// before it acts: handing a transcript to a card, sending a message,
+    /// cancelling the deferred notification, showing success. False means
+    /// somebody else owns the capture now — an expired reservation was overtaken
+    /// — or that the capture is already finished, and in either case this
+    /// surface must do nothing further with it.
+    func confirmOwnership(_ claim: PendingRetryClaim) async -> Bool {
+        guard let container = containerURL else { return false }
+        let defaults = defaults
+        return (try? withExclusiveLock(in: container) { () -> Bool in
+            // Deliberately the reconciled queue rather than the expiry-swept
+            // one: a question about ownership may finish an interrupted
+            // deletion, but it may not itself retire a capture on the clock.
+            let entries = queueLocked(from: defaults, in: container)
+            guard entries.contains(where: { $0.id == claim.id }) else { return false }
+            return liveLease(for: claim, in: container) != nil
+        }) ?? false
     }
 
     /// How many captures are waiting, records only — no recording is read.
@@ -933,58 +1041,6 @@ actor PendingRetryStore: PendingRetryQueueWriting {
         }
     }
 
-    /// Clear exactly the capture the caller completed, and nothing else. Every
-    /// other queued capture — including one armed by another process while this
-    /// caller was suspended — is untouched.
-    ///
-    /// Superseded by `clear(_ claim:)`; delete when no caller remains. It takes
-    /// no reservation, so it cannot tell whether the capture it is finishing is
-    /// the one this caller was working on.
-    @discardableResult
-    func clear(ifCurrentID id: UUID) async -> Bool {
-        guard let container = containerURL else { return false }
-        let defaults = defaults
-        return (try? withExclusiveLock(in: container) { () -> Bool in
-            let entries = queueLocked(from: defaults, in: container)
-            guard let removed = entries.first(where: { $0.id == id }) else { return false }
-            return !finishLocked([removed], from: entries, defaults: defaults, in: container).isEmpty
-        }) ?? false
-    }
-
-    /// Record what a process OBSERVED about one capture — whether its recording
-    /// reached the desk, and the words if recognition already produced them.
-    ///
-    /// The ownership check and the write happen inside ONE `withExclusiveLock`,
-    /// so nothing can arm, complete or restate this capture between them. It is
-    /// metadata-only: no audio is re-written, no file is touched, and no other
-    /// entry is read back or re-committed. A capture that is no longer queued
-    /// answers false and nothing is created — a verdict about a recording that
-    /// has already been dealt with is not a reason to bring it back.
-    ///
-    /// A nil argument keeps whatever the record already carries.
-    ///
-    /// Superseded by `recordPublicationState(_ claim:transcript:publicationState:)`;
-    /// delete when no caller remains.
-    @discardableResult
-    func recordPublicationState(
-        id: UUID,
-        transcript: String? = nil,
-        publicationState: PendingRetryPublicationState?
-    ) async -> Bool {
-        guard let container = containerURL else { return false }
-        let defaults = defaults
-        return (try? withExclusiveLock(in: container) { () -> Bool in
-            let entries = queueLocked(from: defaults, in: container)
-            return restateLocked(
-                id: id,
-                in: entries,
-                defaults: defaults,
-                container: container,
-                lease: readSidecar(for: id, in: container)?.lease
-            ) { $0.recording(transcript: transcript, publicationState: publicationState) }
-        }) ?? false
-    }
-
     /// Discard every pending capture (Settings → "Clear pending recording").
     /// Deletes the audio files, the screenshots, the records and the queue
     /// itself — including the pre-id-scoped recording, which this is the only
@@ -1047,27 +1103,40 @@ actor PendingRetryStore: PendingRetryQueueWriting {
         // after the queue naming the copy commits.
         if let slot = pointerData.flatMap({
             try? JSONDecoder().decode(PendingRetryMetadata.self, from: $0)
-        }), !queuedIDs(in: queueData).contains(slot.id) {
+        }) {
+            let alreadyQueued = queuedIDs(in: queueData).contains(slot.id)
             if files.audio[slot.id] != nil {
-                // Already id-scoped: an earlier fold copied them and died
-                // before retiring the original.
+                // Its bytes are already under its own id — either this fold
+                // copied them and died before retiring the fixed name, or an
+                // earlier read committed the entry and died before it. The
+                // recognition is deliberately NOT conditioned on the entry
+                // being absent from the index: the crash window that leaves an
+                // already-queued capture beside an un-retired fixed name is
+                // exactly the one that used to leak the file for ever, because
+                // the next read skipped this step and retired the pointer, and
+                // the pointer is the last thing that could name the file.
                 retireLegacyRecording = files.hasLegacyRecording
-            } else if copyLegacyRecording(
-                to: slot.id,
-                destination: slot.resolvedDestination,
-                files: &files,
-                in: container
-            ) {
-                retireLegacyRecording = true
-            } else {
-                // Its only recording could not be put under an id. Leave BOTH
-                // the pointer and the file exactly as they are for the next
-                // read; a queued capture with no bytes would be finished by the
-                // next claim, and finishing it is what deletes the file.
-                entries.removeAll { $0.id == slot.id }
-                foldedLegacySlot = false
-                retireLegacyPointer = false
+            } else if !alreadyQueued {
+                if copyLegacyRecording(
+                    to: slot.id,
+                    destination: slot.resolvedDestination,
+                    files: &files,
+                    in: container
+                ) {
+                    retireLegacyRecording = true
+                } else {
+                    // Its only recording could not be put under an id. Leave
+                    // BOTH the pointer and the file exactly as they are for the
+                    // next read; a queued capture with no bytes would be
+                    // finished by the next claim, and finishing it is what
+                    // deletes the file.
+                    entries.removeAll { $0.id == slot.id }
+                    foldedLegacySlot = false
+                    retireLegacyPointer = false
+                }
             }
+            // Queued but owning no bytes is the entry an earlier build folded in
+            // without moving them; step 3 is what gives it the recording.
         }
 
         // 3 — The pre-id-scoped recording, once. An entry folded in by an
@@ -1084,29 +1153,56 @@ actor PendingRetryStore: PendingRetryQueueWriting {
             }
         }
 
-        // 4 — Adopt every arm that did not commit. The sidecar carries the
+        // 3b — The fixed name a build BEFORE this ordering left behind. That
+        // build retired the pointer before deleting the file, so a death in
+        // between removed the only thing that could name the recording. The one
+        // safe reading of it is proof rather than inference: it goes only when a
+        // queued capture's own recording is byte-for-byte this file, which is
+        // proof the recording is preserved. An unreadable file compares unequal,
+        // so a locked device leaves it alone.
+        if firstReconcile, files.hasLegacyRecording, !retireLegacyRecording,
+           legacyRecordingIsDuplicated(of: entries, files: files, in: container) {
+            retireLegacyRecording = true
+        }
+
+        // 4 — The record is authoritative over its index row. They are never
+        // committed together and the record is always written first, so a
+        // disagreement is a process that died between the two writes and the
+        // record is the newer half. An UNREADABLE record changes nothing: its
+        // row is left exactly as it stands and the next read tries again.
+        for (position, metadata) in entries.enumerated() {
+            guard files.sidecars.contains(metadata.id),
+                  let recorded = readSidecar(for: metadata.id, in: container)?.metadata,
+                  recorded != metadata else { continue }
+            entries[position] = recorded
+            changed = true
+        }
+
+        // 5 — Adopt every arm that did not commit. The sidecar carries the
         // WHOLE record, so a refused Work publication comes back with its
         // verdict and its words rather than as a capture with neither.
         for id in files.sidecars.sorted(by: { $0.uuidString < $1.uuidString })
         where !entries.contains(where: { $0.id == id }) {
-            guard let file = files.audio[id] else {
+            guard files.audio[id] != nil else {
                 // An arm whose bytes never landed. There is no recording to
                 // protect and no retry that could succeed.
                 remove(container.appendingPathComponent(PendingRetryFiles.sidecar(id)))
                 continue
             }
-            if let sidecar = readSidecar(for: id, in: container) {
-                entries.append(sidecar.metadata)
-            } else if let salvaged = adoptedMetadata(forID: id, file: file) {
-                // An unreadable record is not a reason to delete a recording.
-                entries.append(salvaged)
-            } else {
+            guard let sidecar = readSidecar(for: id, in: container) else {
+                // Unreadable, so this capture DEFERS: the recording stays, the
+                // record stays, and nothing is written. Rebuilding the entry
+                // from the filename instead would lose the verdict, the words
+                // and the language — and that lossy row would then be the
+                // authority for ever, because a capture the index names is
+                // never re-read from its record.
                 continue
             }
+            entries.append(sidecar.metadata)
             changed = true
         }
 
-        // 5 — A recording with neither a record nor an index row. Under the
+        // 6 — A recording with neither a record nor an index row. Under the
         // current layout that is residue a clear did not finish deleting;
         // under the previous one it is an arm that could not describe itself,
         // and those are adopted once.
@@ -1127,7 +1223,7 @@ actor PendingRetryStore: PendingRetryQueueWriting {
             changed = true
         }
 
-        // 6 — Give every index row a record. This is what upgrades a container
+        // 7 — Give every index row a record. This is what upgrades a container
         // the previous layout wrote, and what repairs one somebody deleted.
         let unrecorded = entries.filter { !files.sidecars.contains($0.id) }
         for metadata in unrecorded {
@@ -1141,17 +1237,21 @@ actor PendingRetryStore: PendingRetryQueueWriting {
         entries = PendingRetryQueue.ordered(entries)
 
         var committed = true
-        if changed || foldedLegacySlot || retireLegacyPointer {
+        if changed || foldedLegacySlot || retireLegacyPointer || retireLegacyRecording {
             do {
                 try persist(entries, to: defaults)
+                if retireLegacyRecording {
+                    // BEFORE the pointer, deliberately. The pointer is the last
+                    // thing that can name this recording, so a death between the
+                    // two must leave the pointer standing over a file that is
+                    // already gone — never a file with nothing left to name it.
+                    remove(container.appendingPathComponent(PendingRetryFiles.legacyAudioName))
+                }
                 if retireLegacyPointer {
                     // Only once the queue carrying it is committed. The pointer
                     // is the sole description of that recording until then.
                     defaults.removeObject(forKey: PendingRetryDefaultsKeys.legacySlot)
                     _ = defaults.synchronize()
-                }
-                if retireLegacyRecording {
-                    remove(container.appendingPathComponent(PendingRetryFiles.legacyAudioName))
                 }
             } catch {
                 // Nothing on disk was lost: the next read decodes the same
@@ -1168,15 +1268,25 @@ actor PendingRetryStore: PendingRetryQueueWriting {
 
     /// The queue with the clock applied — expired captures finished and their
     /// files reclaimed.
+    ///
+    /// A capture under a LIVE reservation is not idle, so the clock does not
+    /// reach it: the TTL is a budget for a transcription nobody is performing,
+    /// and a provider request may be allowed 300 seconds and attempted three
+    /// times, which is longer than the budget itself. Deleting a recording out
+    /// from under the surface transcribing it is the one thing the clock must
+    /// never do. The reservation lapses when its holder stops renewing, and the
+    /// next read applies the clock as normal.
     private func liveQueueLocked(
         from defaults: any DefaultsStore,
         in container: URL
     ) -> [PendingRetryMetadata] {
         let entries = queueLocked(from: defaults, in: container)
-        let split = PendingRetryQueue.partitioningExpired(entries, at: Date())
-        guard !split.expired.isEmpty else { return entries }
+        let now = Date()
+        let expired = PendingRetryQueue.partitioningExpired(entries, at: now).expired
+            .filter { !isReserved($0.id, in: container, at: now) }
+        guard !expired.isEmpty else { return entries }
         let finished = finishLocked(
-            split.expired, from: entries, defaults: defaults, in: container
+            expired, from: entries, defaults: defaults, in: container
         )
         return entries.filter { !finished.contains($0.id) }
     }
@@ -1263,6 +1373,55 @@ actor PendingRetryStore: PendingRetryQueueWriting {
         liveLease(for: claim, in: container) != nil
     }
 
+    /// Might another surface still be holding this capture?
+    ///
+    /// An UNREADABLE record answers yes. Not knowing who holds a capture is not
+    /// a licence to take it, and the two ways a record fails to read — protected
+    /// until first unlock, or a decode that fails — are both states where a
+    /// live reservation may be sitting in bytes this process cannot see.
+    private func isReserved(_ id: UUID, in container: URL, at now: Date) -> Bool {
+        let url = sidecarURL(for: id, in: container)
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        guard let sidecar = readSidecar(for: id, in: container) else { return true }
+        guard let lease = sidecar.lease else { return false }
+        return lease.isLive(at: now)
+    }
+
+    /// Take the reservation and hand the capture over. The single place a claim
+    /// is minted, so `claimNext` and `claim(id:)` cannot drift on what a
+    /// reservation is or on what a claim carries.
+    ///
+    /// A reservation that cannot be WRITTEN is not a reservation: nothing is
+    /// offered, because handing two surfaces the same capture while both believe
+    /// they hold it is the defect the lease exists to remove.
+    private func reserveLocked(
+        _ metadata: PendingRetryMetadata,
+        at audioURL: URL,
+        duration: TimeInterval,
+        now: Date,
+        in container: URL
+    ) -> PendingRetryClaim? {
+        guard let audioData = readAudio(at: audioURL) else { return nil }
+        let lease = PendingRetryLease(
+            token: UUID(),
+            expiresAt: now.addingTimeInterval(duration),
+            duration: duration
+        )
+        guard (try? writeSidecar(
+            PendingRetrySidecar(metadata: metadata, lease: lease),
+            in: container
+        )) != nil else { return nil }
+
+        return PendingRetryClaim(
+            entry: PendingRetryEntry(
+                audioData: audioData,
+                metadata: metadata,
+                workImageData: workImageData(for: metadata, in: container)
+            ),
+            token: lease.token
+        )
+    }
+
     // MARK: - Files
 
     /// Everything this store owns in the container, read in one pass.
@@ -1346,10 +1505,38 @@ actor PendingRetryStore: PendingRetryQueueWriting {
         return true
     }
 
+    /// Is the pre-id-scoped recording a copy of one a queued capture already
+    /// owns?
+    ///
+    /// The fold COPIES rather than moves, so between the copy and the deletion
+    /// both files hold the same bytes. If a process died in that window on a
+    /// build that retired the pointer first, nothing names the fixed name any
+    /// more — and the only honest way to reclaim it is proof that its content
+    /// survives elsewhere. Bytes, not sizes or timestamps: an inference here
+    /// deletes a recording that may exist nowhere else.
+    ///
+    /// A file that cannot be read compares unequal, so a locked device answers
+    /// false and leaves it.
+    private func legacyRecordingIsDuplicated(
+        of entries: [PendingRetryMetadata],
+        files: Inventory,
+        in container: URL
+    ) -> Bool {
+        let legacy = container.appendingPathComponent(PendingRetryFiles.legacyAudioName)
+        for metadata in entries {
+            guard let file = files.audio[metadata.id] else { continue }
+            if FileManager.default.contentsEqual(
+                atPath: legacy.path, andPath: file.url.path
+            ) { return true }
+        }
+        return false
+    }
+
     /// The record a recording can be reconstructed from when nothing else
     /// describes it: its id and destination from the name, and its age from the
-    /// file. Everything a recovery branches on is missing, which is exactly why
-    /// the sidecar exists.
+    /// file. Everything a recovery branches on is missing, which is why it is
+    /// reached only where nothing else CAN describe the recording — a container
+    /// the previous layout wrote, which had no records in it at all.
     private func adoptedMetadata(
         forID id: UUID,
         file: Inventory.AudioFile

@@ -8,7 +8,7 @@
 // `defaultValue:` at runtime, so a guard that resolves the string proves
 // nothing about the row that ships.
 //
-// Four rules, each of which held false copy in front of a user before it
+// Six rules, each of which held false copy in front of a user before it
 // existed:
 //
 // (1) VOCABULARY. Work opens, keeps and removes; it never sends, dispatches,
@@ -34,8 +34,14 @@
 // reclaims a Work capture the desk never accepted, so the retry card's discard
 // deletes the only copy of what somebody said; its confirmation has to name
 // the device the bytes are on and say they do not come back.
+// (6) THAT SENTENCE IS FALSE FOR A CAPTURE THE DESK ALREADY TOOK. Its recording
+// is a playable card and the queue is holding a second copy purely so the words
+// can be tried again, so the confirmation shown there is a DIFFERENT row that
+// may not borrow either of rule (5)'s claims — a dialog that tells someone
+// their recording cannot be recovered when it is sitting on their desk stops
+// them tidying up a queue they are entitled to empty.
 //
-// Rules (1) to (3) are scoped to `workboard.*`. Rule (4) also covers
+// Rules (1) to (3) are scoped to `workboard.*`. Rules (4) to (6) also cover
 // `pendingRetry.*`, the retry card's own keys: the card is a Work surface, but
 // its queue serves Chat as well, so those rows may legitimately say *sent* and
 // are deliberately kept out of the vocabulary scan. `intent.workboardCapture.*`
@@ -355,6 +361,67 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
             "nothing reclaims a Work capture the desk never accepted, so this is the only "
                 + "copy of what somebody said and the dialog may not imply it can be got "
                 + "back: \(body)"
+        )
+    }
+
+    /// The sibling confirmation, for a capture whose recording the desk already
+    /// holds. `PendingRetryCard.discardMessage` picks between the two rows on
+    /// `discardKeepsRecordingInWork`, and this one is shown when the discard
+    /// costs the person nothing but a second transcription attempt — so it is
+    /// guarded on the COMPLEMENT of rule (5): it has to say the recording stays
+    /// in Work, and it may not carry either claim the other row exists to make.
+    func testThePublishedDiscardConfirmationSaysTheRecordingStaysInWork() throws {
+        let strings = try catalogStrings()
+        let body = try XCTUnwrap(
+            englishValue(try XCTUnwrap(
+                strings["pendingRetry.card.discard.confirm.body.published"],
+                "the published-capture discard confirmation has no catalog row"
+            )),
+            "the published-capture discard confirmation must carry an English value"
+        )
+        let lowered = body.lowercased()
+
+        XCTAssertTrue(
+            lowered.contains("work"),
+            "the recording is a card on the desk, and naming where it still is is the "
+                + "whole reason this row exists apart from its sibling: \(body)"
+        )
+        XCTAssertTrue(
+            ["stays", "remains", "still there"].contains(where: { lowered.contains($0) }),
+            "the person is answering \"Discard this recording?\" about a recording that "
+                + "is not going anywhere, so the sentence has to say so: \(body)"
+        )
+        XCTAssertTrue(
+            lowered.contains("copy"),
+            "what the discard actually removes is the second copy the queue is holding "
+                + "for another transcription attempt, and the sentence has to name it "
+                + "rather than leave the person guessing what they are agreeing to: \(body)"
+        )
+        XCTAssertFalse(
+            lowered.contains("cannot be recovered") || lowered.contains("can't be recovered"),
+            "this recording IS recoverable — it is a playable card on the desk — so "
+                + "borrowing the other row's finality is simply false: \(body)"
+        )
+        XCTAssertFalse(
+            lowered.contains("this device"),
+            "the other row names the device because that device holds the only copy; "
+                + "here the desk holds it and it syncs, so the claim does not transfer: \(body)"
+        )
+        XCTAssertFalse(
+            lowered.contains("delete"),
+            "the recording is not deleted by this discard, only the queue's spare copy "
+                + "of it: \(body)"
+        )
+
+        let unpublished = try XCTUnwrap(
+            englishValue(try XCTUnwrap(strings["pendingRetry.card.discard.confirm.body"])),
+            "the discard confirmation must carry an English value"
+        )
+        XCTAssertNotEqual(
+            body, unpublished,
+            "the two states share one dialog and differ only in this sentence; collapsing "
+                + "them back into one row puts one of the two claims in front of the wrong "
+                + "person, whichever row survives."
         )
     }
 

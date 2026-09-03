@@ -7386,6 +7386,17 @@
         }
       }
     },
+    "pendingRetry.card.discard.confirm.body.published" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This removes only the copy kept for another try at transcribing it. The recording is already in Work and stays there."
+          }
+        }
+      }
+    },
     "pendingRetry.card.discard.confirm.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {

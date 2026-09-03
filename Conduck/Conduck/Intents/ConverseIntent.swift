@@ -353,11 +353,11 @@ struct ConverseIntent: AppIntent {
                     createdAt: pendingMetadata.createdAt
                 )
                 workPublicationState = .published
-                await Self.recordRecoveryState(.published, for: captureID)
+                await Self.recordRecoveryState(.published, on: guardToken)
             } catch {
                 Self.log.error("ConverseIntent: Work recording card not published")
                 workPublicationState = .phaseOneFailed
-                await Self.recordRecoveryState(.phaseOneFailed, for: captureID)
+                await Self.recordRecoveryState(.phaseOneFailed, on: guardToken)
             }
         }
 
@@ -510,6 +510,31 @@ struct ConverseIntent: AppIntent {
         // disarms there, 75 stays armed.
         var transcriptCaptured = false
 
+        // The reservation taken at `arm` lasts one notification window, and the
+        // speech hop below can outlast it: a custom provider request is allowed
+        // 300 s and is attempted three times. Extending it while this process is
+        // alive is what keeps the app's retry card from taking the capture out
+        // from under a transcription that is still running — and the short
+        // horizon is what gives it straight back when the OS kills this process
+        // mid-flight, because a task cannot renew from a process that is gone.
+        // Cancelled on EVERY exit from `perform()`, refusal paths included.
+        let leaseRenewal = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(PendingRetryGuard.leaseRenewalInterval * 1_000_000_000)
+                )
+                guard !Task.isCancelled else { return }
+                // A refused renewal is NOT a reason to stop asking. The store
+                // answers false for a cross-process lock it could not take as
+                // well as for a hold somebody overtook, and stopping on the
+                // first would give away a reservation that is still this
+                // process's. The ownership checks before each hand-off are what
+                // turn a genuine takeover into a refusal.
+                await PendingRetryGuard.renew(guardToken)
+            }
+        }
+        defer { leaseRenewal.cancel() }
+
         do {
             // Foreground multipart upload. STTClient owns the retry loop
             // (per-error budget) + audio-file `defer` cleanup. We hand it
@@ -582,13 +607,28 @@ struct ConverseIntent: AppIntent {
                 // stored NOWHERE. It leaves the guard armed — nothing below it
                 // runs — which is why the outcome, not the absence of an error,
                 // is what licenses the disarm.
+                // The capture must still be THIS process's before its words go
+                // anywhere. A hold that lapsed while the speech hop ran can be
+                // taken by the app's retry card, and that surface transcribes
+                // and finishes the same recording — so continuing here would
+                // republish and re-attach behind it, and the disarm below would
+                // be refused anyway. The recording stays queued for whoever
+                // holds it; nothing is deleted and nothing is lost.
+                guard await PendingRetryGuard.stillOwnsCapture(guardToken) else {
+                    throw AppError.invalidRequest(message: String(
+                        localized: "pendingRetry.card.busy",
+                        defaultValue: "This recording is already being finished. Try again in a moment."
+                    ))
+                }
+
                 let held = Self.heldCapture(
                     Self.stamped(
                         pendingMetadata,
                         publicationState: workPublicationState,
                         transcript: transcript
                     ),
-                    audio: uploadData
+                    audio: uploadData,
+                    reservation: guardToken
                 )
                 let outcome: WorkVoiceRecoveryOutcome
                 do {
@@ -600,12 +640,17 @@ struct ConverseIntent: AppIntent {
                     // The words exist only in this process, and the recording
                     // they came from is still queued. Park the words beside it
                     // so the retry that finishes this capture pays for no
-                    // second transcription of the same bytes.
-                    await Self.recordRecoveryState(
-                        workPublicationState,
-                        for: captureID,
-                        transcript: transcript
-                    )
+                    // second transcription of the same bytes. The verdict is
+                    // always in hand here — the block that sets it runs for
+                    // exactly this destination — and writing one this process
+                    // never reached would be worse than writing nothing.
+                    if let workPublicationState {
+                        await Self.recordRecoveryState(
+                            workPublicationState,
+                            on: guardToken,
+                            transcript: transcript
+                        )
+                    }
                     throw error
                 }
                 if await outcome.isTerminal {
@@ -646,6 +691,18 @@ struct ConverseIntent: AppIntent {
             // background delegate appends the reply + fires the completion
             // notification on success, or a failure notification on error — so
             // delivery is unaffected; only the wait is removed.
+            // Same gate as the Work lane's, and this is the one where it costs
+            // something to be wrong: a Chat capture two surfaces both finish is
+            // two user turns and two gateway effects for one recording. If the
+            // reservation was overtaken while STT ran, the surface holding it is
+            // sending these words — this process must not send them again.
+            guard await PendingRetryGuard.stillOwnsCapture(guardToken) else {
+                throw AppError.invalidRequest(message: String(
+                    localized: "pendingRetry.card.busy",
+                    defaultValue: "This recording is already being finished. Try again in a moment."
+                ))
+            }
+
             try await Self.runConverseHop(
                 userText: transcript,
                 imageDataURIs: screenshotDataURIs,
@@ -748,33 +805,34 @@ struct ConverseIntent: AppIntent {
 
     /// This capture as `recover` takes one, from the process that ARMED it.
     ///
-    /// `PendingRetryClaim` is the shape a retry SURFACE holds: a capture it
-    /// selected out of the shared queue, plus the token of the reservation it
-    /// took over it. This process selected nothing — it minted the id, wrote the
-    /// entry and still holds the only in-memory copy of the bytes and the
-    /// phase-one verdict — so the value it hands over carries its own record and
-    /// a token that names NO reservation. Two consequences, both deliberate:
+    /// `PendingRetryClaim` is the shape a retry SURFACE holds: one capture, plus
+    /// the token of the reservation over it. This process took its reservation
+    /// BY ID at `arm` rather than by selection — it minted the id, wrote the
+    /// entry, and still holds the only in-memory copy of the bytes and the
+    /// phase-one verdict — so the value handed over pairs that real token with
+    /// this process's own record and payload. Two consequences, both deliberate:
     ///
     ///   • Nothing else can be handed this capture by mistake: the ids, the
-    ///     bytes and the verdict are this process's own, not a queue read.
-    ///   • Every write `recover` attempts against the entry is REFUSED, because
-    ///     the store checks the token. This lane writes its own verdict either
-    ///     side of the call through `recordRecoveryState`, which is what it did
-    ///     before reservations existed — see §Requests in the wave notes for the
-    ///     one store operation (reserve BY ID) that would let this lane hold a
-    ///     real one, and the durable `.published` write it would restore.
+    ///     bytes and the verdict are this process's own, not a queue read, so no
+    ///     recording is materialised a second time in the most memory-
+    ///     constrained process in the app.
+    ///   • Every write `recover` attempts against the entry LANDS, because the
+    ///     token matches the live lease — including the durable `.published`
+    ///     verdict that stops a later retry reading a stale `.phaseOneFailed` as
+    ///     licence to resurrect a card the person deleted.
     ///
-    /// Taking a reservation the store's way is not available here and would be
-    /// wrong if it were: its only selection primitive answers "the newest
-    /// unreserved capture", which is not this capture whenever anything armed
-    /// after it, and a hold taken in an intent process would outlive the OS kill
-    /// this whole guard exists for — the deferred "Recording Saved" notice fires
-    /// at 90 s while the entry would stay unclaimable for 600.
+    /// Selection is still refused here, and `claimNext` is the reason: it answers
+    /// "the newest unreserved capture", which is not this capture whenever
+    /// anything armed after it. The hold this lane does take lasts one deferred-
+    /// notification window (`PendingRetryGuard.leaseDuration`), so an intent the
+    /// OS killed hands the capture back by the time its own notice tells the
+    /// person to tap and retry.
     ///
     /// `nonisolated` because `perform()` is, and this is a pure restatement.
     nonisolated private static func heldCapture(
         _ metadata: PendingRetryMetadata,
-        audio: Data
+        audio: Data,
+        reservation: PendingRetryGuard.Token
     ) -> PendingRetryClaim {
         PendingRetryClaim(
             entry: PendingRetryEntry(
@@ -784,7 +842,12 @@ struct ConverseIntent: AppIntent {
                 // recovery has no business republishing it.
                 workImageData: nil
             ),
-            token: UUID()
+            // The lease this process holds over the entry it armed. Absent only
+            // when arming preserved nothing, and then there is no entry for any
+            // token to name — the capture's own id stands in, so the value names
+            // no reservation by construction rather than by a random draw, and
+            // every queue write against it is refused exactly as it should be.
+            token: reservation.claim?.token ?? metadata.id
         )
     }
 
@@ -805,25 +868,18 @@ struct ConverseIntent: AppIntent {
     /// recording that may exist nowhere else, exempt from expiry), not a lost
     /// recording.
     ///
-    /// WHY THIS LANE HOLDS NO RESERVATION, unlike the two retry surfaces. A
-    /// reservation is how a surface SELECTS one capture out of a shared queue;
-    /// this process did not select anything — it armed the capture itself and
-    /// holds the only in-memory copy of both the bytes and the verdict, and it
-    /// addresses its entry by the capture id it minted. The store's selection
-    /// primitive answers "the newest unreserved capture", which is not this
-    /// capture whenever anything armed after it, so taking one here would put a
-    /// ten-minute hold on somebody else's recording. And a hold this process
-    /// took would survive the OS kill this whole guard exists for: the deferred
-    /// notice fires at 90 s telling the user to tap and retry, while the entry
-    /// stayed unclaimable for 600.
+    /// It goes through the RESERVATION this lane holds, so it writes only to a
+    /// capture this process still owns. A capture another surface took over
+    /// while this one was suspended in STT belongs to that surface's own
+    /// observation, and a verdict written from here would contradict it.
     @MainActor
     private static func recordRecoveryState(
-        _ publicationState: PendingRetryPublicationState?,
-        for captureID: UUID,
+        _ publicationState: PendingRetryPublicationState,
+        on token: PendingRetryGuard.Token,
         transcript: String? = nil
     ) async {
-        _ = await PendingRetryStore.shared.recordPublicationState(
-            id: captureID,
+        await PendingRetryGuard.recordPublicationState(
+            token,
             transcript: transcript,
             publicationState: publicationState
         )

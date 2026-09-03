@@ -29,16 +29,17 @@
 //     WHERE a statement sits, which no runtime case in this bundle can reach.
 //     Same technique and same helpers as `HeadlessRefusalLaneDriftGuardTests`.
 //
-// The legacy-caller census is the load-bearing source check. `load()`,
-// `clear(ifCurrentID:)` and `recordPublicationState(id:)` are superseded by the
-// claim API and are kept only until their last caller is gone;
-// `updateAttemptIfCurrent(id:)` reached zero callers and no longer exists, and
-// its row stays as a guard against the shape returning. Each is lease-BLIND —
-// it acts on a capture whether or not the caller still holds it — so one caller
-// left behind is one place two surfaces can still collide. The census is an EXACT
-// set on both sides: a new legacy caller fails it, and so does a listed one
-// that has been migrated, which is what stops the allowlist outliving its
-// reasons.
+// The legacy-caller census is the load-bearing source check. Every lease-BLIND
+// operation it names — `clear(ifCurrentID:)`, `recordPublicationState(id:)` and
+// `updateAttemptIfCurrent(id:)` — reached zero callers and no longer exists on
+// the store; `load()` survives only as the control the durability cases measure
+// `claimNext` against, and no production file may reach it either. The rows stay
+// as guards against the shapes returning: each acts on a capture whether or not
+// the caller still holds it, so one caller is one place two surfaces can finish
+// the same recording. The census is an EXACT set on both sides: a new legacy
+// caller fails it, and so does a listed one that has been migrated, which is
+// what stops the allowlist outliving its reasons — every set is now empty, and
+// an empty expectation is what a returning caller fails against.
 
 import XCTest
 @testable import Conduck
@@ -236,38 +237,31 @@ final class PendingRetrySurfaceHandoffTests: XCTestCase {
             "PendingRetryStore.shared.load()": [],
             "retryLane.load()": [],
 
-            // Finish a capture without holding it.
-            "clear(ifCurrentID:": [
-                // `PendingRetryGuard.disarm` releases the capture the SAME
-                // process armed, named by the token it was handed. It cannot
-                // take a reservation instead: the store reserves the newest
-                // unreserved capture, not a named one, and a hold taken in an
-                // intent process would outlive the OS kill the guard exists for.
-                "Conduck/Services/PendingRetryGuard.swift",
-                // `InAppAudioRecorder.releaseDurableRetry` is the same shape and
-                // gated the same way — `armedDurableRetryID == id`, this
-                // recorder's own arm. Moving it to the claim API means adding
-                // the claim operations to `PendingRetryQueueWriting` and
-                // updating the test double that conforms to it.
-                "Conduck/Services/InAppAudioRecorder.swift",
-            ],
+            // Finish a capture without holding it. Zero callers: the three
+            // arming lanes — `PendingRetryGuard`, `InAppAudioRecorder` and the
+            // Shortcuts intent — reserve the capture they minted with
+            // `claim(id:duration:)` and finish it through `clear(_ claim:)`.
+            // The operation itself is gone; the row keeps the shape from coming
+            // back under its old name.
+            "clear(ifCurrentID:": [],
 
             // Count an attempt against a capture without holding it. The
             // operation itself is gone; this row keeps the shape from coming
             // back under its old name.
             "updateAttemptIfCurrent(": [],
 
-            // Write a verdict about a capture without holding it. Same reason
-            // as `PendingRetryGuard`: the intent process armed this capture
-            // rather than selecting it, so it addresses it by the id it minted.
-            "recordPublicationState(id:": ["Conduck/Intents/ConverseIntent.swift"],
+            // Write a verdict about a capture without holding it. Gone for the
+            // same reason: the intent process holds a reservation over the
+            // capture it minted, so its verdict is token-checked.
+            "recordPublicationState(id:": [],
         ]
 
         var actual: [String: Set<String>] = expected.mapValues { _ in [] }
+        // The store itself is scanned like every other production file: it no
+        // longer DECLARES any of these, so there is nothing here to exempt, and
+        // a call to one from inside the store would be as lease-blind as a call
+        // from anywhere else.
         for path in try Self.productionSwiftPaths() {
-            // The store DECLARES these; naming a superseded operation in the
-            // file that defines it is not calling it.
-            guard path != Self.storePath else { continue }
             let source = Self.callText(
                 RefusalLaneSource.stripComments(
                     try String(contentsOf: RefusalLaneSource.projectContainerURL
@@ -358,12 +352,29 @@ final class PendingRetrySurfaceHandoffTests: XCTestCase {
                       "The card no longer re-reads the count after finishing one, so a card left "
                       + "standing for the NEXT capture reads as a retry that failed.")
 
-        let discard = try RefusalLaneSource.body(ofFunction: "discardPendingRetry", in: source, path: path)
-        XCTAssertTrue(discard.contains("PendingRetryStore.shared.claimNext()"),
+        // The reservation is taken when the button is tapped, BEFORE the
+        // confirmation is raised, so the dialog is bound to one exact capture;
+        // the confirmed delete then acts on the reservation it was raised
+        // about rather than re-selecting against a queue that may have moved.
+        let offer = try RefusalLaneSource.body(
+            ofFunction: "offerPendingRetryDiscard", in: source, path: path
+        )
+        XCTAssertTrue(offer.contains("PendingRetryStore.shared.claimNext()"),
                       "Discard must take the same reservation a retry does, or it deletes a "
                       + "capture another surface is finishing.")
+        XCTAssertTrue(offer.contains("confirmingPendingRetryDiscard = true"),
+                      "The confirmation is raised without a reservation, so the question is "
+                      + "asked about no capture in particular.")
+
+        let discard = try RefusalLaneSource.body(ofFunction: "discardPendingRetry", in: source, path: path)
+        XCTAssertTrue(discard.contains("pendingRetryDiscard"),
+                      "Discard must act on the reservation the confirmation was raised about, "
+                      + "not on whatever the queue would hand it now.")
         XCTAssertTrue(discard.contains("finishPendingRetry(claim)"),
                       "Discard must retire exactly the claimed capture.")
+        XCTAssertFalse(discard.contains("PendingRetryStore.shared.claimNext()"),
+                       "Selecting at confirmation time re-answers `which capture` against a "
+                       + "queue that may have changed while the dialog was on screen.")
         XCTAssertFalse(discard.contains("PendingRetryStore.shared.clear()"),
                        "`clear()` discards EVERY parked recording. The person asked to be rid of one.")
 

@@ -708,6 +708,36 @@ extension ConversationStore {
                 // physical row this id names has to be the same kind of card
                 // this capture is publishing, whoever owns it.
                 try Self.requireMatchingKind(materialRows: materialRows, kind: draft.kind)
+                // WHICH ROWS THIS PUBLICATION MAY REPOINT, read BEFORE the
+                // transaction stamps any of them.
+                //
+                // A replay is not necessarily the newest thing that happened to
+                // this card. The drainer replays an envelope captured minutes
+                // ago, and the voice lane republishes a recording parked before
+                // that; meanwhile another device can have reattached a NEW file
+                // onto the same card, whose row arrives here ahead of its blob.
+                // Normalising that row onto the replay's older bytes would
+                // silently replace the person's newer file — and export the
+                // replacement. So a row is only brought back onto these bytes
+                // when it is NOT newer than the material this call is
+                // publishing; a newer pairing is left waiting for its own blob,
+                // which is what turns it `.synced` on its own.
+                //
+                // `draft.createdAt` is that timestamp: the envelope's
+                // `createdAt` for the drainer, the recording's for a retry, the
+                // chat turn's for a re-capture, and `Date()` for anything the
+                // person is doing right now — so a fresh publication still
+                // normalises every row, and only a stale one holds back.
+                //
+                // Read here rather than at the repair because ADOPTION below
+                // stamps `now` on every re-homed row: a row this same call just
+                // touched would otherwise read as a later publication than
+                // itself and never be repaired.
+                let publicationDate = draft.createdAt
+                let rowsNotNewerThanThisPublication = materialRows.filter { row in
+                    guard let stamp = row.value(forKey: "updatedAt") as? Date else { return true }
+                    return stamp <= publicationDate
+                }
                 var adopted = false
                 if !materialRows.isEmpty {
                     let owners = Set(
@@ -817,7 +847,16 @@ extension ConversationStore {
                                 // blob the other row names is absent rather
                                 // than superseded (nothing deleted), so the
                                 // disagreement would survive every replay.
-                                let rowsDisagree = materialRows.contains { row in
+                                //
+                                // ONLY over the rows this publication may
+                                // repoint. A row newer than the material being
+                                // replayed is another device's later
+                                // publication, not a stale duplicate: it names
+                                // bytes whose blob is still on its way, and
+                                // dragging it onto these older bytes would
+                                // throw away the file the person put there
+                                // last.
+                                let rowsDisagree = rowsNotNewerThanThisPublication.contains { row in
                                     !Self.namesSyncedPayload(
                                         row: row,
                                         contentHash: contentHash,
@@ -831,7 +870,7 @@ extension ConversationStore {
                                 }
                                 if rowsDisagree { repaired = true }
                                 if repaired {
-                                    for row in materialRows {
+                                    for row in rowsNotNewerThanThisPublication {
                                         Self.pointAtSyncedPayload(
                                             row: row,
                                             contentHash: contentHash,

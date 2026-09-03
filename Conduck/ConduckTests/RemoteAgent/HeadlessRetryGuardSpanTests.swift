@@ -305,17 +305,20 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
     /// The recovery is handed the capture this process ARMED, never one it
     /// selected out of the queue.
     ///
-    /// `recover` takes a reservation because a retry SURFACE holds one — a
-    /// capture it picked out of a queue several processes write. This process
-    /// picked nothing: it minted the id, wrote the entry and still holds the
-    /// only in-memory copy of the bytes and the phase-one verdict. Reaching for
-    /// the store's selection primitive here would be wrong twice over. It
-    /// answers "the newest UNRESERVED capture", which is not this capture
-    /// whenever anything armed after it — so an intent could put a ten-minute
-    /// hold on a recording it will never finish. And a hold this process took
-    /// would survive the OS kill this whole guard exists for: the deferred
-    /// "Recording Saved" notice fires at 90 s telling the user to tap and retry,
-    /// while their entry stayed unclaimable for 600.
+    /// `recover` takes a reservation because a retry SURFACE holds one. This
+    /// process holds one too — but it took it BY ID at `arm`, over the entry it
+    /// minted and wrote, and it still holds the only in-memory copy of the bytes
+    /// and the phase-one verdict. Reaching for the store's SELECTION primitive
+    /// here would be wrong twice over. It answers "the newest UNRESERVED
+    /// capture", which is not this capture whenever anything armed after it — so
+    /// an intent could put a hold on a recording it will never finish, and
+    /// materialise a stranger's bytes in the most memory-constrained process in
+    /// the app to do it.
+    ///
+    /// The hold this lane DOES take lasts one deferred-notification window
+    /// (`PendingRetryGuard.leaseDuration`), not the store's ten minutes, so an
+    /// intent the OS killed hands the capture back by the time its own notice
+    /// tells the user to tap and retry.
     ///
     /// A source guard for the same reason as everything else in this file: the
     /// Shortcuts lane cannot be driven here, and this is a matter of WHICH value
@@ -326,11 +329,10 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
 
         XCTAssertFalse(
             source.contains("claimNext("),
-            "The Shortcuts lane now RESERVES a capture out of the queue. It answers the newest "
-            + "unreserved one, which is not the capture this process armed whenever anything armed "
-            + "after it — and a reservation taken here outlives the OS kill the guard exists for, "
-            + "leaving the entry unclaimable for ten minutes while the 90-second notice invites the "
-            + "user to retry it."
+            "The Shortcuts lane now SELECTS a capture out of the queue. `claimNext` answers the "
+            + "newest unreserved one, which is not the capture this process armed whenever anything "
+            + "armed after it — so the intent would hold, and read into memory, a recording it is "
+            + "never going to finish. This lane addresses its own entry by id."
         )
         let heldAt = try XCTUnwrap(
             body.range(of: "Self.heldCapture(")?.lowerBound,
@@ -344,15 +346,85 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
         )
         XCTAssertLessThan(heldAt, recoverAt)
 
-        // The verdict this lane writes is its own, at the id it minted — the
-        // half of the bookkeeping a claim would otherwise carry.
+        // The verdict this lane writes is its own, through the reservation it
+        // took at `arm` — the half of the bookkeeping the recovery cannot do for
+        // it, because the recovery does not know what phase one answered.
         XCTAssertTrue(
             body.contains("Self.recordRecoveryState("),
-            "`perform()` stopped writing the publication verdict to the queue entry. Nothing else "
-            + "writes it on this lane — the recovery's own write is refused, because the value this "
-            + "process hands it names no reservation — so a retry an app launch later cannot tell a "
-            + "recording the desk never took from a card the person deleted."
+            "`perform()` stopped writing the publication verdict to the queue entry, so a retry an "
+            + "app launch later cannot tell a recording the desk never took from a card the person "
+            + "deleted — and the two call for opposite acts."
         )
+
+        // …and the value it hands over carries the REAL reservation. A claim
+        // built with `token: UUID()` looks exactly like one the store issued and
+        // is refused by every write the recovery attempts, silently: that is how
+        // the durable `.published` verdict went unwritten on this lane for a
+        // whole round.
+        XCTAssertTrue(
+            body.contains("reservation: guardToken"),
+            "`perform()` hands the recovery a capture that names no reservation. Every verdict the "
+            + "recovery records against the entry is then refused by the store's token check, and "
+            + "nothing says so."
+        )
+        XCTAssertFalse(
+            source.contains("token: UUID()"),
+            "The Shortcuts lane mints a claim token no store issued. It is indistinguishable from a "
+            + "real reservation at the call site and worthless at the store."
+        )
+    }
+
+    /// Before the words go anywhere — the desk, a conversation, a gateway — this
+    /// process has to still OWN the capture it armed.
+    ///
+    /// The hold lasts one deferred-notification window, and the speech hop can
+    /// outlast it (a custom provider request is allowed 300 s and attempted
+    /// three times). A lapsed hold can be taken by the app's retry card, which
+    /// then transcribes and finishes the same recording — so continuing here is
+    /// a second desk write behind that surface's, and on the Chat lane two user
+    /// turns and two gateway effects for one thing said once.
+    ///
+    /// A source guard for this file's standing reason: `perform()` takes an
+    /// `IntentFile` from the Shortcuts runtime and drives a live provider, so
+    /// WHERE the check sits is the only thing that can be asserted here.
+    func testTheIntentConfirmsItStillOwnsTheCaptureBeforeEitherHandoff() throws {
+        let source = try RefusalLaneSource.source(at: Self.intentPath)
+        let body = try RefusalLaneSource.body(ofFunction: "perform", in: source, path: Self.intentPath)
+
+        XCTAssertEqual(
+            body.components(separatedBy: "PendingRetryGuard.stillOwnsCapture(guardToken)").count - 1, 2,
+            "`perform()` must confirm ownership exactly twice — once per destination, each "
+            + "immediately before that destination's hand-off. One check covering both would sit far "
+            + "above the Chat send, and the window it leaves open is the one that duplicates a turn."
+        )
+
+        let recoverAt = try XCTUnwrap(
+            body.range(of: "WorkVoiceCaptureCoordinator.recover(")?.lowerBound,
+            "The Work lane no longer makes its desk decision through the shared recovery."
+        )
+        let hopAt = try XCTUnwrap(
+            body.range(of: "Self.runConverseHop(")?.lowerBound,
+            "`perform()` no longer reaches the converse hop; update this guard."
+        )
+        let workConfirm = try XCTUnwrap(
+            body.range(of: "PendingRetryGuard.stillOwnsCapture(guardToken)")?.lowerBound,
+            "The Work hand-off is no longer gated on this process still owning the capture."
+        )
+        let chatConfirm = try XCTUnwrap(
+            body.range(of: "PendingRetryGuard.stillOwnsCapture(guardToken)",
+                       range: body.index(after: workConfirm)..<body.endIndex)?.lowerBound,
+            "The Chat hand-off is no longer gated on this process still owning the capture. It is "
+            + "the lane where being wrong costs a duplicate turn AND a duplicate gateway call."
+        )
+        XCTAssertLessThan(workConfirm, recoverAt,
+                          "The desk decision must be taken only by the process that still holds the "
+                          + "capture; after it, the check gates nothing.")
+        XCTAssertLessThan(recoverAt, chatConfirm,
+                          "Control on the ordering: the two checks are distinct sites, one per lane, "
+                          + "not one site counted twice.")
+        XCTAssertLessThan(chatConfirm, hopAt,
+                          "The Chat check has to precede the hop that stores the user turn and "
+                          + "dispatches it.")
     }
 
     // MARK: - Rule 2 — the span reaches past the destination

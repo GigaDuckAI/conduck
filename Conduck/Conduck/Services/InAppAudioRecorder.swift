@@ -44,11 +44,86 @@
 // actually live, so a refused start leaves the previous capture's Try Again
 // exactly where it was, and it releases only the entry it armed itself: one
 // armed by an earlier process belongs to whichever surface recovers it.
+//
+// That last rule is enforced by a RESERVATION, not by an id comparison alone.
+// The desk's voice sheet and the app's retry card are reachable on one screen
+// and read the same queue, so "the entry I armed" and "the entry nobody else is
+// finishing" are different claims: a Try Again reserves the capture before it
+// touches the recording and refuses when another surface holds it, and every
+// clear goes through that reservation so a completed capture can never delete a
+// recording somebody else is mid-transcription on.
 
 import Foundation
 import AVFoundation
 import Observation
 import Speech
+
+/// What a capture surface does to the retry queue, named as ONE seam.
+///
+/// It refines `PendingRetryQueueWriting` — arming and the durable write — with
+/// the RESERVATION half, because a surface that finishes a capture has to be
+/// able to prove the capture is still its own. An id-keyed clear cannot: the
+/// desk's voice sheet and the app's retry card are reachable on one screen, so
+/// a sheet that let go of "its" entry by id could delete the recording the card
+/// was in the middle of transcribing.
+///
+/// It exists as a protocol for the same reason its parent does:
+/// `PendingRetryStore.shared` is a process-global singleton over one App-Group
+/// file every capture test in the bundle shares, and what these surfaces assert
+/// is WHICH capture they reserve, hold and release — a property of the surface,
+/// not of the wire format.
+nonisolated protocol PendingRetryLaneReserving: PendingRetryQueueWriting {
+    /// Reserve exactly the capture named, for the surface that ARMED it.
+    /// Nil when it is not queued, when another reservation is live over it, or
+    /// when its recording cannot be read.
+    func claim(id: UUID, duration: TimeInterval) async -> PendingRetryClaim?
+
+    /// Extend this holder's reservation by the horizon it was granted.
+    @discardableResult
+    func renew(_ claim: PendingRetryClaim) async -> Bool
+
+    /// Does this claim still hold its capture? Reads only.
+    func confirmOwnership(_ claim: PendingRetryClaim) async -> Bool
+
+    /// Give the capture back unfinished — the entry and its recording stay.
+    func release(_ claim: PendingRetryClaim) async
+
+    /// Finish exactly the capture this claim holds, and nothing else.
+    @discardableResult
+    func clear(_ claim: PendingRetryClaim) async -> Bool
+}
+
+extension PendingRetryStore: PendingRetryLaneReserving {}
+
+extension PendingRetryClaim {
+    /// This reservation with the parked recording dropped: the same capture,
+    /// the same token, and nothing any store operation reads.
+    ///
+    /// WHY AN ARMING LANE HOLDS THIS AND NOT THE CLAIM AS ISSUED. `claim(id:)`
+    /// answers with the bytes, because a surface that SELECTED a capture out of
+    /// the queue needs them to finish it. A lane that ARMED the capture already
+    /// holds those bytes — it recorded them — so retaining the store's copy for
+    /// the span of the work is a second recording of up to
+    /// `Constants.maxAudioSize` beside the first, in an App Intent process that
+    /// has to survive a speech hop. Everything a holder does with a reservation
+    /// — `renew`, `release`, `clear`, `confirmOwnership`,
+    /// `recordPublicationState` — reads the capture id and the token and
+    /// nothing else, so the copy buys nothing.
+    ///
+    /// It lives beside `PendingRetryLaneReserving` because both arming lanes —
+    /// this recorder and `PendingRetryGuard` — hold a reservation this way, and
+    /// the vocabulary for that belongs in one place.
+    var reservationOnly: PendingRetryClaim {
+        PendingRetryClaim(
+            entry: PendingRetryEntry(
+                audioData: Data(),
+                metadata: entry.metadata,
+                workImageData: nil
+            ),
+            token: token
+        )
+    }
+}
 
 /// State of an in-app mic capture session. View models drive UI off this.
 enum InAppAudioRecorderState: Equatable {
@@ -193,7 +268,7 @@ final class InAppAudioRecorder {
     /// process-global singleton over one file every capture test in the bundle
     /// shares, and the claims here are about WHICH capture this class arms and
     /// releases — a property of this class, not of the file format.
-    var retryLaneForTesting: (any PendingRetryQueueWriting)?
+    var retryLaneForTesting: (any PendingRetryLaneReserving)?
 
     /// Stands in for the Speech-Recognition TCC verdict the start path reads.
     /// `VoicePermissions.ensureSpeechRecognitionForActiveProvider()` never
@@ -232,7 +307,7 @@ final class InAppAudioRecorder {
     }
 
     /// The retry queue this recorder arms and releases its own entry in.
-    private var retryLane: any PendingRetryQueueWriting {
+    private var retryLane: any PendingRetryLaneReserving {
         #if CONDUCK_TESTING
         return retryLaneForTesting ?? PendingRetryStore.shared
         #else
@@ -240,12 +315,36 @@ final class InAppAudioRecorder {
         #endif
     }
 
-    /// The capture whose queue entry this recorder itself armed, so it releases
-    /// only what it took. An entry armed by another process — a capture that
-    /// outlived an app launch — belongs to whichever surface recovers it, and
-    /// clearing it from here would delete a recording this recorder is not
-    /// finishing.
+    /// The capture whose queue entry this recorder itself armed AND whose write
+    /// landed, so it releases only what it actually parked. An entry armed by
+    /// another process — a capture that outlived an app launch — belongs to
+    /// whichever surface recovers it, and a save that threw parked nothing at
+    /// all: in both cases there is no entry of this recorder's to reserve or
+    /// clear, and the retry runs on the bytes still in hand.
     private var armedDurableRetryID: UUID?
+
+    /// The reservation this recorder holds over that entry while it finishes
+    /// the capture, so no other surface can transcribe or delete the recording
+    /// underneath it. Taken when a retry STARTS rather than when the capture is
+    /// armed: a hold kept from the moment of failure would refuse the person
+    /// their own recording on the retry card for as long as this sheet stayed
+    /// open, and the recorder is not finishing anything in between.
+    private var heldRetryClaim: PendingRetryClaim?
+
+    /// Extends that reservation while the retry runs. A custom provider request
+    /// is allowed 300 s and attempted three times, so one transcription can
+    /// outlast the reservation that protects it. Cancelled on every exit.
+    private var retryLeaseRenewal: Task<Void, Never>?
+
+    /// How often the reservation is extended while a retry is live. Well inside
+    /// `PendingRetryStore.claimLeaseDuration`, so a missed tick costs nothing.
+    private static let retryLeaseRenewalInterval: TimeInterval = 120
+
+    /// True when the last Try Again was refused because another surface holds
+    /// this capture's queue entry. The sheet renders it instead of a typed
+    /// error, because nothing failed: the recording is safe, is being finished
+    /// elsewhere, and this tap changed nothing at all.
+    private(set) var retryRefusedBusy = false
 
     /// Underlying capture engine. Composed (not inherited) so the
     /// AudioRecorder's `ObservableObject`-based timer callbacks stay in
@@ -448,13 +547,35 @@ final class InAppAudioRecorder {
     /// alternative — starting a new recording — leaves the first card on the
     /// desk without its words and puts a second one beside it, which is why
     /// recording again is a separate, separately labelled action.
+    ///
+    /// It RESERVES the capture's queue entry first, and refuses when another
+    /// surface — the app's retry card, the menu bar, a Shortcut host — is
+    /// already finishing that recording. Refusing is not a failure: nothing is
+    /// deleted, the state the sheet is showing is left exactly as it was, and
+    /// `retryRefusedBusy` is what the sheet says about it.
     @discardableResult
     func retryWorkCapture() async -> Result<String, AppError> {
         guard let capture = pendingWorkCapture else {
             return .failure(.audioMissingData)
         }
+        retryRefusedBusy = false
+        guard await reserveDurableRetry(for: capture.id) else {
+            retryRefusedBusy = true
+            // The capture is still exactly as retryable as it was a moment ago,
+            // by whoever holds it — so the state stands and the answer is the
+            // error already on screen rather than a new one about a failure
+            // that did not happen.
+            if case .error(let standing) = state { return .failure(standing) }
+            return .failure(.workDeskWriteFailed)
+        }
         state = .processing
-        return await runProcessingTask { await self.finishAndUpload(resuming: capture) }
+        let result = await runProcessingTask { await self.finishAndUpload(resuming: capture) }
+        // Whatever the outcome, this recorder stops holding what it did not
+        // finish: a capture that succeeded was cleared through the reservation
+        // below, and one that failed is handed straight back so the next tap —
+        // here or on the retry card — can take it without waiting out the lease.
+        await handBackUnfinishedRetry()
+        return result
     }
 
     /// Cancel a hung post-stop transcription (the composer's stall affordance,
@@ -475,6 +596,7 @@ final class InAppAudioRecorder {
 
     /// Reset from `.error(...)` back to `.idle` so the user can try again.
     func dismissError() {
+        retryRefusedBusy = false
         if case .error = state {
             state = .idle
         }
@@ -927,13 +1049,87 @@ final class InAppAudioRecorder {
         await releaseDurableRetry(for: abandoned.id)
     }
 
-    /// Release this recorder's own queue entry. Gated on the id it armed, so an
-    /// entry this process never armed — one that outlived an app launch — is
-    /// left for whoever recovers it.
+    /// Take the reservation over the entry this recorder parked, before a retry
+    /// touches the recording behind it.
+    ///
+    /// True when this recorder holds the capture, and true when there is nothing
+    /// to hold — a capture whose durable write never landed, or one this process
+    /// never armed, has no entry any other surface could be finishing, and the
+    /// bytes in hand are the only copy either way. FALSE means exactly one
+    /// thing: the entry is queued and somebody else's reservation is live over
+    /// it, so this retry would be a second transcription of one recording.
+    private func reserveDurableRetry(for id: UUID) async -> Bool {
+        guard armedDurableRetryID == id else { return true }
+        if let held = heldRetryClaim, held.id == id { return true }
+        guard let claim = await retryLane.claim(
+            id: id,
+            duration: PendingRetryStore.claimLeaseDuration
+        ) else {
+            return false
+        }
+        heldRetryClaim = claim.reservationOnly
+        startRenewingRetryLease()
+        return true
+    }
+
+    /// Hand back a reservation this recorder is still holding after a retry that
+    /// did not finish the capture. The entry and its recording stay exactly as
+    /// they are; only the hold goes, so the next attempt does not wait it out.
+    private func handBackUnfinishedRetry() async {
+        stopRenewingRetryLease()
+        guard let claim = heldRetryClaim else { return }
+        heldRetryClaim = nil
+        await retryLane.release(claim)
+    }
+
+    /// Keep the reservation alive while the speech hop runs. Without it a
+    /// transcription longer than the lease loses the capture to whoever asks
+    /// next — and the launch sweep could delete the recording being transcribed.
+    private func startRenewingRetryLease() {
+        retryLeaseRenewal?.cancel()
+        retryLeaseRenewal = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(Self.retryLeaseRenewalInterval * 1_000_000_000)
+                )
+                guard !Task.isCancelled, let self, let claim = self.heldRetryClaim else { return }
+                // A refused renewal is NOT a reason to stop asking: the store
+                // answers false for a cross-process lock it could not take as
+                // well as for a hold somebody overtook, and stopping on the
+                // first would give away a reservation that is still this
+                // recorder's. Only `stopRenewingRetryLease` ends the loop.
+                await self.retryLane.renew(claim)
+            }
+        }
+    }
+
+    private func stopRenewingRetryLease() {
+        retryLeaseRenewal?.cancel()
+        retryLeaseRenewal = nil
+    }
+
+    /// Retire this recorder's own queue entry, through the reservation over it.
+    ///
+    /// Gated on the id it armed, so an entry this process never armed — one that
+    /// outlived an app launch — is left for whoever recovers it. And gated on
+    /// the reservation, so a capture another surface took over is left for that
+    /// surface to finish: an id-keyed clear here deleted the recording the retry
+    /// card was mid-transcription on, because the desk's voice sheet and that
+    /// card are reachable on one screen.
     private func releaseDurableRetry(for id: UUID) async {
         guard armedDurableRetryID == id else { return }
+        stopRenewingRetryLease()
+        var claim = heldRetryClaim
+        heldRetryClaim = nil
+        if claim?.id != id {
+            claim = await retryLane.claim(
+                id: id,
+                duration: PendingRetryStore.claimLeaseDuration
+            )
+        }
+        guard let claim else { return }
         armedDurableRetryID = nil
-        _ = await retryLane.clear(ifCurrentID: id)
+        _ = await retryLane.clear(claim)
     }
 
     /// The ONE place this recorder hands a capture to the retry lane, so the
@@ -981,11 +1177,16 @@ final class InAppAudioRecorder {
             transcript: capture.transcript,
             publicationState: publicationState
         )
-        try? await retryLane.save(
+        // The id is recorded only once the write LANDED. A save that threw
+        // parked nothing, so there is no entry to reserve, nothing to clear, and
+        // nothing another surface could be holding — and claiming otherwise
+        // would have the next Try Again ask the queue for a capture that was
+        // never queued and read the refusal as somebody else's hold.
+        guard (try? await retryLane.save(
             audioData: capture.audio,
             metadata: metadata,
             workImageData: nil
-        )
+        )) != nil else { return }
         armedDurableRetryID = capture.id
     }
 }

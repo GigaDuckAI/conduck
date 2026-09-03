@@ -41,6 +41,11 @@
 // until the next capture failed. Each attempt RESERVES the capture it takes
 // (`claimNext`) and hands the reservation back on every outcome that leaves it
 // waiting, so two surfaces cannot transcribe and finish the same recording.
+// The reservation is EXTENDED while the provider is working and CHECKED before
+// anything irreversible: the transcript reaches `onTranscript`, the deferred
+// notice is cancelled and the state settles only after the store confirms this
+// window still holds the capture, because a hold that lapsed mid-transcription
+// can have been taken over by a surface that already sent the same words.
 
 import AppKit
 import AVFoundation
@@ -222,10 +227,7 @@ final class DictationService: RecordingExclusivityAuthority {
                 let waiting = pendingRetryCount > 0
                 state = .error(
                     message: waiting
-                        ? String(
-                            localized: "pendingRetry.card.busy",
-                            defaultValue: "This recording is already being finished. Try again in a moment."
-                        )
+                        ? pendingRetryBusyMessage
                         : String(localized: "No saved recording to retry."), // xcstrings
                     // A capture somebody else is holding IS retryable — the
                     // reservation lapses. Only an empty queue retires the
@@ -333,14 +335,21 @@ final class DictationService: RecordingExclusivityAuthority {
         }
 
         do {
-            let response = try await STTClient.shared.transcribe(
-                audioFileURL: tempURL,
-                apiKey: apiKey,
-                language: pending.metadata.preferredLanguage,
-                provider: snapshot.provider,
-                customModel: snapshot.customModel,
-                customConfig: snapshot.customConfig
-            )
+            // The reservation is EXTENDED for as long as the provider is
+            // working. A custom endpoint is allowed 300 s per request and is
+            // attempted three times, so one Retry can outlast the ten minutes
+            // the hold was granted for — and the entry's own expiry, which the
+            // store waives only while a reservation is live.
+            let response = try await PendingRetryLeaseRenewal.whileRenewing(claim) {
+                try await STTClient.shared.transcribe(
+                    audioFileURL: tempURL,
+                    apiKey: apiKey,
+                    language: pending.metadata.preferredLanguage,
+                    provider: snapshot.provider,
+                    customModel: snapshot.customModel,
+                    customConfig: snapshot.customConfig
+                )
+            }
             let trimmed = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
                 state = .error(
@@ -359,7 +368,17 @@ final class DictationService: RecordingExclusivityAuthority {
             if pending.metadata.resolvedDestination == .work {
                 return await finishWorkRetry(claim, transcript: trimmed)
             }
-            await settleAfterFinishing(claim)
+            // The finish IS the ownership check, and it has to come FIRST. It
+            // retires the entry only while this reservation still holds the
+            // capture, so a false answer means another surface overtook a
+            // lapsed hold and is sending — or has already sent — these very
+            // words. Handing them to the coordinator anyway is a duplicate turn
+            // the person never dictated twice.
+            guard await settleAfterFinishing(claim) else {
+                lastError = nil
+                state = .error(message: pendingRetryBusyMessage, isRetryable: true)
+                return false
+            }
             // Legacy and explicit Chat records continue into the agent
             // round-trip.
             onTranscript(trimmed)
@@ -430,6 +449,15 @@ final class DictationService: RecordingExclusivityAuthority {
         transcript: String
     ) async -> Bool {
         let pending = claim.entry
+        // Nothing reaches the desk on behalf of a capture this window no longer
+        // holds. The words may have been bought minutes ago — a transcription
+        // that outlived its horizon and was overtaken — and the surface that
+        // took it over is publishing them itself.
+        guard await PendingRetryStore.shared.confirmOwnership(claim) else {
+            lastError = nil
+            state = .error(message: pendingRetryBusyMessage, isRetryable: true)
+            return false
+        }
         do {
             // A GigaAction capture can also carry a screenshot, and the retry
             // record holds the only copy until it lands. Publish it FIRST,
@@ -459,7 +487,11 @@ final class DictationService: RecordingExclusivityAuthority {
                 )
                 return false
             }
-            await settleAfterFinishing(claim)
+            // The card is on the desk either way, so a clear this reservation
+            // can no longer make is not a failure to report — it means the
+            // surface that overtook this one will retire the entry itself. The
+            // count refresh inside is what the popover needs regardless.
+            _ = await settleAfterFinishing(claim)
             return true
         } catch {
             lastError = nil
@@ -485,21 +517,30 @@ final class DictationService: RecordingExclusivityAuthority {
     /// the only state that offers the next tap.
     ///
     /// The sentence is deliberately not an apology: nothing failed here.
-    private func settleAfterFinishing(_ claim: PendingRetryClaim) async {
-        _ = await PendingRetryStore.shared.clear(claim)
-        PendingRetryGuard.cancelDeferredNotification(for: claim.id)
+    ///
+    /// `false` means the clear was REFUSED — this reservation no longer holds
+    /// the capture — and it is the ownership proof the caller acts on before it
+    /// hands words to the coordinator. The deferred "Recording Saved" notice is
+    /// cancelled only on a true clear: it belongs to whichever surface actually
+    /// retires the capture.
+    @discardableResult
+    private func settleAfterFinishing(_ claim: PendingRetryClaim) async -> Bool {
+        let retired = await PendingRetryStore.shared.clear(claim)
+        if retired {
+            PendingRetryGuard.cancelDeferredNotification(for: claim.id)
+        }
         await refreshPendingRetryCount()
         guard pendingRetryCount > 0 else {
             lastError = nil
             state = .idle
-            return
+            return retired
         }
-        // `DictationPopoverView` draws its audio Retry only while
-        // `lastError?.shouldPreserveForRetry` is true, so the backlog carries
-        // the arming verdict of the capture the next tap would take. A capture
-        // that recorded none — armed by the Shortcuts lane before anything
-        // failed — leaves the button withheld; §Requests names the one-line
-        // change that would ask the count instead of the taxonomy.
+        // The backlog carries the arming verdict of the capture the next tap
+        // would take, so the popover's Troubleshoot affordance points at the
+        // right code. It is diagnosis only: `DictationPopoverView` gates the
+        // Retry button on `pendingRetryCount`, so a capture that recorded no
+        // code — armed by the Shortcuts lane before anything failed — still
+        // gets its button.
         lastError = (await PendingRetryStore.shared.pendingErrorCode())
             .map { AppError.from(errorCode: $0, message: nil) }
         state = .error(
@@ -509,11 +550,22 @@ final class DictationService: RecordingExclusivityAuthority {
             ),
             isRetryable: true
         )
+        return retired
     }
 
     /// The queue's size, metadata only — `pendingCount()` reads no recording.
     private func refreshPendingRetryCount() async {
         pendingRetryCount = await PendingRetryStore.shared.pendingCount()
+    }
+
+    /// The one sentence for "another surface holds this recording". The holder
+    /// may be the main window, a Shortcut host, or an attempt this process was
+    /// killed in the middle of, so it names nobody.
+    private var pendingRetryBusyMessage: String {
+        String(
+            localized: "pendingRetry.card.busy",
+            defaultValue: "This recording is already being finished. Try again in a moment."
+        )
     }
 
     // MARK: - Recording

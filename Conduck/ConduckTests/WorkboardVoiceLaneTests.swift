@@ -730,9 +730,10 @@ final class WorkboardVoiceLaneTests: XCTestCase {
     private static let flagChunk = "transcriptCaptured = true"
 
     private static let recordChunk = """
-    let record = PendingRetryRecord(
-        metadata: Self.stamped(pendingMetadata, publicationState: workPublicationState),
-        audio: uploadData
+    let record = Self.heldCapture(
+        Self.stamped(pendingMetadata, publicationState: workPublicationState),
+        audio: uploadData,
+        reservation: guardToken
     )
     """
 
@@ -797,8 +798,8 @@ final class WorkboardVoiceLaneTests: XCTestCase {
 
             (.theRecoveryCarriesTheCapturesRecord,
              compliantIntentBody.replacingOccurrences(
-                of: "metadata: Self.stamped(pendingMetadata, publicationState: workPublicationState)",
-                with: "metadata: PendingRetryMetadata(id: UUID(), destination: .work)")),
+                of: "Self.stamped(pendingMetadata, publicationState: workPublicationState),",
+                with: "PendingRetryMetadata(id: UUID(), destination: .work),")),
 
             (.releasedOnlyOnATerminalOutcome,
              compliantIntentBody.replacingOccurrences(

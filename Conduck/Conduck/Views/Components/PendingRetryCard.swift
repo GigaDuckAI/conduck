@@ -42,17 +42,35 @@ struct PendingRetryCard: View {
     /// says a recording is waiting, and "1 recording waiting" beside it is the
     /// same sentence twice.
     let pendingCount: Int
-    /// Delete the recording this card's Retry would take. Confirmed here rather
-    /// than by the host, because the confirmation belongs beside the button and
-    /// every host would otherwise write its own.
+    /// Ask the host to RESERVE the recording this card's Retry would take, so
+    /// the question below is asked about one exact capture.
     ///
-    /// It exists because a Work capture the desk never accepted is exempt from
-    /// the transcription TTL — those bytes are the only copy of what somebody
-    /// said, so nothing expires them — and without this the only way to be rid
-    /// of one is to discard every waiting recording from Settings.
+    /// It does not open the confirmation itself: the host does, by raising
+    /// `confirmingDiscard` once it holds the reservation. A dialog raised first
+    /// and resolved against "whatever is claimable now" is how a discard with a
+    /// backlog deletes a recording the person was not looking at — the queue
+    /// can change while the question is on screen, and another surface may be
+    /// mid-retry on the newest capture.
+    ///
+    /// The affordance exists because a Work capture the desk never accepted is
+    /// exempt from the transcription TTL — those bytes are the only copy of what
+    /// somebody said, so nothing expires them — and without this the only way to
+    /// be rid of one is to discard every waiting recording from Settings.
     let onDiscard: () -> Void
-
-    @State private var confirmingDiscard = false
+    /// Raised by the HOST once it holds the reservation, so the confirmation
+    /// can only ever be answered about a capture this surface owns.
+    @Binding var confirmingDiscard: Bool
+    /// True when the reserved recording is ALREADY a card on the desk — a Work
+    /// capture whose publication landed and whose words are all that is still
+    /// owed. Discarding that one removes the copy kept for another transcription
+    /// attempt and nothing else, so the confirmation may not say the recording
+    /// is gone for good.
+    let discardKeepsRecordingInWork: Bool
+    /// Delete the reserved recording.
+    let onDiscardConfirmed: () -> Void
+    /// Hand the reservation back untouched. Cancelling must cost the next tap —
+    /// here, in the menu bar, or in a Shortcut — nothing at all.
+    let onDiscardCancelled: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -121,7 +139,7 @@ struct PendingRetryCard: View {
                 }
 
                 Button(role: .destructive) {
-                    confirmingDiscard = true
+                    onDiscard()
                 } label: {
                     Text(String(
                         localized: "pendingRetry.card.discard",
@@ -152,20 +170,45 @@ struct PendingRetryCard: View {
                 ),
                 role: .destructive
             ) {
-                onDiscard()
+                onDiscardConfirmed()
             }
             Button(
                 String(localized: "common.cancel", defaultValue: "Cancel"),
                 role: .cancel
-            ) { }
+            ) {
+                onDiscardCancelled()
+            }
         } message: {
-            Text(String(
+            Text(discardMessage)
+        }
+    }
+
+    /// What the discard actually costs, which is not the same sentence for
+    /// every waiting capture.
+    ///
+    /// A Chat capture, and a Work capture the desk never accepted, exist only
+    /// in the retry queue: discarding one deletes the only copy of what somebody
+    /// said. A Work capture that already PUBLISHED is a playable card on the
+    /// desk — the queue is holding a second copy purely so the words can be
+    /// tried again — so telling that person the recording cannot be recovered
+    /// is false, and false in the direction that stops them tidying up.
+    private var discardMessage: String {
+        guard discardKeepsRecordingInWork else {
+            return String(
                 localized: "pendingRetry.card.discard.confirm.body",
                 defaultValue: """
                     This deletes the recording from this device. It cannot be \
                     recovered.
                     """
-            ))
+            )
         }
+        return String(
+            localized: "pendingRetry.card.discard.confirm.body.published",
+            defaultValue: """
+                This removes only the copy kept for another try at \
+                transcribing it. The recording is already in Work and stays \
+                there.
+                """
+        )
     }
 }

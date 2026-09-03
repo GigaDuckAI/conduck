@@ -485,6 +485,163 @@ final class PendingRetryDurabilityTests: XCTestCase {
         XCTAssertEqual(claim.entry.metadata.resolvedDestination, .work, "the filename says so")
     }
 
+    // MARK: - The record outranks its index row
+
+    /// The defect: a restatement writes the record and then the index row, and
+    /// the reconciliation read a record only for a capture the index did not
+    /// name. So a process that died between the two writes left the OLD row in
+    /// charge for ever — a Work capture whose recording had just reached the
+    /// desk came back saying `.phaseOneFailed`, which is a licence to republish
+    /// a card that already exists, and its words were thrown away with it.
+    func testARecordRestatedBeforeTheCrashOutranksItsStaleIndexRow() async throws {
+        let armed = Self.metadata(destination: .work, publicationState: .phaseOneFailed)
+        try await store.save(
+            audioData: Data("the recording".utf8), metadata: armed, workImageData: nil
+        )
+        let offered = await store.claimNext()
+        let holder = try XCTUnwrap(offered)
+        let recorded = await store.recordPublicationState(
+            holder, transcript: "the ferry leaves at seven", publicationState: .published
+        )
+        XCTAssertTrue(recorded)
+
+        // The process died between the two writes the restatement makes: the
+        // record landed, the index row did not.
+        persistIndex([armed])
+
+        let queued = await store.load()
+        let entry = try XCTUnwrap(queued.first)
+
+        XCTAssertEqual(
+            entry.metadata.publicationState, .published,
+            "the record is the newer half of a write that could not be one"
+        )
+        XCTAssertEqual(entry.metadata.transcript, "the ferry leaves at seven")
+        let index = try XCTUnwrap(defaults.data(forKey: PendingRetryDefaultsKeys.queue))
+        let rows = try JSONDecoder().decode([PendingRetryMetadata].self, from: index)
+        XCTAssertEqual(
+            rows.first?.publicationState, .published,
+            "and the stale row is repaired, not merely overridden for this read"
+        )
+    }
+
+    /// The other half: a record that cannot be READ is evidence of nothing. It
+    /// used to be replaced by a reconstruction from the filename — no verdict,
+    /// no words, no language, attempt count 1 — and because a capture the index
+    /// names is never re-read from its record, that lossy row then blocked the
+    /// real one for ever, even once the file became readable.
+    func testAnUnreadableRecordDefersItsCaptureRatherThanRebuildingItBadly() async throws {
+        let armed = Self.metadata(
+            destination: .work,
+            preferredLanguage: "et",
+            attemptCount: 3,
+            transcript: "the ferry leaves at seven",
+            publicationState: .phaseOneFailed
+        )
+        try await store.save(
+            audioData: Data("the recording".utf8), metadata: armed, workImageData: nil
+        )
+        let record = try Data(contentsOf: sidecarURL(armed.id))
+
+        // The arm never committed its index row, and its record cannot be read
+        // — the file is protected until first unlock, or a write was truncated.
+        defaults.removeObject(forKey: PendingRetryDefaultsKeys.queue)
+        try Data("not a record".utf8).write(to: sidecarURL(armed.id), options: [.atomic])
+
+        let deferredCount = await store.pendingCount()
+        let deferredClaim = await store.claimNext()
+
+        XCTAssertEqual(deferredCount, 0, "a capture nothing can describe is not offered")
+        XCTAssertNil(deferredClaim)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: audioURL(armed.id, .work).path),
+            "and its recording is kept — deferring costs nothing, guessing costs the recording"
+        )
+        XCTAssertNil(
+            defaults.data(forKey: PendingRetryDefaultsKeys.queue),
+            "nothing lossy is written in its place"
+        )
+
+        // Once the record can be read, the capture comes back whole.
+        try record.write(to: sidecarURL(armed.id), options: [.atomic])
+        let reoffered = await store.claimNext()
+        let claim = try XCTUnwrap(reoffered)
+
+        XCTAssertEqual(claim.entry.metadata.publicationState, .phaseOneFailed)
+        XCTAssertEqual(claim.entry.metadata.transcript, "the ferry leaves at seven")
+        XCTAssertEqual(claim.entry.metadata.preferredLanguage, "et")
+        XCTAssertEqual(claim.entry.metadata.attemptCount, 3)
+    }
+
+    // MARK: - The fold retires the old recording however it was interrupted
+
+    /// The defect: the fold copied the fixed-name recording under an id,
+    /// committed the queue, then retired the pointer and the file. A death
+    /// between the commit and those two left the capture already queued, so the
+    /// next read skipped the recognition entirely, retired the pointer — the
+    /// last thing that could name the file — and left the recording in the
+    /// container for ever.
+    func testACrashBetweenTheQueueAndTheFixedNameStillRetiresTheOldRecording() async throws {
+        let parked = Self.metadata(destination: .chat)
+        try Data("parked".utf8).write(to: legacyAudioURL())
+        try Data("parked".utf8).write(to: audioURL(parked.id, .chat))
+        persistIndex([parked])
+        defaults.set(
+            try JSONEncoder().encode(parked), forKey: PendingRetryDefaultsKeys.legacySlot
+        )
+
+        let count = await store.pendingCount()
+
+        XCTAssertEqual(count, 1)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: legacyAudioURL().path),
+            "the fixed name goes even though the capture was already queued"
+        )
+        XCTAssertNil(defaults.data(forKey: PendingRetryDefaultsKeys.legacySlot))
+        XCTAssertEqual(
+            try Data(contentsOf: audioURL(parked.id, .chat)), Data("parked".utf8),
+            "and the copy under its own id is what survives"
+        )
+    }
+
+    /// The window on the other side of the same fold, which a build before this
+    /// ordering could leave: the pointer was retired BEFORE the file, so nothing
+    /// names the recording any more. It is reclaimed only on proof — a queued
+    /// capture's own recording is byte-for-byte this file — never on inference.
+    func testACrashAfterThePointerWasRetiredStillReclaimsTheDuplicateRecording() async throws {
+        let parked = Self.metadata(destination: .chat)
+        try Data("parked".utf8).write(to: legacyAudioURL())
+        try Data("parked".utf8).write(to: audioURL(parked.id, .chat))
+        persistIndex([parked])
+
+        let count = await store.pendingCount()
+
+        XCTAssertEqual(count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyAudioURL().path))
+        XCTAssertEqual(
+            try Data(contentsOf: audioURL(parked.id, .chat)), Data("parked".utf8),
+            "the bytes survive under the id; only the copy nothing can name goes"
+        )
+    }
+
+    /// The control on that rule, and the reason it compares CONTENT: a
+    /// fixed-name recording whose bytes no queued capture holds is a recording
+    /// that may exist nowhere else, and it is left exactly where it is.
+    func testAFixedNameRecordingNoQueuedCaptureDuplicatesIsLeftWhereItIs() async throws {
+        let waiting = Self.metadata(destination: .work, publicationState: .phaseOneFailed)
+        try Data("a work recording".utf8).write(to: audioURL(waiting.id, .work))
+        persistIndex([waiting])
+        try Data("something nobody else has".utf8).write(to: legacyAudioURL())
+
+        let count = await store.pendingCount()
+
+        XCTAssertEqual(count, 1)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: legacyAudioURL().path),
+            "nothing proves these bytes are preserved, so nothing may delete them"
+        )
+    }
+
     // MARK: - Reclamation
 
     func testTheLaunchSweepReclaimsOnlyWhatNoWaitingCaptureNames() async throws {

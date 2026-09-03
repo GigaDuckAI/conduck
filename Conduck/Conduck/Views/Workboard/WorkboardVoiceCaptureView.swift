@@ -172,6 +172,21 @@ struct WorkboardVoiceCaptureView: View {
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
                     .multilineTextAlignment(.center)
+                // Try Again reserves this capture's parked recording before it
+                // transcribes, and another surface — the retry card, a Shortcut
+                // host — can be finishing that same recording. Nothing failed
+                // and nothing was deleted, so this says what is true rather than
+                // adding an error the recorder never raised. Same sentence the
+                // retry card shows for the same state.
+                if recorder.retryRefusedBusy {
+                    Text(LocalizedStringResource(
+                        "pendingRetry.card.busy",
+                        defaultValue: "This recording is already being finished. Try again in a moment."
+                    ))
+                    .font(.footnote)
+                    .foregroundStyle(AppColors.warning)
+                    .multilineTextAlignment(.center)
+                }
             }
         }
         .foregroundStyle(AppColors.textPrimary)
@@ -300,17 +315,28 @@ struct WorkboardVoiceCaptureView: View {
         return AppColors.brandAmber
     }
 
+    /// The refusal is folded in because it does NOT change `state`: a Try Again
+    /// another surface is already serving leaves the error on screen exactly as
+    /// it was, so without this the only thing that changed would be invisible to
+    /// VoiceOver.
     private var accessibilityStatusID: String {
+        let busy = recorder.retryRefusedBusy ? "-busy" : ""
         switch recorder.state {
-        case .idle: return "idle"
-        case .recording: return "recording"
-        case .processing: return "processing"
-        case .preparingVoice: return "preparing"
-        case .error(let error): return "error-\(error.errorCode)"
+        case .idle: return "idle" + busy
+        case .recording: return "recording" + busy
+        case .processing: return "processing" + busy
+        case .preparingVoice: return "preparing" + busy
+        case .error(let error): return "error-\(error.errorCode)" + busy
         }
     }
 
     private var accessibilityStatusMessage: String {
+        if recorder.retryRefusedBusy {
+            return String(
+                localized: "pendingRetry.card.busy",
+                defaultValue: "This recording is already being finished. Try again in a moment."
+            )
+        }
         switch recorder.state {
         case .idle:
             return String(localized: "workboard.voice.starting", defaultValue: "Starting the microphone…")
