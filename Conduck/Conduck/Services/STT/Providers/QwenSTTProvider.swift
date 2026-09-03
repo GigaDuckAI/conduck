@@ -50,13 +50,22 @@ import Foundation
 
 enum QwenSTT: STTJSONBodyFactory {
 
-    /// MIME prefix for the data-URI wrapper that DashScope expects on
-    /// inline base64 audio. The pipeline emits AAC-in-MP4.
-    private static let audioMIMEPrefix = "audio/mp4"
+    /// MIME prefix for the data-URI wrapper that DashScope expects on inline
+    /// base64 audio, read off the bytes being sent rather than assumed. The
+    /// pipeline usually emits AAC-in-MP4, but `AudioCompressor` answers WAV
+    /// whenever AAC encoding fails and passes a source container through
+    /// untouched (CAF, from CarPlay's tap), and every retry lane re-uploads
+    /// whatever it preserved — a data URI whose MIME contradicts its own
+    /// payload is rejected on every attempt at that capture, forever.
+    /// `SourceAudioContainer.sniff` is the shared truth across every lane, so
+    /// no two of them can describe one payload differently.
+    private static func audioMIMEPrefix(for audioData: Data) -> String {
+        SourceAudioContainer.sniff(audioData).mimeType
+    }
 
     static func buildRequestBody(audioData: Data, language: String?, model: String) throws -> Data {
         let base64 = audioData.base64EncodedString()
-        let dataURI = "data:\(audioMIMEPrefix);base64,\(base64)"
+        let dataURI = "data:\(audioMIMEPrefix(for: audioData));base64,\(base64)"
         let lang = (language?.isEmpty == false) ? language! : "auto"
 
         let body = QwenRequest(

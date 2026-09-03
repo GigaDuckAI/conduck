@@ -290,6 +290,10 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
     let hasPayload: Bool
     let storageMode: WorkMaterialStorageMode
     let availability: WorkMaterialAvailability
+    /// On the synced lane, the hash of the exact bytes this card was published
+    /// with — the other half of `WorkMaterialBlobPairing`. Nil on every other
+    /// lane, and on a row written before the pairing existed.
+    let contentHash: String?
     let localVaultKey: String?
     let sourceDevice: String?
     let sequence: Int
@@ -316,6 +320,7 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
         hasPayload: Bool,
         storageMode: WorkMaterialStorageMode,
         availability: WorkMaterialAvailability,
+        contentHash: String? = nil,
         localVaultKey: String?,
         sourceDevice: String?,
         sequence: Int,
@@ -339,6 +344,7 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
         self.hasPayload = hasPayload
         self.storageMode = storageMode
         self.availability = availability
+        self.contentHash = contentHash
         self.localVaultKey = localVaultKey
         self.sourceDevice = sourceDevice
         self.sequence = sequence
@@ -389,6 +395,46 @@ nonisolated struct WorkMaterialBlobRecord: Identifiable, Sendable, Hashable {
     /// the same save as the bytes, so their presence is what distinguishes a
     /// finished blob from a partially materialized import.
     var isComplete: Bool { byteSize > 0 && !contentHash.isEmpty }
+}
+
+/// The blob a `.syncedPayload` material row names.
+///
+/// THE PAIRING INVARIANT: a material row records the `contentHash` and
+/// `byteSize` of the exact bytes it was published with, and a blob answers for
+/// that material only when both match — so a blob is adopted, read, or counted
+/// as present for a card only when some publication of exactly those bytes
+/// completed against that card.
+///
+/// WHY FINDING A COMPLETE BLOB UNDER THE MATERIAL'S ID IS NOT ENOUGH. The two
+/// stores mirror through CloudKit independently, so a blob another device
+/// inserted can reach this one BEFORE — or instead of — the material row that
+/// names it, and that device can still take it back: a publication whose
+/// material save fails rolls its own blob row back and exports the deletion. A
+/// card committed here against those bytes would then wait for iCloud for ever,
+/// with nothing left to wait for. Pairing makes the card's own publication the
+/// evidence; a device that cannot find one publishes its own blob instead, and
+/// duplicate rows carrying identical bytes are an accepted state.
+///
+/// A nil `contentHash` is a row written before the pairing existed. It names no
+/// particular blob, so the newest complete one answers for it — there are no
+/// such rows in production, and the tolerance costs nothing.
+nonisolated struct WorkMaterialBlobPairing: Sendable, Hashable {
+    let contentHash: String?
+    let byteSize: Int64
+
+    init(contentHash: String?, byteSize: Int64) {
+        self.contentHash = contentHash
+        self.byteSize = byteSize
+    }
+
+    /// Whether this blob is the payload the material names. Stated once, here:
+    /// selection, availability and adoption all ask it through this method, so
+    /// the read path and the write path cannot start disagreeing about which
+    /// blob belongs to a card.
+    func names(_ blob: WorkMaterialBlobRecord) -> Bool {
+        guard let contentHash, !contentHash.isEmpty else { return true }
+        return blob.contentHash == contentHash && blob.byteSize == byteSize
+    }
 }
 
 /// Payload + metadata loaded only when a card is opened.

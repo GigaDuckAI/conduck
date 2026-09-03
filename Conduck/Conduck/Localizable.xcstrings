@@ -23024,7 +23024,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Keeps the recording on your private desk and adds the words when they’re ready. The audio goes only to the speech provider you chose — never to an AI, never to a server of ours."
+            "value" : "Keeps the recording on your private desk and adds the words when they’re ready. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation, and never through a server of ours."
           }
         }
       }

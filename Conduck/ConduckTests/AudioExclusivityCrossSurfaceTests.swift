@@ -26,6 +26,7 @@
 // `CarPlayRecordingService.anySessionActive` is written only by a real car
 // connection, so the desk's refusal against it stays a founder-QA item.
 
+import Speech
 import XCTest
 @testable import Conduck
 
@@ -122,6 +123,12 @@ final class AudioExclusivityCrossSurfaceTests: XCTestCase {
     private func makeRecorder() -> InAppAudioRecorder {
         let recorder = InAppAudioRecorder(retryDestination: .chat)
         recorder.microphoneStartForTesting = { true }
+        // The Speech-Recognition preflight sits ABOVE that microphone seam and
+        // reads the machine's live TCC row — it never prompts under XCTest — so
+        // a device or CI image whose row for this bundle is `denied` bails
+        // before the capture starts and every ordering claim here fails for a
+        // reason that is not the code. Pinned so these cases stay about audio.
+        recorder.speechAuthorizationForTesting = .authorized
         return recorder
     }
 

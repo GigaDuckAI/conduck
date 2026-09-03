@@ -187,7 +187,10 @@ final class DictationService: RecordingExclusivityAuthority {
             lastError = nil
             state = .processing
 
-            guard let pending = await PendingRetryStore.shared.load() else {
+            // The queue is offered newest first and finished ONE capture per
+            // Retry: this surface shows a single recovery at a time, and what
+            // is still queued is offered by the next tap.
+            guard let pending = await PendingRetryStore.shared.load().first else {
                 state = .error(
                     message: String(localized: "No saved recording to retry."), // xcstrings
                     isRetryable: false
@@ -311,10 +314,10 @@ final class DictationService: RecordingExclusivityAuthority {
                 onTranscript(trimmed)
             } catch let error as AppError {
                 if error.shouldPreserveForRetry {
-                    // Update only while this capture still owns the slot. An
-                    // overlapping Action-Button capture may have replaced it
-                    // while STT was suspended; the older retry must never
-                    // overwrite that newer audio/destination.
+                    // Update only while this capture is still queued. Another
+                    // surface may have finished it while STT was suspended, and
+                    // a diagnosis written after that would create an entry for
+                    // a capture that is done.
                     _ = await PendingRetryStore.shared.updateAttemptIfCurrent(
                         id: pending.metadata.id,
                         lastErrorCode: error.errorCode
@@ -368,7 +371,7 @@ final class DictationService: RecordingExclusivityAuthority {
     /// same `do`, so a store that refused the write skips it and the recording
     /// survives to be recovered again — and a non-terminal outcome keeps it too.
     private func finishWorkRetry(
-        _ pending: (audioData: Data, metadata: PendingRetryMetadata, workImageData: Data?),
+        _ pending: PendingRetryEntry,
         transcript: String
     ) async {
         do {

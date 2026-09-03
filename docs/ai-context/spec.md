@@ -423,11 +423,11 @@ The hard part is not sending it, it is knowing when not to. "No gateway is confi
 
 ---
 
-## Work is one desk, and nothing on it is sent
+## Work is one desk, and nothing on it becomes a turn
 
-Work is one desk per person, made by the first capture and never deleted. Every capture surface lands on it, and no code path leads from it to an AI. The Work/Chats shell preserves both drafts; GigaAction defaults to Chat for installed-shortcut compatibility.
+Work is one desk per person, made by the first capture and never deleted. Every capture surface lands on it, and no code path leads from it to a gateway. The Work/Chats shell preserves both drafts.
 
-The desk lives in the person's own private iCloud, bytes included: a payload within `Constants.workboardSyncCeilingBytes` rides CloudKit, anything larger stays in the device-local vault behind a reattach, and neither is durable until its bytes read back at the length written. One process imports a capture, renewing its claim throughout; a recapture repairs a bytes-less card. A voice note, in the app or from a Shortcut, is a playable card made durable before the speech hop, so a failed transcription costs the words and never the recording; a retry republishes a recording whose first write failed and degrades one to a note only when its card is gone. External surfaces get disposable copies, never the vault's authoritative URL. Deploy model 16 to production CloudKit before release.
+The desk lives in the person's own private iCloud, bytes included: a payload within `Constants.workboardSyncCeilingBytes` rides CloudKit, anything larger stays in the device-local vault behind a reattach, and neither is durable, or released, until its bytes read back at the length written: a reattach frees the old lane only once the new one reads, so a refusal returns the previous payload. A card names the bytes it was published with, so a peer's upload serves it only after a completed publication of them. One process imports a capture and one publishes a payload, app and headless intent alike, behind App-Group locks; a claim the app cannot hand back is retaken by the ordinary recovery pass, and a recapture repairs a bytes-less card. A voice note, in the app or from a Shortcut, is made durable and playable before the speech hop, so a failed transcription costs the words and never the recording; a retry republishes one whose first write failed and degrades to a note only when its card is gone. Deploy model 16 to production CloudKit before release.
 
 ---
 
@@ -500,17 +500,17 @@ Note a platform trap: a synchronizable keychain item is a genuinely *different* 
 
 **Identity** is a locally generated identifier in the keychain. There are no accounts.
 
-**Audio** never enters a conversation and never syncs with one; a Work voice note is a desk material instead. There is no audio entity in the database, though the attachment entity would permit one.
+**Audio** never enters a conversation and never syncs with one; a Work voice note is a desk material whose bytes ride the desk's own lane instead.
 
-It is *not* memory-only. Transcription and background upload both need a file on disk, so a recording is written to scratch storage and deleted when the operation ends, on success and failure alike, with a sweeper at launch for anything a crash stranded. Two paths deliberately hold a recording longer, both inside the app's own container and both bounded:
+It is *not* memory-only: transcription and background upload both need a file on disk, so a recording is written to scratch storage and deleted when the operation ends, success or failure, with a launch sweeper for what a crash stranded. Two paths deliberately hold one longer, inside the app's own container:
 
-- **A transcription that failed** keeps its recording so the user can retry instead of repeating themselves — this arms on the speech-to-text hop, not the gateway hop, which is why a failed *send* has a turn in the store to retry from while a failed *transcription* has only the audio. Bounded by `PendingRetryMetadata.isExpired` and purged both lazily on read and eagerly at launch. The headless Shortcut route saves it *proactively*, before it knows whether anything failed — because when the OS kills that process mid-transcription there is no error path left to run, and a clip saved in advance is the user's only way back.
-- **A Watch capture** is written to the Watch's own container *before* the first delivery attempt, so process death cannot strand a clip the user has already spoken. Bounded by `AppleRelayPendingQueue.maxEntryCount` and `maxEntryAge`, deleted the moment the phone claims it, with an orphan sweep in both directions at startup.
+- **A transcription that failed** keeps its recording so the user can retry instead of repeating themselves — it arms on the speech-to-text hop, not the gateway hop. Each waiting capture is queued under its own identifier and keeps its recording; `PendingRetryMetadata.isExpired` reclaims a retryable transcription, never a recording that is a card's only copy. The headless Shortcut route saves it *proactively*: when the OS kills that process mid-transcription no error path is left to run, and a clip saved in advance is the user's only way back.
+- **A Watch capture** is written to the Watch's own container *before* the first delivery attempt, so process death cannot strand a clip the user has already spoken. Bounded by `AppleRelayPendingQueue`, deleted the moment the phone claims it, with an orphan sweep both ways at startup.
 
-Two smaller rules about audio on disk, both easy to undo by accident:
+Two smaller rules about audio on disk, easily undone by accident:
 
-- **Scratch files must carry a filename prefix the sweeper recognises.** A file written without one is not merely unswept, it is unreclaimable — no sweep rule broad enough to catch it could avoid deleting other frameworks' files from the same shared directory. That mistake has been made three separate times, which is why a test now scans for it.
-- **Capture filenames are random, not timestamped, and the sweeper logs nothing at all.** The names contain nothing sensitive, but a directory listing of timestamps would disclose when the user was recording. This is exactly the kind of rule a well-meant "let's add some logging here" removes.
+- **Scratch files must carry a filename prefix the sweeper recognises.** Without one a file is not merely unswept but unreclaimable — no rule broad enough to catch it could avoid deleting other frameworks' files from the same shared directory. That mistake has been made three times, which is why a test scans for it.
+- **Capture filenames are random, not timestamped, and the sweeper logs nothing.** The names contain nothing sensitive, but a listing of timestamps would disclose when the user was recording — exactly the kind of rule a well-meant "let's add some logging here" removes.
 
 **Outbound traffic** goes to Apple — the private iCloud mirror, the key-value store, and Apple's own on-device speech-model download — and otherwise to exactly three destinations, all chosen and paid for by the user: their speech provider, the AI they configured, and, where a gateway has one, its file server. Attachments sent to a file server keep their original metadata; the copy sent inline to the model is downsized with metadata stripped.
 

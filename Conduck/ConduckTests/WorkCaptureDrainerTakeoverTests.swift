@@ -139,8 +139,11 @@ final class WorkCaptureDrainerTakeoverTests: XCTestCase {
 
         // The window the defect needs: the payload is complete and durable, and
         // no card names it yet.
+        // Asked UNPAIRED — with no pairing supplied, any complete row answers —
+        // because the point is exactly that no card names these bytes yet.
         let completeness = try await staleStore.workMaterialBlobCompleteness(
-            materialIDs: [entryID]
+            materialIDs: [entryID],
+            pairedWith: [:]
         )
         XCTAssertEqual(
             completeness[entryID]?.byteSize, Int64(payload.count),

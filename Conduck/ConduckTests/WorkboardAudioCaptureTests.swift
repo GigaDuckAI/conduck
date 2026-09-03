@@ -345,9 +345,10 @@ final class WorkboardAudioCaptureTests: XCTestCase {
     }
 
     /// A fallback publication is the answer to `.recordingMissing` /
-    /// `.notAudio`, and it cannot use the capture id: the desk write is
-    /// idempotent BY id, so a note published there answers with the card that
-    /// already sits on it and the words are lost with no error anywhere.
+    /// `.notAudio`, and it cannot use the capture id: a material id names ONE
+    /// card, so a note published at an id already naming a recording is refused
+    /// as the collision it is, and the recovery carrying those words would fail
+    /// on every attempt with nowhere else to put them.
     func testTheFallbackNoteIdIsDerivedFromTheCaptureAndCannotCollideWithIt() async throws {
         let captureID = UUID(uuidString: "9F2C7A10-4B31-4E52-9A77-0C1D5E6F8A03")!
         let derived = WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID)
@@ -372,20 +373,32 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         )
 
         // …and the collision it exists to avoid is real: a note published under
-        // the capture id answers with the recording, unchanged and wordless.
+        // the capture id is REFUSED by the desk, so a recovery that used it
+        // would report a failure it can never retry past while the words it
+        // carried reached nothing.
         let store = ConversationStore(inMemory: true)
-        _ = try await Self.publish(captureID: captureID, in: store)
-        let collided = try await store.upsertDeskMaterial(
-            WorkMaterialDraft(
-                id: captureID,
-                kind: .note,
-                title: "recovered on the second attempt",
-                textContent: "recovered on the second attempt",
-                storageMode: .metadataOnly
+        let recording = try await Self.publish(captureID: captureID, in: store)
+        do {
+            _ = try await store.upsertDeskMaterial(
+                WorkMaterialDraft(
+                    id: captureID,
+                    kind: .note,
+                    title: "recovered on the second attempt",
+                    textContent: "recovered on the second attempt",
+                    storageMode: .metadataOnly
+                )
             )
+            XCTFail("a note at the recording's own id must not be written")
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            // The desk refuses an id that already names a card of another kind.
+        }
+        let deskAfterCollision = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let afterCollision = try XCTUnwrap(
+            deskAfterCollision?.materials.first { $0.id == captureID }
         )
-        XCTAssertEqual(collided.kind, .audio, "the recording wins; the note is never inserted")
-        XCTAssertNil(collided.textContent, "and the words it carried went nowhere")
+        XCTAssertEqual(afterCollision.kind, .audio, "the recording is untouched")
+        XCTAssertNil(afterCollision.textContent, "and the words the note carried went nowhere")
+        XCTAssertEqual(afterCollision.id, recording.id)
 
         let fallback = try await store.upsertDeskMaterial(
             WorkMaterialDraft(

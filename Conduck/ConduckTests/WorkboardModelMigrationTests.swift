@@ -10,8 +10,9 @@
 // every list fetch. v15 adds exactly one presentation column, so an account
 // that never resized a card carries nothing new. v16 splits the model into two
 // CloudKit configurations so payload blobs live in a store the Watch never
-// mounts, and a shipped default-configuration store must open as `Core`
-// untouched.
+// mounts — a shipped default-configuration store must open as `Core` untouched
+// — and gives a material the hash of the blob it was published with, so a card
+// names its own payload rather than whatever blob carries its id.
 
 import XCTest
 import CoreData
@@ -237,7 +238,7 @@ final class WorkboardModelMigrationTests: XCTestCase {
         }
     }
 
-    func testV16AddsOnlyTheBlobEntityAndTwoCloudKitConfigurations() throws {
+    func testV16AddsTheBlobEntityTheMaterialPairingAndTwoCloudKitConfigurations() throws {
         let v15 = try requiredModel(named: "Conversations 15.mom")
         let v16 = try requiredModel(named: "Conversations 16.mom")
         let existing = Set(v15.entitiesByName.keys)
@@ -254,15 +255,41 @@ final class WorkboardModelMigrationTests: XCTestCase {
         for entityName in existing {
             let before = try XCTUnwrap(v15.entitiesByName[entityName])
             let after = try XCTUnwrap(v16.entitiesByName[entityName])
-            XCTAssertEqual(Set(after.attributesByName.keys), Set(before.attributesByName.keys),
-                           "v16 must not mutate shipped \(entityName) columns")
+            // One added column on one entity: the material names the blob it
+            // was published with, because a blob carrying its id may be another
+            // device's and may still be rolled back.
+            let added = Set(after.attributesByName.keys)
+                .subtracting(before.attributesByName.keys)
+            XCTAssertEqual(added, entityName == "WorkMaterial" ? ["contentHash"] : [],
+                           "v16 must not add columns to \(entityName)")
+            XCTAssertTrue(
+                Set(before.attributesByName.keys).isSubset(of: Set(after.attributesByName.keys)),
+                "v16 must not drop a shipped \(entityName) column"
+            )
             XCTAssertEqual(Set(after.relationshipsByName.keys), Set(before.relationshipsByName.keys),
                            "v16 must not mutate shipped \(entityName) relationships")
-            XCTAssertEqual(
-                after.versionHash, before.versionHash,
-                "adding an entity and configurations must leave \(entityName) migration-free"
-            )
+            if entityName == "WorkMaterial" {
+                XCTAssertNotEqual(
+                    after.versionHash, before.versionHash,
+                    "an added column is a migration; a matching hash would mean it is not there"
+                )
+            } else {
+                XCTAssertEqual(
+                    after.versionHash, before.versionHash,
+                    "adding an entity and configurations must leave \(entityName) migration-free"
+                )
+            }
         }
+
+        let pairing = try XCTUnwrap(
+            v16.entitiesByName["WorkMaterial"]?.attributesByName["contentHash"]
+        )
+        XCTAssertEqual(pairing.attributeType, .stringAttributeType)
+        XCTAssertTrue(pairing.isOptional)
+        XCTAssertNil(
+            pairing.defaultValue,
+            "a migrated card names no blob until a publication writes one; nil is that state"
+        )
 
         XCTAssertTrue(
             v15.configurations.filter { $0 != "PF_DEFAULT_CONFIGURATION_NAME" }.isEmpty,
@@ -369,6 +396,10 @@ final class WorkboardModelMigrationTests: XCTestCase {
                 XCTAssertEqual(material.value(forKey: "title") as? String, "Screenshot")
                 XCTAssertEqual(material.value(forKey: "cardSize") as? String, "large")
                 XCTAssertEqual(material.value(forKey: "thumbnailData") as? Data, thumbnail)
+                XCTAssertNil(
+                    material.value(forKey: "contentHash"),
+                    "lightweight migration may not invent a blob for a card that names none"
+                )
                 XCTAssertEqual(
                     material.value(forKey: "updatedAt") as? Date,
                     Date(timeIntervalSince1970: 1_800_000_001),
@@ -388,6 +419,10 @@ final class WorkboardModelMigrationTests: XCTestCase {
                 blob.setValue(Date(timeIntervalSince1970: 1_800_000_002), forKey: "createdAt")
                 blob.setValue(Date(timeIntervalSince1970: 1_800_000_002), forKey: "updatedAt")
                 material.setValue("syncedPayload", forKey: "storageMode")
+                // The pairing, written in the same save as the lane: the card
+                // names the blob it was published with.
+                material.setValue("sha256-fixture", forKey: "contentHash")
+                material.setValue(NSNumber(value: Int64(payload.count)), forKey: "byteSize")
                 // Both stores commit from one save; Core Data routes each row by
                 // configuration membership, so no explicit store assignment.
                 try context.save()
@@ -413,6 +448,10 @@ final class WorkboardModelMigrationTests: XCTestCase {
             materialRequest.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
             let material = try XCTUnwrap(context.fetch(materialRequest).first)
             XCTAssertEqual(material.value(forKey: "storageMode") as? String, "syncedPayload")
+            XCTAssertEqual(
+                material.value(forKey: "contentHash") as? String, "sha256-fixture",
+                "the pairing survives close and reopen with the lane it belongs to"
+            )
             XCTAssertNil(material.value(forKey: "payload"),
                          "synced bytes live in the blob row; the material column stays unwritten")
 

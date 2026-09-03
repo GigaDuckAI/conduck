@@ -257,17 +257,23 @@ struct WorkboardVoiceCaptureView: View {
         }
     }
 
-    /// The sheet's privacy line. It may not promise that nothing is sent: the
-    /// words come from whichever speech provider the person configured, and
-    /// `STTClient`'s table is mostly cloud vendors, so the recording leaves the
-    /// device on every configuration except Apple's on-device engine. What the
-    /// desk can promise is the boundary that actually holds — one destination,
-    /// chosen by the person, and no AI or server of ours behind it.
+    /// The sheet's privacy line. Two promises it may not make. It may not
+    /// promise that nothing is sent: the words come from whichever speech
+    /// provider the person configured, and `STTClient`'s table is mostly cloud
+    /// vendors, so the recording leaves the device on every configuration
+    /// except Apple's on-device engine. And it may not promise that the audio
+    /// never reaches an AI: `STTProvider.openAI` is `gpt-4o-transcribe`,
+    /// `STTProvider.gemini` is a Gemini model, and a custom OpenAI-compatible
+    /// endpoint can be anything the person points it at — several selectable
+    /// providers ARE AI models, some of them the same vendor serving the
+    /// person's chat. What holds is the boundary the desk actually enforces:
+    /// one destination, chosen by the person, used only for transcription, and
+    /// no server of ours behind it.
     private var privacyCopy: some View {
         Label(
             LocalizedStringResource(
                 "workboard.voice.privacy",
-                defaultValue: "Keeps the recording on your private desk and adds the words when they’re ready. The audio goes only to the speech provider you chose — never to an AI, never to a server of ours."
+                defaultValue: "Keeps the recording on your private desk and adds the words when they’re ready. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation, and never through a server of ours."
             ),
             systemImage: "lock.shield"
         )

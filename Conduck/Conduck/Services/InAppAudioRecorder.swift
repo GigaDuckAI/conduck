@@ -35,17 +35,15 @@
 // for. Chat captures are untouched by all of it: their transcript IS the
 // artifact, and a conversation has no card to hold bytes.
 //
-// `PendingRetryStore` is ONE overwriting slot for the whole app, so this class
-// treats a claim on it as a resource with a lifetime rather than a fire-and-
-// forget save. It arms the slot only while a capture is genuinely unfinished;
-// it RELEASES the claim the moment the capture completes or the person starts
-// over, so nothing offers to re-transcribe an answered capture; it lets go of a
-// capture only once a replacement microphone is actually live, so a refused
-// start leaves the previous capture's Try Again exactly where it was; and it
-// declines to arm at all when doing so would evict a record holding the only
-// copy of some other lane's recording — this capture's audio is already a card
-// on the desk by then, so what it would spend is somebody else's audio to save
-// its own words.
+// `PendingRetryStore` is a QUEUE keyed by capture id, so arming can never cost
+// another capture its recording. What this class still owns is the LIFETIME of
+// its own entry: it arms only while a capture is genuinely unfinished, and it
+// RELEASES that entry the moment the capture completes or the person starts
+// over — an answered capture left queued is one the retry card offers to
+// re-transcribe. It lets go of a capture only once a replacement microphone is
+// actually live, so a refused start leaves the previous capture's Try Again
+// exactly where it was, and it releases only the entry it armed itself: one
+// armed by an earlier process belongs to whichever surface recovers it.
 
 import Foundation
 import AVFoundation
@@ -191,12 +189,21 @@ final class InAppAudioRecorder {
     /// The desk store the Work lane publishes into.
     var workStoreForTesting: ConversationStore?
 
-    /// Stands in for the App-Group retry slot. `PendingRetryStore.shared` is a
+    /// Stands in for the App-Group retry queue. `PendingRetryStore.shared` is a
     /// process-global singleton over one file every capture test in the bundle
-    /// shares, and the claims here are about WHICH capture this class arms,
-    /// releases and refuses to evict — a property of this class, not of the
-    /// file format.
-    var retryLaneForTesting: (any PendingRetrySlotWriting)?
+    /// shares, and the claims here are about WHICH capture this class arms and
+    /// releases — a property of this class, not of the file format.
+    var retryLaneForTesting: (any PendingRetryQueueWriting)?
+
+    /// Stands in for the Speech-Recognition TCC verdict the start path reads.
+    /// `VoicePermissions.ensureSpeechRecognitionForActiveProvider()` never
+    /// PROMPTS under XCTest — it returns the machine's live status — so on any
+    /// device or CI image whose row for this bundle is `denied` or
+    /// `restricted`, `startRecording()` bails before the microphone seam it
+    /// sits above and every ordering claim past that line silently becomes a
+    /// failure about the machine. Pinning the verdict makes those cases say
+    /// what they are about.
+    var speechAuthorizationForTesting: SFSpeechRecognizerAuthorizationStatus?
 
     /// Stands in for the microphone coming up. There is no input device on a
     /// simulator, and the claim this seam exists for is an ORDERING one: the
@@ -224,8 +231,8 @@ final class InAppAudioRecorder {
         #endif
     }
 
-    /// The single retry slot this recorder arms, releases and reads.
-    private var retryLane: any PendingRetrySlotWriting {
+    /// The retry queue this recorder arms and releases its own entry in.
+    private var retryLane: any PendingRetryQueueWriting {
         #if CONDUCK_TESTING
         return retryLaneForTesting ?? PendingRetryStore.shared
         #else
@@ -233,11 +240,11 @@ final class InAppAudioRecorder {
         #endif
     }
 
-    /// The capture whose claim on the single retry slot this recorder itself
-    /// armed, so it releases only what it took. A slot armed by another process
-    /// — a capture that outlived an app launch — belongs to whichever surface
-    /// recovers it, and clearing it from here would delete a recording this
-    /// recorder is not finishing.
+    /// The capture whose queue entry this recorder itself armed, so it releases
+    /// only what it took. An entry armed by another process — a capture that
+    /// outlived an app launch — belongs to whichever surface recovers it, and
+    /// clearing it from here would delete a recording this recorder is not
+    /// finishing.
     private var armedDurableRetryID: UUID?
 
     /// Underlying capture engine. Composed (not inherited) so the
@@ -336,7 +343,16 @@ final class InAppAudioRecorder {
         // recording. Cloud providers no-op. A determined `.denied`/`.restricted`
         // surfaces the existing `speechPermissionDenied` banner and bails
         // without recording; `.authorized` / just-granted proceeds.
-        let speechStatus = await VoicePermissions.ensureSpeechRecognitionForActiveProvider()
+        let speechStatus: SFSpeechRecognizerAuthorizationStatus
+        #if CONDUCK_TESTING
+        if let pinned = speechAuthorizationForTesting {
+            speechStatus = pinned
+        } else {
+            speechStatus = await VoicePermissions.ensureSpeechRecognitionForActiveProvider()
+        }
+        #else
+        speechStatus = await VoicePermissions.ensureSpeechRecognitionForActiveProvider()
+        #endif
         if speechStatus == .denied || speechStatus == .restricted {
             state = .error(.speechPermissionDenied)
             return
@@ -814,10 +830,9 @@ final class InAppAudioRecorder {
         }
 
         // The capture is finished: the words are on its card, or it owns no
-        // card and the host has them. Its claim on the single retry slot is
-        // released here, because a resolved claim left armed is one the retry
-        // card offers to re-transcribe — and one an unrelated capture will
-        // silently displace, deleting audio nobody is waiting for any more.
+        // card and the host has them. Its queue entry is released here, because
+        // a resolved capture left queued is one the retry card goes on offering
+        // to re-transcribe.
         if retryDestination == .work, pendingWorkCapture == nil {
             await releaseDurableRetry(for: capture.id)
         }
@@ -899,13 +914,12 @@ final class InAppAudioRecorder {
     }
     #endif
 
-    /// Let go of the Work capture a new recording replaces, and of its claim on
-    /// the single retry slot. Called only once a replacement microphone is
-    /// actually live: recording again is a deliberate replacement, and the card
-    /// this capture published — if it got one — keeps its bytes on the desk
-    /// either way. What must not survive is the durable claim, which the new
-    /// capture is about to need and whose recovery would re-transcribe a
-    /// recording the person has already replaced.
+    /// Let go of the Work capture a new recording replaces, and of its queue
+    /// entry. Called only once a replacement microphone is actually live:
+    /// recording again is a deliberate replacement, and the card this capture
+    /// published — if it got one — keeps its bytes on the desk either way. What
+    /// must not survive is the queue entry, whose recovery would re-transcribe
+    /// a recording the person has already replaced.
     private func abandonPendingWorkCapture() async {
         workRecordingMaterialID = nil
         guard let abandoned = pendingWorkCapture else { return }
@@ -913,9 +927,9 @@ final class InAppAudioRecorder {
         await releaseDurableRetry(for: abandoned.id)
     }
 
-    /// Release this recorder's own claim on the retry slot. Gated on the id it
-    /// armed, so a slot won by another capture in the meantime — or one this
-    /// process never armed at all — is left for whoever owns it.
+    /// Release this recorder's own queue entry. Gated on the id it armed, so an
+    /// entry this process never armed — one that outlived an app launch — is
+    /// left for whoever recovers it.
     private func releaseDurableRetry(for id: UUID) async {
         guard armedDurableRetryID == id else { return }
         armedDurableRetryID = nil
@@ -940,13 +954,9 @@ final class InAppAudioRecorder {
     /// for opposite acts and look identical from the far side of a process
     /// death.
     ///
-    /// It also declines to arm at all when arming would evict a record holding
-    /// the only copy of a recording. The slot is one overwriting slot for the
-    /// whole app, and a capture whose own recording is already a card on the
-    /// desk owes only its words: spending somebody else's audio to save them is
-    /// the wrong trade in every direction. The words are still held in memory,
-    /// so the sheet's Try Again finishes this capture regardless; only a
-    /// process death costs them.
+    /// Arming costs no other capture anything: the store is a queue keyed by
+    /// capture id, so this record takes its place beside whatever is already
+    /// waiting rather than displacing it.
     ///
     /// Best-effort: a save failure is logged inside the store and the caller
     /// still surfaces the original error — a silent swap to a storage error
@@ -960,12 +970,6 @@ final class InAppAudioRecorder {
         let publicationState: PendingRetryPublicationState? = retryDestination == .work
             ? (capture.materialID == nil ? .phaseOneFailed : .published)
             : nil
-        if publicationState == .published,
-           let incumbent = await retryLane.currentSlot(),
-           incumbent.id != capture.id,
-           !incumbent.hasDurableRecording {
-            return
-        }
         let metadata = PendingRetryMetadata(
             id: capture.id,
             createdAt: Date(),

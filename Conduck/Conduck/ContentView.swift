@@ -1450,7 +1450,11 @@ struct ContentView: View {
         retryErrorMessage = nil
         defer { isRetrying = false }
 
-        guard let pending = await PendingRetryStore.shared.load() else {
+        // The queue is offered newest first and finished ONE capture per tap:
+        // the recovery below is about a single card, and a person watching the
+        // retry card is waiting on the recording they just made. Whatever is
+        // still queued keeps the card up for the next tap.
+        guard let pending = await PendingRetryStore.shared.load().first else {
             pendingRetryErrorCode = nil
             pendingRetryIsRetryable = true
             withAnimation { hasPendingRetry = false }
@@ -1584,9 +1588,10 @@ struct ContentView: View {
                 lastErrorCode: error.errorCode
             )
             guard stillOwnsRetry else {
-                // A newer capture replaced this one while STT was suspended.
-                // Keep its card authoritative instead of painting A's diagnosis
-                // and Troubleshoot code onto B.
+                // This capture left the queue while STT was suspended — another
+                // surface finished it, or the person discarded it. Whatever is
+                // queued now owns the card, so read its diagnosis rather than
+                // painting this one's onto it.
                 let newerRetryIsPending = await PendingRetryStore.shared.hasPending()
                 pendingRetryErrorCode = newerRetryIsPending
                     ? await PendingRetryStore.shared.pendingErrorCode()
@@ -1639,7 +1644,7 @@ struct ContentView: View {
     /// survives to be recovered again — and a non-terminal outcome keeps it too.
     @MainActor
     private func finishWorkRetry(
-        _ pending: (audioData: Data, metadata: PendingRetryMetadata, workImageData: Data?),
+        _ pending: PendingRetryEntry,
         transcript: String
     ) async {
         do {
@@ -1676,10 +1681,10 @@ struct ContentView: View {
         }
     }
 
-    /// Retire the durable record a completed capture no longer needs, and
-    /// re-read the card's state from whatever is left in the single slot — a
-    /// newer capture may have taken it while this one was in flight, and its
-    /// diagnosis is the one the card must show.
+    /// Retire the queue entry a completed capture no longer needs — exactly
+    /// that one — and re-read the card's state from whatever is still queued.
+    /// Another capture may be waiting behind this one, and its diagnosis is the
+    /// one the card must show next.
     @MainActor
     private func releasePendingRetry(id: UUID) async {
         _ = await PendingRetryStore.shared.clear(ifCurrentID: id)

@@ -8,12 +8,12 @@
 //
 // One capture can produce three cards, and the whole subject here is that they
 // are three IDENTITIES. The recording is named by the capture id; a screenshot
-// and a note-shaped fallback are named by ids DERIVED from it. The desk answers
-// a publication at an id it already holds with the card standing there, so an
-// artifact published at the recording's id is not merely ignored — the
-// counterfactuals below measure the recording's own bytes being replaced by the
-// screenshot's, and the recovered words being written nowhere at all while the
-// retry record that held the audio is cleared.
+// and a note-shaped fallback are named by ids DERIVED from it. A material id
+// names ONE card, so an artifact published at the recording's id is a
+// COLLISION: the counterfactuals below measure the desk refusing it outright,
+// which leaves the screenshot and the recovered words with nowhere to go on
+// every attempt. A capture may not lean on that refusal — it is the last line,
+// not the plan.
 //
 // The intent's own ordering cannot be driven from this suite: `perform()` takes
 // an `IntentFile` the Shortcuts runtime supplies and drives a live `STTClient`
@@ -349,51 +349,59 @@ final class WorkboardVoiceLaneTests: XCTestCase {
     }
 
     /// The counterfactual the derived id exists for, MEASURED rather than
-    /// argued. Publishing the screenshot at the capture's own id does not merely
-    /// fail to add a card: the desk treats the arriving bytes as a repair of the
-    /// material already standing there and the recording's payload becomes the
-    /// picture.
-    func testAScreenshotPublishedAtTheCaptureIdWouldReplaceTheRecordingsBytes() async throws {
+    /// argued. Publishing the screenshot at the capture's own id is a COLLISION:
+    /// a material id names one card, so the desk refuses it outright and the
+    /// picture reaches nothing — a capture that used this identity would fail
+    /// its screenshot on every attempt, and would have done far worse before the
+    /// desk learned to refuse it.
+    func testAScreenshotPublishedAtTheCaptureIdIsRefusedRatherThanBecomingTheRecording() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
         let recording = Self.recordingBytes
         _ = try await Self.publishRecording(captureID: captureID, audio: recording, in: store)
 
         let picture = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46])
-        _ = try await store.upsertDeskMaterial(
-            WorkMaterialDraft(
-                id: captureID,
-                kind: .image,
-                title: "screenshot.jpg",
-                filename: "screenshot.jpg",
-                mimeType: "image/jpeg",
-                payload: picture,
-                byteSize: Int64(picture.count)
+        do {
+            _ = try await store.upsertDeskMaterial(
+                WorkMaterialDraft(
+                    id: captureID,
+                    kind: .image,
+                    title: "screenshot.jpg",
+                    filename: "screenshot.jpg",
+                    mimeType: "image/jpeg",
+                    payload: picture,
+                    byteSize: Int64(picture.count)
+                )
             )
-        )
+            XCTFail("a picture at the recording's own id must not be written")
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            // The id already names a card of another kind.
+        }
 
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(desk.materials.count, 1, "no second card — the id was already taken")
-        let collided = try await store.loadWorkMaterialPayload(id: captureID)
+        XCTAssertEqual(desk.materials.first?.kind, .audio, "and the card there is still the recording")
+        let stored = try await store.loadWorkMaterialPayload(id: captureID)
         XCTAssertEqual(
-            collided, picture,
+            stored, recording,
             """
-            MEASURED: the recording's own bytes are gone, replaced by the picture, because a payload \
-            arriving at an id already on the synced lane is a repair of that material. This is the \
-            state `WorkVoiceScreenshotCoordinator.materialID(forCapture:)` exists to make unreachable.
+            MEASURED: the recording keeps its own bytes because the collision was REFUSED. The \
+            refusal is what stands between this identity and the picture, which is the state \
+            `WorkVoiceScreenshotCoordinator.materialID(forCapture:)` exists to make unreachable — \
+            a capture cannot rely on a store's refusal to publish its own artifacts correctly.
             """
         )
-        XCTAssertNotEqual(collided, recording)
+        XCTAssertNotEqual(stored, picture)
     }
 
     // MARK: - The fallback note's own identity
 
     /// The other half of the same defect. When a capture owns no recording card
     /// the recovered words are published note-shaped — and at the capture's own
-    /// id that publication is answered by whatever already stands there, writing
-    /// the words nowhere while every surface goes on to clear the retry record
-    /// that held the only audio.
+    /// id that publication collides with whatever already stands there and is
+    /// refused, so the words reach nothing and no retry of it can ever land
+    /// them.
     func testTheFallbackNoteLandsBesideTheRecordingRatherThanVanishingIntoIt() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
@@ -401,17 +409,26 @@ final class WorkboardVoiceLaneTests: XCTestCase {
         let words = "Ferry leaves at 07:30"
 
         // The shape the finding names: the fallback minted at the capture id.
-        let collided = try await store.upsertDeskMaterial(
-            WorkMaterialDraft(
-                id: captureID,
-                kind: .note,
-                title: "Voice capture",
-                textContent: words,
-                storageMode: .metadataOnly
+        do {
+            _ = try await store.upsertDeskMaterial(
+                WorkMaterialDraft(
+                    id: captureID,
+                    kind: .note,
+                    title: "Voice capture",
+                    textContent: words,
+                    storageMode: .metadataOnly
+                )
             )
+            XCTFail("a note at the recording's own id must not be written")
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            // MEASURED: the desk refuses an id that already names a recording.
+        }
+        let deskAfterCollision = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let collided = try XCTUnwrap(
+            deskAfterCollision?.materials.first { $0.id == captureID }
         )
         XCTAssertEqual(collided.kind, .audio,
-                       "MEASURED: the desk answers with the recording already standing there")
+                       "MEASURED: the recording standing there is untouched")
         XCTAssertNil(collided.textContent, "…and the recovered words are written nowhere at all")
 
         // The shape it takes now.

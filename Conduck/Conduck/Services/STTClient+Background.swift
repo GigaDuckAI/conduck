@@ -185,7 +185,10 @@ extension STTClient {
     /// delegate cleans up on success OR failure.
     ///
     /// - Parameters:
-    ///   - audioFileURL: path to the audio file on disk (M4A AAC).
+    ///   - audioFileURL: path to the audio file on disk. Its container is read
+    ///     from the leading bytes (`SourceAudioContainer.sniff`), never assumed
+    ///     from the name or from the Watch's native AAC — the multipart part's
+    ///     MIME and filename come from that.
     ///   - apiKey: bearer / header value for the STT provider.
     ///   - language: optional ISO 639-1 hint (e.g., "en", "de"); nil = auto-detect.
     ///   - provider: the STT provider (wire format, auth, caps, decoder).
@@ -260,12 +263,13 @@ extension STTClient {
                 try? FileManager.default.removeItem(at: audioFileURL)
                 throw AppError.sttDecodingFailure
             }
+            let part = await Self.backgroundAudioPart(forFileAt: audioFileURL)
             let boundary: String
             do {
                 let result = try STTMultipartBuilder.writeBodyFile(
                     audioFileURL: audioFileURL,
-                    audioMIME: "audio/mp4",
-                    audioFilename: "audio.m4a",
+                    audioMIME: part.mime,
+                    audioFilename: part.filename,
                     model: effModel,
                     language: language,
                     fieldNames: fields
@@ -364,6 +368,28 @@ extension STTClient {
             )
             task.resume()
         }
+    }
+
+    /// What the background lane's multipart audio part claims to be, read off
+    /// the bytes it is about to upload.
+    ///
+    /// Same answer the foreground lane gets from
+    /// `STTClient.multipartAudioPart(for:)` — one description of one payload,
+    /// so the two lanes cannot label the same recording differently — but
+    /// resolved from a short HEAD of the file rather than from the whole
+    /// recording: this path deliberately never holds the audio in memory
+    /// (`uploadTask(with:fromFile:)` streams it), and sniffing must not
+    /// undo that. 64 bytes is headroom over the 12 `SourceAudioContainer.sniff`
+    /// inspects. An unreadable file resolves through the sniff's own `.m4a`
+    /// default rather than throwing here — the builder below is what reports
+    /// the real I/O failure, and it must stay the one that does.
+    static func backgroundAudioPart(forFileAt url: URL) async -> (mime: String, filename: String) {
+        var head = Data()
+        if let handle = try? FileHandle(forReadingFrom: url) {
+            defer { try? handle.close() }
+            head = (try? handle.read(upToCount: 64)) ?? Data()
+        }
+        return await STTClient.multipartAudioPart(for: head)
     }
 
     /// Build a JSON body via the provider's factory and write it to a temp

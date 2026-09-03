@@ -20,8 +20,11 @@
 // promising every byte on every device.
 // (3) TWO SURFACES WHOSE COPY IS ONLY TRUE KEY BY KEY. The voice sheet is the
 // one Work surface with an outbound destination — the speech provider the
-// person configured — so it must name it instead of denying it; the desk's
-// sync banner speaks about cards, because the shared Chat rows it would
+// person configured — so it must name it instead of denying it, and it may not
+// deny that the destination is an AI either: several selectable providers ARE
+// AI models. What it may promise is the boundary the desk enforces, which is
+// that the audio is transcribed and never becomes part of a conversation. The
+// desk's sync banner speaks about cards, because the shared Chat rows it would
 // otherwise borrow speak about conversations.
 // (4) BOTH DIRECTIONS OF THE CATALOG. A key referenced in source with no row
 // renders from its `defaultValue:` and can never be translated; a row no
@@ -62,6 +65,23 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
     /// on-device engine the audio leaves the device. `testTheVoiceSheetNames…`
     /// below states the positive form of the same rule.
     private static let outboundHopKeys: Set<String> = ["workboard.voice.privacy"]
+
+    /// Denials of AI involvement. A Work recording's one destination is the
+    /// speech provider the person picked, and the roster it is picked from
+    /// holds AI models: `STTProvider.openAI` is `gpt-4o-transcribe`,
+    /// `STTProvider.gemini` is a Gemini model, and a custom OpenAI-compatible
+    /// endpoint can be anything — frequently the same vendor already answering
+    /// the person's chat. So a Work string may not say the audio never reaches
+    /// an AI. It is a phrase list rather than a ban on the word: the honest
+    /// sentence is allowed to mention the AI it is drawing a boundary against.
+    private static let aiDenialPhrases = [
+        "never to an ai",
+        "not to an ai",
+        "never reaches an ai",
+        "no ai sees",
+        "without an ai",
+        "never an ai"
+    ]
 
     /// The desk's own sync notice. Three rows, one per actionable account
     /// state, kept separate from `sync.icloud.banner.*` because those say
@@ -143,11 +163,13 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
     }
 
     /// The voice sheet is the one Work surface with a destination, so its
-    /// privacy line has to name that destination rather than deny it. The
-    /// inertness phrases are checked on the RAW value: the vocabulary scan
-    /// above deliberately stops exempting this key, and this is the assertion
-    /// that says why in the failure message.
-    func testTheVoiceSheetNamesTheSpeechProviderRatherThanPromisingInertness() throws {
+    /// privacy line has to name that destination rather than deny it, and it
+    /// has to describe the destination truthfully — which rules out both
+    /// "nothing is sent" and "never to an AI". The inertness phrases are
+    /// checked on the RAW value: the vocabulary scan above deliberately stops
+    /// exempting this key, and this is the assertion that says why in the
+    /// failure message.
+    func testTheVoiceSheetNamesTheSpeechProviderAndDeniesNeitherTheHopNorTheAI() throws {
         let strings = try catalogStrings()
         let value = try XCTUnwrap(
             englishValue(try XCTUnwrap(strings["workboard.voice.privacy"])),
@@ -167,9 +189,23 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
             lowered.contains("nothing leaves"),
             "same rule, said the other way round: \(value)"
         )
+        for phrase in Self.aiDenialPhrases {
+            XCTAssertFalse(
+                lowered.contains(phrase),
+                "gpt-4o-transcribe, Gemini and a custom OpenAI-compatible endpoint are all "
+                    + "selectable speech providers and all of them are AI models, so this line "
+                    + "may not promise the recording never reaches one: \(value)"
+            )
+        }
         XCTAssertTrue(
             lowered.contains("speech provider"),
             "the line has to name where the audio actually goes: \(value)"
+        )
+        XCTAssertTrue(
+            lowered.contains("conversation"),
+            "having given up both denials, the line has to state the boundary that does "
+                + "hold — the audio is transcribed and never becomes part of a conversation, "
+                + "which is what no code path from the desk to a gateway actually buys: \(value)"
         )
     }
 

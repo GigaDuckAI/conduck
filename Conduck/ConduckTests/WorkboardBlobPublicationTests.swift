@@ -35,6 +35,11 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// The blob a card publishing these bytes names.
+    private func pairing(of payload: Data) -> WorkMaterialBlobPairing {
+        WorkMaterialBlobPairing(contentHash: hex(payload), byteSize: Int64(payload.count))
+    }
+
     private func deskMaterials(
         _ store: ConversationStore
     ) async throws -> [WorkMaterialRecord] {
@@ -450,7 +455,20 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         XCTAssertEqual(blobs.first?.contentHash, hex(payload))
         XCTAssertEqual(blobs.first?.payloadByteCount, payload.count)
 
-        let completeness = try await store.workMaterialBlobCompleteness(materialIDs: [draft.id])
+        // The pairing, written in the same save as the lane: the card names the
+        // bytes it published, so a blob that merely carries its id is not its
+        // payload.
+        XCTAssertEqual(published.contentHash, hex(payload))
+        let rows = await store._workMaterialRowsForTesting(id: draft.id)
+        XCTAssertEqual(
+            Set(rows.compactMap(\.contentHash)), [hex(payload)],
+            "every physical row names the blob, or a merge could resurrect an unpaired one"
+        )
+
+        let completeness = try await store.workMaterialBlobCompleteness(
+            materialIDs: [draft.id],
+            pairedWith: [draft.id: pairing(of: payload)]
+        )
         XCTAssertEqual(completeness[draft.id]?.isComplete, true)
         let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
         XCTAssertEqual(loaded, payload)
@@ -505,7 +523,17 @@ final class WorkboardBlobPublicationTests: XCTestCase {
 
     // MARK: - Interrupted publications
 
-    func testABlobLeftByACrashIsAdoptedByTheReplayRatherThanDuplicated() async throws {
+    /// A blob nobody's card names is not evidence, so the replay publishes its
+    /// own and leaves the stranded row standing.
+    ///
+    /// It looks wasteful and is deliberate. This device cannot tell its own
+    /// interrupted publication from a blob another device inserted and can still
+    /// roll back — the two stores mirror independently, so a peer's blob arrives
+    /// on its own — and a card committed against bytes a peer then deletes waits
+    /// for iCloud for ever with nothing left to wait for. Two rows carrying
+    /// identical bytes cost one bounded copy until the card is deleted, and
+    /// paired deletion takes both.
+    func testABlobNoCardNamesIsNotAdoptedByTheReplayThatFindsIt() async throws {
         let store = isolated.make()
         let payload = Data("the screenshot that survived the crash".utf8)
         let draft = WorkMaterialDraft(
@@ -528,13 +556,29 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         let published = try await store.upsertDeskMaterial(draft)
 
         XCTAssertEqual(published.storageMode, .syncedPayload)
+        XCTAssertEqual(published.availability, .synced)
+        XCTAssertEqual(published.contentHash, hex(payload))
         let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
         XCTAssertEqual(loaded, payload)
         let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
-        XCTAssertEqual(blobs.count, 1,
-                       "the bytes were already durable, so the replay writes no second row")
-        XCTAssertEqual(blobs.first?.createdAt, stranded.first?.createdAt,
-                       "and it adopts the row the interrupted attempt left rather than replacing it")
+        XCTAssertEqual(
+            blobs.count, 2,
+            "no card named those bytes, so the publication wrote a row of its own"
+        )
+        XCTAssertEqual(
+            Set(blobs.compactMap(\.contentHash)), [hex(payload)],
+            "both rows carry the same payload; the duplicate is the accepted cost"
+        )
+        XCTAssertTrue(
+            blobs.contains { $0.createdAt == stranded.first?.createdAt },
+            "and the row it found is left standing — deleting it would export a deletion"
+        )
+
+        // A second replay finds a card that DOES name these bytes, so it adopts
+        // and writes nothing: the duplication is bounded at one.
+        _ = try await store.upsertDeskMaterial(draft)
+        let afterSecondReplay = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
+        XCTAssertEqual(afterSecondReplay.count, 2)
     }
 
     func testACardWhosePayloadStoreWasLostIsIncompleteUntilAReplayRestagesIt() async throws {
@@ -557,7 +601,10 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         let card = try XCTUnwrap(cardValue)
         XCTAssertEqual(card.storageMode, .syncedPayload,
                        "the card still claims the synced lane — losing the payload store is silent")
-        let completeness = try await store.workMaterialBlobCompleteness(materialIDs: [draft.id])
+        let completeness = try await store.workMaterialBlobCompleteness(
+            materialIDs: [draft.id],
+            pairedWith: [draft.id: pairing(of: payload)]
+        )
         XCTAssertNil(completeness[draft.id],
                      "the data layer reports the payload as not yet complete")
         let missing = try await store.loadWorkMaterialPayload(id: draft.id)
@@ -587,9 +634,14 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         let published = try await store.upsertDeskMaterial(draft)
 
         XCTAssertEqual(published.storageMode, .syncedPayload)
+        XCTAssertNil(published.contentHash,
+                     "a card that carried no bytes names no blob; it is waiting for one")
         let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
         XCTAssertTrue(blobs.isEmpty)
-        let completeness = try await store.workMaterialBlobCompleteness(materialIDs: [draft.id])
+        let completeness = try await store.workMaterialBlobCompleteness(
+            materialIDs: [draft.id],
+            pairedWith: [:]
+        )
         XCTAssertNil(completeness[draft.id])
         let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
         XCTAssertNil(loaded)
@@ -597,7 +649,14 @@ final class WorkboardBlobPublicationTests: XCTestCase {
 
     // MARK: - Duplicates and disagreement
 
-    func testDuplicateBlobsResolveToTheNewestCompleteRow() async throws {
+    /// Duplicates of the bytes a card NAMES resolve newest-first; complete rows
+    /// carrying other bytes are not this card's payload at all.
+    ///
+    /// Both halves are the same rule. CloudKit imports one logical blob as
+    /// several physical rows — identical copies, which the newest of answers —
+    /// and it imports another device's republication as a row that is newer
+    /// still. Only the material row says which bytes are the card's.
+    func testDuplicatesOfTheNamedBytesResolveNewestFirstAndOtherBytesNeverWin() async throws {
         let store = isolated.make()
         let original = Data("the first device's copy".utf8)
         let draft = WorkMaterialDraft(
@@ -610,27 +669,37 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         )
         let published = try await store.upsertDeskMaterial(draft)
 
-        let newer = Data("the second device's copy, imported later".utf8)
+        // The same bytes, imported again as a second physical row.
         await store._insertWorkMaterialBlobRowForTesting(
             materialID: draft.id,
-            payload: newer,
-            byteSize: Int64(newer.count),
-            contentHash: hex(newer),
+            payload: original,
+            byteSize: Int64(original.count),
+            contentHash: hex(original),
             updatedAt: published.updatedAt.addingTimeInterval(60)
         )
-        let older = Data("a stale copy from a device that was offline".utf8)
+        // And a newer row carrying OTHER bytes: another device's republication,
+        // whose material update has not landed here.
+        let peer = Data("the second device's copy, imported later".utf8)
         await store._insertWorkMaterialBlobRowForTesting(
             materialID: draft.id,
-            payload: older,
-            byteSize: Int64(older.count),
-            contentHash: hex(older),
-            updatedAt: published.updatedAt.addingTimeInterval(-60)
+            payload: peer,
+            byteSize: Int64(peer.count),
+            contentHash: hex(peer),
+            updatedAt: published.updatedAt.addingTimeInterval(120)
         )
 
         let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
-        XCTAssertEqual(loaded, newer)
-        let completeness = try await store.workMaterialBlobCompleteness(materialIDs: [draft.id])
-        XCTAssertEqual(completeness[draft.id]?.contentHash, hex(newer))
+        XCTAssertEqual(loaded, original, "the card opens the payload its own row names")
+        let completeness = try await store.workMaterialBlobCompleteness(
+            materialIDs: [draft.id],
+            pairedWith: [draft.id: pairing(of: original)]
+        )
+        let winner = try XCTUnwrap(completeness[draft.id])
+        XCTAssertEqual(winner.contentHash, hex(original))
+        XCTAssertEqual(
+            winner.updatedAt, published.updatedAt.addingTimeInterval(60),
+            "among the rows the card names, the newest answers"
+        )
         let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
         XCTAssertEqual(blobs.count, 3,
                        "reading resolves duplicates; it never deletes a CloudKit record to do it")
@@ -661,7 +730,10 @@ final class WorkboardBlobPublicationTests: XCTestCase {
 
         let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
         XCTAssertEqual(loaded, payload)
-        let completeness = try await store.workMaterialBlobCompleteness(materialIDs: [draft.id])
+        let completeness = try await store.workMaterialBlobCompleteness(
+            materialIDs: [draft.id],
+            pairedWith: [draft.id: pairing(of: payload)]
+        )
         XCTAssertEqual(completeness[draft.id]?.contentHash, hex(payload))
 
         _ = try await store.upsertDeskMaterial(draft)
@@ -790,35 +862,41 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     }
 
     /// Two publications carrying the same bytes for one material both insert:
-    /// the presence check and the insert are separate operations, and
+    /// the adoption check and the insert are separate operations, and
     /// `(materialID, contentHash, byteSize)` carries no uniqueness constraint —
     /// CloudKit forbids one — so the rows are equal in every column. A rollback
     /// matching on those columns therefore reclaims the other call's payload
     /// along with its own, and a card naming those bytes is left with nothing
     /// behind it.
     ///
-    /// The state is staged here rather than raced: a peer's newer import makes
-    /// the presence check miss the identical row that is already there, which
-    /// is the same position a concurrent publication is in.
+    /// The state is staged here rather than raced: another device has already
+    /// imported a row carrying exactly the bytes this refused replay writes,
+    /// which is the same position a concurrent publication is in.
     func testARefusedPublicationLeavesAnIdenticalBlobItDidNotWrite() async throws {
         let store = isolated.make()
         let mine = Data("the bytes this capture carries".utf8)
-        let draft = WorkMaterialDraft(
-            kind: .file,
-            title: "shared.txt",
-            filename: "shared.txt",
-            mimeType: "text/plain",
-            payload: mine,
-            byteSize: Int64(mine.count)
-        )
-        let published = try await store.upsertDeskMaterial(draft)
+        let materialID = UUID()
+        func draft(_ payload: Data) -> WorkMaterialDraft {
+            WorkMaterialDraft(
+                id: materialID,
+                kind: .file,
+                title: "shared.txt",
+                filename: "shared.txt",
+                mimeType: "text/plain",
+                payload: payload,
+                byteSize: Int64(payload.count)
+            )
+        }
+        let published = try await store.upsertDeskMaterial(draft(mine))
 
-        let peer = Data("bytes another device published for the same card".utf8)
+        // The identical row this refused replay is about to write, already here
+        // from another device.
+        let replay = Data("bytes a second capture of the same source carries".utf8)
         await store._insertWorkMaterialBlobRowForTesting(
-            materialID: draft.id,
-            payload: peer,
-            byteSize: Int64(peer.count),
-            contentHash: hex(peer),
+            materialID: materialID,
+            payload: replay,
+            byteSize: Int64(replay.count),
+            contentHash: hex(replay),
             updatedAt: published.updatedAt.addingTimeInterval(60)
         )
 
@@ -826,7 +904,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         let desk = try XCTUnwrap(deskValue)
         do {
             _ = try await store.upsertDeskMaterial(
-                draft,
+                draft(replay),
                 expectedOwnerRevision: WorkboardRevision.value(for: desk.updatedAt) - 1
             )
             XCTFail("a write against a revision the board has moved past must be refused")
@@ -834,17 +912,20 @@ final class WorkboardBlobPublicationTests: XCTestCase {
             // Expected.
         }
 
-        let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
+        let blobs = await store._workMaterialBlobRowsForTesting(materialID: materialID)
         XCTAssertEqual(
             blobs.count, 2,
             "the refusal takes back the row it inserted and leaves the identical one standing"
         )
         XCTAssertEqual(
-            Set(blobs.compactMap(\.contentHash)), [hex(mine), hex(peer)],
+            Set(blobs.compactMap(\.contentHash)), [hex(mine), hex(replay)],
             "a row this call did not write is not this call's to reclaim, however equal its columns"
         )
-        let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
-        XCTAssertEqual(loaded, peer, "the newest complete row still answers for the card")
+        let loaded = try await store.loadWorkMaterialPayload(id: materialID)
+        XCTAssertEqual(
+            loaded, mine,
+            "the refused replay changed nothing, so the card still opens the bytes it named"
+        )
     }
 
     /// The same rule on the reattach path, which is the one with no in-process
@@ -870,9 +951,12 @@ final class WorkboardBlobPublicationTests: XCTestCase {
             updatedAt: published.updatedAt.addingTimeInterval(60)
         )
 
+        // Bytes neither row carries, so the reattach really does insert a blob
+        // of its own for the refusal to take back.
+        let arriving = Data("the copy the person picked in the importer".utf8)
         let replacement = FileManager.default.temporaryDirectory
             .appendingPathComponent("blob-rollback-\(UUID().uuidString).txt")
-        try mine.write(to: replacement, options: .atomic)
+        try arriving.write(to: replacement, options: .atomic)
         defer { try? FileManager.default.removeItem(at: replacement) }
 
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
@@ -881,7 +965,7 @@ final class WorkboardBlobPublicationTests: XCTestCase {
             _ = try await store.replaceWorkMaterialPayloadFile(
                 id: draft.id,
                 from: replacement,
-                byteSize: Int64(mine.count),
+                byteSize: Int64(arriving.count),
                 filename: replacement.lastPathComponent,
                 mimeType: "text/plain",
                 sourceDevice: "test",
@@ -893,8 +977,10 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         }
 
         let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
-        XCTAssertEqual(blobs.count, 2)
+        XCTAssertEqual(blobs.count, 2, "the row the refusal wrote is gone; the other two stay")
         XCTAssertEqual(Set(blobs.compactMap(\.contentHash)), [hex(mine), hex(peer)])
+        let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
+        XCTAssertEqual(loaded, mine, "and the card still opens the payload it named")
     }
 
     // MARK: - Reattach moves a card between the lanes
@@ -935,6 +1021,10 @@ final class WorkboardBlobPublicationTests: XCTestCase {
 
         XCTAssertEqual(reattached.storageMode, .syncedPayload)
         XCTAssertNil(reattached.localVaultKey)
+        XCTAssertEqual(
+            reattached.contentHash, hex(bytes),
+            "a card arriving on the synced lane names the blob it arrived with"
+        )
         let blobs = await store._workMaterialBlobRowsForTesting(materialID: original.id)
         XCTAssertEqual(blobs.count, 1)
         XCTAssertEqual(blobs.first?.contentHash, hex(bytes))
@@ -1007,6 +1097,77 @@ final class WorkboardBlobPublicationTests: XCTestCase {
                       "the card's payload left the synced lane, so its blob left with it")
         let emptied = try await store.loadWorkMaterialPayload(id: draft.id)
         XCTAssertEqual(emptied, Data())
+    }
+
+    /// The retirement that follows a lane change takes the rows the card was
+    /// ON, named by object id — never everything under the material id.
+    ///
+    /// The swap has to commit before its new leaf can be confirmed, and CloudKit
+    /// delivers into that window: a blob imported there is another device's
+    /// republication whose own material update has not arrived yet. Retiring by
+    /// material id would delete it and EXPORT that deletion, so the peer's card
+    /// would wait for iCloud for ever — for bytes this device threw away on its
+    /// behalf.
+    func testABlobImportedDuringTheConfirmationWindowIsNotRetiredWithTheOldOnes()
+    async throws {
+        let store = isolated.make()
+        let payload = Data("the payload the card is leaving behind".utf8)
+        let draft = WorkMaterialDraft(
+            kind: .file,
+            title: "leaving.txt",
+            filename: "leaving.txt",
+            mimeType: "text/plain",
+            payload: payload,
+            byteSize: Int64(payload.count)
+        )
+        let published = try await store.upsertDeskMaterial(draft)
+        XCTAssertEqual(published.storageMode, .syncedPayload)
+
+        // A zero-byte file has nothing to sync, so the card moves to the vault
+        // and the retirement runs.
+        let replacement = try temporaryFile(Data())
+        defer { try? FileManager.default.removeItem(at: replacement) }
+
+        // The peer's arrival, delivered between the swap's commit and the proof
+        // of its new leaf. Returning nil lets the REAL confirmation run.
+        let arriving = Data("what another device just published for this card".utf8)
+        let arrivingHash = hex(arriving)
+        await store._setPublicationConfirmationHookForTesting { site, materialID, _, _ in
+            guard site == .reattach else { return nil }
+            await store._insertWorkMaterialBlobRowForTesting(
+                materialID: materialID,
+                payload: arriving,
+                byteSize: Int64(arriving.count),
+                contentHash: arrivingHash,
+                updatedAt: Date()
+            )
+            return nil
+        }
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        let reattachedValue = try await store.replaceWorkMaterialPayloadFile(
+            id: draft.id,
+            from: replacement,
+            byteSize: 0,
+            filename: replacement.lastPathComponent,
+            mimeType: "application/octet-stream",
+            sourceDevice: "test",
+            expectedOwnerRevision: WorkboardRevision.value(for: desk.updatedAt)
+        )
+        let reattached = try XCTUnwrap(reattachedValue)
+        XCTAssertEqual(reattached.storageMode, .localVault)
+        XCTAssertNil(reattached.contentHash, "a vault card names no blob")
+
+        let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
+        XCTAssertEqual(
+            blobs.compactMap(\.contentHash), [arrivingHash],
+            """
+            The retirement took the rows the swap found and only those. The row \
+            that arrived inside the window belongs to a publication on another \
+            device; deleting it here would export that deletion.
+            """
+        )
     }
 
     /// CloudKit can merge one card into several physical rows, and blob

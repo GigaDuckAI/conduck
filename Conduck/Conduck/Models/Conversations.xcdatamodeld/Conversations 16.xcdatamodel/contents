@@ -124,6 +124,7 @@
         <attribute name="byteSize" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
         <attribute name="caption" optional="YES" attributeType="String"/>
         <attribute name="cardSize" optional="YES" attributeType="String"/>
+        <attribute name="contentHash" optional="YES" attributeType="String"/>
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="filename" optional="YES" attributeType="String"/>
         <attribute name="height" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>

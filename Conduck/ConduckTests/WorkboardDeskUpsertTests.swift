@@ -748,4 +748,72 @@ final class WorkboardDeskUpsertTests: XCTestCase {
         let loaded = try await store.loadWorkMaterialPayload(id: sharedID)
         XCTAssertEqual(loaded, Data("a file the older build copied".utf8))
     }
+
+    // MARK: - Id collisions on the desk itself
+
+    /// A collision is a collision under ANY owner — the desk included.
+    ///
+    /// Adoption is what checks provenance, and it runs only for rows parked
+    /// somewhere else, so a colliding card already ON the desk would otherwise
+    /// be read as this capture replaying itself. Two things follow, and the
+    /// second is the serious one: the caller is answered with a card it never
+    /// published (a share drainer then passes its durability barrier on that
+    /// card's bytes and drops the queue copy it was holding), and on the synced
+    /// lane the repair branch republishes THESE bytes over that card's payload
+    /// and retires the blob it was using. The person loses the card they had.
+    func testADeskCardOfAnotherKindSharingAMaterialIdIsRefusedRatherThanAnswered()
+    async throws {
+        let store = isolated.make()
+        let sharedID = UUID()
+        let theirs = Data("the screenshot already on the desk".utf8)
+        let published = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                id: sharedID,
+                kind: .image,
+                title: "IMG.png",
+                filename: "IMG.png",
+                mimeType: "image/png",
+                payload: theirs,
+                byteSize: Int64(theirs.count)
+            )
+        )
+        XCTAssertEqual(published.storageMode, .syncedPayload)
+
+        let mine = Data("bytes from a capture that merely shares the id".utf8)
+        do {
+            _ = try await store.upsertDeskMaterial(
+                WorkMaterialDraft(
+                    id: sharedID,
+                    kind: .file,
+                    title: "contract.bin",
+                    filename: "contract.bin",
+                    mimeType: "application/octet-stream",
+                    payload: mine,
+                    byteSize: Int64(mine.count)
+                )
+            )
+            XCTFail("a file capture must not be answered with an image that shares its id")
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            // Expected — and it is a THROW, so the drainer keeps its queue copy.
+        }
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.map(\.id), [sharedID], "no second card was published")
+        let card = try XCTUnwrap(desk.materials.first)
+        XCTAssertEqual(card.kind, .image, "and the card that was there is untouched")
+        XCTAssertEqual(card.title, "IMG.png")
+        XCTAssertEqual(card.availability, .synced)
+        let loaded = try await store.loadWorkMaterialPayload(id: sharedID)
+        XCTAssertEqual(
+            loaded, theirs,
+            "the colliding capture's bytes must never become another card's payload"
+        )
+        let blobs = await store._workMaterialBlobRowsForTesting(materialID: sharedID)
+        XCTAssertEqual(
+            blobs.compactMap(\.contentHash), [hex(theirs)],
+            "nothing was staged for the refused capture, so no blob was written or retired"
+        )
+    }
+
 }

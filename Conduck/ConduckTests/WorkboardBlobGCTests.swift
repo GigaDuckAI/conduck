@@ -58,7 +58,12 @@ final class WorkboardBlobGCTests: XCTestCase {
 
         let blobs = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
         XCTAssertTrue(blobs.isEmpty, "the card's bytes leave with the card")
-        let completeness = try await store.workMaterialBlobCompleteness(materialIDs: [draft.id])
+        // Unpaired: with no pairing supplied any complete row would answer, so
+        // an empty result is the strongest form of "no bytes are left".
+        let completeness = try await store.workMaterialBlobCompleteness(
+            materialIDs: [draft.id],
+            pairedWith: [:]
+        )
         XCTAssertTrue(completeness.isEmpty)
         let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
         XCTAssertNil(loaded)

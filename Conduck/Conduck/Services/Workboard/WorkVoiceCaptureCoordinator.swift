@@ -88,7 +88,10 @@ enum WorkVoiceCaptureCoordinator {
             case notAWorkCapture
             /// There are no words yet. Recognition still owes this capture its
             /// transcript, and a publication of silence beside the recording
-            /// would be worse than none.
+            /// would be worse than none. The RECORDING is secured before this
+            /// answer is given: a record saying the desk never took it has its
+            /// bytes put back as a playable card first, so what is still owed
+            /// is only the words.
             case noTranscript
         }
 
@@ -205,6 +208,12 @@ enum WorkVoiceCaptureCoordinator {
     /// takes the conservative branch: attach, and publish the words beside a
     /// missing card rather than resurrecting it.
     ///
+    /// The RECORDING is dealt with before the transcript is even read. A record
+    /// that says the desk never took it holds the only copy of it, and that is
+    /// true whether or not recognition has produced any words — so those bytes
+    /// go back on the desk first, and the words join whatever is standing there
+    /// afterwards.
+    ///
     /// THROWS whatever the store threw, unchanged. That is a write that failed
     /// over a capture that still exists, so the caller must keep its durable
     /// record and surface a retry; nothing here clears anything, and clearing
@@ -223,8 +232,6 @@ enum WorkVoiceCaptureCoordinator {
         guard pending.metadata.resolvedDestination == .work else {
             return .retryKept(.notAWorkCapture)
         }
-        let words = WorkboardWorkspaceCaptureLogic.normalizedThought(transcript)
-        guard !words.isEmpty else { return .retryKept(.noTranscript) }
 
         let captureID = pending.metadata.id
         var republished = false
@@ -232,6 +239,12 @@ enum WorkVoiceCaptureCoordinator {
         // to have held this recording, so there is nothing to resurrect and the
         // parked bytes are the only copy of it. Empty bytes name no recording
         // at all, and the words fall through to the note-shaped answer below.
+        //
+        // It happens BEFORE the transcript is examined, and that order is the
+        // point: a capture that has no words yet is exactly the capture whose
+        // recording exists nowhere but in these bytes, and refusing to look at
+        // it until recognition succeeds is how a recording waits on a
+        // transcription that may never arrive.
         if pending.metadata.publicationState == .phaseOneFailed, !pending.audio.isEmpty {
             let container = SourceAudioContainer.sniff(pending.audio)
             _ = try await publishRecording(
@@ -244,6 +257,9 @@ enum WorkVoiceCaptureCoordinator {
             )
             republished = true
         }
+
+        let words = WorkboardWorkspaceCaptureLogic.normalizedThought(transcript)
+        guard !words.isEmpty else { return .retryKept(.noTranscript) }
 
         switch try await attachTranscript(words, toRecording: captureID, store: store) {
         case .attached:

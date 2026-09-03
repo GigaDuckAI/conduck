@@ -36,10 +36,11 @@
 // desk-side outcome turns on it: an id naming no card is a publication the desk
 // REFUSED — the parked bytes are the only copy of that recording and belong
 // back on the desk — or a card a person DELETED while recognition was in
-// flight, which must stay deleted. So a refused publication is written into the
-// retry record (`PendingRetryPublicationState.phaseOneFailed`) before anything
-// else is attempted, and the retry stays armed until a card holds the
-// recording. The decision itself is not taken here: every surface that lands a
+// flight, which must stay deleted. So the verdict is written onto this
+// capture's queue entry the moment it is known — metadata only, keyed by the
+// capture id — and a `.phaseOneFailed` entry stays queued until a card holds
+// the recording, whatever the key or the provider then says about the words.
+// The decision itself is not taken here: every surface that lands a
 // recovered Work capture — this lane and the two in-app retry cards — goes
 // through `WorkVoiceCaptureCoordinator.recover`, which republishes, attaches,
 // or writes the words beside a card that is gone, and answers whether the
@@ -73,9 +74,11 @@
 //   isn't one (I3). Neither reading spends an STT call. They part company on
 //   the recording, each matching its own `shouldPreserveForRetry`: 75 leaves
 //   the guard armed, because an unlock makes those exact bytes succeed; 23
-//   disarms, because they cannot succeed until a key is entered and
-//   `PendingRetryStore`'s single slot would otherwise be held against a
-//   capture that can.
+//   disarms, because they cannot succeed until a key is entered and the entry
+//   would otherwise go on offering a retry that reaches the same refusal —
+//   unless phase one FAILED, in which case the queued bytes are the only copy
+//   of a recording no card carries and a verdict about the key may not delete
+//   it.
 //
 //   THE DESTINATION, asked in the SAME ORDER `SharedInboxRouting.resolveOrMint`
 //   asks it — live quick-capture pointer first, this device's "Default for new
@@ -350,14 +353,11 @@ struct ConverseIntent: AppIntent {
                     createdAt: pendingMetadata.createdAt
                 )
                 workPublicationState = .published
+                await Self.recordRecoveryState(.published, for: captureID)
             } catch {
                 Self.log.error("ConverseIntent: Work recording card not published")
                 workPublicationState = .phaseOneFailed
-                await Self.parkRecoveryState(
-                    Self.stamped(pendingMetadata, publicationState: .phaseOneFailed),
-                    audio: uploadData,
-                    workImageData: pendingWorkImageData
-                )
+                await Self.recordRecoveryState(.phaseOneFailed, for: captureID)
             }
         }
 
@@ -396,20 +396,24 @@ struct ConverseIntent: AppIntent {
             // PROVABLE absence — the one verdict on this lane that spends the
             // guard rather than leaving it armed, matching
             // `sttMissingAPIKey.shouldPreserveForRetry == false`. The same bytes
-            // fail identically until a key is entered, and `PendingRetryStore`
-            // is a SINGLE overwriting slot: holding it with a capture that
-            // cannot succeed evicts one that can. The concrete loss — a capture
-            // that failed on preset A with a network error is preserved, the
-            // user switches to keyless preset B and presses the Action Button,
-            // and A's recoverable words are overwritten by these. Disarming also
-            // withdraws the +90 s "Recording Saved" notification, which would
-            // otherwise invite a retry into an empty lane.
-            //
-            // So the temp file goes too: after the disarm nothing holds a copy,
-            // and that is the intended outcome for this reading — not an
+            // fail identically until a key is entered, so the entry would sit in
+            // the queue offering a retry that reaches the same refusal, and the
+            // +90 s "Recording Saved" notification would invite the user into
+            // it. So the temp file goes too: after the disarm nothing holds a
+            // copy, and that is the intended outcome for this reading — not an
             // oversight. The blackout arm below is the opposite case and stays
             // armed.
-            await PendingRetryGuard.disarm(guardToken)
+            //
+            // EXCEPT when phase one failed. Then these bytes are the only copy
+            // of a recording no card carries, and a verdict about the KEY is not
+            // a verdict about the recording: it ends this capture's
+            // transcription, it may not delete what was said. The entry stays
+            // queued — exempt from the transcription TTL for exactly this reason
+            // — so the retry that runs once a key exists still has a recording
+            // to put back on the desk.
+            if workPublicationState != .phaseOneFailed {
+                await PendingRetryGuard.disarm(guardToken)
+            }
             try? FileManager.default.removeItem(at: audioFileURL)
             throw AppError.sttMissingAPIKey
         case .unreadable:
@@ -594,13 +598,13 @@ struct ConverseIntent: AppIntent {
                     )
                 } catch {
                     // The words exist only in this process, and the recording
-                    // they came from is still parked. Park the words beside it
+                    // they came from is still queued. Park the words beside it
                     // so the retry that finishes this capture pays for no
                     // second transcription of the same bytes.
-                    await Self.parkRecoveryState(
-                        record.metadata,
-                        audio: uploadData,
-                        workImageData: pendingWorkImageData
+                    await Self.recordRecoveryState(
+                        workPublicationState,
+                        for: captureID,
+                        transcript: transcript
                     )
                     throw error
                 }
@@ -673,7 +677,16 @@ struct ConverseIntent: AppIntent {
             // a store failure before the append — and the same recording DOES
             // succeed once the user has fixed what the verdict names. Disarming
             // there would delete the only copy of what they said (I6).
-            if !transcriptCaptured {
+            //
+            // The publication verdict is the second gate, and it is about the
+            // RECORDING rather than the words. `.phaseOneFailed` means the desk
+            // never took this recording, so the queued bytes are the only copy
+            // of it: a bad-input verdict about the audio (silence, a clip the
+            // provider cannot read) still ends transcription for this capture,
+            // and it still may not take the recording with it. Every other state
+            // has a card standing behind it, or is Chat, where the transcript IS
+            // the artifact.
+            if !transcriptCaptured, workPublicationState != .phaseOneFailed {
                 await PendingRetryGuard.disarm(guardToken)
             }
             throw error
@@ -733,37 +746,32 @@ struct ConverseIntent: AppIntent {
         )
     }
 
-    /// Commit that observation to the single retry slot, for the recovery that
-    /// happens in ANOTHER process.
+    /// Commit that observation to this capture's queue entry, for the recovery
+    /// that happens in ANOTHER process.
     ///
-    /// Only a refusal is worth the write. `recover` reads a nil verdict and a
-    /// `.published` one the same way, so the successful path never re-commits a
-    /// slot — and re-committing is exactly what must not happen casually: a
-    /// second intent host that armed while this desk write was in flight holds
-    /// bytes whose only copy is that slot, so this restores nothing over it and
-    /// checks the ownership before writing.
-    ///
-    /// The stated cost of leaving success unwritten: a capture whose card DID
-    /// land keeps a nil verdict, so `PendingRetrySlot.hasDurableRecording`
-    /// reads it as a record whose audio may exist nowhere else and the in-app
-    /// recorder declines to displace it. That is the pessimism worth having —
-    /// it spends a later capture's WORDS, which are still held in memory, to
-    /// protect a recording that might be the only copy.
+    /// BOTH publication outcomes are written, because both are load-bearing and
+    /// neither costs anything: the write is metadata-only, keyed by the capture
+    /// id, and takes its ownership check inside the same lock as the write, so
+    /// it can neither rewrite audio nor reach another capture's entry.
+    /// `.phaseOneFailed` is what lets a recovery put the recording back rather
+    /// than read its absence as a deletion; `.published` is what tells the
+    /// expiry sweep this recording is safe on the desk and its entry is
+    /// protecting only a transcription.
     ///
     /// Best-effort by design. A failure leaves the record as `arm` wrote it —
-    /// armed, with an unknown verdict — which is the conservative reading, not
-    /// a lost recording.
+    /// queued, with an unknown verdict — which is the conservative reading (a
+    /// recording that may exist nowhere else, exempt from expiry), not a lost
+    /// recording.
     @MainActor
-    private static func parkRecoveryState(
-        _ metadata: PendingRetryMetadata,
-        audio: Data,
-        workImageData: Data?
+    private static func recordRecoveryState(
+        _ publicationState: PendingRetryPublicationState?,
+        for captureID: UUID,
+        transcript: String? = nil
     ) async {
-        guard await PendingRetryStore.shared.currentSlot()?.id == metadata.id else { return }
-        try? await PendingRetryStore.shared.save(
-            audioData: audio,
-            metadata: metadata,
-            workImageData: workImageData
+        _ = await PendingRetryStore.shared.recordPublicationState(
+            id: captureID,
+            transcript: transcript,
+            publicationState: publicationState
         )
     }
 

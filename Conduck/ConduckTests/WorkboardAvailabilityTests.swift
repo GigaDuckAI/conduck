@@ -66,6 +66,11 @@ final class WorkboardAvailabilityTests: XCTestCase {
         )
     }
 
+    /// The blob a card publishing these bytes names.
+    private func pairing(of payload: Data) -> WorkMaterialBlobPairing {
+        WorkMaterialBlobPairing(contentHash: hex(payload), byteSize: Int64(payload.count))
+    }
+
     private var pendingCopy: String {
         String(localized: "workboard.material.syncPending", defaultValue: "Waiting for iCloud…")
     }
@@ -224,13 +229,68 @@ final class WorkboardAvailabilityTests: XCTestCase {
         let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
         XCTAssertEqual(loaded, newest)
 
-        let completeness = try await store.workMaterialBlobCompleteness(materialIDs: [draft.id])
+        let completeness = try await store.workMaterialBlobCompleteness(
+            materialIDs: [draft.id],
+            pairedWith: [draft.id: pairing(of: newest)]
+        )
         let winner = try XCTUnwrap(completeness[draft.id])
         XCTAssertEqual(winner.contentHash, hex(newest), "the newest COMPLETE row answers")
         XCTAssertEqual(winner.byteSize, Int64(newest.count))
 
         let rows = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
         XCTAssertEqual(rows.count, 3, "reading resolves duplicates; it never deletes one")
+    }
+
+    /// The pairing, from the READ side. A blob row carrying other bytes under
+    /// this material's id — another device's republication, whose own material
+    /// update has not landed here yet — is NEWER than the card's own, so a
+    /// newest-complete-wins read would serve it. It is not what this card
+    /// published, and until the row naming it arrives the card must go on
+    /// answering with its own payload.
+    func testANewerBlobCarryingOtherBytesIsNotThisCardsPayload() async throws {
+        let store = isolated.make()
+        let mine = Data("what this device published".utf8)
+        let draft = syncedDraft(payload: mine, name: "shared.bin")
+        let published = try await store.upsertDeskMaterial(draft)
+        XCTAssertEqual(
+            published.contentHash, hex(mine),
+            "a synced card records the bytes it was published with"
+        )
+
+        let peer = Data("what another device published for the same card".utf8)
+        await store._insertWorkMaterialBlobRowForTesting(
+            materialID: draft.id,
+            payload: peer,
+            byteSize: Int64(peer.count),
+            contentHash: hex(peer),
+            updatedAt: published.updatedAt.addingTimeInterval(60)
+        )
+
+        let board = try await deskMaterials(store)
+        XCTAssertEqual(board[draft.id]?.availability, .synced)
+        let loaded = try await store.loadWorkMaterialPayload(id: draft.id)
+        XCTAssertEqual(
+            loaded, mine,
+            "the card opens the payload its own row names, not the newest row under its id"
+        )
+
+        // And the card is pending — not quietly serving somebody else's bytes —
+        // the moment its own payload is the one that is missing.
+        await store._deleteWorkMaterialBlobRowsForTesting(materialID: draft.id)
+        await store._insertWorkMaterialBlobRowForTesting(
+            materialID: draft.id,
+            payload: peer,
+            byteSize: Int64(peer.count),
+            contentHash: hex(peer),
+            updatedAt: published.updatedAt.addingTimeInterval(60)
+        )
+        let afterLoss = try await deskMaterials(store)
+        XCTAssertEqual(
+            afterLoss[draft.id]?.availability, .syncedPending,
+            "a complete blob that is not the one this card names proves nothing about it"
+        )
+        let unreadable = try await store.loadWorkMaterialPayload(id: draft.id)
+        XCTAssertNil(unreadable)
     }
 
     // MARK: - The whole board, in one pass

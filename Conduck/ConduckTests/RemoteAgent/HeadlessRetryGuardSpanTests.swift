@@ -52,13 +52,17 @@
 //   Rule 1 — `perform()` never disarms before a durable terminal boundary. It
 //     holds exactly THREE:
 //     the provable-absence refusal's own, taken inline in that arm because code
-//     23 preserves nothing and the store's single slot is better spent on a
-//     capture that can succeed; and the catch chain's, gated on the words NOT
-//     yet existing as text. The third is Work's, taken on a TERMINAL outcome
+//     23 preserves nothing and the entry would otherwise go on offering a retry
+//     that reaches the same refusal; and the catch chain's, gated on the words
+//     NOT yet existing as text. The third is Work's, taken on a TERMINAL outcome
 //     from the shared recovery — the one entry point every surface makes its
 //     desk decision through — where the transcript has become durable without
 //     any gateway. The blackout arm sitting beside the first one disarms
 //     nothing — an unlock makes those exact bytes recover.
+//     BOTH pre-transcript disarms carry a second gate, on the PUBLICATION
+//     verdict: `.phaseOneFailed` means the desk never took the recording, so the
+//     queued bytes are its only copy and a verdict about the key or the audio
+//     may end the transcription without deleting what was said.
 //
 //   Rule 2 — the disarm that does run sits BELOW the destination resolve and
 //     BELOW the store append, so every refusal on the way is still armed.
@@ -93,11 +97,13 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
     ///
     ///   1. the PROVABLE-ABSENCE refusal (code 23), taken INLINE in its own arm
     ///      above the `do`. Code-specific and deliberate:
-    ///      `sttMissingAPIKey.shouldPreserveForRetry` is false, and
-    ///      `PendingRetryStore` is a single overwriting slot, so a capture that
-    ///      cannot succeed until a key is entered may not hold it against one
-    ///      that can. Its twin, the blackout arm, must NOT disarm — those bytes
-    ///      succeed the moment the device is unlocked.
+    ///      `sttMissingAPIKey.shouldPreserveForRetry` is false, so a capture
+    ///      that cannot succeed until a key is entered would otherwise sit in
+    ///      the queue offering a retry that reaches the same refusal. Its twin,
+    ///      the blackout arm, must NOT disarm — those bytes succeed the moment
+    ///      the device is unlocked. And it is itself gated on the publication
+    ///      verdict: a key that is absent says nothing about a recording the
+    ///      desk never took.
     ///
     ///   2. the WORK boundary, taken on a TERMINAL outcome from the shared
     ///      recovery — the words are on a card, so nothing is left to protect.
@@ -135,10 +141,26 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
         )
 
         let gateAt = try XCTUnwrap(
-            body.range(of: "if !transcriptCaptured {")?.lowerBound,
+            body.range(of: "if !transcriptCaptured")?.lowerBound,
             "`perform()`'s catch-chain disarm is no longer gated on the transcript not existing yet. "
             + "Ungated, every destination verdict — code 12 included — clears the retry lane and the "
             + "spoken words are gone (I6)."
+        )
+        XCTAssertTrue(
+            body.contains("if !transcriptCaptured, workPublicationState != .phaseOneFailed"),
+            "The catch chain's disarm is no longer gated on the PUBLICATION verdict as well as the "
+            + "transcript. `.phaseOneFailed` means the desk never took the recording, so the queued "
+            + "bytes are the only copy of it — and a bad-input verdict about the AUDIO (silence, a "
+            + "clip the provider cannot read) lands here with `transcriptCaptured` still false and "
+            + "deletes exactly that."
+        )
+        XCTAssertTrue(
+            Self.armGuardsOnTheFailedPublication(arm: "case .notConfigured:",
+                                                 throwToken: "throw AppError.sttMissingAPIKey",
+                                                 in: body),
+            "The provable-absence arm disarms unconditionally again. Code 23 is a verdict about the "
+            + "KEY: it may end this capture's transcription, and it may not delete a recording no "
+            + "card carries."
         )
         let firstDisarm = try XCTUnwrap(body.range(of: "PendingRetryGuard.disarm"))
         let workDisarm = try XCTUnwrap(
@@ -224,6 +246,38 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
         XCTAssertEqual(Self.armSpendsTheGuard(arm: "case .unreadable:",
                                               throwToken: "throw AppError.sttKeyUnreadable",
                                               in: compliant), false)
+
+        // The second gate the absence arm carries, on the same pair of shapes:
+        // it may spend the guard only when phase one LANDED.
+        let ungatedAbsence = """
+        case .notConfigured:
+            await PendingRetryGuard.disarm(guardToken)
+            throw AppError.sttMissingAPIKey
+        """
+        let gatedAbsence = """
+        case .notConfigured:
+            if workPublicationState != .phaseOneFailed {
+                await PendingRetryGuard.disarm(guardToken)
+            }
+            throw AppError.sttMissingAPIKey
+        """
+        XCTAssertFalse(Self.armGuardsOnTheFailedPublication(
+            arm: "case .notConfigured:",
+            throwToken: "throw AppError.sttMissingAPIKey",
+            in: ungatedAbsence),
+                       "Control: the unconditional shape really does delete a recording no card "
+                       + "carries, so the check must fail on it.")
+        XCTAssertTrue(Self.armGuardsOnTheFailedPublication(
+            arm: "case .notConfigured:",
+            throwToken: "throw AppError.sttMissingAPIKey",
+            in: gatedAbsence),
+                      "Control: the gated shape must pass, or the check is unsatisfiable.")
+        XCTAssertFalse(Self.armGuardsOnTheFailedPublication(
+            arm: "case .notConfigured:",
+            throwToken: "throw AppError.sttMissingAPIKey",
+            in: "case .unreadable: throw AppError.sttKeyUnreadable"),
+                       "Control: a missing arm reads as ungated, never as quietly satisfied.")
+
         XCTAssertNil(Self.armSpendsTheGuard(arm: "case .notConfigured:",
                                             throwToken: "throw AppError.sttMissingAPIKey",
                                             in: "case .unreadable: throw AppError.sttKeyUnreadable"),
@@ -540,6 +594,23 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
             return nil
         }
         return body[start..<end].contains("PendingRetryGuard.disarm")
+    }
+
+    /// Whether the disarm inside that arm is conditional on phase one having
+    /// LANDED. A verdict about the key or the bytes may end a capture's
+    /// transcription; it may not delete a recording the desk never took, whose
+    /// only copy is the queued audio. Scoped to the arm for the same reason
+    /// `armSpendsTheGuard` is.
+    private static func armGuardsOnTheFailedPublication(
+        arm: String,
+        throwToken: String,
+        in body: String
+    ) -> Bool {
+        guard let start = body.range(of: arm)?.upperBound,
+              let end = body.range(of: throwToken, range: start..<body.endIndex)?.lowerBound else {
+            return false
+        }
+        return body[start..<end].contains("workPublicationState != .phaseOneFailed")
     }
 
     /// The `do` block that ENCLOSES `anchor`, brace-matched from the nearest
