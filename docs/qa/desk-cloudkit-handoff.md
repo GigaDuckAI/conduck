@@ -1,71 +1,99 @@
-# Desk + CloudKit Byte Sync — Continuation Handoff
+# Desk + CloudKit Byte Sync — Handoff
 
-**Status: PARKED mid-build, at a clean checkpoint.** The founder stopped the build workflow after 2 of 10 phases (2026-08-31). Everything committed at this tip is coherent and verified; nothing is half-edited. This document is the single entry point for resuming.
+**Status: BUILT, REVIEWED, MERGED WITH `main`, awaiting founder Gate-2 QA.** Branch `feature/agent-workboard` (worktree `.codex/worktrees/conduck-agent-workboard`, whose root IS the Conduck app repo). Everything is local — never pushed. Six adversarial Codex review rounds ran over the build; every finding was confirmed by an independent fixer with a measured counterfactual, none was refuted, and the review loop was closed by founder decision after round 6 (its residue is recorded under §Open items, not fixed). The `/code-review` gate is satisfied by that verification; do not run it again.
 
 ## What this branch is
 
-`feature/agent-workboard` — the Workboard feature, redirected across several founder QA rounds into a radically simpler product: **Work = one desk.** A single space where the user drops, arranges, and resizes voice notes, text, screenshots, and files. No projects UI, no AI/dispatch/brief layer. Bytes sync via CloudKit to the user's private iCloud (no company backend; "Data Not Collected" stays true). Voice notes become playable audio cards.
+**Work = one desk.** A single space where the person drops, arranges and resizes voice notes, text, screenshots and files. No projects UI, no AI/dispatch/brief layer — nothing on the desk ever becomes a conversation turn. Bytes ≤ 30 MiB sync through the person's own iCloud private database in a second Core Data store; larger files stay on the device that has them, behind a reattach. Voice notes are playable audio cards that appear BEFORE speech-to-text; a failed transcription never loses the recording. "Data Not Collected" stays true: no company backend is involved anywhere.
 
-Commit chain (all local, never pushed): `96493f7` Codex base → `192b3fc` cleanup → `a2f7569` free card board + tutorial → `6ec69e7` desk-only surface → `23d975c` bare desk → `651a859` headingless desk → **this checkpoint** (foundation slice + these docs).
+## Commit chain (all local)
 
-## Where the build stopped — phase status
+`96493f7` … `651a859` desk rounds → `136e088` CloudKit foundation (model 16) → `4165c74` single-desk purge → `39d19d1` byte sync (two stores) → `223ac35` two-phase audio + string audit → `801b937` wave-B fixes → `effc664` wave-C (cross-process publication lock, recovery coordinator, iOS audio exclusivity) → `f794856` wave-D (material↔blob `contentHash` pairing, kind-collision refusal, UUID-keyed retry queue, sniffed STT MIME) → `1e9a004` wave-E (collision-escape id, per-entry sidecar/tombstone durability, claim/lease API, backlog + Discard UI) → `09bc5a1` wave-F (replay never repoints a newer row, verified terminal retirement, lease ownership on every lane) → **`2c10a54` merge of Conduck `main` (`b649c83`)** → the tip: docs coherence pass + this handoff.
 
-The build ran as a 10-phase orchestrated workflow (`docs/qa/desk-cloudkit/workflow-script.js` — the exact script, still the best build map):
+## Gate at the tip
 
-| # | Phase | Status |
+| Check | Result |
+|---|---|
+| iOS suite (iPhone 17 sim `2B6E0EAC-…`) | **5146** tests / 0 failures / 1 environment skip (`GatewayAdapterBriefTests` clipboard pin — needs the sibling `website` checkout) |
+| watchOS suite (`28AC563B-…`) | **232** / 0 |
+| Signed macOS build | green |
+| `scripts/check-storage-seam.sh`, `check-folder-map.sh`, `check-spec-cites.sh` | exit 0 |
+| `scripts/check-spec-size.sh` | exit 0 — 16607 words of 16900 after the docs pass; every decision within its 650-word limit |
+| Catalogs | all four parse (main 2273 rows); `workboard.*` 147/147 and `pendingRetry.*` 9/9 bidirectional |
+| Mirror triplets (`WorkCaptureEnvelope`, `ShareTargetsSnapshot`, `WorkCaptureDirectoryPublisher` ×3) | byte-identical from `import Foundation` |
+| Data model | only `Conversations 16.xcdatamodel/contents` + `.xccurrentversion` differ from `651a859`; version 15 byte-identical |
+
+## Architecture in one screen (details: `docs/ai-context/spec.md`, the Work / desk / audio decisions)
+
+- **Single desk** = fixed id `Constants.workboardDeskItemID`; one authoritative `upsertDeskMaterial` op serves all capture processes (app, share extensions, Shortcuts intent). Share extensions never publish blobs; they write envelopes the app drains.
+- **Two stores**: `Conversations.sqlite` (Core, 7 entities) and `ConversationBlobs.sqlite` (Blobs, `WorkMaterialBlob`), both `NSPersistentCloudKitContainer` mirrors of the private database; the watch mounts Core only. `WorkMaterialStoragePolicy`: ≤ 30 MiB → `.syncedPayload`, else `.localVault`.
+- **Publication protocol**: blob first, then material; `WorkMaterial.contentHash` pairs a row with its bytes; a device adopts another's upload only when a committed row names those exact bytes AND a complete blob exists; availability `.syncedPending` = "no complete blob paired to this row". Duplicate blob rows are a normal state bounded by persistence (one per attempt that died between the two saves). GC is paired deletion only — no orphan sweep, ever.
+- **Cross-process safety**: `WorkCaptureInbox` generation-named claim dirs + 5-min filesystem lease; `WorkCaptureDrainer` durable-readability barrier; `WorkMaterialPublicationLock` = App-Group `flock` per material id. A capture whose id names a card of another kind is refused; the drainer and the voice recovery retry once under `WorkMaterialCollisionEscape.materialID(forCapture:)`; a second refusal is terminal and retired into `WorkCaptureInbox/refused/` by a verified copy + atomic rename (never a delete).
+- **Two-phase audio**: `WorkVoiceCaptureCoordinator.publishRecording` (card appears) → STT → `attachTranscript`; on failure the bytes park in `PendingRetryStore`, a per-capture queue (sidecar written before audio, index last; tombstone before removal; sidecar authoritative over index). `claimNext` / `claim(id:duration:)` take a token-checked 10-min lease under the cross-process lock; surfaces renew every 120 s and confirm ownership before any hand-off. Work captures not yet `.published` never expire. `recover(claim:…)` is the single answer for every retry surface (app, menu bar, headless intent); `WorkVoiceRecoveryOutcome.isTerminal` drives clearing.
+- **Playback**: `WorkboardAudioCardView` + `WorkboardAudioOutput`; `SpokenAudioSession` owns the audio session for Chat read-aloud and card playback; `SpeechExclusivity` on iOS and macOS.
+
+## Decisions taken by the orchestrator (founder never signed these — reverse if wrong)
+
+1. `workboard.sync.banner.{noAccount,restricted,quotaExceeded}` minted for the desk instead of reusing Chat's "your conversations" banner (plan §C said "reuse").
+2. `WorkMaterial.contentHash` added to model 16 as an additive optional attribute (no model 17) — legal only because 16 was never deployed and is on no device.
+3. A recording is republished only when its `publicationState == .phaseOneFailed`; a wordless republication marks it `.published` and keeps the entry for the words.
+4. `PendingRetryStore` became a UUID-keyed queue; the legacy single slot is folded in on first load, never deleted unread.
+5. Discard (per entry, confirmed) added to the retry card; for a published Work recording it removes only the retry copy.
+6. Five source-text drift guards converted to behavioural seams; appex/absence guards kept.
+7. `WorkboardSurface` and the dead `.openPersonalAISettings` notification deleted.
+8. macOS popover Retry gated on `pendingRetryCount > 0`.
+
+## Founder decisions open
+
+**Copy (nine, all live in the catalog with a placeholder the founder has not read):** (a) voice-sheet privacy line — now concedes that the chosen speech provider may itself be an AI ("…never into a conversation, and never through a server of ours"); reassurance or confession? (b) the three desk sync-banner sentences; (c) `workboard.workspace.drop.overlay.caption` "…Nothing is sent."; (d) the recovered-note title (first line of the transcript); (e) tutorial line + large-file confirm; (f) `workboard.capture.discarded.message.one` is half true for a terminally refused capture; (g) backlog count "2 recordings waiting" as a caption (iOS) vs the whole sentence (macOS); (h) the shared Discard title "Discard this recording?" for a published Work capture; (i) `AppError.workDeskWriteFailed` (78) wording claims transience.
+**Structure:** delete `WorkCaptureRetryCoordinator.swift` (zero callers, compiles without it) — yes/no.
+**Chat behaviour changes this branch introduces (intended, but the founder should know):** starting the in-app microphone stops an active Chat read-aloud; one read-aloud stops another across windows; Chat read-aloud and Work card playback are mutually exclusive; CarPlay dictation uploads now carry `audio/x-caf` instead of a false `audio/mp4` (Gemini WAV canary, release gate 3); the Chat retry card shows a backlog count, stays retry-capable after one finish, and gains Discard.
+
+## Open items (integrate-h §5, condensed — full table with evidence in `desk-cloudkit/fixnotes/integrate-h.md`)
+
+| # | Item | Class |
 |---|---|---|
-| 1 | Spike (two-store/named-configuration feasibility) | ✅ DONE — **FEASIBLE**, repo untouched; recipe + pitfalls in `desk-cloudkit/spike-fixnote.md` |
-| 2 | Foundation (model 16, desk constants, storage policy, records, migration tests) | ✅ DONE + COMMITTED — see `desk-cloudkit/foundation-fixnote.md` |
-| 3 | PurgeCore (VM + repository + store layer) | ❌ not started (agent was killed before its first edit) |
-| 4 | PurgeViews ∥ Desk (shell purge ∥ desk identity + capture retarget) | ❌ |
-| 5 | ByteSync ∥ Share-picker removal ∥ Test surgery | ❌ |
-| 6 | Audio cards (two-phase capture) | ❌ |
-| 7 | Strings + spec truth | ❌ |
-| 8–10 | Adversarial review → Fix → Full gate | ❌ |
+| O-1 | `PendingRetryStore.renew` answers `false` for five reasons but only a token mismatch means the hold is lost; `PendingRetryLeaseRenewal.whileRenewing` stops on the first `false` while the recorder's loop never does. Remedy: renew returns held / lost / unavailable; retry on unavailable. The one item that can still cause a duplicate finish (never a lost recording). | correctness, small |
+| O-2 | `pendingSummary()` — the retry card describes the newest capture but acts on the newest UNRESERVED one; one metadata accessor closes it | UX, small |
+| O-3 | No non-retryable `AppError` for a permanent identity refusal (`.refusedTwice`) | copy + one case |
+| O-4 | Cross-process lock and retry queue are proven with two store instances in ONE process; two real processes only on a signed device | Gate 2 |
+| O-5 | `deleteSupersededBlobRows` can delete a peer's newer blob inside the publishing transaction; the 4-line `notNewerThan:` remedy is measured green in isolation, not applied (three call sites, one decision each) | data, decided-open |
+| O-6…O-16 | hygiene / vocabulary / consolidation (IsolatedWorkStores adoption, banner collapse, `ReplyVoice` on iOS, `filename` on the snapshot, radius literal, shared card actions, availability chip mapping, `workspaceStatus` rename, external-storage memory bound uncovered by decision) | non-blocking |
+| O-17 | Watch catalog drift since `efa553e` (source says "isn't available", catalog "isn't set up"); not a Work string | pre-existing |
+| O-18 | Spec-size debt — CLOSED by the merge (16423/16900); the guard is a real gate again, so doc folds must pay inside their decision | closed |
+| O-19 | **Founder QA — 81 device-only items across the fixnotes + plan §C Gate 2** | release gate |
+| O-20 | `STTKeyBlackoutLaneTests` reports only the first broken lane | test hygiene |
+| O-21 | A control fixture can name a deleted type and stay green | test hygiene |
 
-## What is committed at this tip
+## Release gates
 
-Foundation slice (verified by its agent: iOS build-for-testing **and** macOS build succeeded; targeted tests 13/13; storage-seam script clean):
+1. **Deploy model 16 to CloudKit Production** before any release carrying these entities — it adds `WorkMaterialBlob` and `WorkMaterial.contentHash` (a CloudKit field can never be withdrawn). `origin/main` ships model 13, so one deploy covers all. Record beside APPLE-CD-V7-001.
+2. **Gate 2 — founder signed-device QA**, release-blocking for byte sync. Two signed devices on one iCloud account plus the Mac. The full lists: `desk-cloudkit/spike-fixnote.md` §(c) (18 steps: zones, import/export, delete/reinstall, watch exclusion, headless-intent 134410, quota/signed-out) and the "Founder QA" sections of `integrate-d/e/f/g/h.md` (81 items). The **first thing to do is irreversible**: park a Work voice note under the OLD build, then install this build and confirm it still finishes — the App Group retry container is rewritten on first launch.
+3. Run the private Gemini canary for a WAV body (`Conduck-Private/scripts/validation/`) — the branch now labels WAV honestly where it used to send it as `audio/mp4`.
+4. Never push unasked. When the branch is pushed it lands in the PUBLIC repo `GigaDuckAI/conduck`: nothing under `docs/qa/desk-cloudkit/` contains secrets (checked), but the fixnotes are internal working notes — decide whether they travel.
+5. **Public README documents no Work desk** — its surface table lists only Chat capabilities (pre-existing gap, now a shipped user-visible surface). Needs an owner before release.
 
-- **`Conversations 16` model** — new version (15 untouched): entity `WorkMaterialBlob` (materialID/payload external-storage/byteSize/contentHash/createdAt/updatedAt, all optional, no relationships, no uniqueness) + CloudKit configurations `Core` (7 pre-existing entities) and `Blobs` (blob only). `.xccurrentversion` → 16. Registration proven from the compiled `.momd`, no pbxproj edit.
-- **`Constants.workboardDeskItemID`** = `DE5C0000-0000-4000-A000-000000000001` (the single desk's fixed id) and **`workboardSyncCeilingBytes`** = 30 MB (tunable; deliberately below the archived 50 MB CKAsset figure).
-- **`WorkMaterialStoragePolicy`** (new, no call sites yet) — the single ≤ceiling→`.syncedPayload` / else `.localVault` authority.
-- **`WorkboardRecords.swift` additions** — `WorkMaterialKind.audio`, `WorkMaterialAvailability.syncedPending`, `WorkMaterialBlobRecord` (with `isComplete`).
-- **Migration tests** — v15→v16 schema delta + real two-store SQLite round trip (ported from the spike harness).
-- New string key `workboard.material.syncPending` ("Waiting for iCloud…").
-- Two one-line exhaustive-switch additions in `WorkBriefPromptBuilder`/`WorkboardDispatchCoordinator` — those files DIE in phase 3; the additions exist only to keep this tip compiling.
+## Founder QA script — the twelve to run first
 
-**Verification honesty:** the full iOS/watch suites were NOT re-run on this tip. Baseline at `651a859`: iOS 4750 executed / 0 failures / 2 skips; watch 229 / 0. Foundation is purely additive (+9 tests expected), but run the full gate before trusting the tip.
-
-## How to resume
-
-1. Launch `claude` from the monorepo root, then work in this worktree. Read this file, then `desk-cloudkit/plan.md` **in full** — it is the binding plan (Codex-reviewed: SOUND WITH CHANGES, all 12 changes folded in; verdict extract in `desk-cloudkit/codex-plan-review.md`).
-2. The scout maps (`scout-purge.md` = the exact delete/trim/test/strings map with file:line; `scout-storage.md` = the storage seam; `scout-capture.md` = all 10 capture surfaces + single-desk design) date from `651a859`. They stay accurate until phase 3 starts editing; re-verify line numbers opportunistically.
-3. Re-launch the workflow from `desk-cloudkit/workflow-script.js`, **dropping phases 1–2** (their outputs are committed; their fixnotes live in this directory — point the script's `FIX` dir here or copy these fixnotes into the new session's fixnotes dir so later agents read them). The old run id is useless across sessions.
-4. Phase-3+ agents must respect the "Binding for the agents after me" sections in both fixnotes — especially: the `.syncedPending` projection lands at `MaterialRow.record(availableLocalKeys:)` (`ConversationStore+Workboard.swift` ~:2202), reuse `workboard.material.syncPending`, ByteSync replicates the spike's store-description recipe exactly (`#if !os(watchOS)` around the Blobs description IS the watch exclusion), and the Watch desk-id literal + drift-guard test are still TODO.
-
-## Open items the plan already decides (don't re-litigate)
-
-- Single desk = fixed UUID, **no dedup/merge pass** (projection already unions duplicate rows); lazy creation; one authoritative `upsertDeskMaterial` op for all four capture processes; drainer gets a filesystem lease (cross-process inbox race is real).
-- Blob GC = **paired deletion only, no orphan sweep** (a sweep would export deletion of valid CloudKit data).
-- Audio = two-phase (card appears instantly, transcript fills in; STT failure never loses audio; the Work voice retry path must repair the same material).
-- If anything refutes the two-store design late: byte sync is **blocked**, not downgraded — "every blob on the wrist" was explicitly rejected.
-
-## Two flags raised by the spike (for the next orchestrator)
-
-1. **The zone question is genuinely undocumented**: two mirrored stores, same container, same `.private` scope — one shared zone or two? It is Gate 2 step 5 (below). Documented fallback if it goes badly: a second CloudKit container identifier for the Blobs store (config change, not a redesign — needs portal + both entitlements files + a second Production deploy).
-2. **TN3164 hardening (plan-adjacent, pre-existing surface)**: Apple prescribes that only the app process attach `cloudKitContainerOptions`; the headless intent/extension processes should load the store mirror-less. Worth folding into the ByteSync phase.
-
-## Release gates (unchanged discipline)
-
-1. **Deploy model 16 to CloudKit Production** before any release carrying these entities (supersedes the model-15 `cardSize` gate; `origin/main` ships model 13, so one deploy covers all). Record beside APPLE-CD-V7-001.
-2. **Gate 2 — founder signed-device QA** (release-blocking for byte sync): the full 18-step checklist is in `desk-cloudkit/spike-fixnote.md` §(c) — zones, import/export, delete/reinstall, watch exclusion, headless-intent 134410, quota/signed-out.
-3. Rebase/merge onto Conduck `main` before integration (brings the `fetchRecentForPicker` deadlock fix this branch predates). Never push unasked.
+On the iPhone unless stated; airplane mode where "offline". Failure cases are named.
+1. **Upgrade** (do this FIRST, once): old build → park a Work voice note offline → install this build → retry online → one playable card with the words. Fail: card missing, card duplicated, or Diagnostics still reports a waiting recording afterwards.
+2. **Desk basics**: drop text, a screenshot, a small file and a > 30 MiB file; arrange/resize; kill the app mid-drop and reopen. Fail: any card missing or duplicated.
+3. **Two devices, small file**: capture on A, wait on B → card opens on B. Delete on B → gone on A.
+4. **Two devices, large file**: > 30 MiB on A → B shows the card as device-local (not "Waiting for iCloud…" for ever); reattach a small file on A → B opens it.
+5. **Force-quit mid-publication** on A right after the progress bar → B never shows a permanent "Waiting for iCloud…"; re-capture on A → exactly one card.
+6. **Voice note online**: record from the desk → playable card appears at once, words fill in. Play it while Chat read-aloud is speaking → read-aloud stops (intended).
+7. **Voice note offline**: record → card appears, retry card appears; go online, Retry → words on the SAME card, no note, no second card.
+8. **Two recordings waiting**: Work note offline, then Action-Button Chat capture offline; online → Retry twice → both complete; count reaches zero.
+9. **Discard**: published Work note whose words failed → Discard → dialog says the recording stays in Work → card still plays. Chat capture → Discard → dialog says deleted, cannot be recovered.
+10. **Racing surfaces (Mac)**: menu-bar Retry running, press the main window's retry → busy sentence, Retry button still drawn, exactly one result.
+11. **Shortcuts vs app**: Action-Button capture offline, then open the app and tap Retry before the 90-second notice → exactly one finishes, the other says it is already being finished.
+12. **Watch**: ordinary dictation still transcribes (AAC, unchanged); the watch never shows a Work card and never downloads a blob (Gate 2 §watch exclusion).
+Then the full 81 + 18.
 
 ## Standing constraints (any future agent)
 
-Build caches under `~/Library/Caches/gigaduck-builds/<slug>` + `clean-build-cache.sh` always · never pass `-configuration` to xcodebuild test/build-for-testing · iOS sim iPhone 17 Pro `04DEF4F5-C144-4936-AEC3-A971B4FA9CDC`, watch `28AC563B-42C1-4E66-940D-77E63B07918B` serially after iOS · never touch the `Conduck/Configs/Identity-Override.xcconfig` symlink · envelope/snapshot mirror files change in byte-identical triplets or not at all · new watch TEST files need a manual target add (use the existing smoke file) · `plutil -lint` false-fails on `.xcstrings` (use a JSON parser) · the spec-size guard fails pre-existing (19,830/16,900) — record, don't fix.
+Build caches under `~/Library/Caches/gigaduck-builds/<slug>` + `clean-build-cache.sh <slug>` always · never `-configuration` on xcodebuild test/build-for-testing · check the sim's TCC row before trusting a red audio run (`sqlite3 …/TCC.db`; reset with `xcrun simctl privacy <UDID> reset all ai.gigaduck.AgentRelay`) · never touch the `Conduck/Configs/Identity-Override.xcconfig` symlink · mirror triplets change byte-identically or not at all · parallel agents never edit `.xcstrings` (one serial copy agent) · docs are present-tense end state, no changelog narration · the "nobody undo" lists in every fixnote interlock — read the relevant one before changing a mechanism · never rebase this branch; merge only · never push unasked.
 
-## Earlier handoff
+## Where things are
 
-`docs/qa/workboard-worktree-handoff.md` covers the original (pre-desk) implementation and its QA script; it describes machinery that phases 3+ delete. Where it conflicts with `desk-cloudkit/plan.md`, the plan wins.
+`desk-cloudkit/plan.md` (binding plan) · `desk-cloudkit/fixnotes/` (every agent's note, waves A–F + integrate-a…h; the Codex findings are restated verbatim in the fixnotes of the wave that fixed them) · `desk-cloudkit/spike-fixnote.md` §(c) (Gate-2 checklist) · `docs/ai-context/spec.md` + `project-structure.md` (present-tense truth) · workflow scripts in the session dir `~/.claude/projects/-Users-peterkruck-repos-GigaDuck--codex-worktrees-conduck-agent-workboard/…/workflows/scripts/`. The earlier `docs/qa/workboard-worktree-handoff.md` described the pre-desk build and is retired.
