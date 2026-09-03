@@ -582,8 +582,8 @@ struct ConverseIntent: AppIntent {
                 // stored NOWHERE. It leaves the guard armed — nothing below it
                 // runs — which is why the outcome, not the absence of an error,
                 // is what licenses the disarm.
-                let record = PendingRetryRecord(
-                    metadata: Self.stamped(
+                let held = Self.heldCapture(
+                    Self.stamped(
                         pendingMetadata,
                         publicationState: workPublicationState,
                         transcript: transcript
@@ -593,7 +593,7 @@ struct ConverseIntent: AppIntent {
                 let outcome: WorkVoiceRecoveryOutcome
                 do {
                     outcome = try await WorkVoiceCaptureCoordinator.recover(
-                        record,
+                        held,
                         transcript: transcript
                     )
                 } catch {
@@ -746,6 +746,48 @@ struct ConverseIntent: AppIntent {
         )
     }
 
+    /// This capture as `recover` takes one, from the process that ARMED it.
+    ///
+    /// `PendingRetryClaim` is the shape a retry SURFACE holds: a capture it
+    /// selected out of the shared queue, plus the token of the reservation it
+    /// took over it. This process selected nothing — it minted the id, wrote the
+    /// entry and still holds the only in-memory copy of the bytes and the
+    /// phase-one verdict — so the value it hands over carries its own record and
+    /// a token that names NO reservation. Two consequences, both deliberate:
+    ///
+    ///   • Nothing else can be handed this capture by mistake: the ids, the
+    ///     bytes and the verdict are this process's own, not a queue read.
+    ///   • Every write `recover` attempts against the entry is REFUSED, because
+    ///     the store checks the token. This lane writes its own verdict either
+    ///     side of the call through `recordRecoveryState`, which is what it did
+    ///     before reservations existed — see §Requests in the wave notes for the
+    ///     one store operation (reserve BY ID) that would let this lane hold a
+    ///     real one, and the durable `.published` write it would restore.
+    ///
+    /// Taking a reservation the store's way is not available here and would be
+    /// wrong if it were: its only selection primitive answers "the newest
+    /// unreserved capture", which is not this capture whenever anything armed
+    /// after it, and a hold taken in an intent process would outlive the OS kill
+    /// this whole guard exists for — the deferred "Recording Saved" notice fires
+    /// at 90 s while the entry would stay unclaimable for 600.
+    ///
+    /// `nonisolated` because `perform()` is, and this is a pure restatement.
+    nonisolated private static func heldCapture(
+        _ metadata: PendingRetryMetadata,
+        audio: Data
+    ) -> PendingRetryClaim {
+        PendingRetryClaim(
+            entry: PendingRetryEntry(
+                audioData: audio,
+                metadata: metadata,
+                // The screenshot is published on its own derived id above; a
+                // recovery has no business republishing it.
+                workImageData: nil
+            ),
+            token: UUID()
+        )
+    }
+
     /// Commit that observation to this capture's queue entry, for the recovery
     /// that happens in ANOTHER process.
     ///
@@ -762,6 +804,18 @@ struct ConverseIntent: AppIntent {
     /// queued, with an unknown verdict — which is the conservative reading (a
     /// recording that may exist nowhere else, exempt from expiry), not a lost
     /// recording.
+    ///
+    /// WHY THIS LANE HOLDS NO RESERVATION, unlike the two retry surfaces. A
+    /// reservation is how a surface SELECTS one capture out of a shared queue;
+    /// this process did not select anything — it armed the capture itself and
+    /// holds the only in-memory copy of both the bytes and the verdict, and it
+    /// addresses its entry by the capture id it minted. The store's selection
+    /// primitive answers "the newest unreserved capture", which is not this
+    /// capture whenever anything armed after it, so taking one here would put a
+    /// ten-minute hold on somebody else's recording. And a hold this process
+    /// took would survive the OS kill this whole guard exists for: the deferred
+    /// notice fires at 90 s telling the user to tap and retry, while the entry
+    /// stayed unclaimable for 600.
     @MainActor
     private static func recordRecoveryState(
         _ publicationState: PendingRetryPublicationState?,

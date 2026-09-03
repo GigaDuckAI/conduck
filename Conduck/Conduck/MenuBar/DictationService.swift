@@ -31,6 +31,16 @@
 // decision): macOS runs in-process on the main actor; no OS-kill risk between
 // startRecording and stopAndProcess. Audio is preserved reactively on STT
 // error only.
+//
+// RETRY IS QUEUE-SHAPED, and that is why `retryLast` does not return to `.idle`
+// when it finishes one. `PendingRetryStore` holds every waiting capture, this
+// window and the main window's card both reach it, and `.error` is the only
+// state this popover draws a Retry control in. So a finish that leaves other
+// captures waiting settles into `.error` again, saying how many are left —
+// returning to `.idle` there is how the second recording became unreachable
+// until the next capture failed. Each attempt RESERVES the capture it takes
+// (`claimNext`) and hands the reservation back on every outcome that leaves it
+// waiting, so two surfaces cannot transcribe and finish the same recording.
 
 import AppKit
 import AVFoundation
@@ -80,6 +90,17 @@ final class DictationService: RecordingExclusivityAuthority {
     /// True between the soft-warning fire (T-60 s) and the hard cap (300 s).
     /// Drives the amber timer in `DictationPopoverView.recordingView`.
     private(set) var nearMaxDuration: Bool = false
+
+    /// How many captures are still waiting in `PendingRetryStore`, as of the
+    /// last time this service asked. Metadata only — `pendingCount()` reads no
+    /// recording — and refreshed on every finish, so the `.error` state this
+    /// service settles into after finishing one can say what is left.
+    ///
+    /// It is the DIRECT answer to the question `DictationPopoverView`'s
+    /// `hasSavedRetryAudio` asks of the error taxonomy ("are there bytes to
+    /// retry?"), which the taxonomy can only answer for the capture that just
+    /// failed in this process.
+    private(set) var pendingRetryCount: Int = 0
 
     private let recorder = AudioRecorder()
     private var recordingStartTime: Date?
@@ -187,173 +208,205 @@ final class DictationService: RecordingExclusivityAuthority {
             lastError = nil
             state = .processing
 
-            // The queue is offered newest first and finished ONE capture per
-            // Retry: this surface shows a single recovery at a time, and what
-            // is still queued is offered by the next tap.
-            guard let pending = await PendingRetryStore.shared.load().first else {
+            // ONE capture per Retry, RESERVED while this window works on it:
+            // the queue is offered newest first, and the reservation is what
+            // stops the main window's card or a Shortcut host from transcribing
+            // and finishing the same recording beside us. What is still queued
+            // is offered by the next tap.
+            guard let claim = await PendingRetryStore.shared.claimNext() else {
+                // Nothing this window may take. A capture another surface holds
+                // is still WAITING, so the count decides which sentence is
+                // true — "there is nothing to retry" retires the affordance and
+                // must not be said while a recording is parked.
+                await refreshPendingRetryCount()
+                let waiting = pendingRetryCount > 0
                 state = .error(
-                    message: String(localized: "No saved recording to retry."), // xcstrings
-                    isRetryable: false
+                    message: waiting
+                        ? String(
+                            localized: "pendingRetry.card.busy",
+                            defaultValue: "This recording is already being finished. Try again in a moment."
+                        )
+                        : String(localized: "No saved recording to retry."), // xcstrings
+                    // A capture somebody else is holding IS retryable — the
+                    // reservation lapses. Only an empty queue retires the
+                    // affordance.
+                    isRetryable: waiting
                 )
                 return
             }
 
-            // A Work capture whose WORDS are already parked owes the desk a
-            // write and nothing else: recognition succeeded and only that write
-            // failed. Everything between here and the upload — the key verdict,
-            // the staged file, the provider round trip — would be spent buying
-            // an answer this record already carries, and a key removed since
-            // would refuse a retry that needs none. This one finishes with no
-            // network at all.
-            if pending.metadata.resolvedDestination == .work,
-               let parked = pending.metadata.transcript?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               !parked.isEmpty {
-                await finishWorkRetry(pending, transcript: parked)
-                return
-            }
-
-            // ATOMIC snapshot: (presetID, apiKey, provider)
-            // resolved in one actor hop so a concurrent preset switch can't
-            // produce a key/provider mismatch on retry.
-            let snapshot = await SettingsManager.shared.activeSTTSnapshot()
-            // The key question through `STTKeyReadiness` — in-process providers
-            // (Apple on-device) and the keyless (`.none` auth) BYO endpoint need
-            // no key, and both arms live inside its `requiresKey`.
-            //
-            // A nil `snapshot.apiKey` is ambiguous, and on THIS path the wrong
-            // reading is worse than a wrong sentence: the saved recording is
-            // already in `PendingRetryStore`, and telling the user their key is
-            // missing with `isRetryable: false` retires the only affordance that
-            // reaches those words. `.unreadable` keeps the retry live because an
-            // unlock makes the identical bytes succeed (I3, I6). Neither arm
-            // clears the store.
-            let apiKey: String
-            switch await STTKeyReadiness.resolve(
-                presetID: snapshot.presetID,
-                snapshotKey: snapshot.apiKey,
-                provider: snapshot.provider,
-                customConfig: snapshot.customConfig
-            ) {
-            case .ready(let key):
-                apiKey = key
-            case .notConfigured:
-                state = .error(
-                    message: AppError.sttMissingAPIKey.localizedDescription,
-                    isRetryable: false
-                )
-                return
-            case .unreadable:
-                lastError = .sttKeyUnreadable
-                // The CAUSE LINE ONLY — see `processAudio`'s twin below for the
-                // reasoning; both sites make the same call, because one cause
-                // may not read two ways on one surface.
-                state = .error(
-                    message: AppError.sttKeyUnreadable.errorDescription ?? "",
-                    isRetryable: AppError.sttKeyUnreadable.isRetryable
-                )
-                return
-            }
-
-            // Re-materialize the saved audio bytes to a fresh temp file URL —
-            // PendingRetryStore.load returns Data, and STTClient.transcribe
-            // owns the file's lifecycle via defer-remove.
-            //
-            // The container is read off those bytes rather than assumed: both
-            // capture lanes preserve COMPRESSED audio and `AudioCompressor` can
-            // return WAV, so a fixed `.m4a` name tells a provider something
-            // untrue about its own input and the stricter ones refuse it.
-            let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent(
-                    "conduck_retry_\(UUID().uuidString)"
-                    + ".\(PendingRetryAudioFile.extension(for: pending.audioData))"
-                )
-            do {
-                try pending.audioData.write(to: tempURL, options: [.atomic])
-            } catch {
-                state = .error(
-                    message: String(localized: "Couldn't stage the retry audio."), // xcstrings
-                    isRetryable: false
-                )
-                return
-            }
-
-            do {
-                let response = try await STTClient.shared.transcribe(
-                    audioFileURL: tempURL,
-                    apiKey: apiKey,
-                    language: pending.metadata.preferredLanguage,
-                    provider: snapshot.provider,
-                    customModel: snapshot.customModel,
-                    customConfig: snapshot.customConfig
-                )
-                let trimmed = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else {
-                    state = .error(
-                        message: String(localized: "Transcription returned empty text. Please try again."), // xcstrings
-                        isRetryable: true
-                    )
-                    return
-                }
-
-                // Work records take the desk lane and never reach the agent
-                // round-trip from this surface, so they leave here rather than
-                // falling through to the Chat handoff below. The release of the
-                // durable record is theirs to decide, not this method's: it
-                // happens only on an outcome that says a card now holds the
-                // words.
-                if pending.metadata.resolvedDestination == .work {
-                    await finishWorkRetry(pending, transcript: trimmed)
-                    return
-                }
-                _ = await PendingRetryStore.shared.clear(ifCurrentID: pending.metadata.id)
-                PendingRetryGuard.cancelDeferredNotification(for: pending.metadata.id)
-                state = .idle
-                // Legacy and explicit Chat records continue into the agent
-                // round-trip.
-                onTranscript(trimmed)
-            } catch let error as AppError {
-                if error.shouldPreserveForRetry {
-                    // Update only while this capture is still queued. Another
-                    // surface may have finished it while STT was suspended, and
-                    // a diagnosis written after that would create an entry for
-                    // a capture that is done.
-                    _ = await PendingRetryStore.shared.updateAttemptIfCurrent(
-                        id: pending.metadata.id,
-                        lastErrorCode: error.errorCode
-                    )
-                }
-                lastError = error
-                // Cause AND remedy. `localizedDescription` on a `LocalizedError`
-                // is `errorDescription` alone, so the footer showed a certificate
-                // refusal's cause with no way out — the server-side routes, the
-                // "may be intercepted" warning and the "the certificate is fine"
-                // line all live in `recoverySuggestion`, and the popover has no
-                // second slot to reach one. `descriptionWithRecovery` drops the
-                // generic "Try again." fallback, so an ordinary retryable failure
-                // reads exactly as before and the Retry affordance keeps its own
-                // gate (`isRetryable`).
-                state = .error(
-                    // STT lane — this service never sends a gateway turn, so
-                    // there is no ref and the neutral wording is the true one.
-                    message: error.descriptionWithRecovery(),
-                    isRetryable: error.isRetryable
-                )
-            } catch {
-                lastError = nil
-                if pending.metadata.resolvedDestination == .work {
-                    state = .error(
-                        message: String(
-                            localized: "workboard.capture.retry.voice.message",
-                            defaultValue: "Couldn't add this recording to Work. Try again."
-                        ),
-                        isRetryable: true
-                    )
-                } else {
-                    state = .error(message: error.localizedDescription, isRetryable: false)
-                }
+            // The reservation goes back on every outcome that leaves the
+            // capture waiting, so the next tap can take it immediately instead
+            // of waiting out the lease.
+            if await attemptRetry(claim) == false {
+                await PendingRetryStore.shared.release(claim)
             }
         }
+    }
+
+    /// Everything one Retry tap does with the capture it reserved.
+    ///
+    /// `true` means the capture is FINISHED and its entry retired; `false`
+    /// means it is still waiting and the caller hands the reservation back.
+    /// Splitting the two keeps "who releases the reservation" one statement in
+    /// `retryLast` rather than a duty every early return has to remember.
+    private func attemptRetry(_ claim: PendingRetryClaim) async -> Bool {
+        let pending = claim.entry
+
+        // A Work capture whose WORDS are already parked owes the desk a
+        // write and nothing else: recognition succeeded and only that write
+        // failed. Everything between here and the upload — the key verdict,
+        // the staged file, the provider round trip — would be spent buying
+        // an answer this record already carries, and a key removed since
+        // would refuse a retry that needs none. This one finishes with no
+        // network at all.
+        if pending.metadata.resolvedDestination == .work,
+           let parked = pending.metadata.transcript?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !parked.isEmpty {
+            return await finishWorkRetry(claim, transcript: parked)
+        }
+
+        // ATOMIC snapshot: (presetID, apiKey, provider)
+        // resolved in one actor hop so a concurrent preset switch can't
+        // produce a key/provider mismatch on retry.
+        let snapshot = await SettingsManager.shared.activeSTTSnapshot()
+        // The key question through `STTKeyReadiness` — in-process providers
+        // (Apple on-device) and the keyless (`.none` auth) BYO endpoint need
+        // no key, and both arms live inside its `requiresKey`.
+        //
+        // A nil `snapshot.apiKey` is ambiguous, and on THIS path the wrong
+        // reading is worse than a wrong sentence: the saved recording is
+        // already in `PendingRetryStore`, and telling the user their key is
+        // missing with `isRetryable: false` retires the only affordance that
+        // reaches those words. `.unreadable` keeps the retry live because an
+        // unlock makes the identical bytes succeed (I3, I6). Neither arm
+        // clears the store.
+        let apiKey: String
+        switch await STTKeyReadiness.resolve(
+            presetID: snapshot.presetID,
+            snapshotKey: snapshot.apiKey,
+            provider: snapshot.provider,
+            customConfig: snapshot.customConfig
+        ) {
+        case .ready(let key):
+            apiKey = key
+        case .notConfigured:
+            state = .error(
+                message: AppError.sttMissingAPIKey.localizedDescription,
+                isRetryable: false
+            )
+            return false
+        case .unreadable:
+            lastError = .sttKeyUnreadable
+            // The CAUSE LINE ONLY — see `processAudio`'s twin below for the
+            // reasoning; both sites make the same call, because one cause
+            // may not read two ways on one surface.
+            state = .error(
+                message: AppError.sttKeyUnreadable.errorDescription ?? "",
+                isRetryable: AppError.sttKeyUnreadable.isRetryable
+            )
+            return false
+        }
+
+        // Re-materialize the saved audio bytes to a fresh temp file URL —
+        // PendingRetryStore.load returns Data, and STTClient.transcribe
+        // owns the file's lifecycle via defer-remove.
+        //
+        // The container is read off those bytes rather than assumed: both
+        // capture lanes preserve COMPRESSED audio and `AudioCompressor` can
+        // return WAV, so a fixed `.m4a` name tells a provider something
+        // untrue about its own input and the stricter ones refuse it.
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "conduck_retry_\(UUID().uuidString)"
+                + ".\(PendingRetryAudioFile.extension(for: pending.audioData))"
+            )
+        do {
+            try pending.audioData.write(to: tempURL, options: [.atomic])
+        } catch {
+            state = .error(
+                message: String(localized: "Couldn't stage the retry audio."), // xcstrings
+                isRetryable: false
+            )
+            return false
+        }
+
+        do {
+            let response = try await STTClient.shared.transcribe(
+                audioFileURL: tempURL,
+                apiKey: apiKey,
+                language: pending.metadata.preferredLanguage,
+                provider: snapshot.provider,
+                customModel: snapshot.customModel,
+                customConfig: snapshot.customConfig
+            )
+            let trimmed = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                state = .error(
+                    message: String(localized: "Transcription returned empty text. Please try again."), // xcstrings
+                    isRetryable: true
+                )
+                return false
+            }
+
+            // Work records take the desk lane and never reach the agent
+            // round-trip from this surface, so they leave here rather than
+            // falling through to the Chat handoff below. The release of the
+            // durable record is theirs to decide, not this method's: it
+            // happens only on an outcome that says a card now holds the
+            // words.
+            if pending.metadata.resolvedDestination == .work {
+                return await finishWorkRetry(claim, transcript: trimmed)
+            }
+            await settleAfterFinishing(claim)
+            // Legacy and explicit Chat records continue into the agent
+            // round-trip.
+            onTranscript(trimmed)
+            return true
+        } catch let error as AppError {
+            if error.shouldPreserveForRetry {
+                // Count the attempt against the capture this window still
+                // HOLDS. A reservation another surface overtook — or a
+                // capture the person discarded while STT was suspended —
+                // answers false and nothing is written, so a diagnosis can
+                // never be painted onto somebody else's recording.
+                _ = await PendingRetryStore.shared.updateAttempt(
+                    claim,
+                    lastErrorCode: error.errorCode
+                )
+            }
+            lastError = error
+            // Cause AND remedy. `localizedDescription` on a `LocalizedError`
+            // is `errorDescription` alone, so the footer showed a certificate
+            // refusal's cause with no way out — the server-side routes, the
+            // "may be intercepted" warning and the "the certificate is fine"
+            // line all live in `recoverySuggestion`, and the popover has no
+            // second slot to reach one. `descriptionWithRecovery` drops the
+            // generic "Try again." fallback, so an ordinary retryable failure
+            // reads exactly as before and the Retry affordance keeps its own
+            // gate (`isRetryable`).
+            state = .error(
+                // STT lane — this service never sends a gateway turn, so
+                // there is no ref and the neutral wording is the true one.
+                message: error.descriptionWithRecovery(),
+                isRetryable: error.isRetryable
+            )
+        } catch {
+            lastError = nil
+            if pending.metadata.resolvedDestination == .work {
+                state = .error(
+                    message: String(
+                        localized: "workboard.capture.retry.voice.message",
+                        defaultValue: "Couldn't add this recording to Work. Try again."
+                    ),
+                    isRetryable: true
+                )
+            } else {
+                state = .error(message: error.localizedDescription, isRetryable: false)
+            }
+        }
+        return false
     }
 
     /// Everything this surface does to the desk with a recovered Work capture,
@@ -370,10 +423,13 @@ final class DictationService: RecordingExclusivityAuthority {
     /// The release of the durable record sits BELOW the recovery and inside the
     /// same `do`, so a store that refused the write skips it and the recording
     /// survives to be recovered again — and a non-terminal outcome keeps it too.
+    /// `true` only on the terminal outcome that retired the entry, so the caller
+    /// knows whether the reservation still has to go back.
     private func finishWorkRetry(
-        _ pending: PendingRetryEntry,
+        _ claim: PendingRetryClaim,
         transcript: String
-    ) async {
+    ) async -> Bool {
+        let pending = claim.entry
         do {
             // A GigaAction capture can also carry a screenshot, and the retry
             // record holds the only copy until it lands. Publish it FIRST,
@@ -389,7 +445,7 @@ final class DictationService: RecordingExclusivityAuthority {
                 )
             }
             let outcome = try await WorkVoiceCaptureCoordinator.recover(
-                PendingRetryRecord(pending),
+                claim,
                 transcript: transcript
             )
             guard outcome.isTerminal else {
@@ -401,11 +457,10 @@ final class DictationService: RecordingExclusivityAuthority {
                     ),
                     isRetryable: true
                 )
-                return
+                return false
             }
-            _ = await PendingRetryStore.shared.clear(ifCurrentID: pending.metadata.id)
-            PendingRetryGuard.cancelDeferredNotification(for: pending.metadata.id)
-            state = .idle
+            await settleAfterFinishing(claim)
+            return true
         } catch {
             lastError = nil
             state = .error(
@@ -415,7 +470,50 @@ final class DictationService: RecordingExclusivityAuthority {
                 ),
                 isRetryable: true
             )
+            return false
         }
+    }
+
+    /// Retire the entry this reservation holds, cancel the "Recording Saved"
+    /// notice that would otherwise invite the user back to a retry that no
+    /// longer exists, and settle into the state the REST of the queue calls for.
+    ///
+    /// `.idle` only when nothing is left. `.error` is the one state this
+    /// service's popover draws a Retry control in, so returning to `.idle` with
+    /// captures still waiting is what made the second recording unreachable
+    /// until an unrelated capture failed — it is not an error state so much as
+    /// the only state that offers the next tap.
+    ///
+    /// The sentence is deliberately not an apology: nothing failed here.
+    private func settleAfterFinishing(_ claim: PendingRetryClaim) async {
+        _ = await PendingRetryStore.shared.clear(claim)
+        PendingRetryGuard.cancelDeferredNotification(for: claim.id)
+        await refreshPendingRetryCount()
+        guard pendingRetryCount > 0 else {
+            lastError = nil
+            state = .idle
+            return
+        }
+        // `DictationPopoverView` draws its audio Retry only while
+        // `lastError?.shouldPreserveForRetry` is true, so the backlog carries
+        // the arming verdict of the capture the next tap would take. A capture
+        // that recorded none — armed by the Shortcuts lane before anything
+        // failed — leaves the button withheld; §Requests names the one-line
+        // change that would ask the count instead of the taxonomy.
+        lastError = (await PendingRetryStore.shared.pendingErrorCode())
+            .map { AppError.from(errorCode: $0, message: nil) }
+        state = .error(
+            message: String(
+                localized: "pendingRetry.card.count",
+                defaultValue: "\(pendingRetryCount) recordings waiting"
+            ),
+            isRetryable: true
+        )
+    }
+
+    /// The queue's size, metadata only — `pendingCount()` reads no recording.
+    private func refreshPendingRetryCount() async {
+        pendingRetryCount = await PendingRetryStore.shared.pendingCount()
     }
 
     // MARK: - Recording
@@ -692,6 +790,13 @@ final class DictationService: RecordingExclusivityAuthority {
     /// throw regardless of what path travelled in the metadata. Hence the early
     /// return rather than a fallback URL that could never be used.
     ///
+    /// The bookkeeping path is built from `PendingRetryFiles` rather than
+    /// spelled out, so it names the id-scoped file the store actually writes.
+    /// The fixed `pending_retry_audio.m4a` name is the PRE-ID-SCOPED recording
+    /// an older release parked, which the store folds in once and then never
+    /// reads or deletes — a record pointing there would describe a file that is
+    /// not this capture's and that nothing may touch.
+    ///
     /// Best-effort by design: a save failure is logged inside the store and the
     /// caller still surfaces the original error, because swapping in a storage
     /// error would tell the user the wrong thing about why their capture stopped.
@@ -701,13 +806,16 @@ final class DictationService: RecordingExclusivityAuthority {
         preferredLanguage: String?
     ) async {
         guard error.shouldPreserveForRetry else { return }
+        let captureID = UUID()
         guard let pendingURL = FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: Constants.appGroupID)?
-            .appendingPathComponent("pending_retry_audio.m4a") else { return }
+            .appendingPathComponent(
+                PendingRetryFiles.audio(captureID, .chat)
+            ) else { return }
         try? await PendingRetryStore.shared.save(
             audioData: audioData,
             metadata: PendingRetryMetadata(
-                id: UUID(),
+                id: captureID,
                 createdAt: Date(),
                 audioFileURL: pendingURL,
                 preferredLanguage: preferredLanguage,
@@ -715,6 +823,10 @@ final class DictationService: RecordingExclusivityAuthority {
                 lastErrorCode: error.errorCode
             )
         )
+        // The popover's Retry is drawn from `lastError`; the COUNT is what says
+        // whether more than this capture is waiting, and it is read once here
+        // rather than on every render.
+        await refreshPendingRetryCount()
     }
 
     /// Mic-authority view for the exclusivity bus. Only `.recording` counts —

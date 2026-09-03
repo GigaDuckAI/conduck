@@ -749,6 +749,7 @@ final class DiagnosticsRunner {
         let stuckShareCount = await SharedInboxDrainer.shared.diagnosticStuckCount()
         let shareTargetsHealthy = Self.shareTargetsSnapshotHealthy(hasGateways: !refs.isEmpty)
         let pendingRetry = await PendingRetryStore.shared.diagnosticSnapshot()
+        let pendingRetryCount = await PendingRetryStore.shared.pendingCount()
         let storageFreeBytes = Self.appGroupFreeBytes()
         // Recent FAILED sends — the same singleton-diagnostic-accessor idiom as
         // the two reads above, and deliberately on THIS tier: a local Core Data
@@ -1370,9 +1371,14 @@ final class DiagnosticsRunner {
         // FORCE-SHOWS the Voice section (`hasPendingRetry` above).
         if let pendingRetry {
             let remaining = Self.pendingRetryRemainingMinutes(createdAt: pendingRetry.createdAt)
+            // The snapshot describes the NEWEST capture and cannot say how many
+            // are behind it, so the count travels beside it. Metadata only —
+            // `pendingCount()` reads no recording — and it is what turns "a
+            // recording is waiting" into a number a support conversation can
+            // reconcile against what the person is looking at.
             factPendingRetry = pendingRetry.audioFileExists
-                ? "parked(code \(pendingRetry.lastErrorCode.map(String.init) ?? "none"), \(remaining)m left)"
-                : "orphaned"
+                ? "parked(code \(pendingRetry.lastErrorCode.map(String.init) ?? "none"), \(remaining)m left, \(pendingRetryCount) waiting)"
+                : "orphaned(\(pendingRetryCount) waiting)"
             let retryDetail: String
             if !pendingRetry.audioFileExists {
                 retryDetail = String(localized: "diagnostics.voice.pendingRetry.orphaned", defaultValue: "A failed transcription left a retry behind, but its recording file is missing — record again.")

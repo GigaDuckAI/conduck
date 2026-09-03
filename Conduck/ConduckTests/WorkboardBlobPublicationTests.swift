@@ -530,9 +530,10 @@ final class WorkboardBlobPublicationTests: XCTestCase {
     /// interrupted publication from a blob another device inserted and can still
     /// roll back — the two stores mirror independently, so a peer's blob arrives
     /// on its own — and a card committed against bytes a peer then deletes waits
-    /// for iCloud for ever with nothing left to wait for. Two rows carrying
-    /// identical bytes cost one bounded copy until the card is deleted, and
-    /// paired deletion takes both.
+    /// for iCloud for ever with nothing left to wait for. Rows carrying
+    /// identical bytes cost one copy each until the card's bytes are replaced or
+    /// the card is deleted; `WorkboardSyncedRowRepairTests` measures that bound,
+    /// which is persistence rather than a count.
     func testABlobNoCardNamesIsNotAdoptedByTheReplayThatFindsIt() async throws {
         let store = isolated.make()
         let payload = Data("the screenshot that survived the crash".utf8)
@@ -575,7 +576,9 @@ final class WorkboardBlobPublicationTests: XCTestCase {
         )
 
         // A second replay finds a card that DOES name these bytes, so it adopts
-        // and writes nothing: the duplication is bounded at one.
+        // and writes nothing. That bounds REPLAY, not the state: an attempt that
+        // dies again before its card commits strands another row, which is what
+        // `WorkboardSyncedRowRepairTests` measures.
         _ = try await store.upsertDeskMaterial(draft)
         let afterSecondReplay = await store._workMaterialBlobRowsForTesting(materialID: draft.id)
         XCTAssertEqual(afterSecondReplay.count, 2)

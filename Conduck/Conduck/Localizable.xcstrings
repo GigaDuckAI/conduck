@@ -7319,6 +7319,84 @@
         }
       }
     },
+    "pendingRetry.card.busy" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This recording is already being finished. Try again in a moment."
+          }
+        }
+      }
+    },
+    "pendingRetry.card.count" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "new",
+                  "value" : "%lld recording waiting"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "new",
+                  "value" : "%lld recordings waiting"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "pendingRetry.card.discard" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Discard recording"
+          }
+        }
+      }
+    },
+    "pendingRetry.card.discard.confirm.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Discard"
+          }
+        }
+      }
+    },
+    "pendingRetry.card.discard.confirm.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This deletes the recording from this device. It cannot be recovered."
+          }
+        }
+      }
+    },
+    "pendingRetry.card.discard.confirm.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Discard this recording?"
+          }
+        }
+      }
+    },
     "pendingRetry.headline" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {

@@ -1314,13 +1314,17 @@ struct DictationPopoverView: View {
         }
     }
 
-    /// True only when the failed capture's audio was actually preserved in
-    /// `PendingRetryStore` (`shouldPreserveForRetry`) — the precondition for
-    /// `retryLast` to succeed. Errors that are nominally retryable but save no
-    /// bytes ("empty text", rate-limit, generic API failure) would dead-end in
-    /// "No saved recording to retry", so they get Dismiss only.
+    /// True only when `PendingRetryStore` holds a recording to retry — the
+    /// precondition for `retryLast` to succeed. The store's count is the
+    /// direct answer: the error taxonomy (`shouldPreserveForRetry`) can only
+    /// speak for the capture that just failed in THIS process, and says nothing
+    /// about a capture still waiting after one finishes, or one armed by the
+    /// Shortcuts lane before anything failed here. Errors that are nominally
+    /// retryable but saved no bytes ("empty text", rate-limit, generic API
+    /// failure) leave the count at zero and get Dismiss only, so Retry never
+    /// dead-ends in "No saved recording to retry".
     private var hasSavedRetryAudio: Bool {
-        service.lastError?.shouldPreserveForRetry == true
+        service.pendingRetryCount > 0
     }
 
     private func errorFooter(message: String, isRetryable: Bool) -> some View {

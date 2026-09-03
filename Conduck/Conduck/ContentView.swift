@@ -24,7 +24,13 @@
 //  Notification deep-link: a reply notification tap foregrounds the app and
 //  opens the target conversation thread (local fetch by conversationID).
 //
-//  Pending-retry surface: `PendingRetryCard` lives above the thread.
+//  Pending-retry surface: `PendingRetryCard` lives above the thread. It speaks
+//  for the whole queue, not one recording: Retry RESERVES the newest waiting
+//  capture (`claimNext`), finishes exactly that one, and re-reads the count —
+//  so a card still standing afterwards is saying "there is another", not "that
+//  failed". Every outcome that leaves the capture waiting hands the reservation
+//  straight back, because the menu bar and a Shortcut host reach the same queue
+//  and a lease nobody released is ten minutes a recording cannot be retried.
 //
 
 import SwiftUI
@@ -46,6 +52,12 @@ struct ContentView: View {
     /// the mic just fired). Recreated whenever `currentConversationID` changes.
     @State private var detailVM: ConversationDetailViewModel?
     @State private var hasPendingRetry: Bool = false
+    /// How many captures are waiting, the one the card's Retry would take
+    /// included. The card speaks for a QUEUE — Retry finishes one and whatever
+    /// is behind it keeps the card up — so the count is what stops a card that
+    /// is still there after a successful retry from reading as a failure.
+    /// Metadata-only (`pendingCount()` reads no recording).
+    @State private var pendingRetryCount: Int = 0
     /// The `AppError.errorCode` that armed the pending retry, mirrored from the
     /// store alongside `hasPendingRetry` so the retry card's Troubleshoot
     /// affordance can build its `DiagnosticsFocus`. nil = no code (a plain notice
@@ -460,7 +472,9 @@ struct ContentView: View {
                             retryErrorMessage: retryErrorMessage,
                             onRetry: retryButtonTapped,
                             errorIsRetryable: pendingRetryIsRetryable,
-                            troubleshootFocus: DiagnosticsFocus(errorCode: pendingRetryErrorCode, ref: nil)
+                            troubleshootFocus: DiagnosticsFocus(errorCode: pendingRetryErrorCode, ref: nil),
+                            pendingCount: pendingRetryCount,
+                            onDiscard: discardButtonTapped
                         )
                         .padding(.horizontal, 16)
                         .padding(.top, 12)
@@ -1066,7 +1080,10 @@ struct ContentView: View {
     /// hand it back on the next foreground, once the user has had a chance to
     /// act on the remedy.
     private func refreshPendingRetryState() async {
-        hasPendingRetry = await PendingRetryStore.shared.hasPending()
+        // The COUNT rather than a boolean, because the card has to say how many
+        // are waiting and both readings come from one metadata-only scan.
+        pendingRetryCount = await PendingRetryStore.shared.pendingCount()
+        hasPendingRetry = pendingRetryCount > 0
         pendingRetryErrorCode = await PendingRetryStore.shared.pendingErrorCode()
         pendingRetryIsRetryable = pendingRetryErrorCode
             .map { AppError.from(errorCode: $0, message: nil).isRetryable } ?? true
@@ -1444,22 +1461,57 @@ struct ContentView: View {
         Task { await runPendingRetry() }
     }
 
+    private func discardButtonTapped() {
+        guard !isRetrying else { return }
+        Task { await discardPendingRetry() }
+    }
+
     @MainActor
     private func runPendingRetry() async {
         isRetrying = true
         retryErrorMessage = nil
         defer { isRetrying = false }
 
-        // The queue is offered newest first and finished ONE capture per tap:
-        // the recovery below is about a single card, and a person watching the
-        // retry card is waiting on the recording they just made. Whatever is
+        // ONE capture per tap, RESERVED while this surface works on it. The
+        // queue is offered newest first — a person watching this card is
+        // waiting on the recording they just made — and the reservation is what
+        // stops the menu bar, a second window or a Shortcut host from
+        // transcribing and finishing the same recording beside us. Whatever is
         // still queued keeps the card up for the next tap.
-        guard let pending = await PendingRetryStore.shared.load().first else {
-            pendingRetryErrorCode = nil
-            pendingRetryIsRetryable = true
-            withAnimation { hasPendingRetry = false }
+        guard let claim = await PendingRetryStore.shared.claimNext() else {
+            // Nothing this surface may take. Either the queue is empty, or
+            // every capture in it is reserved — by the menu bar, a Shortcut
+            // host, or an attempt this app was force-quit in the middle of.
+            // Only the first of those retires the card, so the count decides.
+            await refreshPendingRetryState()
+            if pendingRetryCount > 0 {
+                presentRetryError(String(
+                    localized: "pendingRetry.card.busy",
+                    defaultValue: "This recording is already being finished. Try again in a moment."
+                ))
+            }
             return
         }
+
+        // The reservation is given back on every outcome that leaves the
+        // capture waiting — a refusal, a throw, a cancellation — so the next
+        // tap here or on another surface can take it immediately instead of
+        // waiting out the lease.
+        if await attemptPendingRetry(claim) == false {
+            await PendingRetryStore.shared.release(claim)
+        }
+    }
+
+    /// Everything one Retry tap does with the capture it reserved.
+    ///
+    /// `true` means the capture is FINISHED and its entry retired; `false`
+    /// means it is still waiting and the caller must hand the reservation back.
+    /// Splitting the two is what keeps "who releases the reservation" a single
+    /// statement in the caller rather than a duty every early return has to
+    /// remember.
+    @MainActor
+    private func attemptPendingRetry(_ claim: PendingRetryClaim) async -> Bool {
+        let pending = claim.entry
 
         // A Work capture whose WORDS are already parked owes the desk a write
         // and nothing else: recognition succeeded and only that write failed.
@@ -1471,8 +1523,7 @@ struct ContentView: View {
            let parked = pending.metadata.transcript?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !parked.isEmpty {
-            await finishWorkRetry(pending, transcript: parked)
-            return
+            return await finishWorkRetry(claim, transcript: parked)
         }
 
         // ATOMIC snapshot — (presetID, apiKey, provider, customModel,
@@ -1502,7 +1553,7 @@ struct ContentView: View {
             apiKey = key
         case .notConfigured:
             presentRetryError(String(localized: "No STT API key set. Open Settings to add one."))  // xcstrings
-            return
+            return false
         case .unreadable:
             // Re-keyed and surfaced exactly as the STT `catch` below does it, so
             // the card explains the failure the user is looking at NOW and its
@@ -1526,7 +1577,7 @@ struct ContentView: View {
                 AppError.sttKeyUnreadable.errorDescription ?? "",
                 sticky: !AppError.sttKeyUnreadable.isRetryable
             )
-            return
+            return false
         }
 
         // Re-materialize the preserved audio to a fresh temp URL —
@@ -1548,7 +1599,7 @@ struct ContentView: View {
             try pending.audioData.write(to: retryAudioURL, options: [.atomic])
         } catch {
             presentRetryError(String(localized: "Couldn't send — try again in a minute."))  // xcstrings
-            return
+            return false
         }
 
         do {
@@ -1564,7 +1615,7 @@ struct ContentView: View {
             let recoveredTranscript = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !recoveredTranscript.isEmpty else {
                 presentRetryError(String(localized: "Transcription returned empty text. Try again."))  // xcstrings
-                return
+                return false
             }
 
             // Work records take the desk lane and never reach a gateway from
@@ -1573,33 +1624,27 @@ struct ContentView: View {
             // theirs to decide, not this method's: it happens only on an
             // outcome that says a card now holds the words.
             if pending.metadata.resolvedDestination == .work {
-                await finishWorkRetry(pending, transcript: recoveredTranscript)
-                return
+                return await finishWorkRetry(claim, transcript: recoveredTranscript)
             }
 
-            await releasePendingRetry(id: pending.metadata.id)
+            await finishPendingRetry(claim)
             // Legacy and explicit Chat records continue into the established
             // converse path.
             _ = await sendTurn(recoveredTranscript)
+            return true
 
         } catch let error as AppError {
-            let stillOwnsRetry = await PendingRetryStore.shared.updateAttemptIfCurrent(
-                id: pending.metadata.id,
+            let stillOwnsRetry = await PendingRetryStore.shared.updateAttempt(
+                claim,
                 lastErrorCode: error.errorCode
             )
             guard stillOwnsRetry else {
-                // This capture left the queue while STT was suspended — another
-                // surface finished it, or the person discarded it. Whatever is
-                // queued now owns the card, so read its diagnosis rather than
-                // painting this one's onto it.
-                let newerRetryIsPending = await PendingRetryStore.shared.hasPending()
-                pendingRetryErrorCode = newerRetryIsPending
-                    ? await PendingRetryStore.shared.pendingErrorCode()
-                    : nil
-                pendingRetryIsRetryable = true
-                retryErrorMessage = nil
-                withAnimation { hasPendingRetry = newerRetryIsPending }
-                return
+                // This reservation no longer holds the capture — another
+                // surface overtook it while STT was suspended, or the person
+                // discarded it. Whatever is queued now owns the card, so read
+                // its diagnosis rather than painting this one's onto it.
+                await refreshPendingRetryState()
+                return false
             }
             // Re-key the card to the failure the user is looking at NOW, not the
             // one that armed the store: the Troubleshoot chip pointed at the
@@ -1624,6 +1669,7 @@ struct ContentView: View {
                 presentRetryError(String(localized: "Couldn't send — try again in a minute."))  // xcstrings
             }
         }
+        return false
     }
 
     /// Everything this surface does to the desk with a recovered Work capture,
@@ -1642,11 +1688,14 @@ struct ContentView: View {
     /// The release of the durable record sits BELOW the recovery and inside the
     /// same `do`, so a store that refused the write skips it and the recording
     /// survives to be recovered again — and a non-terminal outcome keeps it too.
+    /// `true` only on the terminal outcome that retired the entry, so the caller
+    /// knows whether the reservation still has to go back.
     @MainActor
     private func finishWorkRetry(
-        _ pending: PendingRetryEntry,
+        _ claim: PendingRetryClaim,
         transcript: String
-    ) async {
+    ) async -> Bool {
+        let pending = claim.entry
         do {
             // A GigaAction capture can also carry a screenshot, and the retry
             // record holds the only copy until it lands. Publish it FIRST,
@@ -1662,7 +1711,7 @@ struct ContentView: View {
                 )
             }
             let outcome = try await WorkVoiceCaptureCoordinator.recover(
-                PendingRetryRecord(pending),
+                claim,
                 transcript: transcript
             )
             guard outcome.isTerminal else {
@@ -1670,32 +1719,53 @@ struct ContentView: View {
                     localized: "workboard.capture.retry.voice.message",
                     defaultValue: "Couldn't add this recording to Work. Try again."
                 ))
-                return
+                return false
             }
-            await releasePendingRetry(id: pending.metadata.id)
+            await finishPendingRetry(claim)
+            return true
         } catch {
             presentRetryError(String(
                 localized: "workboard.capture.retry.voice.message",
                 defaultValue: "Couldn't add this recording to Work. Try again."
             ))
+            return false
         }
     }
 
-    /// Retire the queue entry a completed capture no longer needs — exactly
-    /// that one — and re-read the card's state from whatever is still queued.
-    /// Another capture may be waiting behind this one, and its diagnosis is the
-    /// one the card must show next.
+    /// Retire the queue entry a completed capture no longer needs — exactly the
+    /// one this reservation holds — and re-read the card's state from whatever
+    /// is still queued. Another capture may be waiting behind this one, and its
+    /// diagnosis and the new count are what the card must show next: a card
+    /// that simply stayed up after a successful retry reads as a failure.
     @MainActor
-    private func releasePendingRetry(id: UUID) async {
-        _ = await PendingRetryStore.shared.clear(ifCurrentID: id)
-        PendingRetryGuard.cancelDeferredNotification(for: id)
+    private func finishPendingRetry(_ claim: PendingRetryClaim) async {
+        _ = await PendingRetryStore.shared.clear(claim)
+        PendingRetryGuard.cancelDeferredNotification(for: claim.id)
 
-        let newerRetryIsPending = await PendingRetryStore.shared.hasPending()
-        pendingRetryErrorCode = newerRetryIsPending
+        pendingRetryCount = await PendingRetryStore.shared.pendingCount()
+        pendingRetryErrorCode = pendingRetryCount > 0
             ? await PendingRetryStore.shared.pendingErrorCode()
             : nil
         pendingRetryIsRetryable = true
-        withAnimation { hasPendingRetry = newerRetryIsPending }
+        retryErrorMessage = nil
+        withAnimation { hasPendingRetry = pendingRetryCount > 0 }
+    }
+
+    /// Delete exactly the capture the card is offering, at the person's explicit
+    /// request, and cancel the "Recording Saved" notice that would otherwise
+    /// invite them back to a retry that no longer exists.
+    ///
+    /// It goes through the SAME reservation as a retry, and through
+    /// `clear(_ claim:)` rather than `clear()`: the store's discard-everything
+    /// operation would also delete a capture another surface is in the middle
+    /// of finishing, and the person asked to be rid of ONE recording.
+    @MainActor
+    private func discardPendingRetry() async {
+        guard let claim = await PendingRetryStore.shared.claimNext() else {
+            await refreshPendingRetryState()
+            return
+        }
+        await finishPendingRetry(claim)
     }
 
     /// Show the retry card's secondary error line.

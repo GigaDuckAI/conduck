@@ -801,11 +801,35 @@ extension ConversationStore {
                                     byteSize: staged.byteSize,
                                     in: context
                                 )
+                                // WHAT THE ROWS SAY DECIDES, NOT WHAT THIS CALL
+                                // WROTE. An insertion or a superseded deletion
+                                // says this publication changed the payload
+                                // STORE; neither says anything about the
+                                // physical rows. Two devices can publish
+                                // different bytes under one material id, so a
+                                // merge leaves rows naming different blobs, and
+                                // the row naming the blob that never arrived
+                                // keeps the card waiting for iCloud whenever it
+                                // wins the canonical read. A replay carrying
+                                // exactly these bytes would otherwise repair
+                                // nothing: its blob is already here
+                                // (`.alreadyPresent`, nothing inserted) and the
+                                // blob the other row names is absent rather
+                                // than superseded (nothing deleted), so the
+                                // disagreement would survive every replay.
+                                let rowsDisagree = materialRows.contains { row in
+                                    !Self.namesSyncedPayload(
+                                        row: row,
+                                        contentHash: contentHash,
+                                        byteSize: staged.byteSize
+                                    )
+                                }
                                 if case .inserted = publishedBlob {
                                     repaired = true
                                 } else if superseded > 0 {
                                     repaired = true
                                 }
+                                if rowsDisagree { repaired = true }
                                 if repaired {
                                     for row in materialRows {
                                         Self.pointAtSyncedPayload(
@@ -1128,10 +1152,27 @@ extension ConversationStore {
     /// it can be another device's publication whose material save then failed,
     /// and that device's rollback deletes the row and exports the deletion, so a
     /// card committed here against it would wait for iCloud for ever. Where
-    /// there is no such card, this call publishes its OWN row; two rows carrying
+    /// there is no such card, this call publishes its OWN row, and rows carrying
     /// identical bytes for one material are an accepted state, resolved by the
-    /// same newest-matching read that resolves a CloudKit merge, and paired
-    /// deletion takes both. `WorkMaterialBlobPairing` states the whole rule.
+    /// same newest-matching read that resolves a CloudKit merge.
+    /// `WorkMaterialBlobPairing` states the whole rule.
+    ///
+    /// THE BOUND ON THOSE ROWS, STATED ACCURATELY: it is not a count. Every
+    /// attempt that dies between this save and the material save — a crash or a
+    /// jetsam, since a REFUSAL takes its own row back by object id — strands one
+    /// more row, and the attempt after it strands another, because there is
+    /// still no card to license adoption. `deleteSupersededBlobRows` never
+    /// retires them: it deletes rows carrying OTHER bytes, and these carry the
+    /// bytes the card eventually names. What retires them is the next
+    /// publication or reattach putting DIFFERENT bytes on this card, and paired
+    /// deletion when the card goes. So the bound is persistence, not arithmetic:
+    /// one row per interrupted attempt, each at most the sync ceiling, standing
+    /// until one of those two happens.
+    ///
+    /// NO SWEEP MAY CLOSE THAT. A pass over "blobs no card names" cannot tell
+    /// this device's stranded attempt from a peer's blob that CloudKit imported
+    /// ahead of the material naming it, and deleting the second exports the
+    /// deletion of a payload that was merely early.
     ///
     /// Both halves read METADATA only — realizing blob rows to compare them
     /// would fault a ceiling-sized payload in to answer a question about its
@@ -1422,6 +1463,25 @@ extension ConversationStore {
         row.setValue(contentHash, forKey: "contentHash")
         row.setValue(NSNumber(value: byteSize), forKey: "byteSize")
         row.setValue(date, forKey: "updatedAt")
+    }
+
+    /// Whether one PHYSICAL row already names exactly these bytes on the synced
+    /// lane — the row-side half of `WorkMaterialBlobPairing`, asked of the raw
+    /// columns because a repair works on rows rather than on the one record the
+    /// canonical read projects.
+    ///
+    /// It is the question a synced repair asks of every row: a row that answers
+    /// no is naming a lane or a blob the card is not on, and only a write can
+    /// bring it back into line.
+    private static func namesSyncedPayload(
+        row: NSManagedObject,
+        contentHash: String,
+        byteSize: Int64
+    ) -> Bool {
+        row.value(forKey: "storageMode") as? String
+            == WorkMaterialStorageMode.syncedPayload.rawValue
+            && row.value(forKey: "contentHash") as? String == contentHash
+            && (row.value(forKey: "byteSize") as? NSNumber)?.int64Value == byteSize
     }
 
     /// Point one material row at the device-local vault. The mirror of
@@ -2995,7 +3055,20 @@ extension ConversationStore {
     ///   physical row: with equal stamps the canonical read picks the touched
     ///   row anyway, so a write that skipped the duplicate would still look
     ///   correct through the projection.
-    func _duplicateWorkMaterialRowForTesting(id: UUID, updatedAt: Date? = nil) async {
+    /// - Parameters contentHash, byteSize: The PAIRING the copy names, when it
+    ///   has to differ from the source's. Two offline devices publishing
+    ///   different bytes under one material id is an ordinary merge, and it is
+    ///   the only way one card ends up with physical rows naming different
+    ///   blobs — a copy of the source's own columns cannot produce it, and no
+    ///   public API can, because every repair writes every row together. Both
+    ///   default to the source's value; neither can CLEAR a column, because the
+    ///   states worth staging all name some blob.
+    func _duplicateWorkMaterialRowForTesting(
+        id: UUID,
+        updatedAt: Date? = nil,
+        contentHash: String? = nil,
+        byteSize: Int64? = nil
+    ) async {
         do { try await ensureLoaded() } catch { return }
         let context = newWriteContext()
         await context.perform { [context] in
@@ -3011,6 +3084,8 @@ extension ConversationStore {
                 copy.setValue(source.value(forKey: name), forKey: name)
             }
             if let updatedAt { copy.setValue(updatedAt, forKey: "updatedAt") }
+            if let contentHash { copy.setValue(contentHash, forKey: "contentHash") }
+            if let byteSize { copy.setValue(NSNumber(value: byteSize), forKey: "byteSize") }
             try? context.save()
         }
     }

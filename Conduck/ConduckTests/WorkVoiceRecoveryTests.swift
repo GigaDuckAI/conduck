@@ -17,17 +17,52 @@
 // legacy unknown — against a card that is standing, missing, or not a recording
 // at all.
 //
+// The third observation is an id that is REFUSED rather than answered: a card
+// of another kind already stands at the capture's own id, so the desk write
+// throws and never stops throwing. The recording goes back under the capture's
+// collision escape instead, the words follow it there, and a refusal of THAT id
+// too is the one state where nothing can carry them.
+//
 // The second half is a queue ENTRY's lifetime, asserted through the recorder
 // that owns it: a finished capture releases its own entry, a replaced one
 // releases it only once the replacement microphone is actually live, and a
 // second capture takes its place beside whatever is already waiting instead of
 // deleting it. Two captures queued together each finish onto their own card.
+//
+// `recover` is handed a CLAIM, so what it records about a capture is durable
+// and assertable. The cases that make a claim by hand carry a token no store
+// issued — enough to drive the desk decision — while the cases about what
+// `recover` WRITES take a real reservation from this case's own isolated queue.
 
 import Speech
 import XCTest
 @testable import Conduck
 
 final class WorkVoiceRecoveryTests: XCTestCase {
+
+    /// Every case gets its OWN queue: the production singleton writes the
+    /// process-global App-Group container every other capture test in this
+    /// bundle shares, and `recover` now writes a publication verdict into
+    /// whichever queue it is handed.
+    private var queueContainer: URL!
+    private var queueDefaults: InMemoryDefaultsStore!
+    private var queue: PendingRetryStore!
+
+    override func setUp() {
+        super.setUp()
+        queueContainer = FileManager.default.temporaryDirectory
+            .appendingPathComponent("work-voice-recovery-\(UUID().uuidString)", isDirectory: true)
+        queueDefaults = InMemoryDefaultsStore()
+        queue = PendingRetryStore(containerURL: queueContainer, defaults: queueDefaults)
+    }
+
+    override func tearDown() {
+        if let queueContainer { try? FileManager.default.removeItem(at: queueContainer) }
+        queue = nil
+        queueDefaults = nil
+        queueContainer = nil
+        super.tearDown()
+    }
 
     // MARK: - recover: a recording that is standing
 
@@ -37,9 +72,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         _ = try await Self.publish(captureID: captureID, in: store)
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.record(id: captureID, publicationState: .published),
+            Self.claim(id: captureID, publicationState: .published),
             transcript: "  the ferry leaves at seven  ",
-            store: store
+            store: store,
+            queue: queue
         )
 
         XCTAssertEqual(outcome, .attached)
@@ -61,9 +97,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         _ = try await Self.publish(captureID: captureID, in: store)
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.record(id: captureID, publicationState: nil),
+            Self.claim(id: captureID, publicationState: nil),
             transcript: "recovered from a record that predates the verdict",
-            store: store
+            store: store,
+            queue: queue
         )
 
         XCTAssertEqual(
@@ -89,9 +126,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let captureID = UUID()
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.record(id: captureID, publicationState: .published),
+            Self.claim(id: captureID, publicationState: .published),
             transcript: "the words outlive the card",
-            store: store
+            store: store,
+            queue: queue
         )
 
         XCTAssertEqual(outcome, .fallbackNotePublished)
@@ -123,9 +161,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let captureID = UUID()
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.record(id: captureID, publicationState: nil),
+            Self.claim(id: captureID, publicationState: nil),
             transcript: "an old record, and no card to be found",
-            store: store
+            store: store,
+            queue: queue
         )
 
         XCTAssertEqual(outcome, .fallbackNotePublished)
@@ -148,9 +187,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let captureID = UUID()
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.record(id: captureID, publicationState: .phaseOneFailed),
+            Self.claim(id: captureID, publicationState: .phaseOneFailed),
             transcript: "Ferry leaves at 07:30\nask about the bikes",
-            store: store
+            store: store,
+            queue: queue
         )
 
         XCTAssertEqual(outcome, .republishedAndAttached)
@@ -187,9 +227,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let standing = try await Self.publish(captureID: captureID, in: store)
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.record(id: captureID, publicationState: .phaseOneFailed),
+            Self.claim(id: captureID, publicationState: .phaseOneFailed),
             transcript: "recovered after a crash between the write and its answer",
-            store: store
+            store: store,
+            queue: queue
         )
 
         XCTAssertEqual(outcome, .republishedAndAttached)
@@ -225,9 +266,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         )
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.record(id: captureID, publicationState: .published),
+            Self.claim(id: captureID, publicationState: .published),
             transcript: "spoken words that belong to a recording",
-            store: store
+            store: store,
+            queue: queue
         )
 
         XCTAssertEqual(outcome, .fallbackNotePublished)
@@ -245,6 +287,258 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         XCTAssertEqual(note.textContent, "spoken words that belong to a recording")
     }
 
+    // MARK: - recover: an id that is REFUSED rather than answered
+
+    /// The desk does not ANSWER a colliding id, it throws — and the throw never
+    /// stops, because the card of another kind standing there is not going
+    /// anywhere. A recovery that rethrew it left the capture in the queue
+    /// failing identically on every retry, for ever. The recording goes back
+    /// under the capture's collision escape instead, and the words follow it
+    /// there.
+    func testACaptureWhoseIdIsTakenLandsUnderItsEscapeAndTakesItsWords() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        let pictureBytes = Data(repeating: 0x2A, count: 64)
+        let picture = try await Self.foreignCard(at: captureID, in: store, bytes: pictureBytes)
+        let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
+        XCTAssertNotEqual(escapeID, captureID, "an escape that is the same id escapes nothing")
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            Self.claim(id: captureID, publicationState: .phaseOneFailed),
+            transcript: "Ferry leaves at 07:30\nask about the bikes",
+            store: store,
+            queue: queue
+        )
+
+        XCTAssertEqual(outcome, .republishedAndAttached)
+        XCTAssertTrue(
+            outcome.isTerminal,
+            """
+            The capture is finished and its entry may go. A refusal that reached \
+            the caller as a throw kept the entry armed over a state that never \
+            resolves — which is the queue never emptying, not a retry.
+            """
+        )
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(Set(desk.materials.map(\.id)), [captureID, escapeID])
+
+        let recording = try XCTUnwrap(desk.materials.first { $0.id == escapeID })
+        XCTAssertEqual(recording.kind, .audio, "the recording is still a recording")
+        XCTAssertEqual(recording.textContent, "Ferry leaves at 07:30\nask about the bikes")
+        XCTAssertEqual(recording.title, "Ferry leaves at 07:30")
+        let recovered = try await store.loadWorkMaterialPayload(id: escapeID)
+        XCTAssertEqual(recovered, Self.recordingBytes, "the parked bytes are the only copy")
+
+        let untouched = try XCTUnwrap(desk.materials.first { $0.id == captureID })
+        XCTAssertEqual(untouched.kind, .image, "the card that was already there is unchanged")
+        XCTAssertEqual(untouched.title, picture.title)
+        XCTAssertNil(untouched.textContent, "…and never acquires somebody's spoken words")
+        let stillItsOwn = try await store.loadWorkMaterialPayload(id: captureID)
+        XCTAssertEqual(stillItsOwn, pictureBytes, "…nor loses a byte of its own payload")
+    }
+
+    /// The escape is a pure function of the colliding id, so the second process
+    /// to reach this capture — or the same one after a crash — repairs the card
+    /// it already wrote instead of publishing the recording twice.
+    func testAReplayOfAnEscapedRecoveryRepairsTheSameCard() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        _ = try await Self.foreignCard(at: captureID, in: store)
+        let claim = Self.claim(id: captureID, publicationState: .phaseOneFailed)
+        let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
+
+        let first = try await WorkVoiceCaptureCoordinator.recover(
+            claim, transcript: "said once", store: store, queue: queue
+        )
+        let second = try await WorkVoiceCaptureCoordinator.recover(
+            claim, transcript: "said once", store: store, queue: queue
+        )
+
+        XCTAssertEqual(first, .republishedAndAttached)
+        XCTAssertEqual(second, .republishedAndAttached)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(
+            Set(desk.materials.map(\.id)), [captureID, escapeID],
+            "a derived id replayed is a repair; a fresh one each time is a second card"
+        )
+        XCTAssertEqual(desk.materials.filter { $0.kind == .audio }.count, 1)
+    }
+
+    /// The end of the line, and the reason there is no third id: both the
+    /// capture id and its escape name cards of another kind. The words go
+    /// beside them, the capture finishes, and neither foreign card is touched.
+    func testACaptureRefusedUnderBothIdsPutsItsWordsBesideThemAndFinishes() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
+        let firstBytes = Data(repeating: 0x2A, count: 64)
+        let secondBytes = Data(repeating: 0x3B, count: 48)
+        _ = try await Self.foreignCard(at: captureID, in: store, bytes: firstBytes)
+        _ = try await Self.foreignCard(at: escapeID, in: store, bytes: secondBytes)
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            Self.claim(id: captureID, publicationState: .phaseOneFailed),
+            transcript: "the ferry leaves at seven",
+            store: store,
+            queue: queue
+        )
+
+        XCTAssertEqual(outcome, .fallbackNotePublished)
+        XCTAssertTrue(outcome.isTerminal, "the words are on the desk; nothing more can be done here")
+        let noteID = WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(Set(desk.materials.map(\.id)), [captureID, escapeID, noteID])
+        XCTAssertFalse(
+            desk.materials.contains { $0.kind == .audio },
+            "a chain of derived ids has no end; the second refusal is the last one"
+        )
+        XCTAssertEqual(
+            desk.materials.first { $0.id == noteID }?.textContent,
+            "the ferry leaves at seven"
+        )
+        let firstPayload = try await store.loadWorkMaterialPayload(id: captureID)
+        let secondPayload = try await store.loadWorkMaterialPayload(id: escapeID)
+        XCTAssertEqual(firstPayload, firstBytes, "both cards that were there keep their own bytes")
+        XCTAssertEqual(secondPayload, secondBytes)
+    }
+
+    /// The same double refusal with no words yet. Nothing can carry the
+    /// recording and nothing can carry the words, so the capture stays queued
+    /// with the verdict that says its bytes are the only copy — a `.published`
+    /// written here would make it expirable and delete them.
+    func testACaptureRefusedUnderBothIdsWithNoWordsKeepsItsRetryAndWritesNothing() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
+        _ = try await Self.foreignCard(at: captureID, in: store)
+        _ = try await Self.foreignCard(at: escapeID, in: store)
+        let claim = try await armedClaim(id: captureID, publicationState: .phaseOneFailed)
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            claim, transcript: nil, store: store, queue: queue
+        )
+
+        XCTAssertEqual(outcome, .retryKept(.noTranscript))
+        XCTAssertFalse(outcome.isTerminal, "nothing was written, so nothing may be released")
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(
+            Set(desk.materials.map(\.id)), [captureID, escapeID],
+            "no recording, and no note of silence beside two cards that are not this capture's"
+        )
+        let stillWaiting = await queuedRecord(captureID)
+        let queued = try XCTUnwrap(stillWaiting, "the capture is still waiting")
+        XCTAssertEqual(
+            queued.publicationState, .phaseOneFailed,
+            "the desk never took the recording, so the verdict that protects it is unchanged"
+        )
+        XCTAssertTrue(queued.isExemptFromExpiry, "…and a clock may not delete the only copy")
+    }
+
+    /// The state an escape leaves behind, recovered again in another process:
+    /// the recording is standing under the ESCAPE id and the verdict says the
+    /// desk holds it. A recovery that looked only at the capture id would find
+    /// the foreign card, read it as "no recording of mine", and write the words
+    /// into a note beside a card that was there to carry them.
+    func testALaterRecoveryFindsTheRecordingUnderTheEscapeItAlreadyTook() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
+        _ = try await Self.foreignCard(at: captureID, in: store)
+        _ = try await Self.publish(captureID: escapeID, in: store)
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            Self.claim(id: captureID, publicationState: .published),
+            transcript: "the ferry leaves at seven",
+            store: store,
+            queue: queue
+        )
+
+        XCTAssertEqual(outcome, .attached, "nothing was republished; the recording was already there")
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(
+            Set(desk.materials.map(\.id)), [captureID, escapeID],
+            "no note: the words found the recording they came from"
+        )
+        XCTAssertEqual(
+            desk.materials.first { $0.id == escapeID }?.textContent,
+            "the ferry leaves at seven"
+        )
+        XCTAssertNil(desk.materials.first { $0.id == captureID }?.textContent)
+    }
+
+    // MARK: - recover: what it records about the capture it finished
+
+    /// r5a#6. A republication with no words yet answers `.retryKept`, so the
+    /// entry stays armed — and an entry still saying the desk refused this
+    /// recording is exempt from expiry for ever AND licenses the next retry to
+    /// republish a card the person may have deleted in between. The verdict is
+    /// recorded the moment it is true.
+    func testARepublicationWithNoWordsRecordsThatTheDeskHoldsTheRecording() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        let claim = try await armedClaim(id: captureID, publicationState: .phaseOneFailed)
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            claim, transcript: nil, store: store, queue: queue
+        )
+
+        XCTAssertEqual(outcome, .retryKept(.noTranscript))
+        XCTAssertFalse(outcome.isTerminal, "recognition still owes this capture its words")
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        let card = try XCTUnwrap(desk.materials.first)
+        XCTAssertEqual(card.id, captureID)
+        XCTAssertEqual(card.kind, .audio)
+        XCTAssertNil(card.textContent, "the card is honestly wordless until they arrive")
+
+        let stillWaiting = await queuedRecord(captureID)
+        let queued = try XCTUnwrap(stillWaiting, "the capture is still waiting")
+        XCTAssertEqual(
+            queued.publicationState, .published,
+            """
+            The recording IS on the desk now. Left at `.phaseOneFailed`, a later \
+            retry reads the absence of a card the person has since deleted as a \
+            refused write and puts it back.
+            """
+        )
+        XCTAssertNil(queued.transcript, "a nil transcript keeps what the record already carried")
+        XCTAssertFalse(
+            queued.isExemptFromExpiry,
+            "…and the recording no longer exists only here, so the clock may govern it again"
+        )
+    }
+
+    /// The words the entry already carries are the ones a surface with none of
+    /// its own recovers with. Leaving them in the entry buys the same answer
+    /// from the provider a second time, and answers `.noTranscript` over a
+    /// capture whose words were never missing.
+    func testTheWordsAlreadyParkedFinishACaptureWhenTheSurfaceHasNone() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        _ = try await Self.publish(captureID: captureID, in: store)
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            Self.claim(
+                id: captureID,
+                transcript: "the ferry leaves at seven",
+                publicationState: .published
+            ),
+            transcript: nil,
+            store: store,
+            queue: queue
+        )
+
+        XCTAssertEqual(outcome, .attached)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.first?.textContent, "the ferry leaves at seven")
+    }
+
     // MARK: - recover: what must NOT be terminal
 
     func testAStoreThatRefusesTheAttachRethrowsSoTheCallerKeepsItsRetry() async throws {
@@ -254,9 +548,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
 
         do {
             _ = try await WorkVoiceCaptureCoordinator.recover(
-                Self.record(id: UUID(), publicationState: .published),
+                Self.claim(id: UUID(), publicationState: .published),
                 transcript: "words that reached nothing",
-                store: broken
+                store: broken,
+                queue: queue
             )
             XCTFail("a write that failed must reach the caller as a throw, not as a terminal outcome")
         } catch {
@@ -272,9 +567,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
 
         do {
             _ = try await WorkVoiceCaptureCoordinator.recover(
-                Self.record(id: UUID(), publicationState: .phaseOneFailed),
+                Self.claim(id: UUID(), publicationState: .phaseOneFailed),
                 transcript: "words for a recording that could not be put back",
-                store: broken
+                store: broken,
+                queue: queue
             )
             XCTFail("a refused republication must not be swallowed into a note-shaped fallback")
         } catch {
@@ -287,9 +583,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let store = ConversationStore(inMemory: true)
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.record(id: UUID(), destination: .chat, publicationState: nil),
+            Self.claim(id: UUID(), destination: .chat, publicationState: nil),
             transcript: "a conversation turn, not a card",
-            store: store
+            store: store,
+            queue: queue
         )
 
         XCTAssertEqual(outcome, .retryKept(.notAWorkCapture))
@@ -304,9 +601,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let published = try await Self.publish(captureID: captureID, in: store)
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.record(id: captureID, publicationState: .published),
+            Self.claim(id: captureID, publicationState: .published),
             transcript: "   \n  ",
-            store: store
+            store: store,
+            queue: queue
         )
 
         XCTAssertEqual(outcome, .retryKept(.noTranscript))
@@ -330,9 +628,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let captureID = UUID()
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.record(id: captureID, publicationState: .phaseOneFailed),
+            Self.claim(id: captureID, publicationState: .phaseOneFailed),
             transcript: "   \n  ",
-            store: store
+            store: store,
+            queue: queue
         )
 
         XCTAssertEqual(
@@ -361,13 +660,13 @@ final class WorkVoiceRecoveryTests: XCTestCase {
     func testARepeatedRecoveryLandsOnTheNoteItAlreadyPublished() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
-        let record = Self.record(id: captureID, publicationState: .published)
+        let record = Self.claim(id: captureID, publicationState: .published)
 
         let first = try await WorkVoiceCaptureCoordinator.recover(
-            record, transcript: "said once", store: store
+            record, transcript: "said once", store: store, queue: queue
         )
         let second = try await WorkVoiceCaptureCoordinator.recover(
-            record, transcript: "said once", store: store
+            record, transcript: "said once", store: store, queue: queue
         )
 
         XCTAssertEqual(first, .fallbackNotePublished)
@@ -497,8 +796,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
     func testASecondCaptureIsQueuedBesideTheFirstRatherThanReplacingIt() async throws {
         let store = ConversationStore(inMemory: true)
         let chatBytes = Data(repeating: 0x11, count: 32)
-        let chat = Self.record(id: UUID(), destination: .chat, publicationState: nil)
-        let lane = RecordingRetryLane(seeded: chat.metadata, audio: chatBytes)
+        let chat = Self.claim(id: UUID(), destination: .chat, publicationState: nil)
+        let lane = RecordingRetryLane(seeded: chat.entry.metadata, audio: chatBytes)
         let recorder = Self.workRecorder(store: store, lane: lane)
         recorder.transcriptionHopForTesting = { _ in .failure(.sttProviderUnreachable) }
 
@@ -509,7 +808,7 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         )
         let queued = await lane.queued
         XCTAssertEqual(
-            Set(queued.map(\.id)), [chat.metadata.id, workID],
+            Set(queued.map(\.id)), [chat.id, workID],
             """
             BOTH captures are waiting. On a single overwriting slot the arriving \
             Work record deleted the Chat recording, whose bytes exist nowhere \
@@ -517,7 +816,7 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             capture's words instead. A queue owes neither.
             """
         )
-        let survivingChatAudio = await lane.audio(id: chat.metadata.id)
+        let survivingChatAudio = await lane.audio(id: chat.id)
         XCTAssertEqual(
             survivingChatAudio, chatBytes,
             "…and the incumbent's bytes are the ones it was armed with, not a rewrite"
@@ -538,36 +837,44 @@ final class WorkVoiceRecoveryTests: XCTestCase {
     @MainActor
     func testTwoQueuedCapturesEachFinishOntoTheirOwnCard() async throws {
         let store = ConversationStore(inMemory: true)
-        let first = Self.record(id: UUID(), publicationState: .phaseOneFailed)
-        let second = Self.record(id: UUID(), publicationState: .phaseOneFailed)
+        let first = Self.claim(id: UUID(), publicationState: .phaseOneFailed)
+        let second = Self.claim(id: UUID(), publicationState: .phaseOneFailed)
         let lane = RecordingRetryLane()
-        try await lane.save(audioData: first.audio, metadata: first.metadata, workImageData: nil)
-        try await lane.save(audioData: second.audio, metadata: second.metadata, workImageData: nil)
+        try await lane.save(
+            audioData: first.entry.audioData,
+            metadata: first.entry.metadata,
+            workImageData: nil
+        )
+        try await lane.save(
+            audioData: second.entry.audioData,
+            metadata: second.entry.metadata,
+            workImageData: nil
+        )
 
         let firstOutcome = try await WorkVoiceCaptureCoordinator.recover(
-            first, transcript: "the ferry leaves at seven", store: store
+            first, transcript: "the ferry leaves at seven", store: store, queue: queue
         )
         XCTAssertTrue(firstOutcome.isTerminal)
-        _ = await lane.clear(ifCurrentID: first.metadata.id)
+        _ = await lane.clear(ifCurrentID: first.id)
 
         let stillQueued = await lane.queued
         XCTAssertEqual(
-            stillQueued.map(\.id), [second.metadata.id],
+            stillQueued.map(\.id), [second.id],
             "clearing one completed capture removes exactly that one"
         )
 
         let secondOutcome = try await WorkVoiceCaptureCoordinator.recover(
-            second, transcript: "ask about the bikes", store: store
+            second, transcript: "ask about the bikes", store: store, queue: queue
         )
         XCTAssertTrue(secondOutcome.isTerminal)
-        _ = await lane.clear(ifCurrentID: second.metadata.id)
+        _ = await lane.clear(ifCurrentID: second.id)
 
         let emptied = await lane.queued
         XCTAssertTrue(emptied.isEmpty)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(
-            Set(desk.materials.map(\.id)), [first.metadata.id, second.metadata.id],
+            Set(desk.materials.map(\.id)), [first.id, second.id],
             "two captures, two playable cards — neither recovery landed on the other's"
         )
         XCTAssertTrue(desk.materials.allSatisfy { $0.kind == .audio })
@@ -584,8 +891,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let broken = try Self.unusableStore()
         let refuses = await Self.refusesWrites(broken)
         XCTAssertTrue(refuses)
-        let chat = Self.record(id: UUID(), destination: .chat, publicationState: nil)
-        let lane = RecordingRetryLane(seeded: chat.metadata, audio: Data(repeating: 0x11, count: 32))
+        let chat = Self.claim(id: UUID(), destination: .chat, publicationState: nil)
+        let lane = RecordingRetryLane(seeded: chat.entry.metadata, audio: Data(repeating: 0x11, count: 32))
         let recorder = Self.workRecorder(store: broken, lane: lane)
         recorder.transcriptionHopForTesting = { _ in .success("never reached") }
 
@@ -599,10 +906,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let parked = await lane.armed
         let armed = try XCTUnwrap(parked)
         XCTAssertNotEqual(
-            armed.id, chat.metadata.id,
+            armed.id, chat.id,
             "the newest capture is the one the retry card offers first"
         )
-        let chatStillQueued = await lane.entry(id: chat.metadata.id)
+        let chatStillQueued = await lane.entry(id: chat.id)
         XCTAssertNotNil(
             chatStillQueued,
             "and the Chat capture, whose recording exists nowhere else, is still queued behind it"
@@ -677,25 +984,105 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         return recorder
     }
 
-    private static func record(
+    private static func metadata(
         id: UUID,
+        createdAt: Date = Date(timeIntervalSince1970: 1_700_000_000),
         destination: PendingRetryDestination = .work,
         transcript: String? = nil,
         publicationState: PendingRetryPublicationState?
-    ) -> PendingRetryRecord {
-        PendingRetryRecord(
-            metadata: PendingRetryMetadata(
+    ) -> PendingRetryMetadata {
+        PendingRetryMetadata(
+            id: id,
+            createdAt: createdAt,
+            audioFileURL: URL(fileURLWithPath: "/dev/null"),
+            preferredLanguage: nil,
+            attemptCount: 1,
+            lastErrorCode: AppError.workDeskWriteFailed.errorCode,
+            destination: destination,
+            transcript: transcript,
+            publicationState: publicationState
+        )
+    }
+
+    /// A claim made by hand, carrying a token no store issued.
+    ///
+    /// It is everything the desk decision needs — the record and the parked
+    /// bytes — and nothing the QUEUE would honour, so a verdict written against
+    /// it is refused and changes nothing. That is exactly right for the cases
+    /// whose subject is what lands on the desk; the cases whose subject is what
+    /// `recover` records take `armedClaim` instead.
+    private static func claim(
+        id: UUID,
+        destination: PendingRetryDestination = .work,
+        transcript: String? = nil,
+        publicationState: PendingRetryPublicationState?,
+        audio: Data = recordingBytes
+    ) -> PendingRetryClaim {
+        PendingRetryClaim(
+            entry: PendingRetryEntry(
+                audioData: audio,
+                metadata: metadata(
+                    id: id,
+                    destination: destination,
+                    transcript: transcript,
+                    publicationState: publicationState
+                ),
+                workImageData: nil
+            ),
+            token: UUID()
+        )
+    }
+
+    /// A capture armed in THIS case's own queue and reserved through the real
+    /// claim API, so the lease token is live and what `recover` records is
+    /// readable back off disk.
+    private func armedClaim(
+        id: UUID = UUID(),
+        destination: PendingRetryDestination = .work,
+        transcript: String? = nil,
+        publicationState: PendingRetryPublicationState?
+    ) async throws -> PendingRetryClaim {
+        try await queue.save(
+            audioData: Self.recordingBytes,
+            // Armed NOW, not at the fixture's fixed instant: recording a
+            // `.published` verdict makes a Work capture expirable again, and an
+            // entry armed in 2023 would be swept before it could be read back.
+            metadata: Self.metadata(
                 id: id,
-                createdAt: Date(timeIntervalSince1970: 1_700_000_000),
-                audioFileURL: URL(fileURLWithPath: "/dev/null"),
-                preferredLanguage: nil,
-                attemptCount: 1,
-                lastErrorCode: AppError.workDeskWriteFailed.errorCode,
+                createdAt: Date(),
                 destination: destination,
                 transcript: transcript,
                 publicationState: publicationState
             ),
-            audio: recordingBytes
+            workImageData: nil
+        )
+        let reserved = await queue.claimNext(surface: destination)
+        return try XCTUnwrap(reserved, "the capture just armed must be claimable")
+    }
+
+    /// What the queue says about one capture now — the durable copy, read back
+    /// through the store rather than from the claim the case is holding.
+    private func queuedRecord(_ id: UUID) async -> PendingRetryMetadata? {
+        await queue.load().first { $0.metadata.id == id }?.metadata
+    }
+
+    /// A card of another kind standing at `id`, which is what makes the desk
+    /// write refuse a recording published there.
+    @discardableResult
+    private static func foreignCard(
+        at id: UUID,
+        in store: ConversationStore,
+        bytes: Data = Data(repeating: 0x2A, count: 64)
+    ) async throws -> WorkMaterialRecord {
+        try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                id: id,
+                kind: .image,
+                title: "screenshot.jpg",
+                filename: "screenshot.jpg",
+                mimeType: "image/jpeg",
+                payload: bytes
+            )
         )
     }
 

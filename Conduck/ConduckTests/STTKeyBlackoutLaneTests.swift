@@ -151,6 +151,13 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         /// The function whose body is scoped — an unscoped `contains` over a
         /// 1,500-line file is satisfied by any unrelated statement in it.
         let function: String
+        /// Set when the lane's ENTRY function no longer holds the key verdict
+        /// itself but hands the reserved capture to one helper that does. The
+        /// arms are then asserted over the HELPER's body, and the entry's body
+        /// must be shown to call it — so the chain is pinned end to end rather
+        /// than one half of it being asserted about a function that no longer
+        /// decides anything.
+        let delegatesTo: String?
         /// The typed read this lane resolves its verdict through.
         let typedRead: String
         /// The provable-absence arm. Its copy is true, so it keeps code 23.
@@ -162,6 +169,24 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         let preservation: String?
         /// Why this lane is on the list.
         let note: String
+
+        init(path: String,
+             function: String,
+             delegatesTo: String? = nil,
+             typedRead: String,
+             absenceArm: String,
+             blackoutArm: String,
+             preservation: String?,
+             note: String) {
+            self.path = path
+            self.function = function
+            self.delegatesTo = delegatesTo
+            self.typedRead = typedRead
+            self.absenceArm = absenceArm
+            self.blackoutArm = blackoutArm
+            self.preservation = preservation
+            self.note = note
+        }
     }
 
     private static let lanes: [Lane] = [
@@ -224,6 +249,12 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         // keeping the retry affordance alive is.
         Lane(path: "Conduck/MenuBar/DictationService.swift",
              function: "retryLast",
+             // `retryLast` reserves ONE capture out of the queue and hands it
+             // to `attemptRetry`, which is where the key verdict now lives.
+             // The reservation is why the split exists: releasing it has to be
+             // one statement in the caller rather than a duty every early
+             // return in the verdict remembers.
+             delegatesTo: "attemptRetry",
              typedRead: "STTKeyReadiness.resolve",
              absenceArm: ".sttMissingAPIKey",
              blackoutArm: ".sttKeyUnreadable",
@@ -233,6 +264,8 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         // and the card's sentence is the whole surface.
         Lane(path: "Conduck/ContentView.swift",
              function: "runPendingRetry",
+             // Same split, same reason as the menu bar's.
+             delegatesTo: "attemptPendingRetry",
              typedRead: "STTKeyReadiness.resolve",
              absenceArm: "No STT API key set",
              blackoutArm: ".sttKeyUnreadable",
@@ -272,7 +305,21 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         for lane in Self.lanes {
             let label = "\(lane.path) → \(lane.function) (\(lane.note))"
             let source = try RefusalLaneSource.source(at: lane.path)
-            let body = try RefusalLaneSource.body(ofFunction: lane.function, in: source, path: lane.path)
+            let entry = try RefusalLaneSource.body(ofFunction: lane.function, in: source, path: lane.path)
+
+            // A lane that delegates must be shown to REACH its helper, or the
+            // arms below would be asserted about a function nothing calls.
+            let body: String
+            if let helper = lane.delegatesTo {
+                XCTAssertNotNil(
+                    entry.range(of: "\(helper)("),
+                    "\(label) no longer calls `\(helper)(`. The key verdict lives there, so an entry "
+                    + "that stopped reaching it refuses without ever reading the slot — and this guard "
+                    + "would go on asserting about dead code.")
+                body = try RefusalLaneSource.body(ofFunction: helper, in: source, path: lane.path)
+            } else {
+                body = entry
+            }
 
             let readAt = try XCTUnwrap(
                 body.range(of: lane.typedRead)?.lowerBound,

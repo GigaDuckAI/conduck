@@ -10,6 +10,12 @@ import SwiftUI
 /// modes since both share the same recovery affordance ("tap Retry, we'll
 /// re-run whatever was saved"). Routing happens inside `PendingRetryRunner`,
 /// not here.
+///
+/// It speaks for a QUEUE, not for one recording. Retry takes the newest
+/// waiting capture and the card stays up for whatever is behind it, so the
+/// count has to be visible: without it a person who parked three recordings
+/// sees one card, retries once, and reads the card that is still there as a
+/// retry that failed silently.
 struct PendingRetryCard: View {
     let isRetrying: Bool
     let retryErrorMessage: String?
@@ -31,6 +37,22 @@ struct PendingRetryCard: View {
     /// help with (the failable `DiagnosticsFocus` init is the single filter,
     /// applied by the host). nil → no button (nil code or non-troubleshootable).
     var troubleshootFocus: DiagnosticsFocus? = nil
+    /// How many recordings are waiting, the one this card's Retry would take
+    /// included. Rendered only ABOVE one: at exactly one the headline already
+    /// says a recording is waiting, and "1 recording waiting" beside it is the
+    /// same sentence twice.
+    let pendingCount: Int
+    /// Delete the recording this card's Retry would take. Confirmed here rather
+    /// than by the host, because the confirmation belongs beside the button and
+    /// every host would otherwise write its own.
+    ///
+    /// It exists because a Work capture the desk never accepted is exempt from
+    /// the transcription TTL — those bytes are the only copy of what somebody
+    /// said, so nothing expires them — and without this the only way to be rid
+    /// of one is to discard every waiting recording from Settings.
+    let onDiscard: () -> Void
+
+    @State private var confirmingDiscard = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -69,6 +91,19 @@ struct PendingRetryCard: View {
                 }
             }
 
+            // What Retry does NOT say: that there is more than one of these.
+            // The button takes the newest, so a card that stays up afterwards
+            // has to have said why in advance.
+            if pendingCount > 1 {
+                Text(String(
+                    localized: "pendingRetry.card.count",
+                    defaultValue: "\(pendingCount) recordings waiting"
+                ))
+                .font(.caption2)
+                .foregroundStyle(AppColors.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             if let retryErrorMessage {
                 Text(retryErrorMessage)
                     .font(.caption2)
@@ -77,15 +112,60 @@ struct PendingRetryCard: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
-            // "Get help" affordance beneath Retry — the home-screen sibling of
-            // the conversation banner's Troubleshoot button, shown only when the
-            // failure has a code Diagnostics can help with.
-            if let troubleshootFocus {
-                TroubleshootButton(focus: troubleshootFocus)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 16) {
+                // "Get help" affordance beneath Retry — the home-screen sibling
+                // of the conversation banner's Troubleshoot button, shown only
+                // when the failure has a code Diagnostics can help with.
+                if let troubleshootFocus {
+                    TroubleshootButton(focus: troubleshootFocus)
+                }
+
+                Button(role: .destructive) {
+                    confirmingDiscard = true
+                } label: {
+                    Text(String(
+                        localized: "pendingRetry.card.discard",
+                        defaultValue: "Discard recording"
+                    ))
+                    .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(AppColors.textSecondary)
+                .disabled(isRetrying)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(16)
         .glassCardBackground(borderColor: AppColors.sunsetOrange.opacity(0.4))
+        .confirmationDialog(
+            String(
+                localized: "pendingRetry.card.discard.confirm.title",
+                defaultValue: "Discard this recording?"
+            ),
+            isPresented: $confirmingDiscard,
+            titleVisibility: .visible
+        ) {
+            Button(
+                String(
+                    localized: "pendingRetry.card.discard.confirm.action",
+                    defaultValue: "Discard"
+                ),
+                role: .destructive
+            ) {
+                onDiscard()
+            }
+            Button(
+                String(localized: "common.cancel", defaultValue: "Cancel"),
+                role: .cancel
+            ) { }
+        } message: {
+            Text(String(
+                localized: "pendingRetry.card.discard.confirm.body",
+                defaultValue: """
+                    This deletes the recording from this device. It cannot be \
+                    recovered.
+                    """
+            ))
+        }
     }
 }

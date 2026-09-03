@@ -136,6 +136,121 @@ final class PendingRetryDestinationTests: XCTestCase {
         XCTAssertEqual(decoded.resolvedDestination, .work)
     }
 
+    // MARK: - The per-entry record beside the bytes
+
+    /// The record's own wire shape. Its whole job is to describe a capture
+    /// whose index row did not commit, so it has to carry every field the
+    /// metadata does — and it is read on a launch that follows a crash, which
+    /// is exactly when a decode failure costs a recording.
+    func testTheRecordBesideTheBytesCarriesTheWholeMetadataAndItsReservation() throws {
+        let metadata = PendingRetryMetadata(
+            id: UUID(),
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            audioFileURL: URL(fileURLWithPath: "/tmp/work.m4a"),
+            preferredLanguage: "et",
+            attemptCount: 4,
+            lastErrorCode: AppError.workDeskWriteFailed.errorCode,
+            destination: .work,
+            transcript: "the ferry leaves at seven",
+            publicationState: .phaseOneFailed
+        )
+        let lease = PendingRetryLease(
+            token: UUID(),
+            expiresAt: Date(timeIntervalSince1970: 1_700_000_600)
+        )
+
+        let decoded = try JSONDecoder().decode(
+            PendingRetrySidecar.self,
+            from: JSONEncoder().encode(PendingRetrySidecar(metadata: metadata, lease: lease))
+        )
+
+        XCTAssertEqual(decoded.metadata.id, metadata.id)
+        XCTAssertEqual(decoded.metadata.transcript, "the ferry leaves at seven")
+        XCTAssertEqual(decoded.metadata.publicationState, .phaseOneFailed)
+        XCTAssertEqual(decoded.metadata.preferredLanguage, "et")
+        XCTAssertEqual(decoded.metadata.attemptCount, 4)
+        XCTAssertEqual(decoded.lease?.token, lease.token)
+        XCTAssertEqual(decoded.lease?.expiresAt, lease.expiresAt)
+    }
+
+    private struct UnreservedSidecar: Codable {
+        let metadata: PendingRetryMetadata
+    }
+
+    /// The reservation is OPTIONAL on the wire for the same reason every other
+    /// added field is: a record written before it existed, or written by a
+    /// capture nobody is holding, has to decode — as "nobody holds this", which
+    /// is the answer that lets the next surface take it.
+    func testARecordWithNoReservationDecodesAsUnheld() throws {
+        let metadata = PendingRetryMetadata(
+            id: UUID(),
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            audioFileURL: URL(fileURLWithPath: "/tmp/chat.m4a"),
+            preferredLanguage: nil,
+            attemptCount: 1,
+            lastErrorCode: nil
+        )
+
+        let decoded = try JSONDecoder().decode(
+            PendingRetrySidecar.self,
+            from: JSONEncoder().encode(UnreservedSidecar(metadata: metadata))
+        )
+
+        XCTAssertNil(decoded.lease)
+        XCTAssertEqual(decoded.metadata.resolvedDestination, .chat)
+    }
+
+    func testAReservationIsLiveUntilItsInstantAndNotAfter() {
+        let expiry = Date(timeIntervalSince1970: 1_700_000_600)
+        let lease = PendingRetryLease(token: UUID(), expiresAt: expiry)
+
+        XCTAssertTrue(lease.isLive(at: expiry.addingTimeInterval(-1)))
+        XCTAssertFalse(lease.isLive(at: expiry))
+        XCTAssertFalse(lease.isLive(at: expiry.addingTimeInterval(1)))
+    }
+
+    // MARK: - One capture's filenames name one capture
+
+    func testEveryPayloadNameRoundTripsToTheCaptureItBelongsTo() {
+        let id = UUID()
+
+        XCTAssertEqual(PendingRetryFiles.sidecarID(PendingRetryFiles.sidecar(id)), id)
+        XCTAssertEqual(PendingRetryFiles.tombstoneID(PendingRetryFiles.tombstone(id)), id)
+        XCTAssertEqual(PendingRetryFiles.workImageID(PendingRetryFiles.workImage(id)), id)
+        for destination in PendingRetryDestination.allCases {
+            let parsed = PendingRetryFiles.audioID(PendingRetryFiles.audio(id, destination))
+            XCTAssertEqual(parsed?.id, id)
+            XCTAssertEqual(parsed?.destination, destination)
+        }
+        let transitional = PendingRetryFiles.audioID(PendingRetryFiles.transitionalAudio(id))
+        XCTAssertEqual(transitional?.id, id)
+        XCTAssertNil(
+            transitional?.destination,
+            "the transitional name declares none, so its capture resolves to Chat"
+        )
+    }
+
+    /// The invariant behind a recording that was deleted by a capture that did
+    /// not own it: the pre-id-scoped name matches NOTHING this store scans for,
+    /// so no adoption, no reclamation and no per-capture deletion can reach it.
+    /// Its bytes are copied under an id by the reconciliation instead.
+    func testThePreIdScopedRecordingIsNamedByNoCapture() {
+        let name = PendingRetryFiles.legacyAudioName
+
+        XCTAssertNil(PendingRetryFiles.audioID(name))
+        XCTAssertNil(PendingRetryFiles.sidecarID(name))
+        XCTAssertNil(PendingRetryFiles.tombstoneID(name))
+        XCTAssertNil(PendingRetryFiles.workImageID(name))
+        XCTAssertFalse(
+            PendingRetryFiles.isRetryFile(name),
+            "a sweep that could reach it would delete a recording no entry can name"
+        )
+        XCTAssertFalse(
+            PendingRetryFiles.isRetryFile(PendingRetryFiles.lockName),
+            "and neither may a sweep reach the lock every process serializes on"
+        )
+    }
+
     @MainActor
     func testInAppRecorderDefaultsToChatAndWorkCaptureOptsIntoWork() {
         XCTAssertEqual(InAppAudioRecorder().retryDestination, .chat)

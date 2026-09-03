@@ -302,6 +302,59 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
                           + "and hand the user a Retry that reaches the same emptiness.")
     }
 
+    /// The recovery is handed the capture this process ARMED, never one it
+    /// selected out of the queue.
+    ///
+    /// `recover` takes a reservation because a retry SURFACE holds one — a
+    /// capture it picked out of a queue several processes write. This process
+    /// picked nothing: it minted the id, wrote the entry and still holds the
+    /// only in-memory copy of the bytes and the phase-one verdict. Reaching for
+    /// the store's selection primitive here would be wrong twice over. It
+    /// answers "the newest UNRESERVED capture", which is not this capture
+    /// whenever anything armed after it — so an intent could put a ten-minute
+    /// hold on a recording it will never finish. And a hold this process took
+    /// would survive the OS kill this whole guard exists for: the deferred
+    /// "Recording Saved" notice fires at 90 s telling the user to tap and retry,
+    /// while their entry stayed unclaimable for 600.
+    ///
+    /// A source guard for the same reason as everything else in this file: the
+    /// Shortcuts lane cannot be driven here, and this is a matter of WHICH value
+    /// a call is given.
+    func testTheIntentHandsTheRecoveryTheCaptureItArmedRatherThanOneItSelected() throws {
+        let source = try RefusalLaneSource.source(at: Self.intentPath)
+        let body = try RefusalLaneSource.body(ofFunction: "perform", in: source, path: Self.intentPath)
+
+        XCTAssertFalse(
+            source.contains("claimNext("),
+            "The Shortcuts lane now RESERVES a capture out of the queue. It answers the newest "
+            + "unreserved one, which is not the capture this process armed whenever anything armed "
+            + "after it — and a reservation taken here outlives the OS kill the guard exists for, "
+            + "leaving the entry unclaimable for ten minutes while the 90-second notice invites the "
+            + "user to retry it."
+        )
+        let heldAt = try XCTUnwrap(
+            body.range(of: "Self.heldCapture(")?.lowerBound,
+            "`perform()` no longer builds the capture it hands the recovery from its OWN record and "
+            + "bytes. Whatever it passes instead was read from somewhere, and this process is the "
+            + "one place that does not need to read it."
+        )
+        let recoverAt = try XCTUnwrap(
+            body.range(of: "WorkVoiceCaptureCoordinator.recover(")?.lowerBound,
+            "The Work lane no longer makes its desk decision through the shared recovery."
+        )
+        XCTAssertLessThan(heldAt, recoverAt)
+
+        // The verdict this lane writes is its own, at the id it minted — the
+        // half of the bookkeeping a claim would otherwise carry.
+        XCTAssertTrue(
+            body.contains("Self.recordRecoveryState("),
+            "`perform()` stopped writing the publication verdict to the queue entry. Nothing else "
+            + "writes it on this lane — the recovery's own write is refused, because the value this "
+            + "process hands it names no reservation — so a retry an app launch later cannot tell a "
+            + "recording the desk never took from a card the person deleted."
+        )
+    }
+
     // MARK: - Rule 2 — the span reaches past the destination
 
     /// The refusal that costs the user their words is thrown by

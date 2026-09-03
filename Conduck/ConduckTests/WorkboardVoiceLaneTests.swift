@@ -114,16 +114,32 @@ enum WorkVoiceIntentLaneValidator {
         // payload to further durable writes over time, and it may never hand a
         // different one to any of them. Three is the floor a capture cannot do
         // without — the retry copy, the card, the record it is recovered from.
-        let payloads = body.components(separatedBy: "audio: ").dropFirst()
+        //
+        // Two labels, one handoff: `audio:` is what the guard and the desk
+        // publication take, `audioData:` what a queue ENTRY takes. The rule is
+        // about which bytes are handed over, never about which label carries
+        // them, so a lane that packages its record differently is not thereby
+        // exempt from it.
+        let payloads = ["audio: ", "audioData: "].flatMap {
+            body.components(separatedBy: $0).dropFirst()
+        }
         if payloads.count < 3 || payloads.contains(where: { !$0.hasPrefix("uploadData") }) {
             found.insert(.onePayloadForEveryUse)
         }
 
         if !body.contains(".phaseOneFailed") { found.insert(.aRefusedPublicationIsRecorded) }
 
-        let carried = arguments(of: "PendingRetryRecord(", in: body)
+        // Read off the RECOVERY's own first argument rather than off a type
+        // name: whatever wraps the capture — a record, a claim over its queue
+        // entry — the value handed over has to be built from THIS capture's
+        // metadata and THIS capture's bytes. Built inline at the call, or bound
+        // just above it; both are read the same way. Naming the wrapper here is
+        // how a rule about which VALUE is carried turns into a rule about a
+        // type, which the next refactor renames out from under it.
+        let handed = firstArgument(of: recover, in: body)
+        let carried = handed.flatMap { $0.contains("(") ? $0 : binding(of: $0, in: body) }
         if carried?.contains("pendingMetadata") != true
-            || carried?.contains("audio: uploadData") != true {
+            || carried?.contains("uploadData") != true {
             found.insert(.theRecoveryCarriesTheCapturesRecord)
         }
 
@@ -148,6 +164,43 @@ enum WorkVoiceIntentLaneValidator {
         }
 
         return found
+    }
+
+    /// The first argument of `call`, trimmed — the text up to the first comma
+    /// that is not inside a nested call.
+    static func firstArgument(of call: String, in body: String) -> String? {
+        guard let args = arguments(of: call, in: body) else { return nil }
+        var depth = 0
+        var index = args.startIndex
+        while index < args.endIndex {
+            let character = args[index]
+            if character == "(" || character == "[" { depth += 1 }
+            if character == ")" || character == "]" { depth -= 1 }
+            if character == ",", depth == 0 { break }
+            index = args.index(after: index)
+        }
+        return String(args[args.startIndex..<index])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The right-hand side of `let <name> = …`, to the end of the call it
+    /// builds. Nil when nothing binds that name, which the caller reports as a
+    /// violation rather than passing silently.
+    static func binding(of name: String, in body: String) -> String? {
+        guard let assignment = body.range(of: "let \(name) = ") else { return nil }
+        let rest = body[assignment.upperBound...]
+        guard let opening = rest.firstIndex(of: "(") else {
+            return String(rest.prefix { !$0.isNewline })
+        }
+        var index = rest.index(after: opening)
+        var depth = 1
+        while index < rest.endIndex, depth > 0 {
+            if rest[index] == "(" { depth += 1 }
+            if rest[index] == ")" { depth -= 1 }
+            index = rest.index(after: index)
+        }
+        guard depth == 0 else { return nil }
+        return String(rest[rest.startIndex..<index])
     }
 
     /// The paren-matched argument text of `call` (which must end in its `(`).
@@ -471,14 +524,31 @@ final class WorkboardVoiceLaneTests: XCTestCase {
         XCTAssertEqual(PendingRetryAudioFile.extension(for: Self.recordingBytes), "m4a",
                        "unrecognised bytes keep the recorders' native container")
 
-        for (path, function) in Self.retrySurfaces {
-            let body = try Self.functionBody(function, in: path)
-            XCTAssertTrue(
-                body.contains("PendingRetryAudioFile.extension(for: pending.audioData)"),
-                "\(path) names the staged file without reading the bytes it holds."
+        // Anchored on the STAGING itself, not on the function that happens to
+        // contain it: a surface may split its retry across a claim step and an
+        // attempt step, and the rule — every recovered file this surface writes
+        // is named from the bytes it holds — is a property of the staging, not
+        // of a function name. Matched on the argument rather than on the
+        // variable's, for the same reason.
+        for path in Self.retrySurfaces {
+            let text = RefusalLaneSource.stripComments(try Self.source(path))
+            let stagings = Self.ranges(of: "conduck_retry_", in: text)
+            XCTAssertFalse(
+                stagings.isEmpty,
+                "\(path) no longer stages the recovered bytes for the upload at all."
             )
+            for staging in stagings {
+                let expression = String(text[staging.lowerBound...].prefix(240))
+                XCTAssertNotNil(
+                    expression.range(
+                        of: #"PendingRetryAudioFile\.extension\(for: [A-Za-z0-9_.]*audioData\)"#,
+                        options: .regularExpression
+                    ),
+                    "\(path) names a staged file without reading the bytes it holds."
+                )
+            }
             XCTAssertNil(
-                body.range(of: "conduck_retry_\\(UUID().uuidString).m4a"),
+                text.range(of: "conduck_retry_\\(UUID().uuidString).m4a"),
                 "\(path) still hard-codes `.m4a` for whatever container it recovered."
             )
         }
@@ -530,12 +600,20 @@ final class WorkboardVoiceLaneTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    /// The two surfaces that recover a parked Work capture, and the function on
-    /// each that stages the recovered bytes for the upload.
-    private static let retrySurfaces: [(path: String, function: String)] = [
-        (contentViewPath, "runPendingRetry"),
-        (dictationPath, "retryLast"),
-    ]
+    /// The two surfaces that recover a parked Work capture.
+    private static let retrySurfaces = [contentViewPath, dictationPath]
+
+    /// Every range at which `needle` occurs, so a rule can be asserted at each
+    /// site rather than once for the file.
+    private static func ranges(of needle: String, in text: String) -> [Range<String.Index>] {
+        var found: [Range<String.Index>] = []
+        var searchStart = text.startIndex
+        while let range = text.range(of: needle, range: searchStart..<text.endIndex) {
+            found.append(range)
+            searchStart = range.upperBound
+        }
+        return found
+    }
 
     /// Stands in for a compressed 16 kHz mono AAC voice note: small, so the
     /// storage policy picks the synced lane exactly as it does in the app.

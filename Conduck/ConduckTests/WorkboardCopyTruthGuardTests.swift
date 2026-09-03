@@ -30,10 +30,17 @@
 // renders from its `defaultValue:` and can never be translated; a row no
 // source references is dead weight that outlives the surface it was written
 // for. Neither is visible in a diff.
+// (5) THE DISCARD IS THE ONE DESTRUCTIVE AFFORDANCE ON A WORK SURFACE. Nothing
+// reclaims a Work capture the desk never accepted, so the retry card's discard
+// deletes the only copy of what somebody said; its confirmation has to name
+// the device the bytes are on and say they do not come back.
 //
-// Scope is deliberately `workboard.*` only. `intent.workboardCapture.*` is
-// Shortcut-facing identity whose copy legitimately says "without sending it to
-// an AI", and it is declared twice (app and Watch) so the one-target scan
+// Rules (1) to (3) are scoped to `workboard.*`. Rule (4) also covers
+// `pendingRetry.*`, the retry card's own keys: the card is a Work surface, but
+// its queue serves Chat as well, so those rows may legitimately say *sent* and
+// are deliberately kept out of the vocabulary scan. `intent.workboardCapture.*`
+// is Shortcut-facing identity whose copy legitimately says "without sending it
+// to an AI", and it is declared twice (app and Watch) so the one-target scan
 // below cannot see both halves.
 
 import XCTest
@@ -41,6 +48,12 @@ import XCTest
 final class WorkboardCopyTruthGuardTests: XCTestCase {
 
     private static let keyPrefix = "workboard."
+
+    /// The prefixes rule (4) walks in both directions. `pendingRetry.*` joins
+    /// `workboard.*` because the retry card is a Work surface: the keys carry
+    /// the other prefix only because the queue behind them also holds Chat
+    /// captures, and a row nobody references would be just as invisible there.
+    private static let catalogPrefixes = ["workboard.", "pendingRetry."]
 
     /// The one Work-prefixed string that may talk about sending: the menu bar's
     /// Ask button is the CHAT lane, and it really does reach the gateway. It
@@ -110,13 +123,33 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
     }
 
     /// The `en` value of one row, or nil for a row that carries none (a
-    /// bare-English literal whose key IS the string).
+    /// bare-English literal whose key IS the string). A row with plural
+    /// variations has no `stringUnit` of its own; `pluralVariations` reads
+    /// those.
     private func englishValue(_ entry: Any) -> String? {
         guard let entry = entry as? [String: Any],
               let localizations = entry["localizations"] as? [String: Any],
               let english = localizations["en"] as? [String: Any],
               let unit = english["stringUnit"] as? [String: Any] else { return nil }
         return unit["value"] as? String
+    }
+
+    /// The `en` plural categories of one row, keyed by category name, or nil
+    /// for a row that carries a single value.
+    private func pluralVariations(_ entry: Any) -> [String: String]? {
+        guard let entry = entry as? [String: Any],
+              let localizations = entry["localizations"] as? [String: Any],
+              let english = localizations["en"] as? [String: Any],
+              let variations = english["variations"] as? [String: Any],
+              let plural = variations["plural"] as? [String: Any] else { return nil }
+        var values: [String: String] = [:]
+        for (category, body) in plural {
+            if let unit = (body as? [String: Any])?["stringUnit"] as? [String: Any],
+               let value = unit["value"] as? String {
+                values[category] = value
+            }
+        }
+        return values.isEmpty ? nil : values
     }
 
     /// Every `.swift` file in the app target, concatenated. The Watch app and
@@ -264,18 +297,20 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
         )
     }
 
-    // MARK: - (3) Both directions of the catalog
+    // MARK: - (4) Both directions of the catalog
 
     func testEveryWorkKeyInSourceHasACatalogRow() throws {
         let strings = try catalogStrings()
         let source = try appTargetSource()
 
-        for key in workKeys(in: source) {
-            XCTAssertNotNil(
-                strings[key],
-                "\(key) is referenced in the app target but has no catalog row — it would "
-                    + "render from its defaultValue and could never be translated."
-            )
+        for prefix in Self.catalogPrefixes {
+            for key in workKeys(in: source, prefix: prefix) {
+                XCTAssertNotNil(
+                    strings[key],
+                    "\(key) is referenced in the app target but has no catalog row — it would "
+                        + "render from its defaultValue and could never be translated."
+                )
+            }
         }
     }
 
@@ -283,7 +318,8 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
         let strings = try catalogStrings()
         let source = try appTargetSource()
 
-        for key in strings.keys where key.hasPrefix(Self.keyPrefix) {
+        for key in strings.keys
+        where Self.catalogPrefixes.contains(where: { key.hasPrefix($0) }) {
             XCTAssertTrue(
                 source.contains("\"\(key)\""),
                 "\(key) has a catalog row no app-target source references — it outlived "
@@ -292,13 +328,67 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
         }
     }
 
-    /// Every `"workboard.…"` literal in the given text. Work keys are always
+    // MARK: - (5) The one destructive affordance
+
+    /// The retry card's discard deletes bytes nothing else will ever reclaim,
+    /// so its confirmation carries two claims rather than one: WHERE the
+    /// recording is, and that it does not come back. A dialog that says only
+    /// "are you sure?" asks a question the person cannot answer.
+    func testTheDiscardConfirmationSaysWhereTheRecordingIsAndThatItIsGone() throws {
+        let strings = try catalogStrings()
+        let body = try XCTUnwrap(
+            englishValue(try XCTUnwrap(
+                strings["pendingRetry.card.discard.confirm.body"],
+                "the discard confirmation has no catalog row"
+            )),
+            "the discard confirmation must carry an English value"
+        )
+        let lowered = body.lowercased()
+
+        XCTAssertTrue(
+            lowered.contains("this device"),
+            "the recording is in this device's app-group container and syncs nowhere, so the "
+                + "confirmation has to say which device loses it: \(body)"
+        )
+        XCTAssertTrue(
+            lowered.contains("cannot be recovered") || lowered.contains("can't be recovered"),
+            "nothing reclaims a Work capture the desk never accepted, so this is the only "
+                + "copy of what somebody said and the dialog may not imply it can be got "
+                + "back: \(body)"
+        )
+    }
+
+    /// The backlog count renders on the iOS card and, at exactly one, in the
+    /// menu bar's own error state — so a single `%lld recordings waiting` row
+    /// ships "1 recordings waiting" to a Mac user. The catalog carries the
+    /// plural categories; the source `defaultValue:` cannot.
+    func testTheBacklogCountRowCarriesPluralVariations() throws {
+        let strings = try catalogStrings()
+        let variations = try XCTUnwrap(
+            pluralVariations(try XCTUnwrap(
+                strings["pendingRetry.card.count"],
+                "the backlog count has no catalog row"
+            )),
+            "pendingRetry.card.count renders a number and must carry plural variations — "
+                + "MenuBar/DictationService.swift renders it at a count of one."
+        )
+
+        let one = try XCTUnwrap(variations["one"], "the singular category is missing")
+        let other = try XCTUnwrap(variations["other"], "the plural category is missing")
+        XCTAssertFalse(
+            one.contains("recordings"),
+            "the singular category still reads as a plural: \(one)"
+        )
+        XCTAssertTrue(other.contains("recordings"), "the plural category reads as a singular: \(other)")
+    }
+
+    /// Every `"<prefix>…"` literal in the given text. These keys are always
     /// written out in full at the call site, so a literal scan is exact here in
     /// a way it would not be for the catalog's formatted-literal rows.
-    private func workKeys(in source: String) -> Set<String> {
+    private func workKeys(in source: String, prefix: String) -> Set<String> {
         var keys: Set<String> = []
         var remainder = Substring(source)
-        while let open = remainder.range(of: "\"\(Self.keyPrefix)") {
+        while let open = remainder.range(of: "\"\(prefix)") {
             let afterQuote = remainder.index(after: open.lowerBound)
             guard let close = remainder[afterQuote...].firstIndex(of: "\"") else { break }
             let candidate = String(remainder[afterQuote..<close])

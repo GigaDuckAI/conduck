@@ -1,0 +1,588 @@
+// SPDX-License-Identifier: Apache-2.0
+
+// ConduckTests
+// PendingRetryDurabilityTests.swift
+//
+// The DURABLE half of the pending-retry queue: the two write orders, the
+// reconciliation that reads the residue of an interrupted one, and the
+// reservation that stops two retry surfaces finishing the same capture.
+//
+// `PendingRetryQueueTests` drives the queue's pure rules and deliberately
+// touches no file. Everything here needs the opposite — a real directory, a
+// real defaults domain and the actor's own cross-process lock — because the
+// defects these cases pin are all about what is left on disk when a process
+// dies between two writes that cannot be one.
+//
+// Each case runs against an ISOLATED store: its own temporary directory and its
+// own in-memory defaults, through the `CONDUCK_TESTING` initializer. The
+// production singleton writes the process-global App-Group container every
+// other capture test in this bundle shares, so driving it here would assert
+// against — and corrupt — its neighbours' state.
+
+import XCTest
+@testable import Conduck
+
+final class PendingRetryDurabilityTests: XCTestCase {
+
+    private var container: URL!
+    private var defaults: InMemoryDefaultsStore!
+    private var store: PendingRetryStore!
+
+    override func setUp() {
+        super.setUp()
+        container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pending-retry-\(UUID().uuidString)", isDirectory: true)
+        defaults = InMemoryDefaultsStore()
+        store = PendingRetryStore(containerURL: container, defaults: defaults)
+    }
+
+    override func tearDown() {
+        if let container { try? FileManager.default.removeItem(at: container) }
+        store = nil
+        defaults = nil
+        container = nil
+        super.tearDown()
+    }
+
+    // MARK: - An interrupted ARM keeps the whole record
+
+    /// The defect: a recording landed before the index row, so a process death
+    /// in between left an entry the reader could only rebuild from the
+    /// FILENAME — id and destination and nothing else. A refused Work
+    /// publication came back with no verdict, no words and no language, which
+    /// is the state a recovery cannot act on: nil publication state means
+    /// UNKNOWN, so it republishes nothing and re-buys the transcript it was
+    /// already given.
+    func testAnArmInterruptedBeforeTheIndexCommitsKeepsEveryFieldOfItsRecord() async throws {
+        let armed = Self.metadata(
+            destination: .work,
+            preferredLanguage: "et",
+            attemptCount: 3,
+            lastErrorCode: AppError.workDeskWriteFailed.errorCode,
+            transcript: "the ferry leaves at seven",
+            publicationState: .phaseOneFailed
+        )
+        try await store.save(
+            audioData: Data("the recording".utf8),
+            metadata: armed,
+            workImageData: nil
+        )
+
+        // The process died between the bytes and the index row.
+        defaults.removeObject(forKey: PendingRetryDefaultsKeys.queue)
+
+        let adopted = await store.claimNext()
+        let claim = try XCTUnwrap(adopted, "the arm is adopted, not lost")
+        XCTAssertEqual(claim.entry.metadata.id, armed.id)
+        XCTAssertEqual(claim.entry.audioData, Data("the recording".utf8))
+        XCTAssertEqual(
+            claim.entry.metadata.publicationState, .phaseOneFailed,
+            """
+            The verdict is the field a recovery branches on: without it the \
+            desk never gets the recording back, because nil means UNKNOWN and \
+            a recovery must not republish on an unknown.
+            """
+        )
+        XCTAssertEqual(claim.entry.metadata.transcript, "the ferry leaves at seven")
+        XCTAssertEqual(claim.entry.metadata.preferredLanguage, "et")
+        XCTAssertEqual(claim.entry.metadata.attemptCount, 3)
+        XCTAssertEqual(
+            claim.entry.metadata.lastErrorCode, AppError.workDeskWriteFailed.errorCode
+        )
+    }
+
+    /// A record with no recording beside it is an arm that never landed its
+    /// bytes. There is nothing to protect and no retry that could succeed.
+    func testAnArmWhoseBytesNeverLandedLeavesNoWaitingCapture() async throws {
+        let armed = Self.metadata(destination: .work, publicationState: .phaseOneFailed)
+        try await store.save(audioData: Data("bytes".utf8), metadata: armed, workImageData: nil)
+        defaults.removeObject(forKey: PendingRetryDefaultsKeys.queue)
+        try FileManager.default.removeItem(at: audioURL(armed.id, .work))
+
+        let count = await store.pendingCount()
+
+        XCTAssertEqual(count, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarURL(armed.id).path))
+    }
+
+    // MARK: - An interrupted CLEAR stays cleared
+
+    /// The other half of the same defect, and the one that made it
+    /// unresolvable: an interrupted clear left the IDENTICAL residue as an
+    /// interrupted arm — a recording the index does not name — so adoption
+    /// resurrected a capture the person had already finished, and its
+    /// notification and its retry card came back with it.
+    func testAClearInterruptedBeforeTheFilesGoDoesNotBringTheCaptureBack() async throws {
+        let armed = Self.metadata(destination: .work, publicationState: .phaseOneFailed)
+        try await store.save(audioData: Data("finished".utf8), metadata: armed, workImageData: nil)
+
+        // The process died after the tombstone and the index row, before the
+        // payloads: exactly the state `clear` passes through.
+        try Data(armed.id.uuidString.utf8).write(to: tombstoneURL(armed.id))
+        persistIndex([])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL(armed.id).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audioURL(armed.id, .work).path))
+
+        let count = await store.pendingCount()
+        let claim = await store.claimNext()
+
+        XCTAssertEqual(count, 0, "a finished capture does not come back")
+        XCTAssertNil(claim)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarURL(armed.id).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL(armed.id, .work).path))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: tombstoneURL(armed.id).path),
+            "the tombstone is the last file to go, and it goes"
+        )
+    }
+
+    /// The steady state of the current layout: a recording with neither a
+    /// record nor an index row is residue a clear did not finish deleting, and
+    /// it is reclaimed rather than offered.
+    func testARecordingLeftBehindByAFinishedCaptureIsNotResurrected() async throws {
+        // Bring the container up to the current layout first, so the one-time
+        // adoption of the previous one is behind us.
+        _ = await store.pendingCount()
+
+        let stray = UUID()
+        try Data("residue".utf8).write(to: audioURL(stray, .work))
+
+        let count = await store.pendingCount()
+
+        XCTAssertEqual(count, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL(stray, .work).path))
+    }
+
+    // MARK: - The pre-id-scoped recording belongs to one capture
+
+    /// The defect: the fixed-name recording carries no id, so every Chat
+    /// capture resolved to it and every Chat capture's completion deleted it.
+    /// Finishing a capture armed today took a recording parked by a build that
+    /// predates ids.
+    func testTheLegacyRecordingSurvivesAChatCaptureFinishingBesideIt() async throws {
+        let parked = Self.metadata(at: Date().addingTimeInterval(-60), destination: .chat)
+        try Data("what was said before the upgrade".utf8).write(to: legacyAudioURL())
+        defaults.set(try JSONEncoder().encode(parked), forKey: PendingRetryDefaultsKeys.legacySlot)
+
+        let newer = Self.metadata(destination: .chat)
+        try await store.save(audioData: Data("newer".utf8), metadata: newer, workImageData: nil)
+
+        let waiting = await store.pendingCount()
+        XCTAssertEqual(waiting, 2, "the parked capture is folded in beside the new one")
+
+        let offered = await store.claimNext()
+        let claim = try XCTUnwrap(offered)
+        XCTAssertEqual(claim.id, newer.id, "newest first")
+        let cleared = await store.clear(claim)
+        XCTAssertTrue(cleared)
+
+        let remaining = await store.claimNext()
+        let survivor = try XCTUnwrap(
+            remaining,
+            "finishing one capture must not finish another"
+        )
+        XCTAssertEqual(survivor.id, parked.id)
+        XCTAssertEqual(
+            survivor.entry.audioData, Data("what was said before the upgrade".utf8),
+            "its bytes were copied under its own id before anything could reach them"
+        )
+    }
+
+    /// The fold retires both halves of the old shape once the queue carrying
+    /// them is committed, and nothing reads the fixed name afterwards.
+    func testTheFoldRetiresThePointerAndTheFixedNameOnceTheQueueCommits() async throws {
+        let parked = Self.metadata(destination: .chat)
+        try Data("parked".utf8).write(to: legacyAudioURL())
+        defaults.set(try JSONEncoder().encode(parked), forKey: PendingRetryDefaultsKeys.legacySlot)
+
+        let count = await store.pendingCount()
+
+        XCTAssertEqual(count, 1)
+        XCTAssertNil(defaults.data(forKey: PendingRetryDefaultsKeys.legacySlot))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyAudioURL().path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audioURL(parked.id, .chat).path))
+    }
+
+    /// An entry an earlier build folded in without moving the bytes points at
+    /// the fixed name and owns nothing. Its recording is claimed for it once,
+    /// on the first read of the new layout.
+    func testACaptureFoldedInWithoutItsBytesGetsThemOnTheFirstReadOfTheNewLayout() async throws {
+        let folded = Self.metadata(destination: .chat)
+        persistIndex([folded])
+        try Data("still at the fixed name".utf8).write(to: legacyAudioURL())
+
+        let offered = await store.claimNext()
+        let claim = try XCTUnwrap(offered)
+
+        XCTAssertEqual(claim.id, folded.id)
+        XCTAssertEqual(claim.entry.audioData, Data("still at the fixed name".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyAudioURL().path))
+    }
+
+    // MARK: - A claim reads one recording
+
+    /// The defect: both retry surfaces read the whole queue to consume its
+    /// first entry, so a queue of expiry-exempt Work captures materialised
+    /// every one of their recordings — up to `Constants.maxAudioSize` each — to
+    /// offer one.
+    func testClaimingTheNextCaptureReadsExactlyOneRecording() async throws {
+        for _ in 0..<3 {
+            try await store.save(
+                audioData: Data("recording".utf8),
+                metadata: Self.metadata(destination: .work, publicationState: .phaseOneFailed),
+                workImageData: nil
+            )
+        }
+
+        await store.resetAudioReadsForTesting()
+        _ = await store.claimNext()
+        let claimReads = await store.audioReadsForTesting
+
+        await store.resetAudioReadsForTesting()
+        _ = await store.load()
+        let loadReads = await store.audioReadsForTesting
+
+        XCTAssertEqual(claimReads, 1, "one capture is offered, so one recording is read")
+        XCTAssertEqual(
+            loadReads, 3,
+            """
+            The measurement of what `claimNext` replaces: the superseded read \
+            materialises every queued recording to hand back the first one.
+            """
+        )
+    }
+
+    func testCountingWhatIsWaitingReadsNoRecordingAtAll() async throws {
+        for _ in 0..<3 {
+            try await store.save(
+                audioData: Data("recording".utf8),
+                metadata: Self.metadata(destination: .work, publicationState: .phaseOneFailed),
+                workImageData: nil
+            )
+        }
+
+        await store.resetAudioReadsForTesting()
+        let count = await store.pendingCount()
+        let reads = await store.audioReadsForTesting
+
+        XCTAssertEqual(count, 3)
+        XCTAssertEqual(reads, 0, "a count is a question about records, not about bytes")
+    }
+
+    // MARK: - A capture is held by one surface at a time
+
+    /// The defect: the menu bar and the desk's voice sheet both read the queue
+    /// and both took its first entry, so one capture was transcribed twice and
+    /// finished twice — the second completion clearing an entry the first had
+    /// already replaced.
+    func testACaptureAnotherSurfaceIsHoldingIsNotOfferedAgain() async throws {
+        let armed = Self.metadata(destination: .work, publicationState: .phaseOneFailed)
+        try await store.save(audioData: Data("one copy".utf8), metadata: armed, workImageData: nil)
+
+        let offered = await store.claimNext()
+        let first = try XCTUnwrap(offered)
+        let second = await store.claimNext()
+
+        XCTAssertEqual(first.id, armed.id)
+        XCTAssertNil(second, "the other surface is offered nothing while this one holds it")
+    }
+
+    /// A reservation is a horizon, not a lock: a process killed while holding
+    /// one must give the capture back rather than strand it until reinstall.
+    func testAReservationNobodyFinishedIsOfferedAgainOnceItLapses() async throws {
+        let armed = Self.metadata(destination: .work, publicationState: .phaseOneFailed)
+        try await store.save(audioData: Data("one copy".utf8), metadata: armed, workImageData: nil)
+        let offered = await store.claimNext()
+        let first = try XCTUnwrap(offered)
+        let whileHeld = await store.claimNext()
+        XCTAssertNil(whileHeld)
+
+        try lapseReservation(for: armed.id)
+
+        let reoffered = await store.claimNext()
+        let second = try XCTUnwrap(reoffered)
+        XCTAssertEqual(second.id, armed.id)
+        XCTAssertNotEqual(
+            second.token, first.token,
+            "whoever takes it over holds it under their own reservation"
+        )
+    }
+
+    func testReleasingACaptureOffersItAgainAndFinishesNothing() async throws {
+        let armed = Self.metadata(destination: .work, publicationState: .phaseOneFailed)
+        try await store.save(audioData: Data("one copy".utf8), metadata: armed, workImageData: nil)
+        let offered = await store.claimNext()
+        let first = try XCTUnwrap(offered)
+
+        await store.release(first)
+
+        let reoffered = await store.claimNext()
+        let second = try XCTUnwrap(reoffered)
+        XCTAssertEqual(second.id, armed.id)
+        XCTAssertNotEqual(second.token, first.token)
+        let waiting = await store.pendingCount()
+        XCTAssertEqual(waiting, 1, "a release gives a capture back; it does not finish it")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audioURL(armed.id, .work).path))
+    }
+
+    /// The reason every operation takes the claim rather than a bare id: a
+    /// holder that was overtaken must not be able to finish, or restate, a
+    /// capture somebody else is now working on.
+    func testAStaleReservationNeitherRecordsAVerdictNorFinishesTheCapture() async throws {
+        let armed = Self.metadata(
+            destination: .work, attemptCount: 1, publicationState: .phaseOneFailed
+        )
+        try await store.save(audioData: Data("one copy".utf8), metadata: armed, workImageData: nil)
+        let offered = await store.claimNext()
+        let overtaken = try XCTUnwrap(offered)
+        await store.release(overtaken)
+        let reoffered = await store.claimNext()
+        let holder = try XCTUnwrap(reoffered)
+        XCTAssertNotEqual(holder.token, overtaken.token)
+
+        let recorded = await store.recordPublicationState(
+            overtaken, transcript: "not this holder's words", publicationState: .published
+        )
+        let attempted = await store.updateAttempt(overtaken, lastErrorCode: 99)
+        let cleared = await store.clear(overtaken)
+
+        XCTAssertFalse(recorded)
+        XCTAssertFalse(attempted)
+        XCTAssertFalse(cleared)
+
+        let waiting = await store.pendingCount()
+        XCTAssertEqual(waiting, 1, "nothing was finished")
+        let queued = await store.load()
+        let still = try XCTUnwrap(queued.first)
+        XCTAssertNil(still.metadata.transcript, "and nothing was written")
+        XCTAssertEqual(still.metadata.attemptCount, 1)
+        XCTAssertEqual(still.metadata.publicationState, .phaseOneFailed)
+    }
+
+    func testTheHolderRecordsItsVerdictAndFinishesItsOwnCapture() async throws {
+        let armed = Self.metadata(destination: .work, publicationState: .phaseOneFailed)
+        try await store.save(audioData: Data("one copy".utf8), metadata: armed, workImageData: nil)
+        let offered = await store.claimNext()
+        let holder = try XCTUnwrap(offered)
+
+        let recorded = await store.recordPublicationState(
+            holder, transcript: nil, publicationState: .published
+        )
+        XCTAssertTrue(recorded)
+        let queued = await store.load()
+        let restated = try XCTUnwrap(queued.first)
+        XCTAssertEqual(restated.metadata.publicationState, .published)
+        XCTAssertEqual(
+            restated.metadata.transcript, nil,
+            "a nil field keeps what the record already carried"
+        )
+
+        let cleared = await store.clear(holder)
+        XCTAssertTrue(cleared)
+        let waiting = await store.pendingCount()
+        XCTAssertEqual(waiting, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL(armed.id, .work).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarURL(armed.id).path))
+    }
+
+    /// Two waiting captures are drained one at a time, and the second is never
+    /// the one already being finished.
+    func testTwoWaitingCapturesAreOfferedOneAtATimeAndNeverTheSameOne() async throws {
+        let older = Self.metadata(
+            at: Date().addingTimeInterval(-30), destination: .work,
+            publicationState: .phaseOneFailed
+        )
+        let newer = Self.metadata(destination: .work, publicationState: .phaseOneFailed)
+        try await store.save(audioData: Data("older".utf8), metadata: older, workImageData: nil)
+        try await store.save(audioData: Data("newer".utf8), metadata: newer, workImageData: nil)
+
+        let offered = await store.claimNext()
+        let first = try XCTUnwrap(offered)
+        let reoffered = await store.claimNext()
+        let second = try XCTUnwrap(reoffered)
+
+        XCTAssertEqual(first.id, newer.id)
+        XCTAssertEqual(second.id, older.id)
+        XCTAssertEqual(first.entry.audioData, Data("newer".utf8))
+        XCTAssertEqual(second.entry.audioData, Data("older".utf8))
+    }
+
+    /// A surface can only be handed a capture it is able to finish: a Work
+    /// recording belongs on the desk and a Chat recording in a conversation.
+    func testASurfaceIsOfferedOnlyTheCapturesItCanFinish() async throws {
+        let chat = Self.metadata(destination: .chat)
+        let work = Self.metadata(
+            at: Date().addingTimeInterval(-30), destination: .work,
+            publicationState: .phaseOneFailed
+        )
+        try await store.save(audioData: Data("chat".utf8), metadata: chat, workImageData: nil)
+        try await store.save(audioData: Data("work".utf8), metadata: work, workImageData: nil)
+
+        let offered = await store.claimNext(surface: .work)
+        let claimed = try XCTUnwrap(offered)
+
+        XCTAssertEqual(claimed.id, work.id, "the newer Chat capture is not this surface's to finish")
+    }
+
+    // MARK: - Arming displaces nothing, through the real files
+
+    func testASecondArmLeavesTheFirstRecordingExactlyWhereItIs() async throws {
+        let first = Self.metadata(
+            at: Date().addingTimeInterval(-30), destination: .work,
+            publicationState: .phaseOneFailed
+        )
+        let second = Self.metadata(destination: .chat)
+        try await store.save(audioData: Data("the first".utf8), metadata: first, workImageData: nil)
+
+        try await store.save(audioData: Data("the second".utf8), metadata: second, workImageData: nil)
+
+        XCTAssertEqual(
+            try Data(contentsOf: audioURL(first.id, .work)), Data("the first".utf8),
+            "an arming save deletes no other capture's bytes"
+        )
+        let waiting = await store.pendingCount()
+        XCTAssertEqual(waiting, 2)
+    }
+
+    // MARK: - The container the previous layout wrote
+
+    /// A device upgrading into this layout has index rows and recordings and no
+    /// records at all. Nothing of it is deleted, and every entry gains the
+    /// record the new reconciliation needs.
+    func testAContainerWrittenByThePreviousLayoutKeepsEveryRecording() async throws {
+        let parked = Self.metadata(
+            destination: .work,
+            transcript: "already recognised",
+            publicationState: .phaseOneFailed
+        )
+        persistIndex([parked])
+        try Data("previous layout".utf8).write(to: audioURL(parked.id, .work))
+
+        let offered = await store.claimNext()
+        let claim = try XCTUnwrap(offered)
+
+        XCTAssertEqual(claim.id, parked.id)
+        XCTAssertEqual(claim.entry.audioData, Data("previous layout".utf8))
+        XCTAssertEqual(claim.entry.metadata.transcript, "already recognised")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: sidecarURL(parked.id).path),
+            "the record is backfilled, so the NEXT crash is describable"
+        )
+    }
+
+    /// An arm the previous layout could not describe — bytes with no index row,
+    /// because it committed the row last and wrote no record — is adopted once
+    /// rather than reclaimed.
+    func testARecordingThePreviousLayoutCouldNotDescribeIsAdoptedOnce() async throws {
+        let stranded = UUID()
+        try Data("stranded".utf8).write(to: audioURL(stranded, .work))
+
+        let offered = await store.claimNext()
+        let claim = try XCTUnwrap(offered)
+
+        XCTAssertEqual(claim.id, stranded)
+        XCTAssertEqual(claim.entry.audioData, Data("stranded".utf8))
+        XCTAssertEqual(claim.entry.metadata.resolvedDestination, .work, "the filename says so")
+    }
+
+    // MARK: - Reclamation
+
+    func testTheLaunchSweepReclaimsOnlyWhatNoWaitingCaptureNames() async throws {
+        let waiting = Self.metadata(destination: .work, publicationState: .phaseOneFailed)
+        try await store.save(audioData: Data("waiting".utf8), metadata: waiting, workImageData: nil)
+        let stray = UUID()
+        try Data("stray".utf8).write(to: audioURL(stray, .chat))
+
+        await store.cleanupExpired()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audioURL(waiting.id, .work).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL(waiting.id).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL(stray, .chat).path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: container.appendingPathComponent(PendingRetryFiles.lockName).path
+            ),
+            "the sweep owns captures' files, not the lock every process serializes on"
+        )
+    }
+
+    /// The explicit discard is the one operation allowed to reach the
+    /// pre-id-scoped recording, because it is the one operation a person asked
+    /// for.
+    func testDiscardingEverythingLeavesNoRecordingBehind() async throws {
+        let waiting = Self.metadata(destination: .work, publicationState: .phaseOneFailed)
+        try await store.save(audioData: Data("waiting".utf8), metadata: waiting, workImageData: nil)
+        try Data("pre-id".utf8).write(to: legacyAudioURL())
+
+        await store.clear()
+
+        let count = await store.pendingCount()
+        XCTAssertEqual(count, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL(waiting.id, .work).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarURL(waiting.id).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyAudioURL().path))
+    }
+
+    // MARK: - Fixtures
+
+    private static func metadata(
+        at createdAt: Date = Date(),
+        destination: PendingRetryDestination = .chat,
+        preferredLanguage: String? = nil,
+        attemptCount: Int = 1,
+        lastErrorCode: Int? = nil,
+        transcript: String? = nil,
+        publicationState: PendingRetryPublicationState? = nil
+    ) -> PendingRetryMetadata {
+        PendingRetryMetadata(
+            id: UUID(),
+            createdAt: createdAt,
+            audioFileURL: URL(fileURLWithPath: "/dev/null"),
+            preferredLanguage: preferredLanguage,
+            attemptCount: attemptCount,
+            lastErrorCode: lastErrorCode,
+            destination: destination,
+            transcript: transcript,
+            publicationState: publicationState
+        )
+    }
+
+    private func audioURL(_ id: UUID, _ destination: PendingRetryDestination) -> URL {
+        container.appendingPathComponent(PendingRetryFiles.audio(id, destination))
+    }
+
+    private func sidecarURL(_ id: UUID) -> URL {
+        container.appendingPathComponent(PendingRetryFiles.sidecar(id))
+    }
+
+    private func tombstoneURL(_ id: UUID) -> URL {
+        container.appendingPathComponent(PendingRetryFiles.tombstone(id))
+    }
+
+    private func legacyAudioURL() -> URL {
+        container.appendingPathComponent(PendingRetryFiles.legacyAudioName)
+    }
+
+    /// Commit an index without going through the store, so a case can stage the
+    /// exact on-disk state a death between two writes leaves.
+    private func persistIndex(_ entries: [PendingRetryMetadata]) {
+        try? FileManager.default.createDirectory(
+            at: container, withIntermediateDirectories: true
+        )
+        guard let encoded = try? JSONEncoder().encode(entries) else { return }
+        defaults.set(encoded, forKey: PendingRetryDefaultsKeys.queue)
+    }
+
+    /// Move one capture's reservation into the past, which is the only
+    /// observable a process killed while holding it leaves.
+    private func lapseReservation(for id: UUID) throws {
+        let data = try Data(contentsOf: sidecarURL(id))
+        let sidecar = try JSONDecoder().decode(PendingRetrySidecar.self, from: data)
+        let token = try XCTUnwrap(sidecar.lease?.token)
+        let lapsed = PendingRetrySidecar(
+            metadata: sidecar.metadata,
+            lease: PendingRetryLease(token: token, expiresAt: Date().addingTimeInterval(-1))
+        )
+        try JSONEncoder().encode(lapsed).write(to: sidecarURL(id), options: [.atomic])
+    }
+}

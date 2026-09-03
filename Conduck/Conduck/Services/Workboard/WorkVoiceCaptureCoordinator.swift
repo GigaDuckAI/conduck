@@ -27,14 +27,24 @@
 // write is idempotent BY id and would answer a note published there with the
 // card that is already sitting on it.
 //
-// `recover(_:transcript:store:)` is the third and last entry point, and the one
-// every retry surface uses. A capture recovered hours later, in another
+// `recover(_:transcript:store:queue:)` is the third and last entry point, and
+// the one every retry surface uses. A capture recovered hours later, in another
 // process, cannot see what this one saw, so the decision it has to make —
 // attach, republish then attach, or publish the words beside a card that is
 // gone — is made from the retry record's own `publicationState` rather than
 // from an absence, which is a fact with two opposite causes. Duplicating that
 // three-way decision at each surface is what let one of them republish a card a
 // person had deleted while another quietly dropped the words.
+//
+// A capture id can also be REFUSED rather than answered: the desk write throws
+// `invalidMaterialOwner` when that id already names a card of another kind. A
+// refusal never clears on its own, so retrying it verbatim fails identically
+// for ever and the queue entry can never leave the queue. The recording is
+// therefore put back once more under
+// `WorkMaterialCollisionEscape.materialID(forCapture:)`, and the words follow
+// it there — which is also why a recovery looks for the recording under BOTH
+// ids before it decides there is none. A refusal of the escape id too is
+// terminal: the words go beside it as a note, and no third id is ever derived.
 
 #if !os(watchOS)
 
@@ -90,19 +100,27 @@ enum WorkVoiceCaptureCoordinator {
             /// transcript, and a publication of silence beside the recording
             /// would be worse than none. The RECORDING is secured before this
             /// answer is given: a record saying the desk never took it has its
-            /// bytes put back as a playable card first, so what is still owed
-            /// is only the words.
+            /// bytes put back as a playable card first — under the capture's
+            /// own id, or its escape when that id names a card of another kind
+            /// — so what is still owed is only the words. The one state where
+            /// nothing could be secured is a capture whose id AND whose escape
+            /// are both taken; its bytes stay in the entry, which is where the
+            /// only copy of them was already, and the non-terminal answer is
+            /// what every surface renders as a retry error.
             case noTranscript
         }
 
         /// The words joined the recording that was already standing.
         case attached
         /// Phase one was KNOWN to have failed, so the recording was published
-        /// under the capture id from the parked bytes and the words joined it.
-        /// One card, exactly as the capture would have produced first time.
+        /// from the parked bytes and the words joined it. One card, exactly as
+        /// the capture would have produced first time — under the capture's own
+        /// id, or under its collision escape when that id was already a card of
+        /// another kind.
         case republishedAndAttached
         /// The capture owns no recording — deleted while recognition was in
-        /// flight, or an id that names somebody else's card — so the words
+        /// flight, or an id that names somebody else's card, or an identity
+        /// refused under both the capture id and its escape — so the words
         /// landed beside it under `fallbackNoteID(forCapture:)`.
         case fallbackNotePublished
         /// Nothing was written and the durable record must stay armed.
@@ -219,22 +237,41 @@ enum WorkVoiceCaptureCoordinator {
     /// record and surface a retry; nothing here clears anything, and clearing
     /// on a terminal outcome is the caller's own act (`isTerminal`).
     ///
-    /// Idempotent in all three branches — the republication, the attachment and
-    /// the fallback note are each keyed by a derived-or-given id the desk write
-    /// answers rather than duplicates — so a capture recovered twice, or on two
-    /// devices, still has exactly the cards it had after the first.
+    /// The one refusal that is NOT rethrown is a colliding identity. A desk
+    /// write that answers `invalidMaterialOwner` says this id belongs to a card
+    /// of another kind, and that never becomes untrue — so rethrowing it leaves
+    /// a queue entry every retry fails on identically, for ever. The recording
+    /// goes back under `WorkMaterialCollisionEscape.materialID(forCapture:)`
+    /// instead, ONCE, and a refusal of that id too is terminal: the words land
+    /// beside it as a note, and no third id is ever derived.
+    ///
+    /// It takes the CLAIM rather than a bare record because the two facts it
+    /// learns — that the recording is on the desk again, and which id carries
+    /// it — belong in the durable entry the caller is still holding. A verdict
+    /// that lives only in this call's local state is one a crash erases, and
+    /// `.phaseOneFailed` left standing over a recording that IS on the desk is
+    /// what lets a later retry resurrect a card the person deleted.
+    ///
+    /// Idempotent in all four branches — the republication, the escape, the
+    /// attachment and the fallback note are each keyed by a derived-or-given id
+    /// the desk write answers rather than duplicates — so a capture recovered
+    /// twice, or on two devices, still has exactly the cards it had after the
+    /// first.
     @discardableResult
     static func recover(
-        _ pending: PendingRetryRecord,
-        transcript: String,
-        store: ConversationStore = .shared
+        _ claim: PendingRetryClaim,
+        transcript: String?,
+        store: ConversationStore = .shared,
+        queue: PendingRetryStore = .shared
     ) async throws -> WorkVoiceRecoveryOutcome {
-        guard pending.metadata.resolvedDestination == .work else {
+        let pending = claim.entry.metadata
+        guard pending.resolvedDestination == .work else {
             return .retryKept(.notAWorkCapture)
         }
 
-        let captureID = pending.metadata.id
-        var republished = false
+        let captureID = pending.id
+        let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
+
         // The one state that licenses a republication: the desk is KNOWN never
         // to have held this recording, so there is nothing to resurrect and the
         // parked bytes are the only copy of it. Empty bytes name no recording
@@ -245,33 +282,128 @@ enum WorkVoiceCaptureCoordinator {
         // recording exists nowhere but in these bytes, and refusing to look at
         // it until recognition succeeds is how a recording waits on a
         // transcription that may never arrive.
-        if pending.metadata.publicationState == .phaseOneFailed, !pending.audio.isEmpty {
-            let container = SourceAudioContainer.sniff(pending.audio)
-            _ = try await publishRecording(
-                captureID: captureID,
-                audio: pending.audio,
-                fileExtension: container.fileExtension,
-                mimeType: container.mimeType,
-                createdAt: pending.metadata.createdAt,
+        var republication = Republication.notAttempted
+        if pending.publicationState == .phaseOneFailed, !claim.entry.audioData.isEmpty {
+            republication = try await republishRecording(
+                claim.entry.audioData,
+                under: captureID,
+                escapingTo: escapeID,
+                createdAt: pending.createdAt,
                 store: store
             )
-            republished = true
+            // The desk holds the recording again, so record that the moment it
+            // is true rather than on the way out. A recovery that answers
+            // `.noTranscript` returns with the entry still armed, and an entry
+            // that still says `.phaseOneFailed` is exempt from expiry for ever
+            // and licenses a later retry to republish a card the person may
+            // have deleted in between.
+            if case .landed = republication {
+                _ = await queue.recordPublicationState(
+                    claim, transcript: nil, publicationState: .published
+                )
+            }
         }
 
-        let words = WorkboardWorkspaceCaptureLogic.normalizedThought(transcript)
+        // The caller's words win; the entry's are the fallback. A surface that
+        // has nothing to say is not a reason to leave words the provider was
+        // already paid for sitting in the entry this call is holding.
+        let words = WorkboardWorkspaceCaptureLogic.normalizedThought(
+            transcript ?? pending.transcript ?? ""
+        )
         guard !words.isEmpty else { return .retryKept(.noTranscript) }
 
-        switch try await attachTranscript(words, toRecording: captureID, store: store) {
-        case .attached:
-            return republished ? .republishedAndAttached : .attached
-        case .recordingMissing, .notAudio:
-            try await publishFallbackNote(
-                words,
-                forCapture: captureID,
-                createdAt: pending.metadata.createdAt,
+        for materialID in republication.recordingIDs(captureID: captureID, escapeID: escapeID) {
+            switch try await attachTranscript(words, toRecording: materialID, store: store) {
+            case .attached:
+                return republication.isLanded ? .republishedAndAttached : .attached
+            case .recordingMissing, .notAudio:
+                continue
+            }
+        }
+
+        try await publishFallbackNote(
+            words,
+            forCapture: captureID,
+            createdAt: pending.createdAt,
+            store: store
+        )
+        return .fallbackNotePublished
+    }
+
+    /// What became of a recovery's attempt to put the recording back.
+    private enum Republication {
+        /// The verdict did not license one: the desk is believed to hold this
+        /// recording already, or the entry parked no bytes.
+        case notAttempted
+        /// The recording is on the desk under this id — the capture's own, or
+        /// its escape.
+        case landed(UUID)
+        /// Both ids name cards of another kind. Nothing can carry the
+        /// recording, and no third id exists.
+        case refusedTwice
+
+        var isLanded: Bool {
+            if case .landed = self { return true }
+            return false
+        }
+
+        /// The ids the transcript must be offered to, in order.
+        ///
+        /// A republication names exactly where the recording is. Without one,
+        /// the recording may be standing under either id — the capture's own,
+        /// or an escape a PREVIOUS recovery took — and trying only the first
+        /// would write the words into a note beside a recording that was there
+        /// to carry them. A double refusal leaves nothing to try.
+        func recordingIDs(captureID: UUID, escapeID: UUID) -> [UUID] {
+            switch self {
+            case .notAttempted: return [captureID, escapeID]
+            case .landed(let id): return [id]
+            case .refusedTwice: return []
+            }
+        }
+    }
+
+    /// Put the parked bytes back on the desk, escaping a colliding id once.
+    ///
+    /// The container is read off the bytes rather than assumed from the parked
+    /// file's name: both capture lanes preserve COMPRESSED bytes and the
+    /// compressor answers WAV whenever AAC encoding fails.
+    ///
+    /// Only `invalidMaterialOwner` is caught. Every other failure is transient
+    /// over a capture that still exists and must reach the caller as a throw,
+    /// so the entry stays armed and the bytes stay the only copy of themselves.
+    private static func republishRecording(
+        _ audio: Data,
+        under captureID: UUID,
+        escapingTo escapeID: UUID,
+        createdAt: Date,
+        store: ConversationStore
+    ) async throws -> Republication {
+        let container = SourceAudioContainer.sniff(audio)
+        do {
+            _ = try await publishRecording(
+                captureID: captureID,
+                audio: audio,
+                fileExtension: container.fileExtension,
+                mimeType: container.mimeType,
+                createdAt: createdAt,
                 store: store
             )
-            return .fallbackNotePublished
+            return .landed(captureID)
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            do {
+                _ = try await publishRecording(
+                    captureID: escapeID,
+                    audio: audio,
+                    fileExtension: container.fileExtension,
+                    mimeType: container.mimeType,
+                    createdAt: createdAt,
+                    store: store
+                )
+                return .landed(escapeID)
+            } catch WorkboardStoreError.invalidMaterialOwner {
+                return .refusedTwice
+            }
         }
     }
 
