@@ -953,6 +953,39 @@
         }
       }
     },
+    "chat.presence.checking" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Checking connection"
+          }
+        }
+      }
+    },
+    "chat.presence.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Connection check failed"
+          }
+        }
+      }
+    },
+    "chat.presence.reachable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Connected"
+          }
+        }
+      }
+    },
     "chat.title.unconfigured" : {
       "localizations" : {
         "en" : {
@@ -1839,6 +1872,9 @@
       }
     },
     "Create a setup code" : {
+
+    },
+    "Creates an API key for Conduck in your OpenRouter account — nothing to copy." : {
 
     },
     "Currently" : {
@@ -6683,7 +6719,7 @@
         }
       }
     },
-    "Leave blank to keep your current key." : {
+    "Leave blank to keep your current key. A new key doesn't remove the old one from your OpenRouter account." : {
 
     },
     "Let's go" : {
@@ -6712,6 +6748,9 @@
 
     },
     "Mac" : {
+
+    },
+    "Manage this key on OpenRouter" : {
 
     },
     "markdownLink.confirm.cancel" : {
@@ -7293,9 +7332,6 @@
           }
         }
       }
-    },
-    "Paste your OpenRouter API key and pick a model — your messages go straight to OpenRouter, no middleman." : {
-
     },
     "pasteboard.expired.placeholder" : {
       "extractionState" : "extracted_with_value",
@@ -12979,6 +13015,160 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "You've already set up OpenRouter for voice. Reuse that API key here?"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.discarded" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The key you signed in with still exists in your OpenRouter account."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.discardedDismiss" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Dismiss"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.invalidCallback" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The sign-in didn't come back the way Conduck expected. Try again, or paste an API key."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.manage" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Manage on OpenRouter"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.missingKey" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That OpenRouter sign-in is no longer available. Sign in again, or paste an API key."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.network" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach OpenRouter. Check your connection, or paste an API key."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.outcomeUnknown" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "OpenRouter didn't answer in time. If a new key appeared in your OpenRouter account, you can remove it there. Try again, or paste an API key."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.rateLimited" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "OpenRouter is rate-limiting sign-ins. Wait a moment, or paste an API key."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.rejected" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "OpenRouter didn't accept the sign-in. Try again, or paste an API key."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.staged" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Signed in with OpenRouter"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.stagedDetail" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A new API key now sits in your OpenRouter account."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.unavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck couldn't start a secure sign-in on this device. Paste an API key instead."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.unexpected" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "OpenRouter answered in a way Conduck didn't expect. Try again, or paste an API key."
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.openRouter.signIn.useDifferentKey" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Use a different key"
           }
         }
       }
@@ -18994,6 +19184,15 @@
           }
         }
       }
+    },
+    "Sign in again for a fresh key, paste a new one, or leave both alone to keep your current key. Your previous key stays in your OpenRouter account until you remove it there." : {
+
+    },
+    "Sign in with OpenRouter" : {
+
+    },
+    "Sign in with OpenRouter, or paste an API key — then pick a model. Your messages go straight to OpenRouter, no middleman." : {
+
     },
     "Skip for Now" : {
       "extractionState" : "manual",

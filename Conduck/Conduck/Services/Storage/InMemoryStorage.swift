@@ -290,7 +290,25 @@ final class InMemorySecretStore: SecretStore, @unchecked Sendable {
     private let lock = NSLock()
     private var items: [ItemKey: Item] = [:]
 
+    /// While set, every write naming this account fails. See `failWrites(for:)`.
+    private var failingWriteAccount: String?
+
     init() {}
+
+    /// Test affordance — make WRITES for one account fail, so a suite can prove
+    /// what a failed Keychain write leaves behind: the rollback that must run,
+    /// and the in-memory credential the caller must NOT have thrown away yet.
+    /// A real `SecItemAdd` can fail, and the code paths that handle it are
+    /// otherwise unreachable from a test.
+    ///
+    /// Scoped to ONE account rather than a global switch: an armed global would
+    /// break any unrelated write that happened to run while it was set. Cleared
+    /// by passing nil, and by `removeAll()`.
+    func failWrites(for account: String?) {
+        lock.lock()
+        failingWriteAccount = account
+        lock.unlock()
+    }
 
     // MARK: Query decoding
 
@@ -385,6 +403,7 @@ final class InMemorySecretStore: SecretStore, @unchecked Sendable {
 
         lock.lock()
         defer { lock.unlock() }
+        if let failingWriteAccount, failingWriteAccount == key.account { return errSecIO }
         guard items[key] == nil else { return errSecDuplicateItem }
         items[key] = Item(
             data: data,
@@ -397,6 +416,7 @@ final class InMemorySecretStore: SecretStore, @unchecked Sendable {
     func update(_ query: [String: Any], attributes: [String: Any]) -> OSStatus {
         lock.lock()
         defer { lock.unlock() }
+        if let failingWriteAccount, account(query) == failingWriteAccount { return errSecIO }
         let matched = items.keys.filter { matches($0, query: query) }
         guard !matched.isEmpty else { return errSecItemNotFound }
         // `SecItemUpdate` can update attributes OTHER than the payload, and
@@ -417,11 +437,12 @@ final class InMemorySecretStore: SecretStore, @unchecked Sendable {
         return errSecSuccess
     }
 
-    /// Test affordance — drop everything.
+    /// Test affordance — drop everything, including any armed write failure.
     func removeAll() {
         lock.lock()
         defer { lock.unlock() }
         items.removeAll()
+        failingWriteAccount = nil
     }
 }
 

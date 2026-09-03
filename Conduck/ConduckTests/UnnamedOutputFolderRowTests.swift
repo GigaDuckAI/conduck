@@ -48,16 +48,52 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
     /// "before"/"after" reads as arithmetic rather than as a date.
     private let t0 = Date(timeIntervalSince1970: 1_000_000)
 
+    /// THE FIFTH FACT, run through the same two shipped functions production
+    /// runs — the extractor and its post-exclusion window — rather than written
+    /// out as a literal set, so a fixture whose text stops naming a file stops
+    /// selecting instead of quietly keeping a row the real rule drops.
+    ///
+    /// NOT A SUBSTITUTE FOR THE VIEW MODEL'S OWN EXCLUSION ASSEMBLY. Production
+    /// unions the agent turn's storedKeys with the conversation's inbound upload
+    /// tokens, and only `refreshSearchableReplyNames` can reach the second;
+    /// `inbound` here stands in for it so the exclusion path is exercised from
+    /// both sides. What these cases lock is the RULE, not the plumbing that
+    /// feeds it.
+    private func searchable(
+        _ messages: [MessageRecord],
+        inbound: Set<String> = []
+    ) -> Set<UUID> {
+        Set(
+            messages
+                .filter { $0.role == "agent" }
+                .filter { message in
+                    !FileTransferOutputDetector.actionableCandidateWindow(
+                        candidates: FileTransferOutputDetector
+                            .extractCandidates(from: message.text),
+                        excludedKeys: Set(message.attachments.compactMap(\.storedKey))
+                            .union(inbound)
+                    ).isEmpty
+                }
+                .map(\.id)
+        )
+    }
+
+    /// `text` names a file BY DEFAULT, because the row's rule now requires one:
+    /// a reply that names nothing draws no row however broken the lane is, so a
+    /// fixture that named nothing would make every positive case below vacuous
+    /// rather than wrong. `.txt` is on the extractor's allowlist; cases that
+    /// want the silent side pass their own text.
     private func agent(
         id: UUID = UUID(),
         laneID: String?,
         boxKey: String?,
-        at offset: TimeInterval
+        at offset: TimeInterval,
+        text: String = "Saved it to notes.txt."
     ) -> MessageRecord {
         MessageRecord(
             id: id,
             role: "agent",
-            text: "Saved it.",
+            text: text,
             createdAt: t0.addingTimeInterval(offset),
             sourceDevice: "iphone",
             outputScanDone: false,
@@ -78,6 +114,126 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
         )
     }
 
+    // MARK: - A file has to have been in play
+
+    /// THE REPORTED BUG, verbatim. A greeting answered with a greeting, under a
+    /// file server that has genuinely stopped, used to carry a paragraph about
+    /// files neither side mentioned — and the row's own per-turn remedy, a
+    /// search of the reply for the names it mentions, would have answered that
+    /// tap with nothing.
+    func testAPureTextExchangeDrawsNoRow() {
+        let greeting = agent(laneID: lane, boxKey: nil, at: 1,
+                             text: "Hi! How can I help you today?")
+
+        XCTAssertTrue(
+            ConversationDetailViewModel.unnamedFolderRowIDs(
+                in: [user(at: 0), greeting],
+                currentLaneID: lane,
+                faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([greeting])).isEmpty,
+            "a broken file server is not this conversation's business: nothing was lost, and the row's own search would find nothing to ask about")
+    }
+
+    /// A reply that DOES name a file still gets the row on the same broken lane
+    /// — the row did not become quieter, it became specific.
+    func testAReplyNamingAFileStillDrawsTheRow() {
+        let named = agent(laneID: lane, boxKey: nil, at: 1,
+                          text: "Done — I saved it to chart.png.")
+
+        XCTAssertEqual(
+            ConversationDetailViewModel.unnamedFolderRowIDs(
+                in: [named],
+                currentLaneID: lane,
+                faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([named])),
+            [named.id],
+            "a turn whose reply names a file the search could ask about is exactly the turn this row exists for")
+    }
+
+    /// THE POST-EXCLUSION CASE, and the reason the gate is the search's WINDOW
+    /// rather than the raw extraction. The user uploaded `report.csv`; the reply
+    /// echoes that name back. A name already known to this turn is dropped
+    /// before any probe, so the button would issue no request — and a row whose
+    /// remedy issues no request is the thing being removed here.
+    func testAReplyEchoingOnlyTheUsersOwnUploadDrawsNoRow() {
+        let echo = MessageRecord(
+            id: UUID(), role: "agent", text: "Done with report.csv.",
+            createdAt: t0.addingTimeInterval(1), sourceDevice: "iphone",
+            outputScanDone: false, outputScanLaneID: lane, outputBoxKey: nil,
+            attachments: [
+                AttachmentRecord(
+                    id: UUID(), mimeType: "text/csv", filename: "report.csv",
+                    thumbnailData: nil, extractedText: nil,
+                    width: 0, height: 0, byteSize: 1, sequence: 0, createdAt: t0,
+                    isServerReference: true, storedKey: "report.csv")
+            ])
+
+        XCTAssertTrue(
+            ConversationDetailViewModel.unnamedFolderRowIDs(
+                in: [echo],
+                currentLaneID: lane,
+                faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([echo])).isEmpty,
+            "the only name in the reply is one this turn already knows about, so the search would probe nothing")
+    }
+
+    /// The exclusion that comes from the CONVERSATION rather than from the turn:
+    /// the user uploaded `report.csv` earlier, the reply mentions it, and the
+    /// search would drop it as a name this thread already knows.
+    func testAReplyEchoingAnEarlierUploadInTheThreadDrawsNoRow() {
+        let echo = agent(laneID: lane, boxKey: nil, at: 1,
+                         text: "Done with report.csv.")
+
+        XCTAssertTrue(
+            ConversationDetailViewModel.unnamedFolderRowIDs(
+                in: [echo], currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([echo], inbound: ["report.csv"])).isEmpty,
+            "an inbound upload token excludes the name just as a storedKey on the turn does")
+        XCTAssertEqual(
+            ConversationDetailViewModel.unnamedFolderRowIDs(
+                in: [echo], currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([echo])),
+            [echo.id],
+            "and without that token the very same reply DOES draw the row — the exclusion is what moved, not the text")
+    }
+
+    /// Prose that is shaped like a filename is not one. The extractor's own
+    /// allowlist is what makes this true, and it is why the gate reuses the
+    /// shipped extractor instead of a filename-shaped regex of its own.
+    func testProseThatLooksLikeAFilenameDrawsNoRow() {
+        let prose = agent(laneID: lane, boxKey: nil, at: 1,
+                          text: "That takes about 3.5 hours, e.g. overnight — see example.com for 2.50GB plans.")
+
+        XCTAssertTrue(
+            ConversationDetailViewModel.unnamedFolderRowIDs(
+                in: [prose],
+                currentLaneID: lane,
+                faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([prose])).isEmpty,
+            "decimals, abbreviations and domains are not files, and a row drawn on them would be the original complaint wearing a different hat")
+    }
+
+    /// THE DIRECTION OF THE RACE, asserted. The reply scan runs off the main
+    /// actor and lands after the first draw, so an unscanned turn is momentarily
+    /// absent from the set. That must make the row appear LATE, never make a
+    /// standing row vanish — the latter is what the hold mechanism exists for.
+    func testAnUnscannedReplyDrawsNoRowYetRatherThanTheWrongOne() {
+        let named = agent(laneID: lane, boxKey: nil, at: 1,
+                          text: "Saved it to notes.txt.")
+
+        XCTAssertTrue(
+            ConversationDetailViewModel.unnamedFolderRowIDs(
+                in: [named], currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: []).isEmpty,
+            "before the scan lands there is nothing to say")
+        XCTAssertEqual(
+            ConversationDetailViewModel.unnamedFolderRowIDs(
+                in: [named], currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([named])),
+            [named.id],
+            "and once it lands the row arrives — the only direction this race may run")
+    }
+
     // MARK: - The silent cases
 
     /// A lane that is answering produces the empty set, whatever the thread
@@ -92,7 +248,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
 
         XCTAssertTrue(
             ConversationDetailViewModel.unnamedFolderRowIDs(
-                in: messages, currentLaneID: lane, faultedSince: nil).isEmpty,
+                in: messages, currentLaneID: lane, faultedSince: nil,
+                repliesWithSomethingToSearchFor: searchable(messages)).isEmpty,
             "no live fault means nothing to say, and no residue to clear by hand")
     }
 
@@ -106,7 +263,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
         let recent = agent(laneID: lane, boxKey: nil, at: 60)
 
         let selected = ConversationDetailViewModel.unnamedFolderRowIDs(
-            in: [old, recent], currentLaneID: lane, faultedSince: t0)
+            in: [old, recent], currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([old, recent]))
 
         XCTAssertEqual(selected, [recent.id],
                        "only the turn that landed after the lane broke can have been broken by it")
@@ -119,7 +277,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
 
         XCTAssertTrue(
             ConversationDetailViewModel.unnamedFolderRowIDs(
-                in: [elsewhere], currentLaneID: lane, faultedSince: t0).isEmpty)
+                in: [elsewhere], currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([elsewhere])).isEmpty)
     }
 
     /// A turn with no lane at all was sent with no file server configured — the
@@ -130,7 +289,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
 
         XCTAssertTrue(
             ConversationDetailViewModel.unnamedFolderRowIDs(
-                in: [unconfigured], currentLaneID: lane, faultedSince: t0).isEmpty)
+                in: [unconfigured], currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([unconfigured])).isEmpty)
     }
 
     /// A turn that DID get a folder is the other row's business: its folder
@@ -141,7 +301,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
 
         XCTAssertTrue(
             ConversationDetailViewModel.unnamedFolderRowIDs(
-                in: [delivered], currentLaneID: lane, faultedSince: t0).isEmpty,
+                in: [delivered], currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([delivered])).isEmpty,
             "the folder-less row and the unreadable-folder row are disjoint by construction")
     }
 
@@ -150,7 +311,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
     func testUserTurnsAreNeverSelected() {
         XCTAssertTrue(
             ConversationDetailViewModel.unnamedFolderRowIDs(
-                in: [user(at: 60), user(at: 61)], currentLaneID: lane, faultedSince: t0).isEmpty)
+                in: [user(at: 60), user(at: 61)], currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([user(at: 60), user(at: 61)])).isEmpty)
     }
 
     /// The lane is failing but the conversation is bound to a gateway with no
@@ -160,7 +322,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
 
         XCTAssertTrue(
             ConversationDetailViewModel.unnamedFolderRowIDs(
-                in: [orphan], currentLaneID: nil, faultedSince: t0).isEmpty)
+                in: [orphan], currentLaneID: nil, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([orphan])).isEmpty)
     }
 
     // MARK: - The surfaced case
@@ -172,7 +335,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
 
         XCTAssertEqual(
             ConversationDetailViewModel.unnamedFolderRowIDs(
-                in: [boundary], currentLaneID: lane, faultedSince: t0),
+                in: [boundary], currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([boundary])),
             [boundary.id])
     }
 
@@ -188,7 +352,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
 
         XCTAssertEqual(
             ConversationDetailViewModel.unnamedFolderRowIDs(
-                in: [first, second, third], currentLaneID: lane, faultedSince: t0),
+                in: [first, second, third], currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable([first, second, third])),
             [first.id, second.id, third.id])
     }
 
@@ -208,7 +373,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
 
         XCTAssertEqual(
             ConversationDetailViewModel.unnamedFolderRowIDs(
-                in: messages, currentLaneID: lane, faultedSince: t0),
+                in: messages, currentLaneID: lane, faultedSince: t0,
+                repliesWithSomethingToSearchFor: searchable(messages)),
             [qualifying.id])
     }
 
@@ -238,8 +404,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
             in: [tapped, sibling],
             currentLaneID: lane,
             faultedSince: nil,                            // the tap just reset the breaker
-            hold: hold(ids: [tapped.id, sibling.id], laneID: lane, at: 62)
-        )
+            hold: hold(ids: [tapped.id, sibling.id], laneID: lane, at: 62),
+                repliesWithSomethingToSearchFor: searchable([tapped, sibling]))
 
         XCTAssertEqual(state.ids, [tapped.id, sibling.id],
                        "a row that evaporates on touch reads as a crash and removes the affordance the user was reaching for")
@@ -257,8 +423,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
             in: [held, laterWristTurn],
             currentLaneID: lane,
             faultedSince: nil,
-            hold: hold(ids: [held.id], laneID: lane, at: 62)
-        )
+            hold: hold(ids: [held.id], laneID: lane, at: 62),
+                repliesWithSomethingToSearchFor: searchable([held, laterWristTurn]))
 
         XCTAssertEqual(state.ids, [held.id])
     }
@@ -274,8 +440,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
             in: [held, freshlyBroken],
             currentLaneID: lane,
             faultedSince: t0,
-            hold: hold(ids: [held.id], laneID: lane, at: -49)
-        )
+            hold: hold(ids: [held.id], laneID: lane, at: -49),
+                repliesWithSomethingToSearchFor: searchable([held, freshlyBroken]))
 
         XCTAssertEqual(state.ids, [held.id, freshlyBroken.id])
     }
@@ -294,7 +460,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
                 taken, in: [held, recovered], currentLaneID: lane))
 
         let state = ConversationDetailViewModel.unnamedFolderRowState(
-            in: [held, recovered], currentLaneID: lane, faultedSince: nil, hold: taken)
+            in: [held, recovered], currentLaneID: lane, faultedSince: nil, hold: taken,
+                repliesWithSomethingToSearchFor: searchable([held, recovered]))
         XCTAssertTrue(state.ids.isEmpty)
         XCTAssertNil(state.hold)
     }
@@ -338,7 +505,8 @@ final class UnnamedOutputFolderRowTests: XCTestCase {
                 taken, in: [held], currentLaneID: nil))
 
         let state = ConversationDetailViewModel.unnamedFolderRowState(
-            in: [held], currentLaneID: otherLane, faultedSince: nil, hold: taken)
+            in: [held], currentLaneID: otherLane, faultedSince: nil, hold: taken,
+                repliesWithSomethingToSearchFor: searchable([held]))
         XCTAssertTrue(state.ids.isEmpty)
         XCTAssertNil(state.hold)
     }

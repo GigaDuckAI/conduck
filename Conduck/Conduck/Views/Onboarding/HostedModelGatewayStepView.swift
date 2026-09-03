@@ -5,8 +5,37 @@
 //
 // Guided gateway-setup — the HOSTED-MODEL branch (OpenRouter), reached when the
 // user picks "Hosted cloud model" on `GatewayChooserStepView`. The no-server
-// on-ramp: paste an OpenRouter API key + pick a model. ONLY used inside the
-// guided-setup flow (`GuidedGatewaySetupView`); onboarding no longer mounts it.
+// on-ramp: get an OpenRouter key onto the device + pick a model. ONLY used
+// inside the guided-setup flow (`GuidedGatewaySetupView`); onboarding no longer
+// mounts it.
+//
+// TWO WAYS TO SUPPLY THE KEY, ONE CREDENTIAL AT A TIME. "Sign in with
+// OpenRouter" opens the system web-auth sheet, and the key OpenRouter mints
+// comes back through a private-use callback scheme (the PKCE machinery lives in
+// `OpenRouterOAuth`; the staging lives in `SettingsViewModel+OpenRouterOAuth`).
+// Pasting a key stays on the same screen as the equal alternative — a user who
+// already has a key, or whose sign-in failed, is never stranded. The screen
+// enforces a SINGLE credential source: staging a sign-in clears the typed buffer
+// and any voice-key reuse; typing, or choosing the voice key, discards the
+// staged sign-in atomically. Precedence at Connect reads the same way top to
+// bottom: signed-in key → typed key → voice key → stored key.
+//
+// The signed-in key is never held here. This view holds a HANDLE; the raw key
+// stays in the view model and is resolved at Save/Test time, exactly as the
+// voice-key reuse is. The handle is discarded on disappear, so backing out of
+// setup leaves nothing staged — but it does NOT undo the key at OpenRouter,
+// which the exchange created for real. So every discard SNAPSHOTS that key's
+// settings URL first and keeps offering it: dropping the handle destroys the
+// only copy of the key and with it the ability to compute the digest that
+// addresses it, and a user who abandons a sign-in would otherwise never be told
+// a live key is now spending their credit. The digest is not a credential, so it
+// can outlive the key it points at.
+//
+// UNSTAGING RETRACTS THE VERDICT. Every credential-source switch on this screen
+// clears `remoteAgentValidationStates[ref]`, because a verdict earned by one
+// credential describes nothing once another is in play — and the sign-in path
+// auto-probes, so a staged sign-in reaches "API key valid." without the user
+// pressing anything.
 //
 // TWO ENTRY MODES, classified ONCE after `refreshRemoteAgentState()` hydrates the
 // VM (classifying before hydration would misread a cold `configuredRemoteAgentRefSet`
@@ -31,11 +60,13 @@
 // The full manual gateway editor (`RemoteAgentConfigBody`, reached from the
 // Settings list) is a SEPARATE surface — this screen never routes to it.
 //
-// Privacy: the raw key lives only in `pendingKey` + the SecureField; it flows out
-// exactly once via `saveRemoteAgent` (→ Keychain), then cleared. The quiet probe
-// validates the STORED key via `retestRemoteAgent` (raw key never enters the View).
-// Never logged, printed, or echoed in error messages.
+// Privacy: a TYPED key lives only in `pendingKey` + the SecureField; it flows out
+// exactly once via `saveRemoteAgent` (→ Keychain), then cleared. A SIGNED-IN key
+// never enters this View at all — only its handle and a masked tail. The
+// quiet probe validates the STORED key via `retestRemoteAgent` (raw key never
+// enters the View). Never logged, printed, or echoed in error messages.
 
+import AuthenticationServices
 import SwiftUI
 
 struct HostedModelGatewayStepView: View {
@@ -87,6 +118,37 @@ struct HostedModelGatewayStepView: View {
     /// Keychain at save/probe time — it never enters this View). Persisting on
     /// tap would store a key for a gateway that still lacks its required model.
     @State private var useVoiceKey = false
+
+    /// The handle of the OpenRouter sign-in whose key is STAGED right now, or
+    /// nil when none is. The View never sees the key itself — only this handle,
+    /// which it presents to the view model to probe, save, deep-link, discard or
+    /// render as a mask.
+    @State private var oauthHandle: UUID?
+
+    /// True from the tap that opens the web-auth sheet until the exchange (and
+    /// its auto-probe) settles. Disables every other credential control so an
+    /// in-flight sign-in cannot be raced by a Validate / Connect / source switch.
+    @State private var signingIn = false
+
+    /// The sign-in in flight, bound to THIS step. Cancelled on disappear and
+    /// whenever a new sign-in starts, so a completion that lands after the user
+    /// moved on is dropped rather than staging a key nobody is looking at.
+    @State private var signInTask: Task<Void, Never>?
+
+    /// The saved gateway key's OpenRouter settings page (manage mode). Resolved
+    /// asynchronously because it reads the Keychain VM-side; nil hides the row.
+    @State private var storedKeySettingsURL: URL?
+
+    /// The OpenRouter page for a signed-in key this step DISCARDED without
+    /// saving. Snapshotted at the moment of discard, because the vault entry it
+    /// is computed from is gone a line later — and the key it addresses is real
+    /// and still spending the user's credit. Nil hides the note.
+    @State private var discardedKeyURL: URL?
+
+    /// Presents the OpenRouter authorization page. SwiftUI's own session — no
+    /// hand-rolled `ASWebAuthenticationSession` and no presentation anchor to
+    /// keep correct across iPhone, iPad and Mac windows.
+    @Environment(\.webAuthenticationSession) private var webAuthenticationSession
 
     /// Lets `.onSubmit` resign focus — Return is the dismiss/submit affordance.
     @FocusState private var keyFieldFocused: Bool
@@ -208,10 +270,14 @@ struct HostedModelGatewayStepView: View {
             // the save just wrote back to `.unset`.
             guard !connecting else { return }
             viewModel.remoteAgentValidationStates[ref] = .unset
-            // A typed character while voice-key reuse is staged switches the
-            // credential source back to manual — the field is authoritative the
-            // moment the user touches it.
-            if useVoiceKey, !pendingKey.isEmpty { useVoiceKey = false }
+            // A typed character while another credential source is staged
+            // switches back to manual — the field is authoritative the moment the
+            // user touches it. Both switches are atomic with the keystroke, so
+            // there is never an instant where two sources are live.
+            if !pendingKey.isEmpty {
+                if useVoiceKey { useVoiceKey = false }
+                discardStagedSignIn()
+            }
         }
         .onChange(of: useVoiceKey) { _, _ in
             // Staging/unstaging swaps WHICH credential is in play: a verdict
@@ -224,6 +290,12 @@ struct HostedModelGatewayStepView: View {
         }
         .onDisappear {
             probeTask?.cancel()
+            // The sign-in is bound to THIS step: cancel it, and drop the key it
+            // staged. Unsaved by definition (a save consumes the handle), so
+            // nothing persisted is lost — and the discard is handle-scoped, so a
+            // late teardown cannot reach a sign-in some other step started.
+            signInTask?.cancel()
+            discardStagedSignIn()
             // Only setup raises the dirty fence here (via `keyFieldFocused`).
             // Manage never sets it, so it must NOT clear it on disappear —
             // otherwise the manage→edit push could stomp the edit step's fence.
@@ -235,7 +307,12 @@ struct HostedModelGatewayStepView: View {
             await viewModel.refreshRemoteAgentState()
             let configured = viewModel.isRemoteAgentConfigured(ref)
             entryMode = configured ? .manage : .setup
-            if configured { runQuietProbe() }
+            if configured {
+                runQuietProbe()
+                // Manage-card deep link. Reads the Keychain VM-side and returns a
+                // URL built from the key's digest — the key itself never crosses.
+                storedKeySettingsURL = await viewModel.openRouterStoredKeySettingsURL()
+            }
         }
     }
 
@@ -243,32 +320,52 @@ struct HostedModelGatewayStepView: View {
 
     @ViewBuilder
     private var setupBody: some View {
-        if isPartiallySynced {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "arrow.triangle.2.circlepath.icloud")
-                    .foregroundStyle(AppColors.textSecondary)
-                // xcstrings: hosted-model
-                Text("Synced from your other device — just add your OpenRouter key to finish.")
-                    .onboardingScaledFont(.subheadline)
-                    .foregroundStyle(AppColors.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
+        // ONE form column. Everything below the title — the partial-sync banner,
+        // the intro prose, the sign-in pill, the docs link, the reuse callout, the
+        // credential stack and the model picker — shares the footer CTA's width
+        // and centre line through `guidedFormRail()`, the rail the edit step is
+        // built on. Sizing the pieces separately (`buttonMaxWidth` caps with mixed
+        // centre/leading alignment inside a wider 32pt content rail) rendered
+        // THREE columns on macOS: the pill and key field centred at 400, the model
+        // field pinned leading at 400, the footer buttons at 344.
+        VStack(alignment: .leading, spacing: 20) {
+            if isPartiallySynced {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath.icloud")
+                        .foregroundStyle(AppColors.textSecondary)
+                    // xcstrings: hosted-model
+                    Text("Synced from your other device — just add your OpenRouter key to finish.")
+                        .onboardingScaledFont(.subheadline)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .glassCardBackground()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .glassCardBackground()
-            .padding(.horizontal, 32)
-        }
 
-        VStack(alignment: .leading, spacing: 8) {
             // xcstrings: hosted-model
-            Text("Paste your OpenRouter API key and pick a model — your messages go straight to OpenRouter, no middleman.")
+            Text("Sign in with OpenRouter, or paste an API key — then pick a model. Your messages go straight to OpenRouter, no middleman.")
                 .onboardingScaledFont(.subheadline)
                 .foregroundStyle(AppColors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // The one-click path, above the field it replaces. Hidden entirely when
+            // another credential source is already staged (that row supersedes it)
+            // or when this build claims no callback scheme — an action that cannot
+            // come back is worse than no action.
+            if oauthHandle == nil, !useVoiceKey, viewModel.openRouterSignInAvailable {
+                signInSection
+            }
 
             // Quiet grey link (the primer's tertiary-docs treatment) — a passive
             // exit to the OpenRouter site, not a competing action: the screen's one
-            // blue is the Connect fill in the footer.
+            // blue is the Connect fill in the footer. Placed BELOW the sign-in
+            // button because it serves the PASTE path: read first, it sends the user
+            // off-app to fetch a key the button two lines down would have made for
+            // them, and it contradicts that button's own "nothing to copy".
             Link(destination: descriptor.docsURL) {
                 HStack(spacing: 4) {
                     Text("Get an OpenRouter API key") // xcstrings: hosted-model
@@ -280,72 +377,89 @@ struct HostedModelGatewayStepView: View {
             }
             .tint(AppColors.textSecondary)
             .pointerLink()
-            .padding(.top, 2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 32)
-
-        // Offer to reuse a voice OpenRouter key when one exists and the gateway has
-        // NO stored key yet. Tapping STAGES the reuse (flag only — nothing is
-        // persisted): the callout hides, the key field flips to a "voice key
-        // selected" row, and Connect commits key + model together.
-        if entryMode == .setup,
-           viewModel.openRouterVoiceKeyAvailable, !hasStoredKey, !useVoiceKey {
-            OpenRouterKeyReuseCallout(
-                title: LocalizedStringResource(
-                    "settings.remoteAgent.openRouter.reuse.title",
-                    defaultValue: "You've already set up OpenRouter for voice. Reuse that API key here?"
-                ),
-                buttonTitle: LocalizedStringResource(
-                    "settings.remoteAgent.openRouter.reuse.button",
-                    defaultValue: "Use my voice key"
-                ),
-                action: {
-                    // No staging swap while a probe/save is mid-flight against
-                    // the current credential intent.
-                    guard !connecting, !validatingKey else { return }
-                    useVoiceKey = true
-                    // Freeze the pre-filled buffers (same fence the key field's
-                    // focus raises) so a late iCloud-KVS reload can't revert the
-                    // in-progress setup under the user.
-                    viewModel.editorHasUnsavedChanges = true
-                }
-            )
-            // Neutral tint: the callout's bordered button inherits it, so the pill
-            // reads as a quiet secondary here instead of a second blue competing
-            // with Connect. (Settings callsites keep their own default tint.)
-            .tint(AppColors.textPrimary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .onboardingCardPadding()
-            .glassCardBackground()
-            .padding(.horizontal, 32)
-        }
 
-        VStack(spacing: 12) {
-            // The staged row sits ABOVE the key field; the SecureField itself
-            // stays PERMANENTLY mounted with an unchanged modifier chain. On
-            // macOS a SecureField is an out-of-process NSSecureTextField, and
-            // structurally mounting/unmounting it under a state toggle triggers
-            // `_NSDetectedLayoutRecursion` / ViewBridge termination (see
-            // SecretEntrySheet's header + the CustomSTTConfigBody history).
-            // Typing in the field unstages the reuse (see `.onChange(of:
-            // pendingKey)`), so the two credential sources can't disagree.
-            if useVoiceKey {
-                stagedVoiceKeyRow
+            // Offer to reuse a voice OpenRouter key when one exists and the gateway has
+            // NO stored key yet. Tapping STAGES the reuse (flag only — nothing is
+            // persisted): the callout hides, the key field flips to a "voice key
+            // selected" row, and Connect commits key + model together. Hidden while a
+            // sign-in is staged — one credential source on screen at a time.
+            if entryMode == .setup,
+               viewModel.openRouterVoiceKeyAvailable, !hasStoredKey, !useVoiceKey, oauthHandle == nil {
+                OpenRouterKeyReuseCallout(
+                    title: LocalizedStringResource(
+                        "settings.remoteAgent.openRouter.reuse.title",
+                        defaultValue: "You've already set up OpenRouter for voice. Reuse that API key here?"
+                    ),
+                    buttonTitle: LocalizedStringResource(
+                        "settings.remoteAgent.openRouter.reuse.button",
+                        defaultValue: "Use my voice key"
+                    ),
+                    action: {
+                        // No staging swap while a probe/save/sign-in is mid-flight
+                        // against the current credential intent.
+                        guard !connecting, !validatingKey, !signingIn else { return }
+                        // Atomically the other way round from the typed-key switch:
+                        // choosing the voice key drops any signed-in key first, so
+                        // the two can never both be staged.
+                        discardStagedSignIn()
+                        useVoiceKey = true
+                        // Freeze the pre-filled buffers (same fence the key field's
+                        // focus raises) so a late iCloud-KVS reload can't revert the
+                        // in-progress setup under the user.
+                        viewModel.editorHasUnsavedChanges = true
+                    }
+                )
+                // Neutral tint: the callout's bordered button inherits it, so the pill
+                // reads as a quiet secondary here instead of a second blue competing
+                // with Connect. (Settings callsites keep their own default tint.)
+                .tint(AppColors.textPrimary)
+                // Every other credential control on this screen carries the same
+                // gate. Without it the pill stays live-looking and no-ops on macOS,
+                // where the auth window is separate and the app window stays
+                // clickable. The in-action guard remains as the backstop.
+                .disabled(connecting || validatingKey || signingIn)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onboardingCardPadding()
+                .glassCardBackground()
             }
-            keyField(placeholder: descriptor.tokenPlaceholder)
-            OpenRouterModelPickerField(
-                selection: modelBinding,
-                filter: $modelFilter,
-                suggestions: viewModel.remoteAgentModelSuggestions[ref] ?? []
-            )
-            validationStatusRow
+
+            VStack(spacing: 12) {
+                // The staged row sits ABOVE the key field; the SecureField itself
+                // stays PERMANENTLY mounted with an unchanged modifier chain. On
+                // macOS a SecureField is an out-of-process NSSecureTextField, and
+                // structurally mounting/unmounting it under a state toggle triggers
+                // `_NSDetectedLayoutRecursion` / ViewBridge termination (see
+                // SecretEntrySheet's header + the CustomSTTConfigBody history).
+                // Typing in the field unstages both (see `.onChange(of:
+                // pendingKey)`), so the credential sources can't disagree.
+                //
+                // The orphan note LEADS the stack: it is not a credential source at
+                // all, it is what is left over after one was abandoned, and it has
+                // to stay visible while the user works with whichever source
+                // replaced it.
+                if let discardedKeyURL {
+                    discardedKeyNote(url: discardedKeyURL)
+                }
+                if let oauthHandle {
+                    stagedSignInRow(handle: oauthHandle)
+                }
+                if useVoiceKey {
+                    stagedVoiceKeyRow
+                }
+                keyField(placeholder: descriptor.tokenPlaceholder)
+                // The verdict sits with the KEY it describes — above the (tall)
+                // model picker, not below it. A sign-in failure is written into this
+                // same row, and below the picker it lands off-screen on a phone.
+                validationStatusRow
+                OpenRouterModelPickerField(
+                    selection: modelBinding,
+                    filter: $modelFilter,
+                    suggestions: viewModel.remoteAgentModelSuggestions[ref] ?? []
+                )
+            }
         }
-        // 32 — the CONTENT rail, matching the intro prose, the reuse callout and
-        // the partial-sync banner above. At `Layout.horizontalPadding` (16 on
-        // iOS) the fields rendered 16pt wider per side than the text explaining
-        // them.
-        .padding(.horizontal, 32)
+        .guidedFormRail()
     }
 
     // MARK: - Manage body (.manage — second-time, already configured)
@@ -354,32 +468,36 @@ struct HostedModelGatewayStepView: View {
     /// step. Editing is NOT inline — `onEdit()` is the container's `goTo`.
     @ViewBuilder
     private var manageBody: some View {
-        manageCard
+        // Same rail as the setup body and the edit step this hands off to, so the
+        // summary card here and the edit step's card are the one width.
+        VStack(alignment: .leading, spacing: 20) {
+            manageCard
 
-        Button {
-            onEdit()
-        } label: {
-            // Neutral disclosure row (not blue): the screen's one blue is the
-            // filled Done in the footer; the chevron carries the "this navigates".
-            HStack {
-                Text("Change model or API key") // xcstrings: hosted-model
-                    .onboardingScaledFont(.subheadline, weight: .semibold)
-                    .foregroundStyle(AppColors.textPrimary)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .onboardingScaledFont(.caption)
-                    .foregroundStyle(AppColors.textSecondary)
+            Button {
+                onEdit()
+            } label: {
+                // Neutral disclosure row (not blue): the screen's one blue is the
+                // filled Done in the footer; the chevron carries the "this navigates".
+                HStack {
+                    Text("Change model or API key") // xcstrings: hosted-model
+                        .onboardingScaledFont(.subheadline, weight: .semibold)
+                        .foregroundStyle(AppColors.textPrimary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .onboardingScaledFont(.caption)
+                        .foregroundStyle(AppColors.textSecondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            // Full-width disclosure row: the whole band is live and washes on hover.
+            // The label keeps its own frame/contentShape — off macOS this style IS
+            // `.plain`, and this row is a free-standing VStack child, not a `List`
+            // row, so nothing else would make the `Spacer()` gap hittable there.
+            .settingsRowButton()
+            .accessibilityIdentifier("settings.remoteAgent.hosted.change")
         }
-        // Full-width disclosure row: the whole band is live and washes on hover.
-        // The label keeps its own frame/contentShape — off macOS this style IS
-        // `.plain`, and this row is a free-standing VStack child, not a `List`
-        // row, so nothing else would make the `Spacer()` gap hittable there.
-        .settingsRowButton()
-        .padding(.horizontal, 32)
-        .accessibilityIdentifier("settings.remoteAgent.hosted.change")
+        .guidedFormRail()
     }
 
     /// The connected confirmation: honesty-aware tick, current model + masked key,
@@ -414,12 +532,28 @@ struct HostedModelGatewayStepView: View {
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            // Deep link to THIS key's page at OpenRouter — spend, limits,
+            // deletion. Addressed by the key's own digest, computed VM-side, so
+            // the link exists only while a key is actually stored (nil hides it).
+            if let storedKeySettingsURL {
+                Link(destination: storedKeySettingsURL) {
+                    HStack(spacing: 4) {
+                        Text("Manage this key on OpenRouter") // xcstrings: hosted-model
+                        Image(systemName: "arrow.up.right")
+                            .onboardingScaledFont(.caption)
+                    }
+                    .onboardingScaledFont(.subheadline, weight: .semibold)
+                    .foregroundStyle(AppColors.textSecondary)
+                }
+                .tint(AppColors.textSecondary)
+                .pointerLink()
+            }
+
             probeStatusRow
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onboardingCardPadding()
         .glassCardBackground()
-        .padding(.horizontal, 32)
     }
 
     /// One "Label · value" line in the manage card. `value` is verbatim (a model
@@ -471,6 +605,200 @@ struct HostedModelGatewayStepView: View {
         }
     }
 
+    // MARK: - Sign in with OpenRouter
+
+    /// The one-click credential path: a stroked secondary pill (the flow's shared
+    /// secondary vocabulary, same as "Validate key") plus one line saying what
+    /// tapping it actually does to the user's OpenRouter account. Deliberately
+    /// NOT a second blue — the screen's one filled control stays Connect, because
+    /// signing in is a way to fill the form, not the act of finishing it.
+    private var signInSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: startSignIn) {
+                HStack(spacing: 8) {
+                    if signingIn {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "person.badge.key")
+                    }
+                    Text("Sign in with OpenRouter") // xcstrings: hosted-model
+                }
+                .onboardingScaledFont(.headline)
+                .foregroundColor(AppColors.textPrimary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(AppColors.border, lineWidth: 1)
+                )
+                .opacity(signInEnabled ? 1 : 0.5)
+            }
+            // Stroke-only background: without the primitive only the 1pt border
+            // and the glyphs hit-test on macOS. 14 matches the stroke's radius.
+            .choiceCardButton(cornerRadius: 14)
+            .disabled(!signInEnabled)
+            .accessibilityIdentifier("settings.remoteAgent.openRouter.signIn")
+
+            // xcstrings: hosted-model
+            Text("Creates an API key for Conduck in your OpenRouter account — nothing to copy.")
+                .onboardingScaledFont(.caption)
+                .foregroundStyle(AppColors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        // Fills the form rail, so the pill and the line explaining it share the
+        // one column every other control on this screen sits in (`setupBody`).
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Sits above the (always-mounted) key field while a signed-in key is
+    /// staged. Structurally the twin of `stagedVoiceKeyRow`, with two links the
+    /// voice row does not need:
+    ///   • "Manage on OpenRouter" — the exchange created a REAL key, so the user
+    ///     must be able to reach it even if they never press Connect.
+    ///   • "Use a different key" — discards the staged key and returns the screen
+    ///     to the sign-in button + paste field.
+    /// It also restates what the sign-in caption said, because that caption is
+    /// unmounted the instant this row appears — which is the instant the key
+    /// actually starts existing, so it is the worst possible moment for the only
+    /// sentence naming that fact to disappear.
+    /// Locked while a probe or the save is in flight: the captured intent must
+    /// not mutate under an operation that is mid-commit against it.
+    private func stagedSignInRow(handle: UUID) -> some View {
+        let masked = viewModel.openRouterIssuedMaskedKey(handle: handle) ?? ""
+        let manageURL = viewModel.openRouterKeySettingsURL(handle: handle)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(AppColors.success)
+                Text(LocalizedStringResource(
+                    "settings.remoteAgent.openRouter.signIn.staged",
+                    defaultValue: "Signed in with OpenRouter"
+                ))
+                    .onboardingScaledFont(.subheadline)
+                    .foregroundStyle(AppColors.textPrimary)
+                Spacer(minLength: 0)
+                // Masked through the app's ONE masking helper, so a staged key
+                // and a stored key read as the same kind of credential rather
+                // than two different formats a few points apart. Verbatim: it is
+                // a key fragment, never localized.
+                Text(verbatim: masked)
+                    .onboardingScaledFont(.caption, design: .monospaced)
+                    .foregroundStyle(AppColors.textSecondary)
+            }
+            Text(LocalizedStringResource(
+                "settings.remoteAgent.openRouter.signIn.stagedDetail",
+                defaultValue: "A new API key now sits in your OpenRouter account."
+            ))
+                .onboardingScaledFont(.caption)
+                .foregroundStyle(AppColors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 16) {
+                if let manageURL {
+                    Link(destination: manageURL) {
+                        HStack(spacing: 4) {
+                            Text(LocalizedStringResource(
+                                "settings.remoteAgent.openRouter.signIn.manage",
+                                defaultValue: "Manage on OpenRouter"
+                            ))
+                            Image(systemName: "arrow.up.right")
+                                .onboardingScaledFont(.caption)
+                        }
+                        .onboardingScaledFont(.subheadline, weight: .semibold)
+                    }
+                    .pointerLink()
+                    .foregroundStyle(.tint)
+                }
+                Button {
+                    unstageSignInForADifferentKey()
+                } label: {
+                    Text(LocalizedStringResource(
+                        "settings.remoteAgent.openRouter.signIn.useDifferentKey",
+                        defaultValue: "Use a different key"
+                    ))
+                        .onboardingScaledFont(.subheadline, weight: .semibold)
+                }
+                // Tinted inline text trailing a row — a row style would stretch
+                // it to full width and shove the link beside it aside.
+                .inlineLinkButton()
+                .foregroundStyle(.tint)
+                .disabled(connecting || validatingKey || signingIn)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(14)
+        .background(AppColors.cardBackground)
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(AppColors.borderSubtle, lineWidth: 1)
+        )
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("settings.remoteAgent.openRouter.signIn.stagedRow")
+    }
+
+    /// Shown after a signed-in key is dropped WITHOUT ever being saved — the
+    /// user typed instead, chose the voice key, or tapped "Use a different key".
+    ///
+    /// This is the discard half of the same obligation the staged row carries:
+    /// the exchange created that key at OpenRouter for real, so dropping our
+    /// copy leaves a live key spending the user's credit with, otherwise,
+    /// nothing on screen naming it and no way back to it. `url` is snapshotted
+    /// before the discard, since the digest that addresses the key is computed
+    /// from the key — which is gone a line later. The digest is not a
+    /// credential, so it can safely outlive what it points at.
+    private func discardedKeyNote(url: URL) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(AppColors.textSecondary)
+                Text(LocalizedStringResource(
+                    "settings.remoteAgent.openRouter.signIn.discarded",
+                    defaultValue: "The key you signed in with still exists in your OpenRouter account."
+                ))
+                    .onboardingScaledFont(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 16) {
+                Link(destination: url) {
+                    HStack(spacing: 4) {
+                        Text(LocalizedStringResource(
+                            "settings.remoteAgent.openRouter.signIn.manage",
+                            defaultValue: "Manage on OpenRouter"
+                        ))
+                        Image(systemName: "arrow.up.right")
+                            .onboardingScaledFont(.caption)
+                    }
+                    .onboardingScaledFont(.subheadline, weight: .semibold)
+                }
+                .pointerLink()
+                .foregroundStyle(.tint)
+                Button {
+                    discardedKeyURL = nil
+                } label: {
+                    Text(LocalizedStringResource(
+                        "settings.remoteAgent.openRouter.signIn.discardedDismiss",
+                        defaultValue: "Dismiss"
+                    ))
+                        .onboardingScaledFont(.subheadline, weight: .semibold)
+                }
+                .inlineLinkButton()
+                .foregroundStyle(.tint)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(14)
+        .background(AppColors.cardBackground)
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(AppColors.borderSubtle, lineWidth: 1)
+        )
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("settings.remoteAgent.openRouter.signIn.discardedRow")
+    }
+
     // MARK: - Shared fields
 
     /// Sits above the (always-mounted) key field while voice-key reuse is
@@ -502,7 +830,7 @@ struct HostedModelGatewayStepView: View {
             // to full width and shove the staged-key label aside.
             .inlineLinkButton()
             .foregroundStyle(.tint)
-            .disabled(connecting || validatingKey)
+            .disabled(connecting || validatingKey || signingIn)
         }
         .padding(14)
         .background(AppColors.cardBackground)
@@ -511,7 +839,7 @@ struct HostedModelGatewayStepView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(AppColors.borderSubtle, lineWidth: 1)
         )
-        .frame(maxWidth: Constants.Layout.buttonMaxWidth)
+        .frame(maxWidth: .infinity)
         .accessibilityIdentifier("settings.remoteAgent.reuse.selectedRow")
     }
 
@@ -527,6 +855,12 @@ struct HostedModelGatewayStepView: View {
             .focused($keyFieldFocused)
             .submitLabel(.next)
             .onSubmit { keyFieldFocused = false }
+            // Inert while the web-auth sheet is up — typing would be a credential
+            // source switch against an operation already in flight. A MODIFIER,
+            // never a structural change: the field stays permanently mounted,
+            // because mounting/unmounting an out-of-process `NSSecureTextField`
+            // under a state toggle terminates ViewBridge on macOS.
+            .disabled(signingIn)
             .padding(14)
             .background(AppColors.cardBackground)
             .cornerRadius(12)
@@ -534,7 +868,7 @@ struct HostedModelGatewayStepView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(AppColors.borderSubtle, lineWidth: 1)
             )
-            .frame(maxWidth: Constants.Layout.buttonMaxWidth)
+            .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
@@ -674,27 +1008,35 @@ struct HostedModelGatewayStepView: View {
 
     // MARK: - Derived enablement
 
-    /// "Validate key" needs a key to probe — typed, staged (voice-key reuse), or
-    /// (manage) the stored one. Not gated on the model (the catalog only appears
-    /// after a probe).
+    /// "Validate key" needs a key to probe — typed, staged (a sign-in or
+    /// voice-key reuse), or (manage) the stored one. Not gated on the model (the
+    /// catalog only appears after a probe).
     private var validateKeyEnabled: Bool {
         let haveSomethingToProbe =
             !pendingKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || hasStoredKey || useVoiceKey
+                || hasStoredKey || useVoiceKey || oauthHandle != nil
         return haveSomethingToProbe
             && validationState != .checking
-            && !connecting && !validatingKey
+            && !connecting && !validatingKey && !signingIn
     }
 
-    /// "Connect" requires the model and a key — typed, staged (voice-key reuse),
-    /// or already stored.
+    /// "Connect" requires the model and a key — typed, staged (a sign-in or
+    /// voice-key reuse), or already stored.
     private var connectButtonEnabled: Bool {
         let keyOK = !pendingKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || hasStoredKey || useVoiceKey
+            || hasStoredKey || useVoiceKey || oauthHandle != nil
         let modelOK = !modelBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return keyOK && modelOK
             && validationState != .checking
-            && !connecting && !validatingKey
+            && !connecting && !validatingKey && !signingIn
+    }
+
+    /// "Sign in with OpenRouter" is live whenever nothing else is mid-flight
+    /// against the current credential. It is NOT gated on the field being empty:
+    /// starting a sign-in is itself the act of choosing a different source, and
+    /// it clears the field as part of staging.
+    private var signInEnabled: Bool {
+        validationState != .checking && !connecting && !validatingKey && !signingIn
     }
 
     // MARK: - Actions
@@ -703,20 +1045,138 @@ struct HostedModelGatewayStepView: View {
         viewModel.remoteAgentURLStrings[ref] ?? Constants.openRouterBaseURLString
     }
 
+    /// Open the system web-auth sheet and stage whatever comes back.
+    ///
+    /// Staging is atomic with the tap: any previous sign-in is discarded and the
+    /// typed / voice-key sources are cleared BEFORE the sheet opens, so there is
+    /// no instant where the screen has two live credentials. The task is bound to
+    /// this step — a newer sign-in or leaving the screen cancels it, and a
+    /// completion that lands after either is dropped (and its key discarded)
+    /// rather than staging something nobody is looking at.
+    ///
+    /// A user cancel is SILENT: `authenticate` throws `canceledLogin`, and a
+    /// person who closed the sheet is not owed an error about it. Everything else
+    /// lands on the paste field with a message, which is the whole failure
+    /// contract for this feature.
+    private func startSignIn() {
+        guard signInEnabled else { return }
+        guard let start = viewModel.beginOpenRouterSignIn() else {
+            // The view model already wrote the "can't start a secure sign-in"
+            // message into the ref's validation state; nothing else to do.
+            return
+        }
+        probeTask?.cancel()
+        signInTask?.cancel()
+        discardStagedSignIn()
+        // `discardedKeyURL` is deliberately NOT cleared here: a fresh sign-in
+        // mints a second real key, and the note is the only route left to the one
+        // just abandoned. It carries its own Dismiss.
+        // The verdict on screen was earned by whatever this sign-in replaces.
+        viewModel.remoteAgentValidationStates[ref] = .unset
+        pendingKey = ""
+        useVoiceKey = false
+        // Freeze the pre-filled buffers (the same fence the key field's focus
+        // raises) so a late iCloud-KVS reload can't revert the setup under a
+        // sign-in that is already in flight.
+        viewModel.editorHasUnsavedChanges = true
+        signingIn = true
+        let handle = start.handle
+        signInTask = Task { @MainActor in
+            defer { signingIn = false }
+            do {
+                let callback = try await webAuthenticationSession.authenticate(
+                    using: start.authorizationURL,
+                    callback: .customScheme(start.callbackScheme),
+                    // `.shared`, not `.ephemeral`: reusing the browser session the
+                    // user is already signed into IS the one-click property. An
+                    // ephemeral session would make them log in to OpenRouter
+                    // again, which is the friction this whole path removes.
+                    preferredBrowserSession: .shared,
+                    additionalHeaderFields: [:]
+                )
+                guard !Task.isCancelled else {
+                    viewModel.discardOpenRouterSignIn(handle: handle)
+                    return
+                }
+                let outcome = await viewModel.completeOpenRouterSignIn(
+                    handle: handle, callbackURL: callback
+                )
+                guard !Task.isCancelled else {
+                    viewModel.discardOpenRouterSignIn(handle: handle)
+                    return
+                }
+                switch outcome {
+                case .staged(let staged, _):
+                    oauthHandle = staged
+                case .cancelled, .failed:
+                    // The view model has already surfaced any message; the handle
+                    // holds nothing worth keeping.
+                    viewModel.discardOpenRouterSignIn(handle: handle)
+                }
+            } catch is CancellationError {
+                viewModel.discardOpenRouterSignIn(handle: handle)
+            } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
+                // The user closed the sheet. Silent — but the busy state still
+                // resets, via the `defer` above.
+                viewModel.discardOpenRouterSignIn(handle: handle)
+            } catch {
+                // The session itself failed (no presentation context, or the
+                // system tore it down). Nothing usable came back, which is the
+                // same fact a mismatched callback reports.
+                viewModel.failOpenRouterSignIn(handle: handle)
+            }
+        }
+    }
+
+    /// Drop the staged sign-in, if any — the ONE place this View forgets a
+    /// handle, so "discarded locally, still real at OpenRouter" has a single
+    /// meaning. Handle-scoped by construction: it can only forget the handle it
+    /// currently holds.
+    ///
+    /// The key's settings URL is read BEFORE the discard and kept, because the
+    /// discard destroys the only copy of the key and therefore the ability to
+    /// compute the digest that addresses it. That link is the whole remedy for a
+    /// key the exchange already created, so losing it here would leave the user
+    /// with an orphan credential and no route to it.
+    private func discardStagedSignIn() {
+        guard let handle = oauthHandle else { return }
+        discardedKeyURL = viewModel.openRouterKeySettingsURL(handle: handle)
+        oauthHandle = nil
+        viewModel.discardOpenRouterSignIn(handle: handle)
+    }
+
+    /// The USER-initiated unstage ("Use a different key"). Unlike the teardown
+    /// and replacement call sites, nothing else here retracts the verdict — and
+    /// there always is one, because a successful sign-in auto-probes. Leaving it
+    /// would show "API key valid." over a screen with nothing staged.
+    /// Mirrors what `.onChange(of: useVoiceKey)` does for the other source.
+    private func unstageSignInForADifferentKey() {
+        discardStagedSignIn()
+        viewModel.remoteAgentValidationStates[ref] = .unset
+        viewModel.noteRemoteAgentSecretEdited(for: ref)
+    }
+
     /// VALIDATE-ONLY: probe `/v1/key` (also discovering the model catalog) without
-    /// saving. Uses the staged voice key, the typed key, or re-probes the stored
-    /// key when the field is blank in manage mode.
+    /// saving. Uses the staged sign-in, the staged voice key, the typed key, or
+    /// re-probes the stored key when the field is blank in manage mode.
     private func validateKey() {
-        guard !validatingKey && !connecting && validationState != .checking else { return }
+        guard !validatingKey && !connecting && !signingIn && validationState != .checking else { return }
         probeTask?.cancel()
         // Snapshot the credential intent at TAP time — the probe must test what
         // the user launched it against, immune to a mid-flight toggle.
+        let signedInHandle = oauthHandle
         let reuseVoiceKey = useVoiceKey
         let candidate = pendingKey
         let url = fixedURL
         validatingKey = true
         Task {
-            if reuseVoiceKey {
+            if let signedInHandle {
+                // The VM resolves the signed-in key from its vault — never the
+                // View — and a probe never consumes it.
+                await viewModel.testRemoteAgent(
+                    ref: ref, stagedToken: .oauthIssued(signedInHandle), name: nil
+                )
+            } else if reuseVoiceKey {
                 // The VM resolves the voice key from the Keychain — never the View.
                 await viewModel.testRemoteAgent(ref: ref, stagedToken: .reuseVoiceKey, name: nil)
             } else if candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && hasStoredKey {
@@ -735,18 +1195,30 @@ struct HostedModelGatewayStepView: View {
     /// valid key that fails to persist leaves the user unconfigured, and must leave
     /// them on this screen (with the error) rather than on a "Connected" one.
     private func connect() {
-        guard !connecting && !validatingKey && validationState != .checking else { return }
+        guard !connecting && !validatingKey && !signingIn && validationState != .checking else { return }
         // Snapshot the credential intent at TAP time (see `validateKey`).
+        let signedInHandle = oauthHandle
         let reuseVoiceKey = useVoiceKey
         let candidate = pendingKey
         connecting = true
         Task {
-            let ok = await performSave(replacementKey: candidate, reuseVoiceKey: reuseVoiceKey)
+            let ok = await performSave(
+                replacementKey: candidate,
+                reuseVoiceKey: reuseVoiceKey,
+                signedInHandle: signedInHandle
+            )
             guard ok else {
                 connecting = false
                 return
             }
             pendingKey = ""
+            // The save consumed the vault entry, so the handle now addresses
+            // nothing — forget it locally too rather than leaving the staged row
+            // pointing at a key that has moved into the Keychain. Straight to
+            // `oauthHandle`, NOT through `discardStagedSignIn()`: this key was
+            // committed, not abandoned, so it must not raise the orphan note.
+            oauthHandle = nil
+            discardedKeyURL = nil
             viewModel.editorHasUnsavedChanges = false
             // `connecting` stays true through the outgoing slide: clearing it here
             // would flip the button out of its spinner mid-transition. The view is
@@ -755,17 +1227,29 @@ struct HostedModelGatewayStepView: View {
         }
     }
 
-    /// Validate (whenever a NEW key is in play — typed or staged voice-key reuse)
-    /// then persist. `.stored` keeps the saved key untouched — the model-only
-    /// path. `reuseVoiceKey` is the caller's TAP-time snapshot, not live state.
-    private func performSave(replacementKey: String, reuseVoiceKey: Bool) async -> Bool {
+    /// Validate (whenever a NEW key is in play — typed, a staged sign-in, or
+    /// staged voice-key reuse) then persist. `.stored` keeps the saved key
+    /// untouched — the model-only path. Every argument is the caller's TAP-time
+    /// snapshot, not live state.
+    ///
+    /// Precedence, top to bottom, is the same order the screen reads: a signed-in
+    /// key wins, then a typed one, then the voice key, then whatever is stored.
+    /// The screen already keeps those mutually exclusive — this ordering is the
+    /// backstop that decides deterministically if they ever aren't.
+    private func performSave(
+        replacementKey: String,
+        reuseVoiceKey: Bool,
+        signedInHandle: UUID?
+    ) async -> Bool {
         let staged: StagedRemoteAgentToken
-        if reuseVoiceKey {
-            staged = .reuseVoiceKey
-        } else if replacementKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            staged = .stored
-        } else {
+        if let signedInHandle {
+            staged = .oauthIssued(signedInHandle)
+        } else if !replacementKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             staged = .typed(replacementKey)
+        } else if reuseVoiceKey {
+            staged = .reuseVoiceKey
+        } else {
+            staged = .stored
         }
         switch staged {
         case .typed(let key):
@@ -773,10 +1257,11 @@ struct HostedModelGatewayStepView: View {
                 ref: ref, url: fixedURL, token: key, authScheme: .bearer, fingerprint: nil
             )
             guard viewModel.remoteAgentRowState(for: ref) == .valid else { return false }
-        case .reuseVoiceKey:
+        case .reuseVoiceKey, .oauthIssued:
             // Same prove-the-key-before-save contract as a typed key; the VM
-            // resolves the voice key internally.
-            await viewModel.testRemoteAgent(ref: ref, stagedToken: .reuseVoiceKey, name: nil)
+            // resolves the credential internally and, for a sign-in, does NOT
+            // consume it — a failed probe here must leave the key retryable.
+            await viewModel.testRemoteAgent(ref: ref, stagedToken: staged, name: nil)
             guard viewModel.remoteAgentRowState(for: ref) == .valid else { return false }
         case .stored:
             break

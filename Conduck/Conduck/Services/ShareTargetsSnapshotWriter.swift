@@ -31,10 +31,14 @@ import Foundation
 import SwiftUI
 
 /// Builds + atomically writes the App-Group `share-targets.json` the appex
-/// picker reads. Concurrent triggers (`.conversationsDidChange` +
-/// `.settingsDidChangeRemotely` firing near-simultaneously) are generation-
-/// coalesced: actor methods are re-entrant across `await`, so an older build is
-/// explicitly discarded when a newer regeneration has started.
+/// picker reads. An `actor`, but actor isolation alone does NOT serialize
+/// concurrent triggers (`.conversationsDidChange` + `.settingsDidChangeRemotely`
+/// firing near-simultaneously): actors are REENTRANT across `await`, and
+/// `regenerate()` suspends. It therefore coalesces explicitly — one build in
+/// flight plus one trailing build — which both bounds the store reads a burst
+/// can start and stops an older build committing over a newer one. A build that
+/// a newer trigger has already made stale is discarded unwritten, so only the
+/// trailing pass publishes.
 actor ShareTargetsSnapshotWriter {
 
     /// Production singleton — writes into the App-Group `Application Support`
@@ -46,13 +50,6 @@ actor ShareTargetsSnapshotWriter {
     /// `Constants.shareTargetsSnapshotFileName` is the cross-process literal.
     private let store: ConversationStore
     private let settings: SettingsManager
-
-    /// Actor methods are re-entrant at every store/settings await. These two
-    /// flags make regeneration a true single-flight loop: a notification storm
-    /// can request one follow-up pass, but can never fan out hundreds of Core
-    /// Data fetches while the first snapshot is still being assembled.
-    private var regenerationIsRunning = false
-    private var regenerationWasRequested = false
 
     private init() {
         self.store = .shared
@@ -66,27 +63,58 @@ actor ShareTargetsSnapshotWriter {
         self.settings = settings
     }
 
+    #if os(iOS) || os(macOS)
+    /// Single-flight state for `regenerate()`. Actor isolation alone does NOT
+    /// serialize it: actors are REENTRANT across `await`, and `buildSnapshot()`
+    /// suspends, so a second caller walks in while the first is mid-build.
+    private var isRegenerating = false
+    private var regenerationPending = false
+    #endif
+
     /// Regenerate the snapshot and atomically write it (iOS + macOS — both have a
     /// share extension that reads it). On watchOS this is a NO-OP (no share sheet
     /// → the snapshot is never read). Best-effort: any failure logs + returns,
     /// never throws.
+    ///
+    /// COALESCED: at most one build in flight, plus at most one trailing build
+    /// for notifications that land during it. The observer fires this on every
+    /// `.conversationsDidChange` from any store, so without the latch a burst
+    /// opened one concurrent build per post — each taking a fresh background
+    /// context, each parking a dispatch worker on a synchronous Core Data
+    /// coordinator hop while faulting relationships. At 512 parked workers
+    /// libdispatch can schedule nothing ever again and the process wedges.
+    /// The trailing pass is what keeps coalescing honest: dropping posts during
+    /// a build would leave the snapshot stale. Single-flight also fixes an
+    /// ordering bug — concurrent builds could `write()` an OLDER snapshot after
+    /// a newer one.
+    ///
+    /// The flag is claimed BEFORE the first suspension, and nothing suspends
+    /// between the final `regenerationPending` read and clearing it — that gap
+    /// is exactly where reentrancy would slip through and un-bound the fan-out.
     func regenerate() async {
         #if os(iOS) || os(macOS)
-        regenerationWasRequested = true
-        guard !regenerationIsRunning else { return }
-
-        regenerationIsRunning = true
-        defer { regenerationIsRunning = false }
-
-        while regenerationWasRequested {
-            regenerationWasRequested = false
+        if isRegenerating {
+            regenerationPending = true
+            return
+        }
+        isRegenerating = true
+        // `defer` rather than a trailing assignment: today nothing in the loop
+        // can exit early, but one future `guard`/`try` would strand the flag set
+        // forever, and every later call would then return at the check above —
+        // the appex's `share-targets.json` frozen for the process lifetime, with
+        // no error anywhere. Structural beats a comment.
+        defer { isRegenerating = false }
+        repeat {
+            regenerationPending = false
             let snapshot = await buildSnapshot()
 
-            // If another trigger arrived during the awaits, skip publishing the
-            // stale projection and immediately build the one coalesced follow-up.
-            guard !regenerationWasRequested else { continue }
+            // Another trigger arrived during the awaits: this projection is
+            // already stale, so skip publishing it and build the one coalesced
+            // follow-up instead. `continue` in a `repeat`-`while` jumps to the
+            // condition, which is true here, so that follow-up build runs.
+            guard !regenerationPending else { continue }
             write(snapshot)
-        }
+        } while regenerationPending
         #endif
         // watchOS: intentional no-op (the wrist has no share sheet; the snapshot
         // is consumed by the iOS + macOS share extensions only).

@@ -4,7 +4,7 @@
 
 <h1 align="center">Conduck</h1>
 
-<p align="center"><strong>Your AI. Every Apple device. No middleman.</strong></p>
+<p align="center"><strong>Your AI. Every Apple device. No Conduck middleman.</strong></p>
 
 <p align="center">
   The native Apple client for your self-hosted or BYO-key AI.<br />
@@ -77,7 +77,7 @@ Images and text/code attachments can ride inline on every compatible lane. Full 
 ## Private by architecture, not by promise
 
 ```text
-your device   -> your AI (direct HTTPS)
+your device   -> your AI (direct HTTPS, or explicit private-network HTTP)
 your device   -> your cloud voice provider (optional, direct HTTPS)
 your devices <-> your private iCloud
 your device  <-> your WebDAV file server (optional) <-> your agent
@@ -102,7 +102,7 @@ Two builds share this codebase:
 | | Official app | Personal source build |
 |---|---|---|
 | **Distribution** | [App Store](https://apps.apple.com/app/id6773045286) | Build from source |
-| **Terms** | Free for individuals; [commercial use licensed separately](https://conduck.com/terms/) | Apache-2.0, including commercial source use |
+| **Terms** | Free for individuals, including individual professional use; [organization-managed use requires a separate agreement](https://conduck.com/terms/) | Apache-2.0, including commercial source use |
 | **Identity** | Conduck name and artwork | “Conduck Community” with neutral placeholder art |
 | **CarPlay** | Included | Not included because it requires an Apple per-team entitlement |
 
@@ -135,7 +135,7 @@ Several of these words carry a narrower meaning here than they do elsewhere in t
 
 ### Gateway
 
-In Conduck, a gateway is a machine you own that stays on and runs an agent for you: a VPS, home server, or always-on Mac mini. It holds the agent's tools, file system, and long-running jobs. Conduck is the thin client that talks to it over HTTPS and keeps the conversation on your device.
+In Conduck, a gateway is a machine you own that stays on and runs an agent for you: a VPS, home server, or always-on Mac mini. It holds the agent's tools, file system, and long-running jobs. Conduck is the thin client that talks to it over HTTPS — or over explicit plain HTTP at a local-only address — and keeps the conversation on your device.
 
 This differs from the common industry meaning of “AI gateway.” LiteLLM, Portkey, Kong AI Gateway, Cloudflare AI Gateway, and similar products are routing proxies: they sit in front of model providers and handle keys, failover, caching, rate limits, or spend. They do not themselves provide an agent loop, tools, or a working file system.
 
@@ -190,11 +190,13 @@ In the source, `Conversation.backend` and `RemoteAgentBackend` are frozen persis
 ## Connecting to your gateway
 
 <details>
-<summary><strong>HTTPS and certificate requirements for self-hosted gateways</strong></summary>
+<summary><strong>Transport and certificate requirements for self-hosted gateways</strong></summary>
 
 This applies only to self-hosted lanes. A hosted model needs an API key but no certificate setup of your own.
 
-Your gateway needs an `https://` address with a certificate your Apple devices already trust. Conduck refuses a self-signed certificate or one issued by a private certificate authority the device does not trust.
+Use HTTPS for gateways whenever possible. Conduck also accepts an explicitly configured plain-HTTP address only for loopback, a private IPv4 or IPv6 literal, or a Bonjour name ending in `.local`; it warns that the connection is unencrypted. Public and otherwise routable plain-HTTP addresses are rejected. A Tailscale address still needs HTTPS because it is not a local-only address under this rule.
+
+For HTTPS, Conduck refuses a self-signed certificate or one issued by a private certificate authority the device does not trust.
 
 Conduck cannot offer an “ignore certificate errors” switch. App Transport Security — the platform rule Apple applies to app network traffic — allows an app to make certificate checks stricter, not looser.
 

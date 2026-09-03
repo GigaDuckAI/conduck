@@ -2,13 +2,14 @@
 
 Notable changes to the Conduck app for iPhone, iPad, Mac, Apple Watch and
 CarPlay. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
-Each section is named for one App Store release — the marketing version and the
-build number Apple shows — and matches the tag that release carries in this
-repository, `v<version>-<build>`.
+Each section is named for one tagged App Store build — the marketing version
+and build number Apple shows — and matches `v<version>-<build>` in this
+repository. Versions 1.3 and 1.4 shipped on macOS while iOS moved directly
+from 1.2 to 1.5.
 
 ## [1.5-11] — the measurement release
 
-App Store release, 25 August 2026. Tagged `v1.5-11`.
+App Store release, 28 August 2026. Tagged `v1.5-11`.
 
 ### Usage — measuring your own setup, on your own devices
 
@@ -213,7 +214,7 @@ Verified: iOS 4506 tests / 0 failures · watchOS 226 / 0 · Release builds green
 
 ## [1.4-10] — the local-server release
 
-App Store release, 22 August 2026. Tagged `v1.4-10`.
+macOS App Store release, 22 August 2026. Tagged `v1.4-10`.
 
 ### Local servers — plain HTTP where Apple permits it, and nowhere else
 
@@ -272,14 +273,14 @@ Verified: iOS 3987 tests / 0 failures · watchOS 217 / 0 · connector 242 checks
 
 ## [1.3-9] — the file lane, attention and trust release
 
-App Store release, 19 August 2026. Tagged `v1.3-9`.
+macOS App Store release, 19 August 2026. Tagged `v1.3-9`.
 
-Roughly 240 commits since 1.2 (16 July 2026). This repository's history opens
+Roughly 240 commits since 1.2 (21 July 2026). This repository's history opens
 partway through that cycle — the app's source moved here on 22 July 2026 — so
 the earlier 1.3 commits are not in this log's history, and there is no `v1.2`
 tag here to compare against.
 
-This is the engineering long form. The App Store "What's New" for 1.3 is the
+This is the engineering long form. The macOS App Store "What's New" for 1.3 is the
 short, user-facing version of the same release.
 
 ### Files — the agent-file return lane rebuilt

@@ -11,8 +11,10 @@
 //   - `.settingsDidChangeRemotely` — a gateway was added/removed/edited or the
 //     default changed → the configured-gateways list shifts.
 // On either, it asks `ShareTargetsSnapshotWriter` to regenerate. The writer is
-// an actor (serializes overlapping triggers) and its body is two cheap fetches,
-// so no extra debounce is layered here.
+// an actor, but actor isolation does NOT serialize overlapping triggers —
+// actors are reentrant across `await` and `regenerate()` suspends — so the
+// writer coalesces explicitly (one build in flight plus one trailing build).
+// That bound lives there rather than here, so every caller inherits it.
 //
 // Both iOS (`ConduckApp`) and macOS (`AppDelegate.applicationDidFinishLaunching`)
 // instantiate + `start()` one of these for the app's lifetime — each platform's
@@ -39,8 +41,12 @@ final class ShareTargetsSnapshotObserver {
         let names: [Notification.Name] = [.conversationsDidChange, .settingsDidChangeRemotely]
         for name in names {
             let token = center.addObserver(forName: name, object: nil, queue: nil) { _ in
-                // Hop into the writer actor (cheap; the actor serializes overlapping
-                // triggers). `regenerate()` is a no-op on macOS.
+                // Hop into the writer actor. Actor isolation does NOT serialize
+                // overlapping triggers — actors are reentrant across `await`, and
+                // `regenerate()` suspends — so the writer coalesces explicitly:
+                // one build in flight plus one trailing build. A burst therefore
+                // costs a bounded number of concurrent store reads, not one per
+                // post. `regenerate()` is a no-op on watchOS.
                 Task { await ShareTargetsSnapshotWriter.shared.regenerate() }
             }
             tokens.append(token)

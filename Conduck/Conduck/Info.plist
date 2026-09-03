@@ -20,12 +20,39 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- OAuth callback for "Sign in with OpenRouter" (RFC 8252 §7.1). The
+	     redirect target is a PRIVATE-USE reverse-DNS URL scheme, never https:
+	     an https callback needs Associated Domains + an AASA file served from
+	     conduck.com, is entitlement-gated so a Community build could not sign
+	     in at all, and its fallback path sends the authorization CODE to a
+	     server we operate — the one thing the no-backend posture forbids. The
+	     scheme is BUILD-CONFIGURED ($(CONDUCK_OAUTH_SCHEME), which the xcconfig
+	     identity layer derives from CONDUCK_IDENTITY_NAMESPACE) so a Community
+	     build and the official build never claim the same scheme on one device.
+	     CFBundleURLTypes is what LaunchServices registers; the app itself reads
+	     ConduckOAuthCallbackScheme below, the same way it reads
+	     ConduckIdentityNamespace. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>$(CONDUCK_OAUTH_SCHEME)</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(CONDUCK_OAUTH_SCHEME)</string>
+			</array>
+		</dict>
+	</array>
 	<key>ConduckAppGroupID</key>
 	<string>$(CONDUCK_GROUP_ID)</string>
 	<key>ConduckCloudKitContainerID</key>
 	<string>$(CONDUCK_ICLOUD_CONTAINER_ID)</string>
 	<key>ConduckIdentityNamespace</key>
 	<string>$(CONDUCK_IDENTITY_NAMESPACE)</string>
+	<key>ConduckOAuthCallbackScheme</key>
+	<string>$(CONDUCK_OAUTH_SCHEME)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSApplicationCategoryType</key>

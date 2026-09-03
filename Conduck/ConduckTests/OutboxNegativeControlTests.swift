@@ -402,6 +402,65 @@ final class OutboxNegativeControlTests: XCTestCase {
         XCTAssertEqual(recorder.calls.count, 1, "a failed listing spends no control request")
     }
 
+    // MARK: - A read the device never made
+
+    /// THE BUG THIS SECTION EXISTS FOR. Opening a thread from a lift charged the
+    /// lane for a request that never left the phone, which opened a backoff on a
+    /// server that was answering fine and painted "Couldn't read your file
+    /// server" under the replies. The pre-dispatch witness was fixed for exactly
+    /// this; the listing kept flattening every device-side failure into
+    /// `.transport` because it consulted the certificate path, which returns
+    /// early when an attempt recorded no trust signals — and an offline error
+    /// raises none.
+    func testAnOfflineDeviceListingIsNoObservationNotUnusable() async {
+        for code in [URLError.Code.notConnectedToInternet, .dataNotAllowed,
+                     .internationalRoamingOff, .callIsActive] {
+            MockURLProtocol.requestHandler = { _ in throw URLError(code) }
+
+            let verdict = await list()
+
+            XCTAssertEqual(
+                verdict, .noObservation,
+                "\(code) is this device failing to ask, which is evidence about the device and not about the lane")
+        }
+    }
+
+    /// The CONTROL half, which is easy to forget: it is a second request on the
+    /// same path, and a control that never left the device proved nothing about
+    /// the lane either. The listing stays unbelieved — the control is required —
+    /// but nothing is charged for it.
+    func testAnOfflineControlIsNoObservationNotUnusable() async {
+        let recorder = FileLaneRequestRecorder()
+        MockURLProtocol.requestHandler = { [self] request in
+            let url = request.url!
+            recorder.record(method: request.httpMethod ?? "", url: url)
+            if isControl(request) { throw URLError(.notConnectedToInternet) }
+            return (http(url, 207), listingBody())
+        }
+
+        let verdict = await list()
+
+        XCTAssertEqual(verdict, .noObservation)
+        XCTAssertEqual(recorder.calls.count, 2, "the control was attempted; it is the DEVICE that could not ask")
+    }
+
+    /// THE CARVE-OUT MUST NOT BECOME A HOLE. Everything that describes a server
+    /// that was reached for, and failed to answer, still charges the lane —
+    /// otherwise a flapping tunnel hides inside the offline exemption and the
+    /// backoff that bounds this traffic never opens.
+    func testHostSideListingFailuresStayUnusable() async {
+        for code in [URLError.Code.timedOut, .cannotFindHost,
+                     .networkConnectionLost, .cannotConnectToHost] {
+            MockURLProtocol.requestHandler = { _ in throw URLError(code) }
+
+            let verdict = await list()
+
+            XCTAssertEqual(
+                verdict, .unusable(.transport),
+                "\(code) is a server that was asked and did not answer, which is the lane's to own")
+        }
+    }
+
     // MARK: - One definition of a definite miss
 
     /// THE DRIFT GUARD. The listing's control and the pre-dispatch witness are

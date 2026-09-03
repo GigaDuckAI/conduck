@@ -278,6 +278,7 @@
 				Services/TTS/TTSStatusMap.swift,
 				Utilities/AccessibilityAnnouncer.swift,
 				Utilities/Constants.swift,
+				Utilities/OpenRouterAttribution.swift,
 				Views/Conversation/MessageRowFormatters.swift,
 			);
 			target = 630432CD2FB759DB00994EC0 /* ConduckWatch Watch App */;
