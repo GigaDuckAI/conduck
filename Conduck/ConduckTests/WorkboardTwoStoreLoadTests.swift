@@ -263,7 +263,107 @@ final class WorkboardTwoStoreLoadTests: XCTestCase {
         XCTAssertEqual(snapshot.blobPayload, payload)
     }
 
+    // MARK: - 7. The CloudKit containers
+
+    // The signed macOS build died on launch here, and nothing above could see
+    // it: `cloudKitContainerOptions` is readable only while the descriptions
+    // are being built, and no path a suite can drive builds them with the
+    // mirror on — the Simulator forces it off and the test seam is local-only.
+    // So these four read the descriptions directly. What killed the app was two
+    // mirrored stores naming ONE container; Core Data raises "Cannot assign the
+    // same iCloud Container Identifier to multiple stores" as they are
+    // assigned, before a store loads.
+
+    func testTheTwoMirroredStoresCarryDifferentCloudKitContainers() throws {
+        let descriptions = try mirroredDescriptions(blobsEntitled: true)
+        let core = try XCTUnwrap(descriptions.first { $0.configuration == "Core" })
+        let blobs = try XCTUnwrap(descriptions.first { $0.configuration == "Blobs" })
+
+        let coreContainer = try XCTUnwrap(
+            core.cloudKitContainerOptions?.containerIdentifier,
+            "the conversations store must still mirror; a nil here is sync switched off wholesale"
+        )
+        let blobsContainer = try XCTUnwrap(
+            blobs.cloudKitContainerOptions?.containerIdentifier,
+            "an entitled payload store must mirror, or bytes never leave the capturing device"
+        )
+        XCTAssertNotEqual(
+            coreContainer, blobsContainer,
+            "one container across two mirrored stores is the launch crash, restated"
+        )
+    }
+
+    func testEachStoreMirrorsThroughTheContainerNamedForIt() throws {
+        let descriptions = try mirroredDescriptions(blobsEntitled: true)
+        let core = try XCTUnwrap(descriptions.first { $0.configuration == "Core" })
+        let blobs = try XCTUnwrap(descriptions.first { $0.configuration == "Blobs" })
+
+        XCTAssertEqual(
+            core.cloudKitContainerOptions?.containerIdentifier,
+            Constants.iCloudCloudKitContainerID,
+            "the conversations container is a set-once Apple identity; a drift here strands every existing device"
+        )
+        XCTAssertEqual(
+            blobs.cloudKitContainerOptions?.containerIdentifier,
+            Constants.iCloudCloudKitBlobsContainerID,
+            "payload bytes ride the payload container, which the Watch's entitlements never name"
+        )
+    }
+
+    func testAnUnentitledPayloadContainerLeavesTheConversationMirrorOn() throws {
+        // The state between adding the container to the app and creating it in
+        // the developer portal — and the state of any build whose provisioning
+        // profile predates it. It must cost the payload sync and nothing else.
+        let descriptions = try mirroredDescriptions(blobsEntitled: false)
+        let core = try XCTUnwrap(descriptions.first { $0.configuration == "Core" })
+        let blobs = try XCTUnwrap(descriptions.first { $0.configuration == "Blobs" })
+
+        XCTAssertEqual(
+            core.cloudKitContainerOptions?.containerIdentifier,
+            Constants.iCloudCloudKitContainerID,
+            "cards, titles and marks keep syncing when only the payload container is missing"
+        )
+        XCTAssertNil(
+            blobs.cloudKitContainerOptions,
+            """
+            an unentitled payload container must mount LOCAL-ONLY: constructing a CKContainer             this process may not name raises, and the crash lands on launch
+            """
+        )
+    }
+
+    func testThePayloadStoreStaysMountedAndHistoryTrackedWithoutItsContainer() throws {
+        // Local-only is not "absent": the store still mounts, so a capture on
+        // this device still lands somewhere, and history tracking stays on so
+        // the same file starts exporting the moment the container exists.
+        let descriptions = try mirroredDescriptions(blobsEntitled: false)
+        XCTAssertEqual(descriptions.count, 2, "the payload store is mounted, just not mirrored")
+        let blobs = try XCTUnwrap(descriptions.first { $0.configuration == "Blobs" })
+        XCTAssertEqual(blobs.url?.lastPathComponent, expectedBlobStoreURL.lastPathComponent)
+        XCTAssertEqual(
+            (blobs.options[NSPersistentHistoryTrackingKey] as? NSNumber)?.boolValue, true,
+            "a store that stops tracking history exports nothing once the container arrives"
+        )
+    }
+
     // MARK: - Helpers
+
+    /// The descriptions the production path builds with the mirror ON — the one
+    /// arrangement no live store in this suite may take (the Simulator forces
+    /// `cloudKit: false`, and the test seam is local-only by definition), read
+    /// before any store loads. `blobsEntitled` is injected because the shipping
+    /// value probes the running process's own entitlements.
+    private func mirroredDescriptions(blobsEntitled: Bool) throws -> [NSPersistentStoreDescription] {
+        let core = NSPersistentStoreDescription(url: storeURL)
+        let descriptions = ConversationStore._storeDescriptionsForTesting(
+            core: core,
+            blobStoreURL: expectedBlobStoreURL,
+            cloudKit: true,
+            blobsEntitled: blobsEntitled
+        )
+        XCTAssertEqual(descriptions.count, 2, "both stores must be described, mirrored or not")
+        return descriptions
+    }
+
 
     /// The payload store `ConversationStore` derives for a non-App-Group store:
     /// the Core file's own name with `-Blobs` appended, beside it.

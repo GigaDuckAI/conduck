@@ -55,7 +55,10 @@
 // any native macOS build whose process lacks the entitlement (see
 // `Constants.hasICloudContainerEntitlement`, which probes macOS only). The in-memory/on-disk test seam
 // is local-only by definition. History tracking + remote-change posting stay
-// ON in all configurations.
+// ON in all configurations. The two mirrored stores name DIFFERENT containers
+// — Core Data refuses two stores on one — so the payload store carries its own
+// entitlement, and a build holding the conversations container without the
+// payload one mounts `Blobs` local-only instead of dying.
 //
 // App Group store location is load-bearing: the headless Shortcut / App
 // Intent runs in a separate process and must read+write the SAME sqlite as
@@ -1534,13 +1537,23 @@ actor ConversationStore {
     /// the CloudKit mirror to the user's own private iCloud database — ON for the
     /// production App Group store, OFF for the in-memory/on-disk test seam (tests
     /// stay local-only by definition).
-    private static func configureSyncOptions(on description: NSPersistentStoreDescription, cloudKit: Bool) {
+    ///
+    /// `containerIdentifier` is a parameter rather than a constant because each
+    /// mirrored store needs a container of its OWN: two descriptions carrying
+    /// the same identifier make `NSPersistentCloudKitContainer` raise "Cannot
+    /// assign the same iCloud Container Identifier to multiple stores" as the
+    /// descriptions are assigned, before a single store loads.
+    private static func configureSyncOptions(
+        on description: NSPersistentStoreDescription,
+        cloudKit: Bool,
+        containerIdentifier: String
+    ) {
         if cloudKit {
             // Mirrors the local store into the user's private CloudKit database;
             // existing local conversations export on first launch, and turns from
             // the user's other devices import. Developer-blind (no backend).
             description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(
-                containerIdentifier: Constants.iCloudCloudKitContainerID
+                containerIdentifier: containerIdentifier
             )
         }
 
@@ -1555,23 +1568,43 @@ actor ConversationStore {
     /// production store, the screenshot store and the test seam cannot drift
     /// apart. `Core` keeps the shipped sqlite; `Blobs` is a sibling file
     /// carrying `WorkMaterialBlob` alone. Both run through
-    /// `configureSyncOptions` identically — a mirrored store without history
-    /// tracking exports nothing, so an asymmetry there would sync metadata and
-    /// silently strand the bytes.
+    /// `configureSyncOptions` with history tracking on — a mirrored store
+    /// without it exports nothing, so an asymmetry there would sync metadata
+    /// and silently strand the bytes.
+    ///
+    /// **The two mirrors carry DIFFERENT CloudKit containers**
+    /// (`Constants.iCloudCloudKitContainerID` for `Core`,
+    /// `Constants.iCloudCloudKitBlobsContainerID` for `Blobs`), because Core
+    /// Data raises "Cannot assign the same iCloud Container Identifier to
+    /// multiple stores" the moment two descriptions naming one container are
+    /// assigned. Each container is still the user's own private iCloud
+    /// database; there is no backend behind either.
+    ///
+    /// `blobsEntitled` is what keeps a container that has not been provisioned
+    /// yet from being fatal: a build entitled for the conversations container
+    /// but not the payload one mounts `Blobs` LOCAL-ONLY and says so, rather
+    /// than constructing a `CKContainer` the process may not have. Payloads
+    /// then stay on the device that captured them and peers read the cards as
+    /// waiting.
     ///
     /// **The Watch never mounts `Blobs`, and that omission IS the payload
     /// exclusion.** The wrist compiles this same file, has no `WorkAssetVault`
     /// (`#if !os(watchOS)`) to fall back on and no eviction path for bytes it
     /// cannot use, so a payload store it never loads is a payload store
-    /// CloudKit never fills. Materials still mirror; their bytes read as
-    /// pending there.
+    /// CloudKit never fills — and its entitlements name no payload container
+    /// either. Materials still mirror; their bytes read as pending there.
     private static func storeDescriptions(
         core: NSPersistentStoreDescription,
         blobStoreURL: URL?,
-        cloudKit: Bool
+        cloudKit: Bool,
+        blobsEntitled: Bool = Constants.hasICloudBlobsContainerEntitlement
     ) -> [NSPersistentStoreDescription] {
         core.configuration = coreConfigurationName
-        configureSyncOptions(on: core, cloudKit: cloudKit)
+        configureSyncOptions(
+            on: core,
+            cloudKit: cloudKit,
+            containerIdentifier: Constants.iCloudCloudKitContainerID
+        )
         #if os(watchOS)
         return [core]
         #else
@@ -1582,10 +1615,45 @@ actor ConversationStore {
         // Core would outlive the process that owns it.
         blobs.type = core.type
         blobs.configuration = blobsConfigurationName
-        configureSyncOptions(on: blobs, cloudKit: cloudKit)
+        let blobsCloudKit = cloudKit && blobsEntitled
+        if cloudKit && !blobsEntitled {
+            NSLog("[ConversationStore] Blobs container entitlement missing — payloads stay on this device; cards on other devices read as waiting")
+        }
+        configureSyncOptions(
+            on: blobs,
+            cloudKit: blobsCloudKit,
+            containerIdentifier: Constants.iCloudCloudKitBlobsContainerID
+        )
         return [core, blobs]
         #endif
     }
+
+    #if CONDUCK_TESTING
+    /// TEST SEAM — the descriptions `storeDescriptions` builds, for a caller
+    /// that needs to read the CloudKit options off them.
+    ///
+    /// WHY IT HAS TO EXIST. `cloudKitContainerOptions` is only observable
+    /// BEFORE the stores load, and no production path attaches it on a host a
+    /// suite may run on: the Simulator forces `cloudKit: false` and the test
+    /// seam is local-only by definition, so the one arrangement that crashed
+    /// the signed app — two mirrored descriptions naming one container — is
+    /// unreachable through any other entry point. `blobsEntitled` is a
+    /// parameter here for the same reason: the production value is a probe of
+    /// the running process's own entitlements, which a test cannot change.
+    static func _storeDescriptionsForTesting(
+        core: NSPersistentStoreDescription,
+        blobStoreURL: URL?,
+        cloudKit: Bool,
+        blobsEntitled: Bool
+    ) -> [NSPersistentStoreDescription] {
+        storeDescriptions(
+            core: core,
+            blobStoreURL: blobStoreURL,
+            cloudKit: cloudKit,
+            blobsEntitled: blobsEntitled
+        )
+    }
+    #endif
 
     /// The payload store's file for a store whose directory is not the App
     /// Group container: the Core file's own name with `-Blobs` appended,

@@ -52,6 +52,33 @@ enum Constants {
         Bundle.main.object(forInfoDictionaryKey: "ConduckCloudKitContainerID") as? String
             ?? "iCloud.\(identityNamespace)"
 
+    /// CloudKit container for the payload store — its OWN, never the one above.
+    /// Read from the `ConduckCloudKitBlobsContainerID` Info.plist key (fed by
+    /// `CONDUCK_ICLOUD_BLOBS_CONTAINER_ID`); official value
+    /// `iCloud.ai.gigaduck.agentrelay.blobs` (set-once Apple identity, frozen on
+    /// a product rename like every identifier above).
+    ///
+    /// WHY A SECOND CONTAINER. Core Data refuses to mirror two stores through
+    /// one: setting a second description carrying the same identifier raises
+    /// "Cannot assign the same iCloud Container Identifier to multiple stores"
+    /// while the container is being configured, which kills the app on launch.
+    /// The documented shape for two mirrored stores is one container each.
+    ///
+    /// Nothing about the privacy stance moves with it: both containers are the
+    /// user's own private iCloud database, there is no backend behind either,
+    /// and "Data Not Collected" holds unchanged. The Watch never lists this
+    /// container — it mounts no `Blobs` store at all, and that omission IS the
+    /// payload exclusion.
+    ///
+    /// MUST match the second
+    /// `com.apple.developer.icloud-container-identifiers` entry in BOTH
+    /// `Conduck-Official.entitlements` and `Conduck-Community.entitlements`, and
+    /// must appear in NEITHER `ConduckWatch.entitlements` nor the share
+    /// extensions' (they attach no CloudKit options).
+    nonisolated static let iCloudCloudKitBlobsContainerID =
+        Bundle.main.object(forInfoDictionaryKey: "ConduckCloudKitBlobsContainerID") as? String
+            ?? "iCloud.\(identityNamespace).blobs"
+
     /// Whether THIS process may legally construct the CloudKit container above.
     ///
     /// `CKContainer(identifier:)` RAISES — it does not throw or return nil — when
@@ -74,7 +101,11 @@ enum Constants {
     /// probe would be far worse than the unsigned-build crash this prevents, so
     /// the only path to `false` is a positive reading of its absence.
     #if os(macOS)
-    nonisolated static let hasICloudContainerEntitlement: Bool = {
+    /// Whether the running process's entitlement list names `container`, under
+    /// the fail-open contract documented above. Both container probes share this
+    /// one reading so neither can be judged absent by a rule the other does not
+    /// apply.
+    nonisolated private static func carriesICloudContainerEntitlement(_ container: String) -> Bool {
         guard let task = SecTaskCreateFromSelf(nil) else { return true }
         var probeError: Unmanaged<CFError>?
         let value = SecTaskCopyValueForEntitlement(
@@ -91,10 +122,29 @@ enum Constants {
         // Present but not the documented array-of-strings shape: unreadable, not
         // absent, so it takes the fail-open branch with every other uncertainty.
         guard let containers = value as? [String] else { return true }
-        return containers.contains(iCloudCloudKitContainerID)
-    }()
+        return containers.contains(container)
+    }
+
+    nonisolated static let hasICloudContainerEntitlement: Bool =
+        carriesICloudContainerEntitlement(iCloudCloudKitContainerID)
+
+    /// Whether THIS process may legally mirror the payload store through
+    /// `iCloudCloudKitBlobsContainerID`, on the same fail-open terms: only a
+    /// SUCCESSFUL read of an entitlement list that omits the blobs container
+    /// returns false.
+    ///
+    /// It is a separate reading because the two containers are provisioned
+    /// separately — a signed build can carry the conversations container and
+    /// not the payload one, which is exactly the state between adding this
+    /// container to the app and creating it in the developer portal. That build
+    /// mounts the payload store LOCAL-ONLY rather than crashing, so a container
+    /// that does not exist yet costs the user their payload sync and nothing
+    /// else.
+    nonisolated static let hasICloudBlobsContainerEntitlement: Bool =
+        carriesICloudContainerEntitlement(iCloudCloudKitBlobsContainerID)
     #else
     nonisolated static let hasICloudContainerEntitlement = true
+    nonisolated static let hasICloudBlobsContainerEntitlement = true
     #endif
 
     // MARK: - Request Configuration

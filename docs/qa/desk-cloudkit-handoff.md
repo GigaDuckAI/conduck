@@ -42,6 +42,7 @@
 6. Five source-text drift guards converted to behavioural seams; appex/absence guards kept.
 7. `WorkboardSurface` and the dead `.openPersonalAISettings` notification deleted.
 8. macOS popover Retry gated on `pendingRetryCount > 0`.
+9. The payload store mirrors through a SECOND CloudKit container, `iCloud.ai.gigaduck.agentrelay.blobs` official / `iCloud.com.example.conduck.blobs` community (`CONDUCK_ICLOUD_BLOBS_CONTAINER_ID` → `ConduckCloudKitBlobsContainerID` → `Constants.iCloudCloudKitBlobsContainerID`). Core Data raises "Cannot assign the same iCloud Container Identifier to multiple stores" when two descriptions name one container, which killed the first signed macOS launch; the identifier is a set-once Apple identity from here on.
 
 ## Founder decisions open
 
@@ -67,27 +68,29 @@
 
 ## Release gates
 
-1. **Deploy model 16 to CloudKit Production** before any release carrying these entities — it adds `WorkMaterialBlob` and `WorkMaterial.contentHash` (a CloudKit field can never be withdrawn). `origin/main` ships model 13, so one deploy covers all. Record beside APPLE-CD-V7-001.
+1. **Deploy BOTH containers' schemas to CloudKit Production** before any release carrying these entities — the Core half (model 16 plus `WorkMaterial.contentHash`) to `iCloud.ai.gigaduck.agentrelay`, and `WorkMaterialBlob` to `iCloud.ai.gigaduck.agentrelay.blobs`. A CloudKit field can never be withdrawn, and a container whose Production schema is missing syncs in debug and silently not in TestFlight/App Store. `origin/main` ships model 13, so one deploy per container covers all. Record beside APPLE-CD-V7-001.
 2. **Gate 2 — founder signed-device QA**, release-blocking for byte sync. Two signed devices on one iCloud account plus the Mac. The full lists: `desk-cloudkit/spike-fixnote.md` §(c) (18 steps: zones, import/export, delete/reinstall, watch exclusion, headless-intent 134410, quota/signed-out) and the "Founder QA" sections of `integrate-d/e/f/g/h.md` (81 items). The **first thing to do is irreversible**: park a Work voice note under the OLD build, then install this build and confirm it still finishes — the App Group retry container is rewritten on first launch.
+   **The zone question is answered by construction.** The two stores mirror through SEPARATE containers, so they cannot share a record zone and no Core-store fetch can hand the wrist a blob record. `spike-fixnote.md` §(c) step 5 therefore collapses to: confirm the Blobs container's Development schema shows `CD_WorkMaterialBlob` and the Core container's does not. Step 12's watch-leakage branch has nothing left to trigger it.
 3. Run the private Gemini canary for a WAV body (`Conduck-Private/scripts/validation/`) — the branch now labels WAV honestly where it used to send it as `audio/mp4`.
 4. Never push unasked. When the branch is pushed it lands in the PUBLIC repo `GigaDuckAI/conduck`: nothing under `docs/qa/desk-cloudkit/` contains secrets (checked), but the fixnotes are internal working notes — decide whether they travel.
 5. **Public README documents no Work desk** — its surface table lists only Chat capabilities (pre-existing gap, now a shipped user-visible surface). Needs an owner before release.
 
-## Founder QA script — the twelve to run first
+## Founder QA script — the thirteen to run first
 
 On the iPhone unless stated; airplane mode where "offline". Failure cases are named.
 1. **Upgrade** (do this FIRST, once): old build → park a Work voice note offline → install this build → retry online → one playable card with the words. Fail: card missing, card duplicated, or Diagnostics still reports a waiting recording afterwards.
 2. **Desk basics**: drop text, a screenshot, a small file and a > 30 MiB file; arrange/resize; kill the app mid-drop and reopen. Fail: any card missing or duplicated.
-3. **Two devices, small file**: capture on A, wait on B → card opens on B. Delete on B → gone on A.
-4. **Two devices, large file**: > 30 MiB on A → B shows the card as device-local (not "Waiting for iCloud…" for ever); reattach a small file on A → B opens it.
-5. **Force-quit mid-publication** on A right after the progress bar → B never shows a permanent "Waiting for iCloud…"; re-capture on A → exactly one card.
-6. **Voice note online**: record from the desk → playable card appears at once, words fill in. Play it while Chat read-aloud is speaking → read-aloud stops (intended).
-7. **Voice note offline**: record → card appears, retry card appears; go online, Retry → words on the SAME card, no note, no second card.
-8. **Two recordings waiting**: Work note offline, then Action-Button Chat capture offline; online → Retry twice → both complete; count reaches zero.
-9. **Discard**: published Work note whose words failed → Discard → dialog says the recording stays in Work → card still plays. Chat capture → Discard → dialog says deleted, cannot be recovered.
-10. **Racing surfaces (Mac)**: menu-bar Retry running, press the main window's retry → busy sentence, Retry button still drawn, exactly one result.
-11. **Shortcuts vs app**: Action-Button capture offline, then open the app and tap Retry before the 90-second notice → exactly one finishes, the other says it is already being finished.
-12. **Watch**: ordinary dictation still transcribes (AAC, unchanged); the watch never shows a Work card and never downloads a blob (Gate 2 §watch exclusion).
+3. **Payload container missing**: before the container exists in the portal (or with a provisioning profile that predates it), the app LAUNCHES — it does not crash — logs `Blobs container entitlement missing`, and cards on the other device stay "Waiting for iCloud…". Create the container, rebuild, and the same card opens. Fail: any launch crash naming an iCloud container identifier.
+4. **Two devices, small file**: capture on A, wait on B → card opens on B. Delete on B → gone on A.
+5. **Two devices, large file**: > 30 MiB on A → B shows the card as device-local (not "Waiting for iCloud…" for ever); reattach a small file on A → B opens it.
+6. **Force-quit mid-publication** on A right after the progress bar → B never shows a permanent "Waiting for iCloud…"; re-capture on A → exactly one card.
+7. **Voice note online**: record from the desk → playable card appears at once, words fill in. Play it while Chat read-aloud is speaking → read-aloud stops (intended).
+8. **Voice note offline**: record → card appears, retry card appears; go online, Retry → words on the SAME card, no note, no second card.
+9. **Two recordings waiting**: Work note offline, then Action-Button Chat capture offline; online → Retry twice → both complete; count reaches zero.
+10. **Discard**: published Work note whose words failed → Discard → dialog says the recording stays in Work → card still plays. Chat capture → Discard → dialog says deleted, cannot be recovered.
+11. **Racing surfaces (Mac)**: menu-bar Retry running, press the main window's retry → busy sentence, Retry button still drawn, exactly one result.
+12. **Shortcuts vs app**: Action-Button capture offline, then open the app and tap Retry before the 90-second notice → exactly one finishes, the other says it is already being finished.
+13. **Watch**: ordinary dictation still transcribes (AAC, unchanged); the watch never shows a Work card and never downloads a blob (Gate 2 §watch exclusion).
 Then the full 81 + 18.
 
 ## Standing constraints (any future agent)
