@@ -129,8 +129,20 @@ final class WorkboardOpenPathTests: XCTestCase {
             thumbnailData: Data([0x89, 0x50, 0x4E, 0x47]),
             availability: .syncPending
         )
+        // The desk it sits on is full of openable pictures. A waiting card must
+        // not ride into the gallery on its neighbours' readability.
+        router.deskMaterials = { [
+            WorkboardMaterialSnapshot(kind: .image, name: "Photo 1", availability: .available),
+            pending,
+            WorkboardMaterialSnapshot(kind: .image, name: "Photo 2", availability: .available)
+        ] }
+
         await router.present(pending)
         XCTAssertNil(router.materialPresentation, "a waiting card opens nothing")
+        XCTAssertNil(
+            router.filePreview.previewURL,
+            "and never reaches Quick Look either"
+        )
         let pendingMessage = try XCTUnwrap(
             router.previewNotice?.message,
             "a refusal says why rather than failing silently"
@@ -145,6 +157,7 @@ final class WorkboardOpenPathTests: XCTestCase {
         )
         await router.present(missing)
         XCTAssertNil(router.materialPresentation)
+        XCTAssertNil(router.filePreview.previewURL)
         let missingMessage = try XCTUnwrap(router.previewNotice?.message)
         XCTAssertFalse(missingMessage.isEmpty)
 
@@ -175,6 +188,38 @@ final class WorkboardOpenPathTests: XCTestCase {
             return XCTFail("a note presents as a note")
         }
         XCTAssertEqual(text, "Ask about the lease")
+    }
+
+    /// An image is a GALLERY, whichever lane holds its bytes. The router reads
+    /// no bytes to decide that — a card too large to sync used to fall into the
+    /// file branch and open as a document, and the size of a picture is not a
+    /// fact about what it is.
+    func testAnImageCardOfEitherLanePresentsAsAGallery() async throws {
+        for availability in [WorkboardMaterialAvailability.available, .localOnly] {
+            let router = PersonalWorkbenchRouter()
+            let photo = WorkboardMaterialSnapshot(
+                kind: .image,
+                name: "Photo 3",
+                mimeType: "image/jpeg",
+                byteCount: 41_000_000,
+                availability: availability
+            )
+            router.deskMaterials = { [photo] }
+
+            await router.present(photo)
+
+            XCTAssertNil(router.previewNotice, "\(availability) opens without explanation")
+            let presentation = try XCTUnwrap(router.materialPresentation)
+            guard case .imageGallery(let pages, let startIndex) = presentation.content else {
+                return XCTFail("an image card presents as a gallery on the \(availability) lane")
+            }
+            XCTAssertEqual(pages.map(\.id), [photo.id])
+            XCTAssertEqual(startIndex, 0)
+            XCTAssertNil(
+                router.filePreview.previewURL,
+                "a picture is never handed to Quick Look, so no disposable copy is made for it"
+            )
+        }
     }
 
     // MARK: - What the preview copy is called

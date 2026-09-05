@@ -413,6 +413,28 @@
         }
       }
     },
+    "attachment.gallery.loadFailed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This image couldn't be opened."
+          }
+        }
+      }
+    },
+    "attachment.gallery.retry" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Retry"
+          }
+        }
+      }
+    },
     "attachment.image.accessibility" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -815,6 +837,61 @@
         }
       }
     },
+    "carplay.picker.addToWork.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add to Work"
+          }
+        }
+      }
+    },
+    "carplay.voice.saving.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saving…"
+          }
+        }
+      }
+    },
+    "carplay.work.notSaved.speak" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't save that yet. Open Conduck to retry."
+          }
+        }
+      }
+    },
+    "carplay.work.saved.speak" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved to Work."
+          }
+        }
+      }
+    },
+    "carplay.work.savedWithoutWords.speak" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved to Work. Add the words on your iPhone."
+          }
+        }
+      }
+    },
     "Change model or API key" : {
 
     },
@@ -1205,17 +1282,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "OK"
-          }
-        }
-      }
-    },
-    "common.share" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Share"
           }
         }
       }
@@ -6588,6 +6654,127 @@
         }
       }
     },
+    "intent.workAddFiles.description" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Save files to your private Work desk without sending them to an AI."
+          }
+        }
+      }
+    },
+    "intent.workAddFiles.error.fileTooLarge" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "“%@” is too big to keep in Work."
+          }
+        }
+      }
+    },
+    "intent.workAddFiles.error.noFiles" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Choose at least one file to add to Work."
+          }
+        }
+      }
+    },
+    "intent.workAddFiles.error.setTooLarge" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Those files are too big to add at once. Add them in smaller batches."
+          }
+        }
+      }
+    },
+    "intent.workAddFiles.error.tooManyFiles" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That’s too many files to add at once. Add them in smaller batches."
+          }
+        }
+      }
+    },
+    "intent.workAddFiles.error.unreadableFile" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "“%@” couldn’t be read, so nothing was added to Work."
+          }
+        }
+      }
+    },
+    "intent.workAddFiles.files" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Files"
+          }
+        }
+      }
+    },
+    "intent.workAddFiles.note" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Note"
+          }
+        }
+      }
+    },
+    "intent.workAddFiles.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add Files to Work"
+          }
+        }
+      }
+    },
+    "intent.workRecordNote.description" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Work and start recording a voice note. Nothing is sent to an AI."
+          }
+        }
+      }
+    },
+    "intent.workRecordNote.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Record a Note to Work"
+          }
+        }
+      }
+    },
     "intent.workboardCapture.confirmation" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -6862,6 +7049,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Open Work…"
+          }
+        }
+      }
+    },
+    "menu.recordToWork" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Record to Work…"
           }
         }
       }
@@ -7629,6 +7827,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Press %@ or tap the mic to start"
+          }
+        }
+      }
+    },
+    "popover.start.workShortcut" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Press %@ to keep a private note"
           }
         }
       }
@@ -10374,6 +10583,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "How to Use"
+          }
+        }
+      }
+    },
+    "settings.mac.general.shortcut.captureToWork.label" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Capture to Work"
           }
         }
       }
@@ -22678,17 +22898,6 @@
         }
       }
     },
-    "workboard.material.file.ready" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The original file is ready to open or share."
-          }
-        }
-      }
-    },
     "workboard.material.image" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22865,17 +23074,6 @@
         }
       }
     },
-    "workboard.material.openFile" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open File"
-          }
-        }
-      }
-    },
     "workboard.material.openLink" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22927,28 +23125,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "This material is not available on this device. Reattach it here to open it."
-          }
-        }
-      }
-    },
-    "workboard.material.preview.unavailable.message" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "The original image could not be decoded on this device."
-          }
-        }
-      }
-    },
-    "workboard.material.preview.unavailable.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No Preview"
           }
         }
       }
@@ -23096,6 +23272,28 @@
         }
       }
     },
+    "workboard.menuBar.compose.work.placeholder" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Write a note for your desk"
+          }
+        }
+      }
+    },
+    "workboard.menuBar.compose.work.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add to Work"
+          }
+        }
+      }
+    },
     "workboard.menuBar.saved" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23103,6 +23301,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Added to Work. Nothing was sent."
+          }
+        }
+      }
+    },
+    "workboard.menuBar.saved.open.help" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Work and see the new card"
+          }
+        }
+      }
+    },
+    "workboard.menuBar.voice.cardMissing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That recording is no longer on your desk."
           }
         }
       }

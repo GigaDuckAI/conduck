@@ -59,6 +59,72 @@ enum WatchRecordingState: Equatable {
     }
 }
 
+/// Which of the wrist's two capture lanes a recording belongs to.
+///
+/// A SEPARATE AXIS from `WatchCaptureTarget`, not another case of it, and the
+/// separation is the safety property: a target answers "which conversation",
+/// and every answer it can give ends at a gateway. Work has no conversation, no
+/// gateway and no dispatch — folding it in as a third case would put the one
+/// destination that must never reach a gateway inside the type whose whole job
+/// is to name one.
+///
+/// `chat` is the ABSENT value everywhere it is persisted or put on a wire, so a
+/// blob or a payload that predates Work keeps its original meaning exactly.
+enum WatchCaptureDestination: String, Codable, Sendable {
+    case chat
+    case work
+}
+
+/// The terminal line a Work capture leaves on the wrist. Work never reaches
+/// `.waiting` and never produces a reply, so it has no use for the recording
+/// state machine's tail — this is the whole of what the capture view renders
+/// once the microphone is done.
+enum WatchWorkCaptureOutcome: Equatable, Sendable {
+    /// The iPhone published the RECORDING to the desk.
+    case saved
+    /// The iPhone was not reachable in time. The clip is durably queued on this
+    /// watch and settles on its own; nothing was lost and nothing is asked of
+    /// the person beyond bringing the phone back into range.
+    case deferredToPhone
+    /// The iPhone answered with a transcript but no durability stamp (a build
+    /// that predates the Work destination). The words are on the desk; the
+    /// recording is not.
+    case savedWordsOnly
+    /// Refused, with the sentence to show. Carries the message rather than a
+    /// code so the capture view renders one line without a second switch.
+    case refused(reason: String)
+}
+
+/// Why a Work capture cannot start right now. Asked BEFORE the microphone arms,
+/// because both answers are things the person can act on and neither is worth
+/// discovering after they have already spoken.
+enum WatchWorkCaptureRefusal: Error, Equatable {
+    /// Another turn owns the state machine.
+    case busy
+    /// The relay queue is full of captures still waiting on the iPhone. Work
+    /// entries are eviction-exempt (deleting one would destroy the only copy of
+    /// a recording), so the pressure is answered here instead.
+    case queueFull
+
+    /// The sentence for the wrist. `busy` reuses no existing string because the
+    /// existing busy refusals are silent — the Ask button just declines — while
+    /// this lane has a view of its own that must say something.
+    var message: String {
+        switch self {
+        case .busy:
+            return String(
+                localized: "watch.work.refusal.busy",
+                defaultValue: "Finish what you’re doing first, then try again."
+            )
+        case .queueFull:
+            return String(
+                localized: "watch.work.refusal.queueFull",
+                defaultValue: "Work is waiting for your iPhone. Bring it nearby first."
+            )
+        }
+    }
+}
+
 /// Where a quick-capture turn should land, resolved at TRIGGER time so a
 /// pointer / default-gateway change mid-recording can never silently reroute
 /// the turn (the gateway ref is captured the moment the trigger fires).
@@ -239,6 +305,20 @@ final class WatchRecordingService {
             return false
         }
     }
+    /// Which lane the live capture belongs to. Set by EVERY capture entry point
+    /// (never inferred), so a Work capture cannot leak its destination into the
+    /// next chat ask and a chat ask cannot inherit Work's relay forcing.
+    /// Observable: the capture surfaces render different tails for the two.
+    private(set) var captureDestination: WatchCaptureDestination = .chat
+
+    /// The terminal line for the most recent Work capture, or nil when there is
+    /// nothing to report. A SEPARATE channel from `state` on purpose: Work
+    /// settles minutes after the machine has returned to `.idle` (a deferred
+    /// relay), and every case of `WatchRecordingState` is switched
+    /// exhaustively across the wrist's views — a Work case added there would be
+    /// a source change in every one of them for a value none of them mean.
+    private(set) var workCaptureOutcome: WatchWorkCaptureOutcome?
+
     /// True between the soft-warning fire and the hard cap. Drives the
     /// orange timer + "1 min left" label in the recording view.
     var nearMaxDuration: Bool = false
@@ -268,12 +348,13 @@ final class WatchRecordingService {
     /// paired iPhone or a live `WCSession` — the relay branch is the DEFAULT
     /// STT path (`apple-on-device`), so its cancel behaviour is the one most
     /// users depend on.
-    var relayTranscribe: @MainActor (String, URL, String?, String?) async throws -> String = { requestID, audioFileURL, language, providerID in
+    var relayTranscribe: @MainActor (String, URL, String?, String?, WatchCaptureDestination) async throws -> RelayReply = { requestID, audioFileURL, language, providerID, destination in
         try await AppleSpeechRelayCoordinator.shared.relay(
             requestID: requestID,
             audioFileURL: audioFileURL,
             language: language,
-            providerID: providerID
+            providerID: providerID,
+            destination: destination
         )
     }
 
@@ -580,6 +661,11 @@ final class WatchRecordingService {
         }
         captureRequestID = requestID
         inFlightTurnID = UUID()
+        // Stamped, never inherited: the previous capture may have been Work,
+        // and a chat ask that kept that lane would force the relay and settle
+        // through a path that writes to the desk.
+        captureDestination = .chat
+        workCaptureOutcome = nil
         switch target {
         case .existing(let id):
             // Pin the converse hop to this conversation; clear any stale Ask
@@ -612,6 +698,128 @@ final class WatchRecordingService {
         logCaptureStart("startCapture")
         _startRecording()
         return .started
+    }
+
+    // MARK: - Work capture entry point
+    //
+    // The wrist's second lane. It shares the microphone, the compressor and the
+    // relay with Chat and NOTHING else: no target is resolved, no gateway is
+    // consulted, no conversation is pinned or minted, and no converse hop is
+    // reachable from anything it produces. The iPhone publishes the recording;
+    // this watch only carries it there.
+
+    /// Why a Work capture cannot start, or nil when it can. The UI asks FIRST
+    /// so the refusal is a sentence on a button press rather than a discovery
+    /// after the person has spoken.
+    ///
+    /// Two refusals, and the second is the one worth explaining: the relay
+    /// queue is at its cap and every Work entry in it is eviction-exempt, so
+    /// accepting this capture would force the queue to delete a recording that
+    /// exists nowhere else. Refusing costs a sentence; accepting costs audio.
+    func canStartWorkCapture() -> WatchWorkCaptureRefusal? {
+        if state != .idle {
+            // A lingering `.error` is not "busy": every capture entry point
+            // supersedes one, so refusing here would brick the lane behind a
+            // toast the person may never have seen.
+            if case .error = state {} else { return .busy }
+        }
+        if AppleRelayPendingQueue.refusesNewWorkCapture(
+            queueDepth: AppleRelayPendingQueue.shared.entryCount
+        ) {
+            return .queueFull
+        }
+        return nil
+    }
+
+    /// Start a Work capture on behalf of `requestID` (the route nonce the
+    /// launchpad minted). Mirrors `startCapture(boundTo:requestID:)`: the same
+    /// error supersede, the same idle guard, the same
+    /// `alreadyRunning`-vs-`refusedBusy` distinction for the deliberate
+    /// double start, and the same synchronous hand-off to `_startRecording`.
+    ///
+    /// A capacity refusal ALSO reports `.refusedBusy` — the outcome type says
+    /// what happened to the machine, and nothing was armed either way — but
+    /// leaves its sentence in `workCaptureOutcome` so the capture view can
+    /// render it even if the caller never asked `canStartWorkCapture()`.
+    @discardableResult
+    func startWorkCapture(requestID: UUID) -> WatchCaptureStartOutcome {
+        if case .error = state, captureRequestID != requestID { dismissError() }
+        guard state == .idle else {
+            if let live = captureRequestID, live == requestID {
+                WatchLog.note(.capture, "capture.duplicate", ["via": "startWorkCapture", "state": state.phaseKind])
+                return .alreadyRunning
+            }
+            WatchLog.note(.capture, "capture.refused", ["via": "startWorkCapture", "state": state.phaseKind])
+            workCaptureOutcome = .refused(reason: WatchWorkCaptureRefusal.busy.message)
+            return .refusedBusy
+        }
+        if let refusal = canStartWorkCapture() {
+            WatchLog.note(.capture, "capture.refused", ["via": "startWorkCapture", "why": String(describing: refusal)])
+            workCaptureOutcome = .refused(reason: refusal.message)
+            return .refusedBusy
+        }
+        captureRequestID = requestID
+        inFlightTurnID = UUID()
+        captureDestination = .work
+        workCaptureOutcome = nil
+        // Work owns none of the routing state. Clearing rather than leaving it
+        // is the point: an unconsumed Ask hint or a stale composer pin would
+        // otherwise ride along and give this capture a conversation it must
+        // never have.
+        WatchSettingsReader.shared.clearPendingInAppNewConversationBackend()
+        pendingConversationID = nil
+        pendingPinStampsQuickPointer = false
+        mintedConversationID = nil
+        pendingTypedSend = false
+        // No source: `captureSource` exists to decide whether a REPLY
+        // auto-speaks, and Work produces no reply. Nil fails that verdict,
+        // which is the correct answer rather than an absent one.
+        captureSource = nil
+        logCaptureStart("startWorkCapture")
+        _startRecording()
+        return .started
+    }
+
+    /// Drop the terminal line once the capture view has shown it (a dismissal,
+    /// a return to the launchpad), so a later capture does not open on the
+    /// previous one's outcome.
+    func clearWorkCaptureOutcome() {
+        workCaptureOutcome = nil
+    }
+
+    /// Report a DEFERRED Work settlement — the queue resolved an entry whose
+    /// capture view is long gone. Called by `AppleRelayPendingQueue`; the
+    /// banner it posts alongside is what the person actually reads, and this
+    /// keeps the wrist's own surface truthful if they are still looking at it.
+    func noteWorkCaptureSettled(_ settlement: AppleRelayPendingQueue.RelaySettlement) {
+        switch settlement {
+        case .converseHop:
+            return
+        case .workAcknowledged:
+            workCaptureOutcome = .saved
+        case .workWordsOnly:
+            workCaptureOutcome = .savedWordsOnly
+        }
+    }
+
+    /// Retire a Work capture's live leg with the line to show for it.
+    ///
+    /// Work goes straight back to `.idle` rather than parking in `.error` or
+    /// `.waiting`: there is no reply coming and no gateway in flight, so the
+    /// machine has nothing left to own, and leaving it occupied would refuse
+    /// the next capture for no reason. The outcome travels on its own channel,
+    /// which every capture entry point clears.
+    private func finishWorkCapture(_ outcome: WatchWorkCaptureOutcome) {
+        compressedAudioData = nil
+        compressedAudioFormat = nil
+        WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+        clearInFlight()
+        captureDestination = .chat
+        state = .idle
+        recordingTime = 0
+        // AFTER the reset: `clearInFlight` and the state write must not be able
+        // to clear the line they exist to make room for.
+        workCaptureOutcome = outcome
     }
 
     /// Trigger-time resolution for a HEADLESS capture (Action Button /
@@ -789,6 +997,8 @@ final class WatchRecordingService {
         // re-label X's turn `.composer` and silently cost it its legitimate
         // arrival auto-speak. Refuse before touching the pins.
         guard state == .idle else { return }
+        captureDestination = .chat
+        workCaptureOutcome = nil
         pendingConversationID = conversationID
         pendingPinStampsQuickPointer = false
         pendingTypedSend = false
@@ -813,6 +1023,8 @@ final class WatchRecordingService {
         // a predecessor's. (Placed after the idle guard: a refused no-op send
         // must not drop a legitimately pending request.)
         AutoSpeakMailbox.shared.clear()
+        captureDestination = .chat
+        workCaptureOutcome = nil
         pendingConversationID = conversationID
         pendingPinStampsQuickPointer = false
         pendingTypedSend = true
@@ -1102,7 +1314,7 @@ final class WatchRecordingService {
             // the file, clears pins/hint, resets `.idle`. Every capture
             // entry point re-establishes its own pins, so nothing the NEXT
             // capture needs is lost.
-            cancelRecording()
+            discardTooShortCapture()
             return
         }
 
@@ -1178,6 +1390,10 @@ final class WatchRecordingService {
         nearMaxDuration = false
         state = .idle
         recordingTime = 0
+        // Back to the default lane, and the terminal line the user is
+        // cancelling goes with it.
+        captureDestination = .chat
+        workCaptureOutcome = nil
         WatchRecordingCoordinator.shared.isRecordingFlowActive = false
         // A cancelled in-app Ask must not leave a stale pending-backend hint
         // that a later headless trigger would consume (no silent reroute).
@@ -1194,6 +1410,32 @@ final class WatchRecordingService {
         if retiredActiveCapture {
             captureDiscardCount += 1
         }
+    }
+
+    /// The two SILENT discards — the double-tap grace window and the
+    /// header-only byte floor — with the one line a Work capture needs.
+    ///
+    /// Chat needs none: its draft shell pops on `captureDiscardCount` and the
+    /// overlay goes with it. Work has no draft and reports through
+    /// `workCaptureOutcome`, which a cancel deliberately clears — so without
+    /// this the capture screen would sit on "Saving…" forever after a mis-tap,
+    /// which reads as a capture in progress rather than one that never was.
+    private func discardTooShortCapture() {
+        let wasWork = captureDestination == .work
+        cancelRecording()
+        if wasWork {
+            workCaptureOutcome = .refused(reason: Self.workTooShortMessage)
+        }
+    }
+
+    /// The mis-tap line. It says what to do differently rather than what went
+    /// wrong, because nothing did: the person's finger landed twice, or the
+    /// recorder never got a syllable.
+    private static var workTooShortMessage: String {
+        String(
+            localized: "watch.work.tooShort",
+            defaultValue: "That was too short to save. Try again and speak a little longer."
+        )
     }
 
     // MARK: - Processing Pipeline
@@ -1213,6 +1455,10 @@ final class WatchRecordingService {
         // The Task itself is stored so `cancelRecording()` can cancel it
         // (which propagates into the async foreground upload).
         let generation = captureGeneration
+        // Read the lane ONCE, beside the supersede token and for the same
+        // reason: everything below suspends, and the pipeline must settle the
+        // capture that entered it, not whichever one owns the machine later.
+        let destination = captureDestination
         processTask = Task {
             // 1. Identity is no longer required for the upload itself (the
             // Mistral STT call is keyed by the bearer-token in
@@ -1243,9 +1489,9 @@ final class WatchRecordingService {
             if WatchCaptureGuard.isTooShortCapture(byteCount: originalData.count) {
                 WatchLog.note(.capture, "capture.tooShort", ["turn": turnTag, "via": "bytes", "bytes": originalData.count])
                 // Same discard semantics as the grace window (see
-                // `stopRecording`): `cancelRecording()` removes the file
-                // and resets `.idle` without an error banner.
-                cancelRecording()
+                // `stopRecording`): the file is removed and the machine resets
+                // to `.idle` without an error banner.
+                discardTooShortCapture()
                 return
             }
 
@@ -1316,7 +1562,16 @@ final class WatchRecordingService {
             // FAILED (`didCompress == false` — the compressor fell back to the
             // original bytes), the on-disk recorder file already IS those
             // bytes, so we reuse `fileURL` directly.
-            let needsiPhoneRelay = activePresetID == "apple-on-device"
+            //
+            // WORK forces the relay whatever the provider is, because the
+            // relay is not just how the wrist transcribes — it is how the
+            // BYTES reach the iPhone, and the iPhone is what publishes the
+            // recording to the desk. A Work capture transcribed on this watch
+            // would leave the audio here with nowhere to go: the wrist mounts
+            // no payload store, so it cannot write a recording to the desk
+            // itself.
+            let needsiPhoneRelay = destination == .work
+                || activePresetID == "apple-on-device"
                 || provider.dynamicEndpointKey != nil
             if needsiPhoneRelay {
                 let relayURL: URL
@@ -1354,7 +1609,8 @@ final class WatchRecordingService {
                     await runRelay(
                         audioFileURL: relayURL,
                         originalFileURL: fileURL,
-                        providerID: relayProviderID
+                        providerID: relayProviderID,
+                        destination: destination
                     )
                 }
                 return
@@ -1391,7 +1647,12 @@ final class WatchRecordingService {
     ///
     /// Internal (not private) + routed through the `relayTranscribe` seam so the
     /// cancel-supersede contract is unit-testable (`WatchCaptureGuardTests`).
-    func runRelay(audioFileURL: URL, originalFileURL: URL, providerID: String?) async {
+    func runRelay(
+        audioFileURL: URL,
+        originalFileURL: URL,
+        providerID: String?,
+        destination: WatchCaptureDestination = .chat
+    ) async {
         let language = WatchSettingsReader.shared.preferredLanguage
         // Cancel-supersede token, re-checked once the reply await returns. This
         // Task is detached from `processTask` on purpose (a wrist-drop must not
@@ -1418,14 +1679,18 @@ final class WatchRecordingService {
             audioFileURL: audioFileURL,
             language: language,
             providerID: providerID,
-            conversationID: pendingConversationID
+            conversationID: pendingConversationID,
+            // PERSISTED, not remembered: the reply that settles this entry may
+            // land in a process that never saw the capture, and only this field
+            // can tell that process the capture must not reach a gateway.
+            destination: destination
         )
         // Publish the id BEFORE the first byte leaves, so a cancel landing at
         // any point from here on can claim the entry out from under the relay.
         pendingRelayRequestID = requestID
 
         do {
-            let transcript = try await relayTranscribe(requestID, queuedAudioURL, language, providerID)
+            let reply = try await relayTranscribe(requestID, queuedAudioURL, language, providerID, destination)
             if bailIfCancelledRelay(generation: generation) { return }
             // The live relay leg is over: every branch below either claims the
             // entry itself or (deferral) deliberately hands it to the queue for
@@ -1440,27 +1705,50 @@ final class WatchRecordingService {
             // the timeout fired, the reply reconciled, and a drain re-fire's
             // continuation ALSO got the cached verdict) — reset silently, the
             // other path's hop is the one that counts.
-            guard AppleRelayPendingQueue.shared.claimEntry(requestID: requestID) != nil else {
-                compressedAudioData = nil
-                compressedAudioFormat = nil
-                WatchRecordingCoordinator.shared.isRecordingFlowActive = false
-                // This turn is over here — the path that won the claim owns it
-                // now. Clear rather than merely resetting `state`: a surviving
-                // `captureRequestID` would let the winner's mint be stamped with
-                // THIS turn's request. And bump the discard counter, because a
-                // `.new` draft mounted for this capture will now never see a mint,
-                // a refusal or an error — without it the draft holds the capture
-                // overlay until the user swipes back.
-                clearInFlight()
-                state = .idle
-                recordingTime = 0
-                captureDiscardCount += 1
-                return
+            // ONE settlement rule for the live leg and the deferred ones alike
+            // (`AppleRelayPendingQueue.settleSuccess` supplies the same closures
+            // for a queued entry): the destination decides, the claim happens
+            // inside it, and the Work arms cannot reach the converse hop
+            // because the hop is only ever the CHAT closure's body.
+            let result = await AppleRelayPendingQueue.applySettledSuccess(
+                destination: destination,
+                reply: reply,
+                claim: { AppleRelayPendingQueue.shared.claimEntry(requestID: requestID) != nil },
+                completeChat: { text in
+                    compressedAudioData = nil
+                    compressedAudioFormat = nil
+                    WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+                    await startConverseHop(transcript: text)
+                },
+                writeWorkWords: { text in
+                    await AppleRelayPendingQueue.shared.writeWorkWords(
+                        text,
+                        requestID: requestID,
+                        createdAt: Date()
+                    )
+                },
+                finishWork: { settlement in
+                    finishWorkCapture(settlement == .workAcknowledged ? .saved : .savedWordsOnly)
+                }
+            )
+            switch result {
+            case .applied:
+                break
+            case .superseded:
+                // A late `reconcile` already claimed and settled this very turn
+                // — reset silently; the other path's outcome is the one that
+                // counts.
+                retireSupersededRelay(destination: destination)
+            case .workWordsUnwritten:
+                // The words could not be written, so the entry — and the
+                // recording — stay queued. Say that rather than claiming a save
+                // that did not happen; the next drain tries again.
+                surfaceRelayVerdict(
+                    Self.workNoteUnwrittenMessage,
+                    destination: destination,
+                    deferred: false
+                )
             }
-            compressedAudioData = nil
-            compressedAudioFormat = nil
-            WatchRecordingCoordinator.shared.isRecordingFlowActive = false
-            await startConverseHop(transcript: transcript)
         } catch {
             if bailIfCancelledRelay(generation: generation) { return }
             pendingRelayRequestID = nil
@@ -1475,11 +1763,11 @@ final class WatchRecordingService {
                 // must FOLLOW the state assignment — `state.didSet` clears
                 // the flag on every transition).
                 // xcstrings: relay-convergence fix
-                state = .error(message: String(localized: "Sent to iPhone. Your transcript will arrive when it reconnects."))
-                lastErrorIsRelayDeferral = true
-                compressedAudioData = nil
-                compressedAudioFormat = nil
-                WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+                surfaceRelayVerdict(
+                    String(localized: "Sent to iPhone. Your transcript will arrive when it reconnects."),
+                    destination: destination,
+                    deferred: true
+                )
                 return
             }
             if let appError = error as? AppError,
@@ -1513,11 +1801,11 @@ final class WatchRecordingService {
                 // that blacks out again leaves it queued SILENTLY
                 // (`AppleRelayPendingQueue.leavesEntryQueued`) — no second
                 // notification, so no second chance to name the right device.
-                state = .error(message: Self.relayKeyUnreadableMessage)
-                lastErrorIsRelayDeferral = true
-                compressedAudioData = nil
-                compressedAudioFormat = nil
-                WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+                surfaceRelayVerdict(
+                    Self.relayKeyUnreadableMessage,
+                    destination: destination,
+                    deferred: true
+                )
                 return
             }
             if let appError = error as? AppError,
@@ -1528,54 +1816,97 @@ final class WatchRecordingService {
                 // first: claim-nil ⇒ a racing reconcile already surfaced this
                 // verdict → silent reset.
                 guard AppleRelayPendingQueue.shared.claimEntry(requestID: requestID) != nil else {
-                    compressedAudioData = nil
-                    compressedAudioFormat = nil
-                    WatchRecordingCoordinator.shared.isRecordingFlowActive = false
-                    // This turn is over here — the path that won the claim owns it
-                    // now. Clear rather than merely resetting `state`: a surviving
-                    // `captureRequestID` would let the winner's mint be stamped with
-                    // THIS turn's request. And bump the discard counter, because a
-                    // `.new` draft mounted for this capture will now never see a mint,
-                    // a refusal or an error — without it the draft holds the capture
-                    // overlay until the user swipes back.
-                    clearInFlight()
-                    state = .idle
-                    recordingTime = 0
-                    captureDiscardCount += 1
+                    retireSupersededRelay(destination: destination)
                     return
                 }
-                compressedAudioData = nil
-                compressedAudioFormat = nil
                 // xcstrings: stt-dictation-default
-                state = .error(message: String(localized: "On-device voice isn't ready on your iPhone yet. Open Conduck there to set it up."))
-                WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+                surfaceRelayVerdict(
+                    String(localized: "On-device voice isn't ready on your iPhone yet. Open Conduck there to set it up."),
+                    destination: destination,
+                    deferred: false
+                )
                 return
             }
             // Other AppError (or unknown) — permanent for this capture. Claim
             // first (same exactly-once rule as above), then surface.
             guard AppleRelayPendingQueue.shared.claimEntry(requestID: requestID) != nil else {
-                compressedAudioData = nil
-                compressedAudioFormat = nil
-                WatchRecordingCoordinator.shared.isRecordingFlowActive = false
-                // This turn is over here — the path that won the claim owns it
-                // now. Clear rather than merely resetting `state`: a surviving
-                // `captureRequestID` would let the winner's mint be stamped with
-                // THIS turn's request. And bump the discard counter, because a
-                // `.new` draft mounted for this capture will now never see a mint,
-                // a refusal or an error — without it the draft holds the capture
-                // overlay until the user swipes back.
-                clearInFlight()
-                state = .idle
-                recordingTime = 0
-                captureDiscardCount += 1
+                retireSupersededRelay(destination: destination)
                 return
             }
+            WatchLog.error(.stt, "stt.prep.failed", ["turn": turnTag, "code": (error as? AppError)?.errorCode ?? -1])
+            surfaceRelayVerdict(
+                terminalSTTMessage(for: error as? AppError),
+                destination: destination,
+                deferred: false
+            )
+        }
+    }
+
+    /// Land a relay verdict on the lane that owns the capture.
+    ///
+    /// CHAT keeps the state machine's `.error` — the wrist's one error surface,
+    /// with its Retry affordance and the deferral provenance flag the queue's
+    /// drain reads. WORK has no error state of its own and must not borrow
+    /// Chat's: a `.waiting`/`.error` machine refuses the next capture, and a
+    /// Work capture that timed out has nothing pending for the machine to hold
+    /// — its recording is durably queued and settles on its own. So the same
+    /// sentence becomes the capture's terminal line and the machine goes idle.
+    ///
+    /// `deferred` says the entry is STILL QUEUED and will be re-fired. On Chat
+    /// it tags the toast's provenance (`lastErrorIsRelayDeferral`, which the
+    /// drain and the late reconcile use to decide they may auto-clear it); on
+    /// Work it selects the outcome that promises delivery rather than one that
+    /// reports a failure, because nothing failed — the phone just is not here.
+    private func surfaceRelayVerdict(
+        _ message: String,
+        destination: WatchCaptureDestination,
+        deferred: Bool
+    ) {
+        switch destination {
+        case .chat:
             compressedAudioData = nil
             compressedAudioFormat = nil
-            WatchLog.error(.stt, "stt.prep.failed", ["turn": turnTag, "code": (error as? AppError)?.errorCode ?? -1])
-            state = .error(message: terminalSTTMessage(for: error as? AppError))
+            state = .error(message: message)
+            // AFTER the state write: `state.didSet` clears the flag on every
+            // transition, so setting it first would erase it.
+            if deferred { lastErrorIsRelayDeferral = true }
             WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+        case .work:
+            finishWorkCapture(deferred ? .deferredToPhone : .refused(reason: message))
         }
+    }
+
+    /// Reset after a verdict a RACING path already claimed and settled. The
+    /// winner owns the turn now, so this one leaves no trace: no banner over
+    /// someone else's outcome, and nothing latched that could stamp the
+    /// winner's mint with this turn's request.
+    private func retireSupersededRelay(destination: WatchCaptureDestination) {
+        compressedAudioData = nil
+        compressedAudioFormat = nil
+        WatchRecordingCoordinator.shared.isRecordingFlowActive = false
+        clearInFlight()
+        captureDestination = .chat
+        state = .idle
+        recordingTime = 0
+        // The discard counter is a CHAT concern: it exists to pop a `.new`
+        // draft shell that will now never see a mint. Work mounts no draft, and
+        // bumping it here would pop an unrelated thread.
+        if destination == .chat { captureDiscardCount += 1 }
+    }
+
+    /// The line for a Work capture whose words could not be written to the desk
+    /// after an iPhone build that predates Work answered with a transcript and
+    /// no recording.
+    ///
+    /// It promises nothing about WHEN, because the honest answer depends on the
+    /// phone: the entry stays queued and is re-fired, and an updated iPhone
+    /// settles it properly on the next attempt. What the sentence can promise
+    /// is the part that matters — the capture is still here, on this watch.
+    private static var workNoteUnwrittenMessage: String {
+        String(
+            localized: "watch.work.noteUnwritten",
+            defaultValue: "Couldn’t add that to Work yet. It’s still on your watch."
+        )
     }
 
     /// The RELAY leg's Keychain-blackout sentence — the wrist form, naming the

@@ -59,6 +59,67 @@ final class WorkboardMaterialPresentationTests: XCTestCase {
         XCTAssertEqual(WorkboardMaterialIcon.symbol(for: note), WorkboardMaterialKind.note.systemImage)
     }
 
+    /// A card that spends its whole tile on the photo hands VoiceOver no photo
+    /// at all, so the words ARE the card there: the label has to keep naming the
+    /// kind, the name and the availability it is in. The label is composed apart
+    /// from the tile precisely so this can be asserted — nothing about the
+    /// artwork mode reaches it.
+    func testAnImageForwardCardStillSpeaksItsKindNameAndAvailability() {
+        let photo = WorkboardMaterialSnapshot(
+            kind: .image,
+            name: "Whiteboard 3",
+            thumbnailData: Data([0x01, 0x02]),
+            availability: .syncPending,
+            cardSize: .large
+        )
+        XCTAssertEqual(
+            WorkboardCardArtworkMode.resolve(
+                kind: photo.kind,
+                hasThumbnail: photo.thumbnailData != nil,
+                footprint: photo.cardSize
+            ),
+            .imageForward
+        )
+
+        let spoken = WorkboardCardAccessibility.summary(
+            material: photo,
+            cardSize: photo.cardSize,
+            boardPosition: 2,
+            boardCount: 5
+        )
+
+        XCTAssertTrue(spoken.contains(String(localized: WorkboardMaterialKind.image.title)))
+        XCTAssertTrue(spoken.contains("Whiteboard 3"))
+        XCTAssertTrue(spoken.contains(String(localized: WorkboardCardAccessibility.availabilityLabel(
+            for: .syncPending
+        ))))
+        XCTAssertTrue(spoken.contains(
+            WorkboardCardAccessibility.boardPositionLabel(position: 2, count: 5)
+        ))
+
+        // Losing the picture must not lose the words: the same card without
+        // preview bytes says exactly the same thing.
+        var withoutThumbnail = photo
+        withoutThumbnail.thumbnailData = nil
+        XCTAssertEqual(
+            WorkboardCardArtworkMode.resolve(
+                kind: withoutThumbnail.kind,
+                hasThumbnail: false,
+                footprint: withoutThumbnail.cardSize
+            ),
+            .inline
+        )
+        XCTAssertEqual(
+            WorkboardCardAccessibility.summary(
+                material: withoutThumbnail,
+                cardSize: withoutThumbnail.cardSize,
+                boardPosition: 2,
+                boardCount: 5
+            ),
+            spoken
+        )
+    }
+
     func testLargeImportMessageNamesTheTotalSizeAndSeparatesSingularFromPlural() {
         let single = StubLargeImportConfirmation(largeItemByteCounts: [40_000_000])
         let multiple = StubLargeImportConfirmation(largeItemByteCounts: [40_000_000, 20_000_000])

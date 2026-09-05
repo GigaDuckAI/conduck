@@ -60,10 +60,34 @@ extension View {
     /// Fixed modal dimensions improve desktop composition, but minimum widths
     /// can overflow compact iPhones and narrow multitasking windows. Let iOS
     /// own the sheet size and apply the composed minimum only on macOS.
+    ///
+    /// A minimum alone is the right shape for a form or a page of text, which
+    /// wants to be no smaller than legible and no larger than the window it
+    /// sits in. It is the WRONG shape for a picture: a minimum-only sheet opens
+    /// at that minimum, so a media surface would launch at its floor and every
+    /// image would arrive shrunk. Such a sheet therefore also states the size it
+    /// WANTS (`ideal`, what macOS opens it at) and the size it will grow to
+    /// (`max`, so a resize is not fought by the content). All three optional
+    /// parameters default to nil so the text sheets keep the exact frame they
+    /// already had.
     @ViewBuilder
-    func workboardDesktopSheetFrame(minWidth: CGFloat, minHeight: CGFloat) -> some View {
+    func workboardDesktopSheetFrame(
+        minWidth: CGFloat,
+        minHeight: CGFloat,
+        idealWidth: CGFloat? = nil,
+        idealHeight: CGFloat? = nil,
+        maxWidth: CGFloat? = nil,
+        maxHeight: CGFloat? = nil
+    ) -> some View {
         #if os(macOS)
-        frame(minWidth: minWidth, minHeight: minHeight)
+        frame(
+            minWidth: minWidth,
+            idealWidth: idealWidth,
+            maxWidth: maxWidth,
+            minHeight: minHeight,
+            idealHeight: idealHeight,
+            maxHeight: maxHeight
+        )
         #else
         self
         #endif

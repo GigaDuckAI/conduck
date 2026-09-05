@@ -55,13 +55,72 @@ final class RelayWireContractTests: XCTestCase {
         XCTAssertEqual(Wire.audioKey, "audio")
         XCTAssertEqual(Wire.wakeKind, "apple-speech-relay-wake")
         XCTAssertEqual(Wire.supportsMessageReplyKey, "replySendMessageOK")
+        // Work destination + its reply stamp — mirrored on the Watch side.
+        XCTAssertEqual(Wire.destinationKey, "destination")
+        XCTAssertEqual(Wire.destinationWork, "work")
+        XCTAssertEqual(Wire.resultWorkSavedKey, "result.work")
+    }
+
+    func testChatIsNeverSpelledOnTheWire() {
+        // The chat lane has no literal ON PURPOSE: a shipped wrist build sends
+        // no destination at all, so "absent means chat" is the only reading
+        // that keeps it working. A `destinationChat = "chat"` appearing here
+        // would mean some sender is now spelling it — at which point every
+        // older watch is a request this phone cannot classify.
+        XCTAssertEqual(
+            AppleSpeechRelayCoordinator.isWorkDestination(nil), false,
+            "An absent destination is a chat ask — the shape every shipped watch sends"
+        )
+        XCTAssertEqual(
+            AppleSpeechRelayCoordinator.isWorkDestination("chat"), false,
+            "Chat is never spelled; a literal 'chat' is an unknown value, and unknown reads as chat"
+        )
+        XCTAssertEqual(
+            AppleSpeechRelayCoordinator.isWorkDestination("Work"), false,
+            "Exact match only — a case-folded read would guess at drift"
+        )
+        XCTAssertEqual(
+            AppleSpeechRelayCoordinator.isWorkDestination(Wire.destinationWork), true
+        )
+    }
+
+    // MARK: - Reply payload round trip (work success)
+
+    func testWorkSuccessReplyCarriesTheChatKeysPlusTheWorkStamp() {
+        let payload = RelayReplyCache.CachedReply(text: "buy oat milk", errorCode: nil, workSaved: true)
+            .payload(requestID: "req-work")
+
+        XCTAssertEqual(payload["kind"] as? String, "apple-speech-relay-reply")
+        XCTAssertEqual(payload["requestID"] as? String, "req-work")
+        XCTAssertEqual(payload["result.text"] as? String, "buy oat milk")
+        XCTAssertEqual(payload["result.work"] as? Bool, true)
+        XCTAssertNil(payload["result.errorCode"], "A saved capture is a success reply")
+        XCTAssertEqual(
+            payload.count, 4,
+            "A work success reply is EXACTLY chat's three keys plus result.work — anything else is wire drift"
+        )
+    }
+
+    func testChatSuccessReplyCarriesNoWorkStamp() {
+        // The stamp's ABSENCE is load-bearing on the wrist: a work request
+        // answered without it means an older iPhone build kept no recording.
+        // Writing it on a chat reply would make that reading unavailable.
+        let payload = RelayReplyCache.CachedReply(text: "hello duck", errorCode: nil)
+            .payload(requestID: "req-chat")
+        XCTAssertNil(payload["result.work"], "Chat replies never carry the Work stamp")
+
+        // A false stamp is not a stamp either — the wire carries true or nothing.
+        let explicitlyFalse = RelayReplyCache.CachedReply(text: "hello duck", errorCode: nil, workSaved: false)
+            .payload(requestID: "req-chat")
+        XCTAssertNil(explicitlyFalse["result.work"])
+        XCTAssertEqual(explicitlyFalse.count, 3)
     }
 
     func testSettingsPullKindMatchesCrossTargetContract() {
         // Settings-pull rides the existing "kind" dispatch
         // key but is NOT a Wire literal: it is homed in `Constants`, which
         // compiles into BOTH targets, so no manual Watch mirror exists to
-        // drift. The Wire enums stay at exactly the 11 relay literals the
+        // drift. The Wire enums stay at exactly the 14 relay literals the
         // spec pins (asserted above) — do not grow them for this.
         XCTAssertEqual(Constants.settingsPullMessageKind, "settings-pull")
     }

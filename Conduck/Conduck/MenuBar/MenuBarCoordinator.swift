@@ -200,6 +200,19 @@ final class MenuBarCoordinator {
     /// Audio → STT engine. Its `onTranscript` hook is wired to `handleTranscript`.
     let dictationService: DictationService
 
+    /// The Work lane's own recorder, frozen to `.work` recovery routing when it
+    /// is created so a retry hours later can never cross into an agent send
+    /// path. ONE instance for the app's lifetime, held here rather than in the
+    /// popover's view state, because the popover's hosted SwiftUI view is torn
+    /// down while the mic is live — a view-owned recorder would be unstoppable
+    /// the moment somebody clicked away.
+    ///
+    /// It is a SECOND recorder beside `dictationService` on purpose: the two
+    /// lanes publish to different places and recover through different queues,
+    /// and the microphone lease — not a shared object — is what keeps them from
+    /// running at once.
+    let workVoiceRecorder = InAppAudioRecorder(retryDestination: .work)
+
     /// Conversation store seam — production keeps `.shared`; tests inject an
     /// isolated `ConversationStore(inMemory: true)` (the unsigned test host
     /// CRASHES on the shared CloudKit-backed container's first touch — no
@@ -744,15 +757,47 @@ final class MenuBarCoordinator {
     private(set) var menuBarInputMode: MenuBarInputMode =
         SettingsManager.menuBarInputModeAtLaunch()
 
-    /// The text-mode popover's draft. COORDINATOR-owned (not view `@State`) so
-    /// it survives popover teardown by construction — an outside-click (the
-    /// IMPLICIT dismiss) keeps the user's words, while Esc / the explicit Cancel
-    /// controls discard them (`cancelActiveCapture`). `sendQuickTypedDraft()`
-    /// clears it atomically with `turnStarting` in one MainActor turn (the
-    /// no-stale-frame contract). The popover binds it via `@Bindable`.
-    var quickDraft = ""
+    /// The text-mode popover's compositions — one for Chat, one for Work, and
+    /// which of them the compose surface is editing. COORDINATOR-owned (not view
+    /// `@State`) so they survive popover teardown by construction — an
+    /// outside-click (the IMPLICIT dismiss) keeps the user's words, while Esc /
+    /// the explicit Cancel controls discard them (`cancelActiveCapture`).
+    ///
+    /// The AIM lives here with the words, and that is the whole point of the
+    /// type: a Work flag cleared on close would leave the private sentence
+    /// behind for Chat's Return to pick up on the next ⌘⇧1 summon.
+    private(set) var compose = MenuBarComposeState()
+
+    /// The CHAT composition. `sendQuickTypedDraft()` clears it atomically with
+    /// `turnStarting` in one MainActor turn (the no-stale-frame contract). The
+    /// popover binds it via `@Bindable`.
+    var quickDraft: String {
+        get { compose.chatText }
+        set { compose.chatText = newValue }
+    }
+
+    /// The WORK composition — what ⌃⌘W's compose surface edits. It is a
+    /// separate slot rather than a label on the Chat draft so the words meant
+    /// for the desk are never sitting in the field a single Return would send
+    /// to a gateway.
+    var quickWorkDraft: String {
+        get { compose.workText }
+        set { compose.workText = newValue }
+    }
+
+    /// Which composition the compose surface is showing. Read by the popover to
+    /// pick its header, its commit action, and whether the Ask affordance is
+    /// drawn at all.
+    var composeTarget: MenuBarComposeTarget { compose.target }
+
     private(set) var isSavingQuickDraftToWork = false
     var quickWorkCaptureFeedback: MenuBarWorkCaptureFeedback?
+
+    /// Whether the "Added to Work" acknowledgement (or its failure twin) is on
+    /// screen. Part of the contract `MenuBarController` drives the ⌃⌘W lane
+    /// through: a press that resolved into a banner has something to show, so
+    /// the popover it opened must not be treated as empty.
+    var workCaptureFeedbackIsShowing: Bool { quickWorkCaptureFeedback != nil }
 
     /// TEXT-mode compose state that must survive a dismissal: a staged ⌘⇧2
     /// screenshot, or (text mode only) a non-empty draft. Gates the explicit-
@@ -766,6 +811,15 @@ final class MenuBarCoordinator {
         if pendingCaptureImage != nil { return true }
         return menuBarInputMode == .text
             && !quickDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The Work-only compose surface's own commit gate. Deliberately separate
+    /// from `hasComposeState`, which also decides whether a destination PICK
+    /// survives a dismissal: the Work lane has no destination to pin, so a Work
+    /// composition must not keep an unrelated gateway choice alive.
+    var hasWorkComposeState: Bool {
+        pendingCaptureImage != nil
+            || !quickWorkDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// The gateway the Conversations *window*'s title picker chose for the NEXT
@@ -1681,8 +1735,20 @@ final class MenuBarCoordinator {
     func cancelActiveCapture() {
         if quickViewModel?.isAwaitingReply == true { quickViewModel?.cancelInFlight() }
         dictationService.cancelRecording()
+        // The Work lane bails on the same press. Its recorder is invisible to
+        // `dictationService`, so an Esc that skipped it would close the popover
+        // over a live microphone with no surface left to stop it.
+        cancelWorkVoiceCapture()
         clearPendingCaptureImage()
-        quickDraft = ""
+        // Discard the composition ON SCREEN. A parked Work draft is not
+        // abandoned by an Esc pressed over the Chat surface (and vice versa) —
+        // an explicit bail throws away what the person was looking at, never a
+        // second composition they cannot see.
+        if compose.target == .work {
+            discardWorkOnlyCompose()
+        } else {
+            quickDraft = ""
+        }
         discardPendingFailedTurn()
         resetQuickDestinationAfterTurn()
     }
@@ -1728,6 +1794,10 @@ final class MenuBarCoordinator {
     /// destination at the press instant (display==send, exactly like voice —
     /// text mode just has a zero-length "recording" between arm and send).
     func sendQuickTypedDraft() {
+        // The one hard line between the two lanes, asserted where the gateway
+        // path begins rather than only in the view that hides the button: while
+        // the surface is aimed at the desk, nothing it holds may be sent.
+        guard compose.target == .chat else { return }
         let trimmed = quickDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         // Empty no-op MUST precede any state change: entering `handleQuickSend`
         // empty would burn a staged ⌘⇧2 screenshot via its defer. Attachment-only
@@ -1762,12 +1832,199 @@ final class MenuBarCoordinator {
         }
     }
 
+    // MARK: - Work-only compose state (⌃⌘W, text input mode)
+
+    /// Show the compose surface aimed at the desk: the header names Work, the
+    /// Ask affordance is not drawn, and Return commits to `saveQuickDraftToWork`.
+    ///
+    /// The aim is taken BEFORE the popover is shown (see
+    /// `MenuBarController.handleWorkCapturePress`) so the surface never draws a
+    /// frame of Chat chrome over words meant for the desk.
+    func openComposeForWorkOnly() {
+        quickWorkCaptureFeedback = nil
+        compose.aimAtWork()
+    }
+
+    /// Leave the Work-only surface WITHOUT touching what is written on it — the
+    /// ⌘⇧1 summon's answer to a parked Work composition. The Chat surface comes
+    /// back with its own draft, and the Work words wait where they were.
+    ///
+    /// Kept separate from the discard below because the two are opposite
+    /// promises: this one is a navigation, and losing words to a navigation is
+    /// the failure mode the whole aim-with-the-words design exists to prevent.
+    func closeWorkOnlyCompose() {
+        compose.returnToChat()
+    }
+
+    /// Throw the Work composition away — the explicit bail (Esc, the surface's
+    /// own Cancel). The Chat draft underneath is untouched.
+    func discardWorkOnlyCompose() {
+        compose.discardActive()
+        quickWorkCaptureFeedback = nil
+    }
+
+    // MARK: - Work voice capture (⌃⌘W, voice input mode)
+
+    /// True from the moment ⌃⌘W is pressed until the capture is finished or let
+    /// go: the start, the recording, the transcription that follows the stop,
+    /// and an unfinished capture's error.
+    ///
+    /// The error arm is gated on `canRetryWorkCapture` rather than on the error
+    /// alone, and the distinction is the difference between two states that look
+    /// alike. A capture that was REFUSED — a busy microphone, a denied
+    /// permission — never reached the desk and owns nothing, so it is not a
+    /// capture in progress and the popover shows it as a banner. A capture that
+    /// published a card and then could not get its words IS unfinished: its
+    /// recording is on the desk waiting for a transcript, and the HUD that owns
+    /// the Try Again which finishes it must outrank everything else the popover
+    /// could show.
+    var workCaptureIsActive: Bool {
+        if isStartingWorkVoiceCapture { return true }
+        switch workVoiceRecorder.state {
+        case .recording, .processing, .preparingVoice:
+            return true
+        case .error:
+            return workVoiceRecorder.canRetryWorkCapture
+        case .idle:
+            return false
+        }
+    }
+
+    /// True across `beginWorkVoiceCapture`'s own suspension. `state` stays
+    /// `.idle` while the microphone comes up, so without this the popover would
+    /// render one frame of the ordinary content between the press that opened it
+    /// and the recording that justified it.
+    private(set) var isStartingWorkVoiceCapture = false
+
+    /// Start a Work capture. Returns whether the microphone actually came up.
+    ///
+    /// A refusal is surfaced HERE rather than left to the caller, because the
+    /// caller is a global hotkey with nothing on screen of its own: the popover
+    /// is already open by the time this runs, and a banner in it is the only
+    /// place the person can be told why nothing is recording.
+    ///
+    /// Arbitration is the recorder's `SpeechExclusivity` mic lease and nothing
+    /// else. `DictationService.state` is deliberately not consulted: the lease
+    /// is held by whichever recorder actually has the input — including the main
+    /// window's composer mic, which that state knows nothing about — so a second
+    /// opinion derived from it could only ever disagree with the truth.
+    @discardableResult
+    func beginWorkVoiceCapture() async -> Bool {
+        guard !workCaptureIsActive else { return false }
+        quickWorkCaptureFeedback = nil
+        workVoiceRecorder.onAutoStopResult = { [weak self] result in
+            self?.noteWorkCaptureFinished(result)
+        }
+        isStartingWorkVoiceCapture = true
+        await workVoiceRecorder.startRecording()
+        isStartingWorkVoiceCapture = false
+
+        if case .recording = workVoiceRecorder.state { return true }
+        presentWorkVoiceStartRefusal()
+        return false
+    }
+
+    /// Second ⌃⌘W press: finish the capture in hand. A live microphone stops and
+    /// saves; an unfinished capture that already owns a card runs the retry that
+    /// completes it, which is the same thing the desk sheet's Try Again does.
+    /// Never a discard — the words are the point, and this hotkey has no other
+    /// stop affordance.
+    func finishWorkVoiceCapture() async {
+        switch workVoiceRecorder.state {
+        case .recording:
+            noteWorkCaptureFinished(await workVoiceRecorder.stopAndUpload())
+        case .error where workVoiceRecorder.canRetryWorkCapture:
+            noteWorkCaptureFinished(await workVoiceRecorder.retryWorkCapture())
+        case .idle, .processing, .preparingVoice, .error:
+            break
+        }
+    }
+
+    /// Start over: a new recording, leaving whatever the previous capture landed
+    /// on the desk. The recorder releases the capture it replaces only once the
+    /// replacement microphone is live, so a refused start leaves the first
+    /// capture — and the Try Again that finishes it — exactly where it was.
+    func restartWorkVoiceCapture() async {
+        workVoiceRecorder.dismissError()
+        _ = await beginWorkVoiceCapture()
+    }
+
+    /// Explicit bail on a Work capture. A live recording is discarded, a
+    /// transcription in flight is abandoned, and a standing error is cleared —
+    /// none of which touches a card already on the desk or the queued recording
+    /// behind an unfinished capture, both of which outlive this popover.
+    func cancelWorkVoiceCapture() {
+        switch workVoiceRecorder.state {
+        case .recording:
+            workVoiceRecorder.cancelRecording()
+        case .processing, .preparingVoice:
+            workVoiceRecorder.cancelProcessing()
+        case .error:
+            workVoiceRecorder.dismissError()
+        case .idle:
+            break
+        }
+    }
+
+    /// The capture reached a terminal answer.
+    ///
+    /// Only a SUCCESS acknowledges, and only when a card owns the words: the
+    /// recorder nils `workRecordingMaterialID` when the capture turned out to
+    /// own no recording at all (a card deleted while speech recognition was in
+    /// flight), and "Added to Work" said over an empty desk is the one sentence
+    /// this surface may not print. A failure sets nothing — the recorder owns
+    /// the error state and the retry lane, and the HUD renders both.
+    private func noteWorkCaptureFinished(_ result: Result<String, AppError>) {
+        guard case .success = result else { return }
+        guard workVoiceRecorder.workRecordingMaterialID != nil else {
+            quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(
+                kind: .failed,
+                message: String(localized: LocalizedStringResource(
+                    "workboard.menuBar.voice.cardMissing",
+                    defaultValue: "That recording is no longer on your desk."
+                ))
+            )
+            return
+        }
+        quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(
+            kind: .saved,
+            message: String(localized: LocalizedStringResource(
+                "workboard.menuBar.saved",
+                defaultValue: "Added to Work. Nothing was sent."
+            ))
+        )
+    }
+
+    /// Say why the microphone did not come up, and clear the refusal off the
+    /// recorder so it cannot masquerade as an unfinished capture.
+    ///
+    /// The busy case reuses the sentence `DictationService` has always shown for
+    /// the same lease refusal — one microphone, one explanation, whichever lane
+    /// asked for it.
+    private func presentWorkVoiceStartRefusal() {
+        let message: String
+        if case .error(let error) = workVoiceRecorder.state {
+            message = error.errorCode == AppError.audioMicBusy.errorCode
+                ? String(localized: "Microphone is in use by another recording.")
+                : error.localizedDescription
+        } else {
+            message = AppError.audioMissingData.localizedDescription
+        }
+        workVoiceRecorder.dismissError()
+        quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(kind: .failed, message: message)
+    }
+
     /// Explicitly move the popover composition into inert Work. This is a
     /// sibling action to Ask, never a hidden destination mode: established
     /// Return/hotkey behavior still sends to Chat, while this labeled action
     /// creates a private Work item and cannot contact a gateway.
+    ///
+    /// It commits whichever composition the surface is showing, so the Chat
+    /// surface's "Add to Work" button and the ⌃⌘W Work-only surface's Return
+    /// are one code path: there is exactly one way words reach the desk from
+    /// this popover, and it publishes an envelope rather than writing a card.
     func saveQuickDraftToWork() {
-        let draftAtCommit = quickDraft
+        let draftAtCommit = compose.activeText
         let thought = WorkboardWorkspaceCaptureLogic.normalizedThought(draftAtCommit)
         let screenshotAtCommit = pendingCaptureImage
         guard !isSavingQuickDraftToWork, !thought.isEmpty || screenshotAtCommit != nil else { return }
@@ -1782,10 +2039,22 @@ final class MenuBarCoordinator {
                     screenshotPNG: screenshotAtCommit
                 )
 
+                // The publication is the durable boundary; the DRAIN is what
+                // makes the acknowledgement true. An envelope nobody imports is
+                // invisible until something else opens the desk, so a banner
+                // reading "Added to Work" would name a card that is not on the
+                // board yet. A drain that cannot reach the store is still not a
+                // failed capture — the envelope stays queued and the desk's own
+                // observer imports it — so its throw is deliberately swallowed.
+                _ = try? await WorkCaptureDrainer(
+                    sourceDevice: SourceDevice.current
+                ).drainAvailableCaptures()
+
                 // The popover stays interactive while disk I/O runs. Consume only
                 // the exact values that were published; text or a screenshot added
-                // during the await belongs to the next capture and must survive.
-                if quickDraft == draftAtCommit { quickDraft = "" }
+                // during the await belongs to the next capture and must survive —
+                // and a composition that kept its words keeps its aim with them.
+                compose.clearActive(ifStillEqualTo: draftAtCommit)
                 if pendingCaptureImage == screenshotAtCommit { clearPendingCaptureImage() }
                 if quickDraft.isEmpty, pendingCaptureImage == nil {
                     resetQuickDestinationAfterTurn()
@@ -2247,3 +2516,128 @@ final class MenuBarCoordinator {
     }
 }
 #endif
+
+// MARK: - Menu-bar Work rules as values (outside the platform gate on purpose)
+//
+// These three types carry the rules the menu bar's Work lane is judged on:
+// where a retained composition is aimed, and which sentence a Work voice HUD is
+// showing. They sit BELOW the `#endif` rather than inside it because the lane
+// that runs `ConduckTests` is an iOS simulator, and a rule sealed inside
+// `#if os(macOS)` compiles to nothing there — assertions about it would be
+// assertions about an empty file. Nothing here touches AppKit, and nothing here
+// knows what a popover is.
+
+/// Where the menu-bar popover's retained composition is aimed.
+enum MenuBarComposeTarget: String, Equatable, Sendable, CaseIterable {
+    /// The gateway lane: Return and Ask send, and the surface says so.
+    case chat
+    /// The desk lane (⌃⌘W): Return and ⌘Return save a private card, the Ask
+    /// affordance is not drawn, and no path from here reaches a gateway.
+    case work
+}
+
+/// The popover's two compositions and which one the compose surface is editing.
+///
+/// WHY THE AIM IS STORED WITH THE WORDS. An outside click is an IMPLICIT
+/// dismissal that deliberately KEEPS the composition alive, so a Work flag
+/// cleared on close would leave the private sentence sitting in the field that
+/// Chat's Return sends — the destination silently changing under words nobody
+/// retyped. The aim therefore ends where the words end: at a commit, or at an
+/// explicit discard.
+///
+/// WHY TWO TEXTS RATHER THAN ONE PLUS A LABEL. A Work composition is never
+/// offered to the gateway lane at all, not even as a prefilled field one Return
+/// would send, so the desk's words live in their own slot and the Chat draft
+/// waits untouched underneath them.
+struct MenuBarComposeState: Equatable, Sendable {
+    /// The Chat composition — ⌘⇧1's compose field.
+    var chatText: String = ""
+    /// The Work composition — ⌃⌘W's compose field.
+    var workText: String = ""
+    /// Which of the two is on screen. Mutated only through the four rules
+    /// below, so no caller can change the aim as a side effect of typing.
+    private(set) var target: MenuBarComposeTarget = .chat
+
+    /// The text the compose surface is editing right now.
+    var activeText: String {
+        get {
+            switch target {
+            case .chat: return chatText
+            case .work: return workText
+            }
+        }
+        set {
+            switch target {
+            case .chat: chatText = newValue
+            case .work: workText = newValue
+            }
+        }
+    }
+
+    /// True when the active composition holds nothing a commit could take.
+    /// Whitespace counts as nothing, exactly as the commit paths trim it.
+    var activeTextIsBlank: Bool { activeText.allSatisfy(\.isWhitespace) }
+
+    /// Aim at the desk (⌃⌘W). Idempotent, and it never touches either text: a
+    /// second press onto an open Work surface must not clear what is on it.
+    mutating func aimAtWork() {
+        target = .work
+    }
+
+    /// Leave the Work surface without touching what is written on it — the
+    /// ⌘⇧1 summon's answer to a parked Work composition.
+    mutating func returnToChat() {
+        target = .chat
+    }
+
+    /// Consume exactly the text that was committed, and answer whether it was.
+    ///
+    /// A commit runs across an `await`, and anything typed during it belongs to
+    /// the NEXT capture — so a composition that changed under the write keeps
+    /// both its words and its aim, and only an unchanged one is cleared and
+    /// released back to Chat.
+    @discardableResult
+    mutating func clearActive(ifStillEqualTo committed: String) -> Bool {
+        guard activeText == committed else { return false }
+        activeText = ""
+        target = .chat
+        return true
+    }
+
+    /// Throw the active composition away — the explicit bail (Esc, Cancel). The
+    /// other composition is untouched: a bail discards what the person was
+    /// looking at, never a second one they cannot see.
+    mutating func discardActive() {
+        activeText = ""
+        target = .chat
+    }
+}
+
+/// The sentence a Work voice HUD is showing, named by the catalog key that
+/// renders it.
+///
+/// It exists as a value because two surfaces describe the same recorder — the
+/// desk's full sheet and the menu bar's compact HUD — and a person who starts a
+/// capture on one and finishes it on the other must not be told two different
+/// things about one state. Resolving the state to a KEY rather than to a string
+/// keeps the rule assertable without a catalog, a bundle or a view.
+enum MenuBarWorkVoiceStatus: String, Equatable, Sendable, CaseIterable {
+    case starting = "workboard.voice.starting"
+    case listening = "workboard.voice.listening"
+    case transcribing = "workboard.voice.transcribing"
+    case preparing = "workboard.voice.preparing"
+    case stopped = "workboard.voice.error.title"
+
+    /// `.idle` reads as STARTING rather than as a state of its own: the HUD is
+    /// on screen only while a capture is live, and the one moment the recorder
+    /// is idle underneath it is the gap before the microphone comes up.
+    static func resolve(_ state: InAppAudioRecorderState) -> MenuBarWorkVoiceStatus {
+        switch state {
+        case .idle: return .starting
+        case .recording: return .listening
+        case .processing: return .transcribing
+        case .preparingVoice: return .preparing
+        case .error: return .stopped
+        }
+    }
+}

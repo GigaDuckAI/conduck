@@ -394,10 +394,24 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         XCTAssertFalse(blackoutArm.contains("terminalSTTMessage"),
                        "`terminalSTTMessage` serves the UPLOAD leg, where the unreadable slot is this "
                        + "watch's own. On the relay leg its 'this device' names the wrong device.")
-        XCTAssertEqual(body.components(separatedBy: "lastErrorIsRelayDeferral = true").count - 1, 2,
+        XCTAssertTrue(blackoutArm.contains("deferred: true"),
+                      "The blackout arm no longer declares itself a deferral, so its toast outlives the "
+                      + "transcript that eventually lands.")
+
+        // The flag itself is written by `surfaceRelayVerdict`, which every arm of
+        // `runRelay` funnels through — so the count that matters is the number of
+        // arms that ASK for the deferral shape, and the helper is what proves the
+        // ask still reaches the flag. Counting the assignment inside `runRelay`
+        // would now measure the funnel, not the arms.
+        XCTAssertEqual(body.components(separatedBy: "deferred: true").count - 1, 2,
                        "Exactly two deferral arms: the reply-wait timeout and the blackout. A blackout that "
-                       + "stopped setting the flag has taken the claim shape instead — or its toast will "
-                       + "outlive the transcript that eventually lands.")
+                       + "stopped asking for the deferral shape has taken the claim shape instead — or its "
+                       + "toast will outlive the transcript that eventually lands.")
+        let verdict = try RefusalLaneSource.body(ofFunction: "surfaceRelayVerdict", in: source, path: path)
+        XCTAssertTrue(verdict.contains("lastErrorIsRelayDeferral = true"),
+                      "`surfaceRelayVerdict` is where a deferral arm's `deferred: true` becomes the "
+                      + "provenance flag the drain reads. Without that write the two deferral arms above "
+                      + "assert nothing.")
     }
 
     /// CarPlay's blackout line is SPOKEN, and the driver cannot re-read it — so

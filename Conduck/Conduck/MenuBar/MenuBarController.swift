@@ -137,6 +137,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 self?.handleRegionCapturePress()
             }
         }
+
+        KeyboardShortcuts.onKeyUp(for: .captureToWork) { [weak self] in
+            Task { @MainActor in
+                self?.handleWorkCapturePress()
+            }
+        }
     }
 
     // MARK: - Click Handling
@@ -189,6 +195,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     // MARK: - Keyboard Shortcut
 
     private func handleShortcutPress() {
+        guard !workRecordingIsLive else { return showWorkCaptureInstead() }
         switch dictationService.state {
         case .idle, .error:
             // TEXT input mode: ⌘⇧1 is a popover TOGGLE — open with the compose
@@ -198,6 +205,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             // `discardPendingFailedTurn` (summoning isn't a fresh capture; the
             // stash dies via Dismiss / Esc-over-error / a successful send).
             if coordinator.menuBarInputMode == .text {
+                // ⌘⇧1 is Chat's door, so it leaves the Work-only surface first —
+                // a navigation, never a discard: the Work composition is parked
+                // where it was written and the Chat draft comes back underneath.
+                coordinator.closeWorkOnlyCompose()
                 if popover.isShown {
                     dismissPopover()
                 } else {
@@ -243,6 +254,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// shows the popover, plays a subtle start cue, and starts the voice turn —
     /// the screenshot rides that turn (`MenuBarCoordinator.handleTranscript`).
     private func handleRegionCapturePress() {
+        guard !workRecordingIsLive else { return showWorkCaptureInstead() }
         if dictationService.state == .recording {
             dictationService.toggleRecording()   // stop-and-send the in-flight capture turn
             return
@@ -291,6 +303,78 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             dictationService.toggleRecording()
             // Using the feature retires the one-time discovery tip.
             await SettingsManager.shared.markScreenshotAskTipSeen()
+        }
+    }
+
+    /// What an ASK hotkey does while a Work recording holds the microphone:
+    /// show the capture that is actually running, and start nothing.
+    ///
+    /// Letting the press proceed would be worse than useless. The chat lane
+    /// would take the lease refusal into `DictationService.state == .error`, and
+    /// the popover renders the Work HUD above everything while a Work capture is
+    /// active — so the refusal would be invisible at the moment it happened and
+    /// would then SURFACE, stale, the instant the Work capture finished: an
+    /// error about a microphone conflict that no longer exists, attached to a
+    /// press the user made a minute earlier. ⌘⇧2 would additionally spend a
+    /// region drag first.
+    ///
+    /// Scoped to a LIVE recording, not to `workCaptureIsActive`: the microphone
+    /// is released at the stop, so a capture still owing its transcript blocks
+    /// nothing.
+    private func showWorkCaptureInstead() {
+        if !popover.isShown { showPopover() }
+    }
+
+    /// "Capture to Work" (⌃⌘W) — the desk's own hotkey. Shaped like
+    /// `handleRegionCapturePress` in its press semantics (a second press stops
+    /// and saves) and deliberately UNLIKE it in two ways, because Work is not a
+    /// send:
+    ///
+    /// - No `isQuickCaptureKnownUnavailable` guard. That guard exists so words
+    ///   are never spent on a turn no gateway can deliver; a Work capture is
+    ///   delivered to local storage, so refusing it for a missing gateway would
+    ///   deny the one capture lane that still works when everything else is
+    ///   down.
+    /// - No `armQuickCapture()`. There is no destination to latch — the desk is
+    ///   the destination — and arming would bind this private capture to the
+    ///   quick CHAT lane's snapshot, which is exactly the confusion the Work
+    ///   lane exists to prevent.
+    ///
+    /// The live/idle question is asked of the WORK recorder, never of
+    /// `dictationService`: the two lanes own different recorders, and a chat
+    /// capture holding the mic must be refused by the microphone lease (which
+    /// the coordinator surfaces), not silently stopped by this press.
+    private func handleWorkCapturePress() {
+        if coordinator.workCaptureIsActive {
+            // Second press: stop and save. Never a discard — the words are
+            // already the point, and this hotkey has no other stop affordance.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await coordinator.finishWorkVoiceCapture()
+            }
+            return
+        }
+        if coordinator.menuBarInputMode == .text {
+            // TEXT input mode: no microphone at all. The compose surface opens
+            // in its Work-only state, where Return saves to the desk. The state
+            // is set BEFORE the popover is shown so the surface never draws one
+            // frame of the Chat header over words meant for the desk.
+            coordinator.openComposeForWorkOnly()
+            showPopover()
+            return
+        }
+        showPopover()
+        // The same "capture armed, start talking" cue ⌘⇧2 plays, and for the
+        // same reason: it has to precede the mic going live, or it lands in the
+        // recording. A refused lease therefore plays a cue and then shows the
+        // refusal the coordinator sets — the alternative is a silent start.
+        CompletionFeedbackPlayer.play(mode: "sound")
+        Task { @MainActor [weak self] in
+            // The Bool is deliberately dropped: a refused microphone lease is
+            // surfaced by the coordinator in the popover that is already open,
+            // and the controller has nothing to add to it.
+            guard let self else { return }
+            _ = await coordinator.beginWorkVoiceCapture()
         }
     }
 
@@ -504,6 +588,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 // rather than from anything that happened in this process.
                 _ = coordinator.unreadReplyConversationIDs   // drive the unread dot
                 _ = coordinator.failedConversationIDs        // drive the failure dot
+                // The Work lane runs on its OWN recorder, so its capture is
+                // invisible to `dictationService.state`. Untracked, a ⌃⌘W
+                // recording would leave the popover `.transient` — one click
+                // outside would close it and orphan a live audio session — and
+                // the status item would sit on the idle duck while the mic ran.
+                _ = coordinator.workVoiceRecorder.state
             } onChange: {
                 Task { @MainActor [weak self] in
                     self?.handleStateChange()
@@ -516,6 +606,26 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     private var isAwaitingReply: Bool {
         coordinator.quickViewModel?.isAwaitingReply ?? false
+    }
+
+    /// True while the Work recorder's microphone is live. Distinct from
+    /// `coordinator.workCaptureIsActive`, which stays true through the save that
+    /// follows the stop: only the LIVE mic may pin the popover open.
+    private var workRecordingIsLive: Bool {
+        if case .recording = coordinator.workVoiceRecorder.state { return true }
+        return false
+    }
+
+    /// True while the Work recorder is doing anything at all — recording, or
+    /// working through the transcription that follows. Drives the status item,
+    /// which narrates whichever capture lane is busy.
+    private var workCaptureIsBusy: Bool {
+        switch coordinator.workVoiceRecorder.state {
+        case .recording, .processing, .preparingVoice:
+            return true
+        case .idle, .error:
+            return false
+        }
     }
 
     private func handleStateChange() {
@@ -536,7 +646,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 // thread as viewed (keeps `popoverVisibleConversationID` current
                 // as the quick lane rebinds, and clears any dot the reply-
                 // arrived event raised in the same tick).
-                if popover.isShown {
+                // …but not while Work owns the popover: the surface on screen
+                // is the Work capture, not the quick thread, so reporting that
+                // thread as visible would clear its unread mark for a reply the
+                // user never saw.
+                if popover.isShown, !coordinator.workCaptureIsActive {
                     coordinator.setPopoverVisibleConversation(coordinator.displayedPopoverConversationID)
                 }
             case .recording, .processing:
@@ -549,6 +663,27 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     private func updateIcon() {
         guard let button = statusItem?.button else { return }
+
+        // The Work lane gets the SAME two busy glyphs the chat lane gets, so
+        // "the mic is live" reads identically whichever hotkey opened it. It is
+        // resolved first only because `dictationService.state` stays `.idle`
+        // through a Work capture; the two lanes are mutually exclusive at the
+        // microphone lease, so this can never mask a live chat capture.
+        if workCaptureIsBusy {
+            switch coordinator.workVoiceRecorder.state {
+            case .recording:
+                button.image = NSImage(systemSymbolName: "record.circle.fill",
+                                       accessibilityDescription: String(localized: "Recording"))
+            default:
+                button.image = NSImage(systemSymbolName: "ellipsis.circle.fill",
+                                       accessibilityDescription: String(localized: "Transcribing"))
+            }
+            // No dots over a busy icon (same rule as every non-idle state
+            // below): they narrate settled chat replies, not a capture in hand.
+            updateFailureBadge(visible: false, on: button)
+            updateUnreadBadge(visible: false, on: button)
+            return
+        }
 
         switch dictationService.state {
         case .recording:
@@ -584,6 +719,15 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     private func updatePopoverBehavior() {
+        // A live WORK recording pins the popover exactly as a chat recording
+        // does — the audio session is the same kind of thing, and a click-away
+        // that orphaned it would lose words the desk had already promised to
+        // keep. Checked first because the Work lane is invisible to
+        // `dictationService.state`, which reads `.idle` throughout.
+        if workRecordingIsLive {
+            popover.behavior = .applicationDefined
+            return
+        }
         switch dictationService.state {
         case .recording:
             // Lock the popover open during recording so an outside click can't
@@ -780,6 +924,20 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         screenshotAskItem.target = self
         menu.addItem(screenshotAskItem)
 
+        let recordToWorkItem = NSMenuItem(
+            title: String(localized: LocalizedStringResource(
+                "menu.recordToWork",
+                defaultValue: "Record to Work…"
+            )),
+            action: #selector(captureToWorkFromMenu),
+            // No responder-chain key-equivalent, same as its two neighbours:
+            // ⌃⌘W is owned by KeyboardShortcuts, and a live menu equivalent
+            // could double-fire while the context menu is key-tracking.
+            keyEquivalent: ""
+        )
+        recordToWorkItem.target = self
+        menu.addItem(recordToWorkItem)
+
         let conversationsItem = NSMenuItem(
             title: String(localized: LocalizedStringResource(
                 "conversations.openConversations",
@@ -858,6 +1016,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     // MARK: - Menu Actions
 
     @objc private func startRecordingFromMenu() {
+        // The third Ask door gets the same Work-recording gate as the other two.
+        guard !workRecordingIsLive else { return showWorkCaptureInstead() }
         // Defensive mode re-check (the item is mode-conditional, but the menu
         // could have been built a beat before a Settings change landed).
         guard coordinator.menuBarInputMode == .voice else {
@@ -888,6 +1048,15 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     @objc private func screenshotAndAskFromMenu() {
         handleRegionCapturePress()
+    }
+
+    /// The menu door into the Work lane — the same handler as ⌃⌘W, so the two
+    /// entry points can never acquire different rules. In text input mode it
+    /// opens the compose surface in its Work-only state; the item's title still
+    /// says "Record" because the hotkey it stands for is the recording one, and
+    /// a mode-conditional title would name the same key twice.
+    @objc private func captureToWorkFromMenu() {
+        handleWorkCapturePress()
     }
 
     @objc private func openConversationsFromMenu() {

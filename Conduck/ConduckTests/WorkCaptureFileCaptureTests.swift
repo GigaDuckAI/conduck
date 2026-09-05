@@ -136,6 +136,41 @@ final class WorkCaptureFileCaptureTests: XCTestCase {
         XCTAssertEqual(directories.map(\.lastPathComponent), [captureID.uuidString])
     }
 
+    // MARK: - A picture is published as a picture
+
+    /// The desk gives an `.image` entry a thumbnail and a place in the gallery,
+    /// so a photo added from a Shortcut has to arrive as one — a picture landing
+    /// as a generic file is a row the person opens one at a time to recognise.
+    /// Either signal answers: a mime type (what a share sheet carries) or a type
+    /// identifier (what a file-provider URL carries). Everything else stays a
+    /// file.
+    func testAnImageIsPublishedAsAnImageEntryAndOtherFilesStayFiles() async throws {
+        let inbox = WorkCaptureInbox(baseURL: root)
+        let byMIME = try writeFile(named: "sketch.png", contents: "png")
+        let byTypeIdentifier = try writeFile(named: "photo.jpg", contents: "jpg")
+        let document = try writeFile(named: "plan.pdf", contents: "pdf")
+
+        _ = try await inbox.publishFileCapture(
+            note: nil,
+            files: [
+                input(byMIME, mimeType: "image/png", typeIdentifier: nil),
+                input(byTypeIdentifier, mimeType: nil, typeIdentifier: "public.jpeg"),
+                input(document, mimeType: "application/pdf", typeIdentifier: "com.adobe.pdf"),
+            ],
+            captureID: UUID()
+        )
+
+        let claimValue = try await inbox.claimNext()
+        let claim = try XCTUnwrap(claimValue)
+        XCTAssertEqual(claim.envelope.entries.map(\.kind), [.image, .image, .file])
+        for entry in claim.envelope.entries {
+            XCTAssertNotNil(
+                claim.payloadURL(for: entry),
+                "an image entry is file-backed exactly as a file entry is"
+            )
+        }
+    }
+
     // MARK: - Refusals take the whole set
 
     func testASetLargerThanTheEntryLimitIsRefusedWhole() async throws {

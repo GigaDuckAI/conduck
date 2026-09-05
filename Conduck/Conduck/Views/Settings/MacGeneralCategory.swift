@@ -233,6 +233,20 @@ struct MacGeneralCategory: View {
                 KeyboardShortcuts.Recorder(for: .captureRegionAndVoice)
             }
             .settingsCardPassiveRow()
+
+            HStack {
+                Label(
+                    // Names the destination, not the input: ⌃⌘W records in voice
+                    // mode and opens the compose surface in text mode, and the
+                    // one thing true of both is where the capture lands.
+                    title: { Text(LocalizedStringResource("settings.mac.general.shortcut.captureToWork.label", defaultValue: "Capture to Work")) },
+                    icon: { Image(systemName: "tray.and.arrow.down") }
+                )
+                .foregroundStyle(AppColors.textPrimary)
+                Spacer()
+                KeyboardShortcuts.Recorder(for: .captureToWork)
+            }
+            .settingsCardPassiveRow()
         } header: {
             Text(LocalizedStringResource("settings.mac.general.shortcut.header", defaultValue: "Keyboard Shortcut"))
         } footer: {

@@ -22,6 +22,7 @@
 
 import CryptoKit
 import Foundation
+import UniformTypeIdentifiers
 import os
 
 /// Bridges the share extensions' best-effort Darwin notification into the
@@ -398,15 +399,27 @@ actor WorkCaptureInbox {
             let pathExtension = WorkCaptureEnvelope.safePathExtension(
                 namedExtension.isEmpty ? file.url.pathExtension : namedExtension
             )
+            // A picture is declared a picture HERE, where the caller's metadata
+            // is still in hand, rather than being re-derived downstream: the
+            // drainer already mints a thumbnail and a gallery page for an
+            // `.image` entry, and a photo that arrives as a generic file is a
+            // row the person has to open one at a time to recognise. The mime
+            // type is asked first because it is what a share sheet and a
+            // Shortcut both reliably carry; the type identifier answers for the
+            // files that carry only that. Everything else stays `.file`.
+            let mimeType = WorkCaptureEnvelope.safeOpaqueMetadata(file.mimeType)
+            let typeIdentifier = WorkCaptureEnvelope.safeOpaqueMetadata(file.typeIdentifier)
+            let isImage = mimeType?.lowercased().hasPrefix("image/") == true
+                || typeIdentifier.flatMap { UTType($0)?.conforms(to: .image) } == true
             staged.append(StagedEntry(
                 entry: WorkCaptureEnvelope.Entry(
                     id: Self.fileEntryID(forCapture: captureID, sequence: sequence),
-                    kind: .file,
+                    kind: isImage ? .image : .file,
                     sequence: sequence,
                     relativePath: "payload-\(Self.paddedSequence(sequence)).\(pathExtension)",
                     displayName: displayName,
-                    mimeType: WorkCaptureEnvelope.safeOpaqueMetadata(file.mimeType),
-                    typeIdentifier: WorkCaptureEnvelope.safeOpaqueMetadata(file.typeIdentifier),
+                    mimeType: mimeType,
+                    typeIdentifier: typeIdentifier,
                     byteCount: file.byteCount
                 ),
                 payload: .copiedFile(from: file.url)

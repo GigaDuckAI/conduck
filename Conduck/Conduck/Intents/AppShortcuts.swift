@@ -53,6 +53,33 @@ struct ConduckShortcuts: AppShortcutsProvider {
             shortTitle: "Add to Work",                        // xcstrings
             systemImageName: "tray.and.arrow.down.fill"
         )
+
+        // The files half of the same lane. Phrases carry no platform name (an
+        // App Intent that names one is rejected at upload) and no verb that
+        // could read as sending — this action copies files onto the desk and
+        // stops there.
+        AppShortcut(
+            intent: AddFilesToWorkIntent(),
+            phrases: [
+                "Add files to Work in \(.applicationName)",                    // xcstrings
+                "Put this on my Work desk in \(.applicationName)"              // xcstrings
+            ],
+            shortTitle: "Add Files to Work",                  // xcstrings
+            systemImageName: "doc.badge.plus"
+        )
+
+        // The launcher for Work's voice capture. It opens the app on the desk
+        // rather than recording headlessly: a recorder with no screen is one
+        // nobody can stop.
+        AppShortcut(
+            intent: RecordWorkNoteIntent(),
+            phrases: [
+                "Record a note to Work in \(.applicationName)",                // xcstrings
+                "Save a voice note to Work in \(.applicationName)"             // xcstrings
+            ],
+            shortTitle: "Record a Note to Work",              // xcstrings
+            systemImageName: "mic.badge.plus"
+        )
     }
 
     static var shortcutTileColor: ShortcutTileColor {

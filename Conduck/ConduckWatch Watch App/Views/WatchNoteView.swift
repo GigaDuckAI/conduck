@@ -79,6 +79,8 @@ struct WatchNoteView: View {
                         messageID: messageID,
                         attachmentID: attachmentID
                     )
+                case .workCapture(let nonce):
+                    WatchWorkCaptureView(requestID: nonce, recordingService: recordingService)
                 }
             }
         }
@@ -332,6 +334,27 @@ struct WatchNoteView: View {
         recordingService.startCapture(boundTo: target, requestID: nonce)
     }
 
+    /// In-app "Save to Work" entry point — a private voice capture that lands on
+    /// the Work desk and touches no gateway, no conversation and no reply.
+    ///
+    /// A SEPARATE BUTTON, NEVER A MODE ON ASK. A sticky destination toggle fails
+    /// in exactly one direction and it is the unrecoverable one: a private
+    /// thought reaching an AI because a switch was still flipped from last time.
+    /// Two buttons cannot leave anything switched on.
+    ///
+    /// Starts at the PUSH SITE for the same reason `pushNewCapture` does — the
+    /// busy check and the start are synchronous with no `await` between them, so
+    /// nothing can occupy the machine in the gap. The pushed view starts
+    /// nothing: it reads the service and renders it.
+    private func beginWorkCapture() {
+        guard !refuseAskIfBusy() else { return }
+        let nonce = UUID()
+        let route = WatchRoute.workCapture(nonce: nonce)
+        WatchLog.info(.nav, "nav.push", ["route": route.logLabel])
+        path.append(route)
+        recordingService.startWorkCapture(requestID: nonce)
+    }
+
     /// Refuse an in-app Ask while another turn owns the state machine, matching
     /// the headless trigger's own ordering rule — `isBusy` is exactly
     /// `HeadlessDrainDecision`'s refuse set, so the Action Button and the Ask
@@ -424,6 +447,33 @@ struct WatchNoteView: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 6)
                     }
+
+                    // The desk's own button, deliberately NOT a mode on Ask
+                    // above it (see `beginWorkCapture`). It sits in the
+                    // Conversations style family rather than Ask's prominent
+                    // one: Ask is the primary thing this watch does, and a
+                    // second prominent button would make the launchpad a
+                    // choice where today it is an action.
+                    //
+                    // Gated by the same master switch as Ask: with Conduck
+                    // turned off for Apple Watch the whole surface is off, and
+                    // a Work capture still needs the iPhone leg the switch
+                    // governs. Busy rule is Ask's, verbatim — one machine, one
+                    // live turn.
+                    Button {
+                        beginWorkCapture()
+                    } label: {
+                        Label(
+                            String(localized: LocalizedStringResource(
+                                "watch.work.launchpad.save",
+                                defaultValue: "Save to Work"
+                            )),
+                            systemImage: "tray.and.arrow.down.fill"
+                        )
+                        .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(recordingService.isBusy && path.isEmpty)
                 } else {
                     Text("Turned off for Apple Watch. Enable it in iPhone Settings.")  // xcstrings
                         .font(.caption2)
@@ -518,6 +568,15 @@ enum WatchRoute: Hashable {
     /// QuickLook). IDs ONLY — never a filename or content in the route value
     /// the viewer loads the decoded text from the store by id.
     case attachmentText(conversationID: UUID, messageID: UUID, attachmentID: UUID)
+    /// A private voice capture bound for the Work desk. Carries NO capture
+    /// target: a Work capture has no conversation and no gateway, which is the
+    /// structural reason it can never be confused with `.capture` — the two are
+    /// distinct route cases holding distinct payloads, so no equality or hash
+    /// collapse can route one into the other's destination. The `nonce` plays
+    /// the same role it does there: a unique route identity per tap, so a
+    /// second "Save to Work" always remounts a fresh screen instead of
+    /// re-presenting the previous capture's terminal line.
+    case workCapture(nonce: UUID)
 
     /// Stable case label for nav breadcrumbs — the case KIND only, never the
     /// associated UUID / capture target.
@@ -527,6 +586,7 @@ enum WatchRoute: Hashable {
         case .capture: return "capture"
         case .thread: return "thread"
         case .attachmentText: return "attachmentText"
+        case .workCapture: return "workCapture"
         }
     }
 }

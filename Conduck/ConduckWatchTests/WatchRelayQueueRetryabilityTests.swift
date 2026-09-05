@@ -93,6 +93,254 @@ final class WatchRelayQueueRetryabilityTests: XCTestCase {
         XCTAssertFalse(AppleRelayPendingQueue.leavesEntryQueued(after: Boom()))
     }
 
+    // MARK: - 1b. Destination: retention, and what a settled reply means
+    //
+    // A WORK entry is the only copy of a recording the person meant to keep,
+    // and no gateway is waiting on it. Both halves of that sentence turn into
+    // rules the queue has to hold, and neither can be observed through the
+    // singleton (its `init` sweeps a real App Group container, `drain` needs an
+    // activated `WCSession`, and the settled path needs a paired iPhone) — so
+    // both are exercised through the pure surfaces the production paths route
+    // into: `applyCaps`, `refusesNewWorkCapture` and `applySettledSuccess`.
+
+    private func entry(
+        _ destination: WatchCaptureDestination,
+        ageSeconds: TimeInterval = 0,
+        id: String = UUID().uuidString
+    ) -> AppleRelayPendingQueue.Entry {
+        AppleRelayPendingQueue.Entry(
+            audioFilePath: "/dev/null/\(id).m4a",
+            language: nil,
+            enqueuedAt: Date().timeIntervalSince1970 - ageSeconds,
+            providerID: nil,
+            conversationID: nil,
+            requestID: id,
+            lastAttemptAt: nil,
+            destination: destination == .chat ? nil : destination.rawValue
+        )
+    }
+
+    /// The persisted shape, both directions. `destination` is additive Codable,
+    /// so a blob written before Work existed has to decode as a chat entry —
+    /// and a chat entry has to keep writing that same shape, or every queued
+    /// capture on a watch that downgrades reads as something else.
+    func testTheEntryRoundTripsItsDestinationAndALegacyBlobReadsAsChat() throws {
+        let work = entry(.work)
+        let chat = entry(.chat)
+
+        let decoded = try JSONDecoder().decode(
+            [AppleRelayPendingQueue.Entry].self,
+            from: try JSONEncoder().encode([work, chat])
+        )
+        XCTAssertEqual(decoded, [work, chat])
+        XCTAssertEqual(decoded[0].captureDestination, .work)
+        XCTAssertEqual(decoded[1].captureDestination, .chat)
+
+        // A chat entry writes NO destination key at all, so its serialized
+        // shape is byte-identical to the pre-Work one.
+        let chatBlob = try XCTUnwrap(String(data: try JSONEncoder().encode(chat), encoding: .utf8))
+        XCTAssertFalse(
+            chatBlob.contains("destination"),
+            "A chat entry now serializes a destination key. The absent value IS the chat reading; writing it changes the on-disk shape for every capture that never needed it."
+        )
+
+        // The legacy blob itself: no key, and it must decode as chat rather
+        // than fail or default to work.
+        let legacy = Data("""
+        [{"audioFilePath":"/tmp/legacy.m4a","enqueuedAt":1,"requestID":"legacy-id"}]
+        """.utf8)
+        let old = try JSONDecoder().decode([AppleRelayPendingQueue.Entry].self, from: legacy)
+        XCTAssertEqual(old.count, 1)
+        XCTAssertNil(old[0].destination)
+        XCTAssertEqual(
+            old[0].captureDestination, .chat,
+            "A queue blob written before Work existed decoded as something other than chat. Every entry already on a wrist would change destination on update."
+        )
+    }
+
+    /// The retention rule. An evicted entry has its audio DELETED, and for Work
+    /// that audio is the only copy in existence — so neither cap may touch one.
+    func testTheCapsNeverEvictAWorkEntryForAgeOrForRoom() {
+        let now = Date().timeIntervalSince1970
+        let day = AppleRelayPendingQueue.maxEntryAge
+
+        // Age: a two-day-old pair. The chat ask has lost its conversation; the
+        // work capture has lost nothing.
+        let aged = AppleRelayPendingQueue.applyCaps(
+            to: [entry(.chat, ageSeconds: day * 2), entry(.work, ageSeconds: day * 2)],
+            now: now
+        )
+        XCTAssertEqual(aged.evicted.count, 1)
+        XCTAssertEqual(aged.evicted.first?.captureDestination, .chat)
+        XCTAssertEqual(
+            aged.kept.map(\.captureDestination), [.work],
+            "The age cap evicted a Work entry. That deletes the recording, and unlike a chat ask there is no transcript on a phone somewhere and no conversation it could have gone stale against."
+        )
+
+        // Room: a queue already full of Work entries, plus one fresh chat ask.
+        // The overflow has to come out of Chat.
+        let full = (0..<AppleRelayPendingQueue.maxEntryCount).map { entry(.work, ageSeconds: TimeInterval($0)) }
+        let crowded = AppleRelayPendingQueue.applyCaps(to: full + [entry(.chat)], now: now)
+        XCTAssertEqual(crowded.evicted.count, 1)
+        XCTAssertEqual(
+            crowded.evicted.first?.captureDestination, .chat,
+            "Count eviction dropped a Work entry to make room. Work is exempt precisely so a burst of asks cannot cost the person a recording."
+        )
+
+        // And a queue that is ALL Work stays whole rather than being trimmed to
+        // the cap — the pressure is answered at the entry point instead.
+        let allWork = AppleRelayPendingQueue.applyCaps(to: full, now: now)
+        XCTAssertTrue(allWork.evicted.isEmpty)
+        XCTAssertEqual(allWork.kept.count, AppleRelayPendingQueue.maxEntryCount)
+    }
+
+    /// NEGATIVE CONTROL for the exemption above: a cap that never evicted
+    /// anything would satisfy both assertions while destroying the chat lane's
+    /// whole bound on queue growth.
+    func testTheCapsStillEvictChatEntries() {
+        let now = Date().timeIntervalSince1970
+        let overflowing = (0...AppleRelayPendingQueue.maxEntryCount).map {
+            entry(.chat, ageSeconds: TimeInterval($0))
+        }
+        let result = AppleRelayPendingQueue.applyCaps(to: overflowing, now: now)
+        XCTAssertEqual(result.kept.count, AppleRelayPendingQueue.maxEntryCount)
+        XCTAssertEqual(result.evicted.count, 1)
+        XCTAssertEqual(
+            result.evicted.first?.requestID, overflowing.first?.requestID,
+            "Count eviction dropped something other than the OLDEST chat entry."
+        )
+        XCTAssertTrue(
+            AppleRelayPendingQueue.applyCaps(
+                to: [entry(.chat, ageSeconds: AppleRelayPendingQueue.maxEntryAge * 2)],
+                now: now
+            ).kept.isEmpty
+        )
+    }
+
+    /// The other end of the exemption: because a full queue can no longer make
+    /// room, a NEW Work capture is refused before the microphone arms. Refusing
+    /// costs a sentence; accepting would cost audio.
+    func testANewWorkCaptureIsRefusedAtCapacityRatherThanEvicting() {
+        XCTAssertFalse(AppleRelayPendingQueue.refusesNewWorkCapture(queueDepth: 0))
+        XCTAssertFalse(
+            AppleRelayPendingQueue.refusesNewWorkCapture(
+                queueDepth: AppleRelayPendingQueue.maxEntryCount - 1
+            )
+        )
+        XCTAssertTrue(
+            AppleRelayPendingQueue.refusesNewWorkCapture(
+                queueDepth: AppleRelayPendingQueue.maxEntryCount
+            ),
+            "A Work capture was accepted onto a full queue. The queue cannot evict a Work entry to hold it, so the eleventh capture either breaks the cap or deletes one of the ten recordings already waiting."
+        )
+    }
+
+    /// THE INVARIANT THIS WHOLE LANE EXISTS FOR: nothing on the desk reaches a
+    /// gateway. The converse hop is the queue's only path to one, so a Work
+    /// entry must never reach it — on either arm, stamped or not.
+    func testAWorkReplyNeverReachesTheConverseHop() async {
+        for workSaved in [true, false] {
+            var hops = 0
+            var claims = 0
+            var writes = 0
+            var finished: [AppleRelayPendingQueue.RelaySettlement] = []
+            let result = await AppleRelayPendingQueue.applySettledSuccess(
+                destination: .work,
+                reply: RelayReply(text: "a private thought", workSaved: workSaved),
+                claim: { claims += 1; return true },
+                completeChat: { _ in hops += 1 },
+                writeWorkWords: { _ in writes += 1; return true },
+                finishWork: { finished.append($0) }
+            )
+            XCTAssertEqual(
+                hops, 0,
+                "A Work capture reached the converse hop (workSaved: \(workSaved)). That is the one path from this queue to a gateway, and a Work capture is a private thought the person deliberately kept off one."
+            )
+            XCTAssertEqual(claims, 1)
+            XCTAssertEqual(finished, [workSaved ? .workAcknowledged : .workWordsOnly])
+            XCTAssertEqual(result, .applied(workSaved ? .workAcknowledged : .workWordsOnly))
+            XCTAssertEqual(writes, workSaved ? 0 : 1)
+        }
+    }
+
+    /// NEGATIVE CONTROL: the same helper MUST still dispatch the hop for a chat
+    /// ask, or the assertion above would pass on a settlement path that had
+    /// simply stopped working.
+    func testAChatReplyStillClaimsAndDispatchesTheHop() async {
+        var hops: [String] = []
+        var writes = 0
+        var finished: [AppleRelayPendingQueue.RelaySettlement] = []
+        let result = await AppleRelayPendingQueue.applySettledSuccess(
+            destination: .chat,
+            // A chat reply can carry the Work stamp only if the iPhone wrote it
+            // onto the wrong lane; the destination decides, never the stamp.
+            reply: RelayReply(text: "ask the agent", workSaved: true),
+            claim: { true },
+            completeChat: { hops.append($0) },
+            writeWorkWords: { _ in writes += 1; return true },
+            finishWork: { finished.append($0) }
+        )
+        XCTAssertEqual(hops, ["ask the agent"])
+        XCTAssertEqual(writes, 0)
+        XCTAssertTrue(finished.isEmpty)
+        XCTAssertEqual(result, .applied(.converseHop))
+    }
+
+    /// THE ORDERING THAT KEEPS THE WORDS: a claim DELETES the recording, and a
+    /// reply with a transcript but no durability stamp means the iPhone kept
+    /// nothing. So the desk write comes first, and a failed write claims
+    /// nothing at all — the entry and the recording stay exactly where they
+    /// were, for the next drain to try again.
+    func testAWordsOnlyWorkReplyClaimsOnlyAfterTheNoteIsWritten() async {
+        var order: [String] = []
+        let failed = await AppleRelayPendingQueue.applySettledSuccess(
+            destination: .work,
+            reply: RelayReply(text: "the words", workSaved: false),
+            claim: { order.append("claim"); return true },
+            completeChat: { _ in order.append("hop") },
+            writeWorkWords: { _ in order.append("write"); return false },
+            finishWork: { _ in order.append("finish") }
+        )
+        XCTAssertEqual(
+            order, ["write"],
+            "A words-only Work reply whose desk write FAILED still claimed the entry. The claim deletes the recording, and the note that was supposed to replace it does not exist — the capture is simply gone."
+        )
+        XCTAssertEqual(failed, .workWordsUnwritten)
+
+        order = []
+        let succeeded = await AppleRelayPendingQueue.applySettledSuccess(
+            destination: .work,
+            reply: RelayReply(text: "the words", workSaved: false),
+            claim: { order.append("claim"); return true },
+            completeChat: { _ in order.append("hop") },
+            writeWorkWords: { _ in order.append("write"); return true },
+            finishWork: { _ in order.append("finish") }
+        )
+        XCTAssertEqual(
+            order, ["write", "claim", "finish"],
+            "The words-only path must write, THEN claim, THEN report — in that order."
+        )
+        XCTAssertEqual(succeeded, .applied(.workWordsOnly))
+    }
+
+    /// Exactly-once, unchanged for both lanes: a verdict a racing path already
+    /// consumed does nothing here, and in particular writes no second card.
+    func testASupersededVerdictSettlesNothingOnEitherLane() async {
+        for destination in [WatchCaptureDestination.chat, .work] {
+            var effects = 0
+            let result = await AppleRelayPendingQueue.applySettledSuccess(
+                destination: destination,
+                reply: RelayReply(text: "already handled", workSaved: true),
+                claim: { false },
+                completeChat: { _ in effects += 1 },
+                writeWorkWords: { _ in effects += 1; return true },
+                finishWork: { _ in effects += 1 }
+            )
+            XCTAssertEqual(result, .superseded)
+            XCTAssertEqual(effects, 0, "A superseded \(destination) verdict still ran an effect.")
+        }
+    }
+
     // MARK: - 2. The notification sentence
 
     /// The shared 75 copy says "this device". This body renders on the WRIST —

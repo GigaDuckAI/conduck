@@ -17,6 +17,9 @@
 #if !os(watchOS)
 
 import SwiftUI
+// SwiftUI's `.quickLookPreview` lives in the SwiftUI×QuickLook cross-import
+// overlay — both imports are required for the modifier to resolve.
+import QuickLook
 import UniformTypeIdentifiers
 
 #if os(macOS)
@@ -302,12 +305,6 @@ private struct WorkbenchSectionSegmentButtonStyle: ButtonStyle {
     }
 }
 
-#if canImport(UIKit)
-import UIKit
-#elseif canImport(AppKit)
-import AppKit
-#endif
-
 extension Notification.Name {
     static let showWorkboard = Notification.Name("showWorkboard")
     static let showChats = Notification.Name("showChats")
@@ -323,11 +320,20 @@ final class PersonalWorkbenchRouter {
     }
 
     struct MaterialPresentation: Identifiable {
+        /// What the sheet draws. A FILE is deliberately absent: files, and the
+        /// recordings that reach this presenter through Open, go to Quick Look,
+        /// which is the surface that already knows how to render a PDF, play a
+        /// recording and offer the system's own share and open-with routes.
+        /// A sheet of ours could only re-describe the file and hand those routes
+        /// back to the system anyway.
         enum Content {
             case note(String)
             case link(URL)
-            case image(Data)
-            case file(URL, extractedText: String?)
+            /// Every openable image on the desk, in board order, with the tapped
+            /// card's position. The whole desk rather than the one card because
+            /// a picture is looked at NEXT to its neighbours; the tapped card
+            /// alone would make the swipe gesture a dead end.
+            case imageGallery(pages: [AttachmentGalleryPage], startIndex: Int)
         }
 
         let id = UUID()
@@ -338,6 +344,12 @@ final class PersonalWorkbenchRouter {
     struct PreviewNotice: Identifiable {
         let id = UUID()
         let message: String
+    }
+
+    /// The pages of an image gallery plus where the tap landed in them.
+    struct GallerySelection {
+        let pages: [AttachmentGalleryPage]
+        let startIndex: Int
     }
 
     // Preserve Conduck's existing launch behavior. Chat owns OnLaunchMode and
@@ -357,16 +369,39 @@ final class PersonalWorkbenchRouter {
     var materialPresentation: MaterialPresentation?
     var previewNotice: PreviewNotice?
 
-    private var previewFileURL: URL?
+    /// Work's own Quick Look presenter. ONE per surface and never shared with
+    /// Chat's: `QLPreviewPanel` is application-shared on macOS, so the two
+    /// sections must be able to invalidate each other — which is exactly what
+    /// `closeMaterial()` does on the way out of Work, mirroring the
+    /// `cancelPendingPresentation()` Chat runs when its own thread is hidden.
+    @ObservationIgnored let filePreview: FilePreviewCoordinator
+
+    /// The desk as the board currently holds it, in board order.
+    ///
+    /// A closure rather than a stored array because the desk is the view
+    /// model's, and a copy taken at construction would go stale on the first
+    /// capture. It is read once, at the moment of the tap, so the gallery's
+    /// pages are the cards that were on screen when the person tapped one.
+    @ObservationIgnored var deskMaterials: @MainActor () -> [WorkboardMaterialSnapshot] = { [] }
+
     private var materialRequestID: UUID?
-    /// The request whose copy the presented sheet is showing. Compared against
-    /// `materialRequestID` so a dismissal cannot reclaim a NEWER request's work.
-    private var presentedRequestID: UUID?
+
+    /// `nil` rather than a default-constructed coordinator: a default argument
+    /// is evaluated in the CALLER's context, which is nonisolated, and the
+    /// coordinator is main-actor isolated. Building it inside the initialiser
+    /// keeps that construction on the actor that owns it.
+    init(filePreview: FilePreviewCoordinator? = nil) {
+        self.filePreview = filePreview ?? FilePreviewCoordinator()
+    }
 
     func present(_ material: WorkboardMaterialSnapshot) async {
         closeMaterial()
         let requestID = UUID()
         materialRequestID = requestID
+        // Minted here, at the moment of user intent, and NOT next to the
+        // `present` that follows the load: completion order must not decide
+        // which file wins the application-shared Quick Look panel.
+        let previewToken = filePreview.beginRequest()
         do {
             // Opening, previewing, sharing and playing all run through this one
             // presenter, so the readability gate belongs HERE and not only in
@@ -395,81 +430,44 @@ final class PersonalWorkbenchRouter {
                     MaterialPresentation(title: material.name, content: .link(url)),
                     requestID: requestID
                 )
+            // EVERY image lane. A camera original parked in the device-local
+            // vault is a picture exactly as much as a small synced one is, and
+            // routing by lane would open the large one as a document — the size
+            // of a photograph is not a fact about what it is.
+            // No bytes are read here: the gallery resolves each page's original
+            // itself, when that page is the one being looked at.
             case .image:
-                if let localURL = try await ConversationStore.shared.localURLForWorkMaterial(id: material.id) {
-                    let previewURL = try await Self.makePreviewCopy(
-                        from: localURL,
-                        displayName: material.name
-                    )
-                    commit(
-                        MaterialPresentation(
-                            title: material.name,
-                            content: .file(previewURL, extractedText: nil)
-                        ),
-                        previewURL: previewURL,
-                        requestID: requestID
-                    )
-                    return
-                }
-                guard let data = try await ConversationStore.shared.loadWorkMaterialPayload(id: material.id)
-                    ?? material.thumbnailData else {
-                    throw WorkbenchPreviewError.unavailable
-                }
-                commit(
-                    MaterialPresentation(title: material.name, content: .image(data)),
-                    requestID: requestID
+                let selection = Self.gallerySelection(
+                    desk: deskMaterials(),
+                    tapped: material
                 )
-            // A recording reaches this presenter only through Share/Open, where
-            // Quick Look plays it; the board's own audio card never routes here.
-            case .file, .audio:
-                if let localURL = try await ConversationStore.shared.localURLForWorkMaterial(id: material.id) {
-                    let previewURL = try await Self.makePreviewCopy(
-                        from: localURL,
-                        displayName: material.name
-                    )
-                    commit(
-                        MaterialPresentation(
-                            title: material.name,
-                            content: .file(previewURL, extractedText: material.textContent)
-                        ),
-                        previewURL: previewURL,
-                        requestID: requestID
-                    )
-                    return
-                }
-                guard let data = try await ConversationStore.shared.loadWorkMaterialPayload(id: material.id) else {
-                    throw WorkbenchPreviewError.unavailable
-                }
-                let filename = Self.previewFilename(
-                    displayName: material.name,
-                    mimeType: material.mimeType
-                )
-                let url = try await Task.detached(priority: .userInitiated) {
-                    let directory = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("Conduck-Workboard-Preview", isDirectory: true)
-                    try FileManager.default.createDirectory(
-                        at: directory,
-                        withIntermediateDirectories: true,
-                        attributes: nil
-                    )
-                    let url = directory
-                        .appendingPathComponent(UUID().uuidString, isDirectory: true)
-                        .appendingPathComponent(filename, isDirectory: false)
-                    try FileManager.default.createDirectory(
-                        at: url.deletingLastPathComponent(),
-                        withIntermediateDirectories: true,
-                        attributes: nil
-                    )
-                    try data.write(to: url, options: .atomic)
-                    return url
-                }.value
                 commit(
                     MaterialPresentation(
                         title: material.name,
-                        content: .file(url, extractedText: material.textContent)
+                        content: .imageGallery(
+                            pages: selection.pages,
+                            startIndex: selection.startIndex
+                        )
                     ),
-                    previewURL: url,
                     requestID: requestID
+                )
+            // A recording reaches this presenter only through Open, where Quick
+            // Look plays it; the board's own audio card never routes here.
+            case .file, .audio:
+                let previewURL = try await makeDisposablePreviewCopy(of: material)
+                // The desk moved on while the copy was being made — a newer tap,
+                // or a switch to Chats. The copy is this request's own work, so
+                // this request reclaims it rather than leaving it for the sweep.
+                guard filePreview.isCurrent(previewToken), materialRequestID == requestID else {
+                    Self.removePreviewCopy(at: previewURL)
+                    return
+                }
+                filePreview.present(
+                    PreviewedFile(
+                        url: previewURL,
+                        reclaim: { Self.removePreviewCopy(at: previewURL) }
+                    ),
+                    token: previewToken
                 )
             }
         } catch {
@@ -480,36 +478,100 @@ final class PersonalWorkbenchRouter {
 
     func closeMaterial() {
         materialRequestID = nil
-        presentedRequestID = nil
         if materialPresentation != nil { materialPresentation = nil }
-        if let previewFileURL {
-            Self.removePreviewCopy(at: previewFileURL)
-            self.previewFileURL = nil
-        }
+        // Invalidate the visible Quick Look AND every in-flight claim. Without
+        // this a Work preview could stay on screen over Chats — and on macOS the
+        // panel both sections share would be owned by the hidden one.
+        filePreview.cancelPendingPresentation()
     }
 
-    /// The preview sheet went away by ANY route — Done, an interactive swipe, or
-    /// Escape — and the disposable plaintext copy has to go with it; only Done
-    /// runs `closeMaterial()` itself. Skips the reclaim when the slot has already
-    /// moved on: `present()` clears the presentation and starts the next request
-    /// while SwiftUI is still animating this sheet away, and that newer request
-    /// (or the copy it has already committed) must survive.
-    func reclaimDismissedPreview() {
-        guard materialPresentation == nil, materialRequestID == presentedRequestID else { return }
-        closeMaterial()
+    /// The pages a tap on one image card opens, and where that tap landed.
+    ///
+    /// The desk is filtered through the SAME gate the tap itself passed, so a
+    /// card whose bytes are still arriving is never a page — swiping onto it
+    /// would present its thumbnail as though the picture had landed, which is
+    /// the exact confusion `WorkboardCardActionPolicy` exists to prevent.
+    ///
+    /// A tapped card that is not in the desk it was tapped on (a board reloaded
+    /// underneath the gesture) still opens, alone: refusing it would turn a
+    /// stale read into a dead tap on a card the person is looking at.
+    static func gallerySelection(
+        desk: [WorkboardMaterialSnapshot],
+        tapped: WorkboardMaterialSnapshot
+    ) -> GallerySelection {
+        let openable = desk.filter { candidate in
+            candidate.kind == .image
+                && WorkboardCardActionPolicy.allows(.open, when: candidate.availability)
+        }
+        let materials = openable.contains { $0.id == tapped.id } ? openable : [tapped]
+        let startIndex = materials.firstIndex { $0.id == tapped.id } ?? 0
+        return GallerySelection(
+            pages: materials.map(galleryPage(for:)),
+            startIndex: startIndex
+        )
+    }
+
+    /// One card as the gallery sees it. The accessibility label is the card's
+    /// own name rather than a position, because that name is what the person
+    /// reads on the desk and VoiceOver speaks it verbatim.
+    static func galleryPage(
+        for material: WorkboardMaterialSnapshot
+    ) -> AttachmentGalleryPage {
+        AttachmentGalleryPage(
+            id: material.id,
+            thumbnailData: material.thumbnailData,
+            accessibilityLabel: material.name
+        )
+    }
+
+    /// The ORIGINAL bytes behind one image card, for one gallery page.
+    ///
+    /// One store call for both lanes: `loadWorkMaterialPayload` already resolves
+    /// a synced blob and a device-local vault leaf, so the gallery never has to
+    /// know which one a card is on — which is the same reason the router stopped
+    /// branching on the lane in the first place.
+    ///
+    /// Throwing rather than returning empty bytes is the contract the gallery
+    /// page relies on: it turns a throw into its Retry state, while empty bytes
+    /// would decode to nothing and spin. A thumbnail is never substituted here —
+    /// this is the surface a person opens to see the picture itself.
+    nonisolated static func imageBytes(materialID: UUID) async throws -> Data {
+        guard let data = try await ConversationStore.shared.loadWorkMaterialPayload(id: materialID) else {
+            throw WorkbenchPreviewError.unavailable
+        }
+        return data
+    }
+
+    /// A throwaway copy of one material's bytes for Quick Look.
+    ///
+    /// Both lanes end in the same place — a file under this desk's own preview
+    /// container — because Quick Look and everything it can hand a file to
+    /// (Open with, Save to Files) must never receive the vault's authoritative
+    /// URL: an editor is free to mutate what it is given, and the desk's own
+    /// revision covers those bytes.
+    private func makeDisposablePreviewCopy(
+        of material: WorkboardMaterialSnapshot
+    ) async throws -> URL {
+        if let localURL = try await ConversationStore.shared.localURLForWorkMaterial(id: material.id) {
+            return try await Self.makePreviewCopy(from: localURL, displayName: material.name)
+        }
+        guard let data = try await ConversationStore.shared.loadWorkMaterialPayload(id: material.id) else {
+            throw WorkbenchPreviewError.unavailable
+        }
+        return try await Self.writePreviewCopy(
+            of: data,
+            filename: Self.previewFilename(
+                displayName: material.name,
+                mimeType: material.mimeType
+            )
+        )
     }
 
     private func commit(
         _ presentation: MaterialPresentation,
-        previewURL: URL? = nil,
         requestID: UUID
     ) {
-        guard materialRequestID == requestID else {
-            if let previewURL { Self.removePreviewCopy(at: previewURL) }
-            return
-        }
-        previewFileURL = previewURL
-        presentedRequestID = requestID
+        guard materialRequestID == requestID else { return }
         materialPresentation = presentation
     }
 
@@ -581,6 +643,40 @@ final class PersonalWorkbenchRouter {
             let destination = directory.appendingPathComponent(filename, isDirectory: false)
             do {
                 try FileManager.default.copyItem(at: sourceURL, to: destination)
+                #if os(iOS)
+                try? FileManager.default.setAttributes(
+                    [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                    ofItemAtPath: destination.path
+                )
+                #endif
+                return destination
+            } catch {
+                try? FileManager.default.removeItem(at: directory)
+                throw error
+            }
+        }.value
+    }
+
+    /// The same disposable copy for a material whose bytes live in the store
+    /// rather than on disk. It writes into the identical per-copy directory
+    /// under the same container, so ONE reclaim rule and ONE launch sweep cover
+    /// both lanes and neither can be forgotten on its own.
+    private nonisolated static func writePreviewCopy(
+        of data: Data,
+        filename: String
+    ) async throws -> URL {
+        try await Task.detached(priority: .userInitiated) {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("Conduck-Workboard-Preview", isDirectory: true)
+            let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            let destination = directory.appendingPathComponent(filename, isDirectory: false)
+            do {
+                try data.write(to: destination, options: .atomic)
                 #if os(iOS)
                 try? FileManager.default.setAttributes(
                     [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
@@ -817,6 +913,13 @@ final class PersonalWorkbenchModel {
         self.repository = repository
         self.workboardViewModel = workboardViewModel
         self.refreshCoordinator = refreshCoordinator
+
+        // The gallery's other pages. Weak and read at tap time: the board is the
+        // view model's to own, so the router asks for it rather than holding a
+        // copy that the next capture would make wrong.
+        router.deskMaterials = { [weak workboardViewModel] in
+            workboardViewModel?.desk?.materials ?? []
+        }
     }
 
     func scheduleRefresh(includeCaptureDrain: Bool = false) {
@@ -888,17 +991,24 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 model.router.destination = .chats
             }
             .modifier(WorkbenchPlatformRoutingModifier(router: model.router))
-            // `onDismiss` rather than the Done button alone: a swipe or Escape
-            // writes nil straight through the binding, and the disposable
-            // plaintext copy of the material must be reclaimed on EVERY exit.
-            .sheet(
-                item: $model.router.materialPresentation,
-                onDismiss: { model.router.reclaimDismissedPreview() }
-            ) { presentation in
+            .sheet(item: $model.router.materialPresentation) { presentation in
                 WorkboardMaterialPreviewView(
                     presentation: presentation,
                     onClose: model.router.closeMaterial
                 )
+            }
+            // A SEPARATE presenter from the sheet above, not a case inside it:
+            // Quick Look is the system's own window (a panel on macOS, a full
+            // screen controller on iOS) and it is what already knows how to draw
+            // a PDF, play a recording and offer Open with / Share.
+            .quickLookPreview(workMaterialPreviewURL)
+            // The modifier nils the binding on user dismissal, and ONLY on user
+            // dismissal — that edge is what tells the coordinator the file may
+            // be reclaimed where the platform allows it.
+            .onChange(of: model.router.filePreview.previewURL) { oldValue, newValue in
+                if oldValue != nil && newValue == nil {
+                    model.router.filePreview.handleDismiss()
+                }
             }
             .alert(item: $model.router.previewNotice) { notice in
                 Alert(
@@ -915,13 +1025,30 @@ struct PersonalWorkbenchView<Chats: View>: View {
             }
     }
 
-    /// Launch/foreground repair for the device-local asset vault. The sweep has
-    /// delete authority and scales with what is on disk, so it belongs on this
-    /// edge and never in the board's read path, which re-runs on ordinary Chat
-    /// activity.
+    /// The Quick Look binding. `@Bindable` because the coordinator is an
+    /// `@Observable` reference the router owns rather than this view's own
+    /// state — the desk shell is remounted by the platform shells, and a
+    /// presenter living here would lose an in-flight claim with it.
+    private var workMaterialPreviewURL: Binding<URL?> {
+        @Bindable var filePreview = model.router.filePreview
+        return $filePreview.previewURL
+    }
+
+    /// Launch/foreground repair for device-local Work storage. Both passes have
+    /// delete or write authority and scale with what is on disk, so they belong
+    /// on this edge and never in the board's read path, which re-runs on
+    /// ordinary Chat activity.
+    ///
+    /// One `Task`, in order: the vault sweep decides which materials still HAVE
+    /// bytes, and the thumbnail backfill then reads those bytes. Running the
+    /// backfill first would spend decodes on rows the sweep is about to write
+    /// off. The backfill never throws and self-limits to one pass per store, so
+    /// both of this view's edges (`task` and a foreground `scenePhase`) can call
+    /// it freely.
     private func reconcileDurableWorkStorage() {
         Task {
             _ = try? await ConversationStore.shared.reconcileWorkAssetVault()
+            await ConversationStore.shared.repairMissingWorkThumbnails()
         }
     }
 
@@ -1080,11 +1207,51 @@ private struct WorkbenchPlatformRoutingModifier: ViewModifier {
     #endif
 }
 
+/// The sheet half of Work's preview. Files never reach it — those go to Quick
+/// Look — so what remains is the two surfaces the system has no presenter for
+/// (a note's text, a link) and the image gallery, which is Chat's zoomable
+/// gallery driven by desk cards instead of message attachments.
 private struct WorkboardMaterialPreviewView: View {
     let presentation: PersonalWorkbenchRouter.MaterialPresentation
     let onClose: () -> Void
 
+    @ViewBuilder
     var body: some View {
+        switch presentation.content {
+        case .imageGallery(let pages, let startIndex):
+            AttachmentFullScreenView(
+                pages: pages,
+                startIndex: startIndex,
+                // Lazy, per page, and by card id: the gallery asks only for the
+                // page being looked at, and a card whose bytes are unreadable
+                // throws so that page offers Retry instead of spinning.
+                loadFullBytes: { materialID in
+                    try await PersonalWorkbenchRouter.imageBytes(materialID: materialID)
+                },
+                // Work stores originals verbatim, so a camera photo here is a
+                // 40+ megapixel decode. The bound is what makes a desk-wide
+                // gallery affordable; the STRICT path behind it reports failure
+                // rather than silently falling back to an unbounded decode.
+                fullDecodeMaxPixel: 4096
+            )
+            // A picture wants the size it deserves rather than the floor a
+            // minimum-only sheet would open at. The main window's default is
+            // 1100x760, so 900x640 reads as a preview of the desk behind it
+            // rather than a second window.
+            .workboardDesktopSheetFrame(
+                minWidth: 640,
+                minHeight: 480,
+                idealWidth: 900,
+                idealHeight: 640,
+                maxWidth: .infinity,
+                maxHeight: .infinity
+            )
+        case .note, .link:
+            textualPreview
+        }
+    }
+
+    private var textualPreview: some View {
         NavigationStack {
             Group {
                 switch presentation.content {
@@ -1113,43 +1280,11 @@ private struct WorkboardMaterialPreviewView: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
-                case .image(let data):
-                    WorkboardPreviewImage(data: data)
-                case .file(let url, let text):
-                    ScrollView {
-                        VStack(spacing: 18) {
-                            Image(systemName: "doc.fill")
-                                .font(.system(size: 44))
-                                .foregroundStyle(AppColors.brandAmber)
-                            if let text, !text.isEmpty {
-                                Text(text)
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            } else {
-                                Text(LocalizedStringResource(
-                                    "workboard.material.file.ready",
-                                    defaultValue: "The original file is ready to open or share."
-                                ))
-                                .foregroundStyle(AppColors.textSecondary)
-                            }
-                            HStack {
-                                Link(destination: url) {
-                                    Label(
-                                        LocalizedStringResource("workboard.material.openFile", defaultValue: "Open File"),
-                                        systemImage: "arrow.up.right.square"
-                                    )
-                                }
-                                ShareLink(item: url) {
-                                    Label(
-                                        LocalizedStringResource("common.share", defaultValue: "Share"),
-                                        systemImage: "square.and.arrow.up"
-                                    )
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        .padding(24)
-                    }
+                case .imageGallery:
+                    // Unreachable: the gallery is drawn above, outside this
+                    // navigation chrome, because it carries its own Done control
+                    // and its own black ground.
+                    EmptyView()
                 }
             }
             .background(AppColors.background.ignoresSafeArea())
@@ -1161,45 +1296,6 @@ private struct WorkboardMaterialPreviewView: View {
             }
         }
         .workboardDesktopSheetFrame(minWidth: 360, minHeight: 340)
-    }
-}
-
-private struct WorkboardPreviewImage: View {
-    let data: Data
-
-    var body: some View {
-        ScrollView([.horizontal, .vertical]) {
-            #if canImport(UIKit)
-            if let image = UIImage(data: data) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(16)
-            } else {
-                unavailable
-            }
-            #elseif canImport(AppKit)
-            if let image = NSImage(data: data) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(16)
-            } else {
-                unavailable
-            }
-            #endif
-        }
-    }
-
-    private var unavailable: some View {
-        ContentUnavailableView(
-            LocalizedStringResource("workboard.material.preview.unavailable.title", defaultValue: "No Preview"),
-            systemImage: "photo.badge.exclamationmark",
-            description: Text(LocalizedStringResource(
-                "workboard.material.preview.unavailable.message",
-                defaultValue: "The original image could not be decoded on this device."
-            ))
-        )
     }
 }
 

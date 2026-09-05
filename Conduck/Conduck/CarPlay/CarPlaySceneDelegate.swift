@@ -12,8 +12,13 @@
 // session. On session end the voice modal is DISMISSED — the persistent picker
 // root is already there, so the app never falls to the CarPlay dashboard. The
 // list refreshes on `.conversationsDidChange` and is disabled while a session
-// is active. No-gateway state = a single "Set up your AI on iPhone
-// first." row.
+// is active. No-gateway state = the "Set up your AI on iPhone first." row.
+//
+// The first section also carries a permanent "Add to Work" row — a ONE-SHOT
+// spoken note that lands on the driver's own desk and reaches no gateway, so it
+// is offered in the no-gateway state too. Work CARDS are never listed here:
+// content on a car screen is what the voice-based-conversation entitlement
+// forbids, and this row only records.
 //
 // NAV MODEL: the list picker is the permanent root (set ONCE in `didConnect`,
 // never removed); the `CPVoiceControlTemplate` is a modal-only template (SDK
@@ -449,6 +454,29 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         }
     }
 
+    /// Start a ONE-SHOT Work note: the driver says something, it lands on their
+    /// own desk, and the session ends. `startSession` minus the gateway
+    /// pre-flight, and the omission is the point — nothing on this lane is
+    /// dispatched anywhere, so there is no default to resolve, no conversation
+    /// to bind, no snapshot to read and nothing that can refuse the driver for
+    /// a reason about an AI they have not set up. That is also why the row is
+    /// offered before any gateway exists: the car is useful on day one.
+    ///
+    /// The g1 audio-race contract is preserved verbatim: the engine starts
+    /// INSIDE the `presentTemplate` completion. This body has no suspension
+    /// before that call, so — unlike `startSession` — it needs no `Task` hop,
+    /// and the mute button is re-synced on the not-yet-presented template for
+    /// the same reason it is there.
+    private func startWorkNote(service: CarPlayRecordingService) {
+        guard case .idle = service.state, !service.sessionActive else { return }
+        // Consumed: the driver is acting again — the hint's job is done.
+        oneShotStartFailureHint = false
+        self.setMuteButton(service: service)
+        self.ensureVoicePresented(service: service, voiceState: "listening", animated: false) { [weak service] in
+            service?.beginWorkNote()
+        }
+    }
+
     /// Present the voice template MODALLY over the persistent list root (or, if
     /// already presented, just switch its live state). The live voice state is
     /// activated and `completion` fired INSIDE the present completion — this is
@@ -547,6 +575,55 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
 
     // MARK: - Picker construction + refresh
 
+    /// Rows the "Recent" section may take, given the picker's fixed row budget.
+    ///
+    /// `CPListTemplate.maximumItemCount` is a hard ceiling the framework
+    /// enforces by TRUNCATING, so a row added to the first section without
+    /// paying for it here silently costs the oldest conversation instead — a
+    /// loss nobody would see in a diff. Three claims on the budget, and each is
+    /// subtracted where it is decided:
+    ///
+    ///   • row 0, "New voice chat" — `CarPlayConversationLabel.recentCap`
+    ///   • the one-shot mic-couldn't-start hint, only while it is shown
+    ///   • "Add to Work", which is permanent
+    ///
+    /// Pure arithmetic, extracted so the budget is unit-tested without a
+    /// CarPlay scene (and `recentCap` itself is left untouched — it answers the
+    /// narrower question of what row 0 costs, and other callers ask it).
+    static func recentRowBudget(maximumItemCount: Int, showsStartFailureHint: Bool) -> Int {
+        CarPlayConversationLabel.recentCap(
+            maximumItemCount: maximumItemCount - (showsStartFailureHint ? 1 : 0) - 1
+        )
+    }
+
+    /// The permanent "Add to Work" row: one tap, one spoken note, straight onto
+    /// the driver's own desk.
+    ///
+    /// Built here rather than inline because it appears in BOTH picker states —
+    /// with gateways configured and without — and the two must not drift into
+    /// different labels or different handlers for what is one affordance. It
+    /// carries no detail text for the same reason row 0 does not: a head unit's
+    /// row is read at a glance from the driver's seat.
+    ///
+    /// The desk is NEVER browsed here. Cards are content, and content on a car
+    /// screen is what the voice-based-conversation entitlement forbids; this row
+    /// only records.
+    private func makeWorkNoteItem(service: CarPlayRecordingService) -> CPListItem {
+        let item = CPListItem(
+            // xcstrings
+            text: String(localized: "carplay.picker.addToWork.title", defaultValue: "Add to Work"),
+            detailText: nil
+        )
+        item.setImage(UIImage(systemName: "tray.and.arrow.down.fill"))
+        item.handler = { [weak self, weak service] _, completion in
+            defer { completion() }
+            guard let self, let service else { return }
+            guard !service.sessionActive else { return }  // disabled mid-session
+            self.startWorkNote(service: service)
+        }
+        return item
+    }
+
     /// Single-flight state for `refreshPicker()`. The picker's async half reads
     /// the store (`fetchRecentForPicker`) after suspending on `SettingsManager`,
     /// and `.conversationsDidChange` drives it — so an unlatched burst overlapped
@@ -589,10 +666,9 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             return
         }
 
-        // The one-shot start-failure hint occupies a row of the template's
-        // fixed item budget while shown; `recentCap` already reserves row 0.
-        let cap = CarPlayConversationLabel.recentCap(
-            maximumItemCount: CPListTemplate.maximumItemCount - (oneShotStartFailureHint ? 1 : 0)
+        let cap = Self.recentRowBudget(
+            maximumItemCount: CPListTemplate.maximumItemCount,
+            showsStartFailureHint: oneShotStartFailureHint
         )
 
         // A refresh is already running: record the ask and let its trailing pass
@@ -622,8 +698,11 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                     }
                 }
             }
-            // No-gateway → a single setup-hint row (no New voice chat: there's
-            // nothing to talk to yet). Multi-gateway: the gate is "is ANY
+            // No-gateway → the setup-hint row (no New voice chat: there's
+            // nothing to talk to yet) PLUS "Add to Work", which needs no
+            // gateway at all: a note goes to the driver's own desk, so the car
+            // is useful before any AI is set up and this is the one state where
+            // it is the only working row. Multi-gateway: the gate is "is ANY
             // gateway configured?" so CarPlay offers a new chat as soon as ≥1
             // backend is set up; the per-conversation send routing already
             // binds each chat to its own backend.
@@ -635,8 +714,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                     detailText: nil
                 )
                 item.setImage(UIImage(systemName: "iphone"))
+                var firstSectionItems: [CPListItem] = [item]
+                firstSectionItems.append(self.makeWorkNoteItem(service: service))
                 template.leadingNavigationBarButtons = []
-                template.updateSections([CPListSection(items: [item])])
+                template.updateSections([CPListSection(items: firstSectionItems)])
                 return
             }
 
@@ -694,6 +775,11 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 hint.handler = { _, completion in completion() }
                 firstSectionItems.insert(hint, at: 0)
             }
+
+            // "Add to Work" LAST in the first section: conversations are what
+            // the driver came for, and the budget for this row is already paid
+            // in `recentRowBudget` above.
+            firstSectionItems.append(self.makeWorkNoteItem(service: service))
             let newSection = CPListSection(items: firstSectionItems)
 
             // "Recent" section — conversations to continue (label + date only).

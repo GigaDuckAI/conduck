@@ -20,6 +20,12 @@
 // preserves a staged composition.
 //
 // The `content` router resolves state in this PRIORITY:
+//   0. `workCaptureIsActive` → `workCaptureView` — the ⌃⌘W Work HUD (status +
+//                              timer + Stop, or the failure with the Try Again
+//                              that finishes the capture). It outranks even a
+//                              live chat recording, because the two lanes
+//                              cannot both hold the microphone and this popover
+//                              is the ONLY surface a ⌃⌘W capture has.
 //   1. service `.recording`  → `recordingStatusView` (timer + a compact Cancel X)
 //   2. `isWorking`           → `workingView` — ONE view for the WHOLE turn,
 //                              with `workingPhase` choosing the copy: STT
@@ -147,6 +153,14 @@ struct DictationPopoverView: View {
                 header
             }
             content
+            // The Work acknowledgement, for the lanes with no compose surface
+            // under it to carry the row — a ⌃⌘W VOICE capture, whose whole
+            // surface is the HUD, and the settled state after one. Never drawn
+            // twice: the compose surface renders the same row itself, attached
+            // to the words it is about.
+            if coordinator.workCaptureFeedbackIsShowing, !showsComposeSurface {
+                workFeedbackBand
+            }
             // The footer band only renders when it has a control — so recording,
             // transcribing, and the no-reply start state don't leave an empty
             // strip below a divider.
@@ -225,6 +239,20 @@ struct DictationPopoverView: View {
         .task {
             showsScreenshotAskTip = await SettingsManager.shared.shouldShowScreenshotAskTip()
         }
+        // The Work acknowledgement is announced from the BODY rather than from
+        // the compose surface that used to own it: a ⌃⌘W voice capture never
+        // mounts that surface, and an announcement attached to a view that is
+        // not on screen is an announcement nobody hears.
+        .onChange(of: coordinator.quickWorkCaptureFeedback) { _, feedback in
+            if let feedback { AccessibilityAnnouncer.announce(feedback.message) }
+        }
+        // The HUD's own status line, announced on the same terms the desk sheet
+        // announces it — the popover has no other way to narrate a capture that
+        // is running with the pointer somewhere else entirely.
+        .onChange(of: workCaptureStatus) { _, status in
+            guard coordinator.workCaptureIsActive else { return }
+            AccessibilityAnnouncer.announce(workStatusText(status))
+        }
     }
 
     // MARK: - Header
@@ -240,6 +268,10 @@ struct DictationPopoverView: View {
     /// HUD. The Open-in-Window icon returns on the settled reply / empty /
     /// unconfigured / error states.
     private var showsHeader: Bool {
+        // A Work capture is a pure HUD for the same reason a chat capture is,
+        // and its chrome would be worse than useless: "Open in Window" points at
+        // a conversation the capture has nothing to do with.
+        if coordinator.workCaptureIsActive { return false }
         if service.state == .recording { return false }
         return !isWorking
     }
@@ -314,7 +346,14 @@ struct DictationPopoverView: View {
 
     @ViewBuilder
     private var content: some View {
-        if service.state == .recording {
+        if coordinator.workCaptureIsActive {
+            // HIGHEST PRIORITY, above even a live chat recording. The two lanes
+            // cannot both hold the microphone, so this can never mask one — and
+            // a ⌃⌘W capture has no other surface anywhere: the desk sheet is in
+            // a window this popover does not open, so whatever it shows here is
+            // the only place the recording can be stopped or finished.
+            workCaptureView
+        } else if service.state == .recording {
             recordingStatusView
         } else if isWorking {
             workingView
@@ -451,6 +490,14 @@ struct DictationPopoverView: View {
     // a newline at the cursor via the popover key monitor
     // (`MenuBarController.installEscMonitor`); the draft is COORDINATOR-owned
     // so it survives any dismissal. No send button, no mic — hard mode.
+    //
+    // It has TWO aims, and `coordinator.composeTarget` says which one is on
+    // screen. Aimed at Chat it is unchanged. Aimed at Work (⌃⌘W in text mode) it
+    // edits a SEPARATE composition, titles itself "Add to Work", draws no Ask
+    // affordance at all, and routes both Return and ⌘Return to the desk. The two
+    // texts never mix: the aim survives a click-away dismissal exactly as the
+    // words do, so a private sentence can never be the thing Chat's Return
+    // picks up on the next ⌘⇧1 summon.
 
     /// Visible in the settled/idle states of TEXT mode only. Hidden while a
     /// turn is in flight (`isWorking` — the chrome-free working HUD), while a
@@ -469,6 +516,14 @@ struct DictationPopoverView: View {
         // different thread, so typing here would send to the wrong conversation.
         // Continue the shown thread via "Read full reply in window".
         guard coordinator.popoverOverrideViewModel == nil else { return false }
+        // A live Work capture owns the surface — the HUD is the whole popover.
+        guard !coordinator.workCaptureIsActive else { return false }
+        // The Work-only state is reachable in text mode ONLY, but it is not
+        // gated on the send-error / STT arms below: those describe the gateway
+        // lane, and a desk composition has nothing to do with either.
+        if coordinator.composeTarget == .work {
+            return coordinator.menuBarInputMode == .text
+        }
         guard coordinator.menuBarInputMode == .text,
               !isWorking else { return false }
         switch service.state {
@@ -482,15 +537,38 @@ struct DictationPopoverView: View {
         // Local @Bindable bridge — the view holds the coordinator as a plain
         // `let`, and the field needs a Binding into its observable `quickDraft`.
         @Bindable var coordinator = coordinator
+        let isWorkOnly = coordinator.composeTarget == .work
         return VStack(spacing: 10) {
+            // The Work-only state announces itself. Without a title the surface
+            // is indistinguishable from the Chat one, and the difference is
+            // where a Return press sends private words.
+            if isWorkOnly {
+                Label(
+                    String(localized: LocalizedStringResource(
+                        "workboard.menuBar.compose.work.title",
+                        defaultValue: "Add to Work"
+                    )),
+                    systemImage: "tray.and.arrow.down"
+                )
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(AppColors.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
+            }
+
             composeThumbnail
 
             TextField(
-                String(localized: LocalizedStringResource(
-                    "workboard.menuBar.compose.placeholder",
-                    defaultValue: "Write a note or message"
-                )),
-                text: $coordinator.quickDraft,
+                String(localized: isWorkOnly
+                    ? LocalizedStringResource(
+                        "workboard.menuBar.compose.work.placeholder",
+                        defaultValue: "Write a note for your desk"
+                    )
+                    : LocalizedStringResource(
+                        "workboard.menuBar.compose.placeholder",
+                        defaultValue: "Write a note or message"
+                    )),
+                text: isWorkOnly ? $coordinator.quickWorkDraft : $coordinator.quickDraft,
                 axis: .vertical
             )
             .textFieldStyle(.plain)
@@ -499,6 +577,13 @@ struct DictationPopoverView: View {
             .lineLimit(1...6)
             .focused($composeFocused)
             .onSubmit {
+                // Return follows the surface, never the habit: on the Work
+                // surface it saves, and the gateway readiness that gates the
+                // Chat send is not consulted at all — the desk needs none.
+                if isWorkOnly {
+                    coordinator.saveQuickDraftToWork()
+                    return
+                }
                 guard coordinator.isQuickCaptureReady else { return }
                 coordinator.sendQuickTypedDraft()
             }
@@ -526,23 +611,31 @@ struct DictationPopoverView: View {
             )
 
             if let feedback = coordinator.quickWorkCaptureFeedback {
-                Label(
-                    feedback.message,
-                    systemImage: feedback.kind == .saved
-                        ? "checkmark.circle.fill"
-                        : "exclamationmark.triangle.fill"
-                )
-                .font(.caption)
-                .foregroundStyle(
-                    feedback.kind == .saved
-                        ? AppColors.success
-                        : AppColors.error
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                workFeedbackRow(feedback)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
             HStack(spacing: 10) {
+                if isWorkOnly {
+                    // The Work-only state's own exit. It is the ONLY way back
+                    // to the Chat surface that also throws the words away, and
+                    // it has to be visible: a composition aimed at the desk
+                    // survives every dismissal, so a person who changed their
+                    // mind needs somewhere to say so.
+                    Button(String(localized: LocalizedStringResource(
+                        "common.cancel",
+                        defaultValue: "Cancel"
+                    ))) {
+                        coordinator.discardWorkOnlyCompose()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.callout)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .pointerIconButton(shape: .capsule)
+
+                    Spacer(minLength: 0)
+                }
+
                 Button {
                     coordinator.saveQuickDraftToWork()
                 } label: {
@@ -572,44 +665,54 @@ struct DictationPopoverView: View {
                     )
                 }
                 .choiceCardButton(cornerRadius: 10)
-                .disabled(!coordinator.hasComposeState || coordinator.isSavingQuickDraftToWork)
+                .disabled(
+                    !(isWorkOnly ? coordinator.hasWorkComposeState : coordinator.hasComposeState)
+                        || coordinator.isSavingQuickDraftToWork
+                )
+                // ⌘Return commits the surface the person is looking at. On the
+                // Chat surface it stays Ask's; here Ask is not drawn, so the
+                // same press must reach the only action there is rather than
+                // doing nothing.
+                .keyboardShortcut(isWorkOnly ? KeyboardShortcut(.return, modifiers: .command) : nil)
                 .help(String(localized: LocalizedStringResource(
                     "workboard.menuBar.addToWork.help",
                     defaultValue: "Save this as private work without contacting your AI"
                 )))
 
-                Spacer(minLength: 0)
+                if !isWorkOnly {
+                    Spacer(minLength: 0)
 
-                Button {
-                    coordinator.sendQuickTypedDraft()
-                } label: {
-                    Label(
-                        String(localized: LocalizedStringResource(
-                            "workboard.menuBar.ask",
-                            defaultValue: "Ask"
-                        )),
-                        systemImage: "arrow.up"
+                    Button {
+                        coordinator.sendQuickTypedDraft()
+                    } label: {
+                        Label(
+                            String(localized: LocalizedStringResource(
+                                "workboard.menuBar.ask",
+                                defaultValue: "Ask"
+                            )),
+                            systemImage: "arrow.up"
+                        )
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(Color.black)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 36)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(AppColors.brandAmber)
+                        )
+                    }
+                    .primaryCTAButton()
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(
+                        !coordinator.hasComposeState
+                            || !coordinator.isQuickCaptureReady
+                            || coordinator.isSavingQuickDraftToWork
                     )
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(Color.black)
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 36)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(AppColors.brandAmber)
-                    )
+                    .help(String(localized: LocalizedStringResource(
+                        "workboard.menuBar.ask.help",
+                        defaultValue: "Send this to your default AI gateway"
+                    )))
                 }
-                .primaryCTAButton()
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(
-                    !coordinator.hasComposeState
-                        || !coordinator.isQuickCaptureReady
-                        || coordinator.isSavingQuickDraftToWork
-                )
-                .help(String(localized: LocalizedStringResource(
-                    "workboard.menuBar.ask.help",
-                    defaultValue: "Send this to your default AI gateway"
-                )))
             }
         }
         .padding(.horizontal, 14)
@@ -619,13 +722,14 @@ struct DictationPopoverView: View {
         // every hidden→shown re-mount (turn settled) — exactly the moments
         // the field should reclaim focus.
         .onAppear { focusComposeField() }
-        .onChange(of: coordinator.quickDraft) { _, newValue in
+        // Re-focus when the surface flips between the two aims: the field is
+        // the same view but a different binding, and a ⌃⌘W press onto an
+        // already-open popover re-mounts nothing.
+        .onChange(of: coordinator.composeTarget) { _, _ in focusComposeField() }
+        .onChange(of: coordinator.compose.activeText) { _, newValue in
             if !newValue.isEmpty {
                 coordinator.quickWorkCaptureFeedback = nil
             }
-        }
-        .onChange(of: coordinator.quickWorkCaptureFeedback) { _, feedback in
-            if let feedback { AccessibilityAnnouncer.announce(feedback.message) }
         }
     }
 
@@ -671,6 +775,311 @@ struct DictationPopoverView: View {
             }
             .onHover { thumbnailHovering = $0 }
         }
+    }
+
+    // MARK: - Work capture HUD (⌃⌘W)
+    //
+    // The compact twin of the desk's `WorkboardVoiceCaptureView`, at the
+    // recording HUD's geometry. It DUPLICATES that sheet's copy rather than
+    // sharing a view, which is the popover's standing convention for small
+    // presentation — but not its state→sentence mapping, which goes through
+    // `MenuBarWorkVoiceStatus` so the two surfaces cannot describe one recorder
+    // state with two different words.
+    //
+    // Everything a gateway needs is absent by construction: no destination
+    // picker, no Ask, no "send". The controls are the two the capture actually
+    // has — stop it, or finish the one that stopped itself.
+
+    private var workRecorder: InAppAudioRecorder { coordinator.workVoiceRecorder }
+
+    private var workCaptureStatus: MenuBarWorkVoiceStatus {
+        MenuBarWorkVoiceStatus.resolve(workRecorder.state)
+    }
+
+    /// The sentence for one status. Every key here already ships for the desk's
+    /// own sheet — a capture that reads one way in a window and another way in
+    /// the menu bar is the drift this borrows its way out of.
+    private func workStatusText(_ status: MenuBarWorkVoiceStatus) -> String {
+        switch status {
+        case .starting:
+            return String(localized: LocalizedStringResource(
+                "workboard.voice.starting",
+                defaultValue: "Starting the microphone…"
+            ))
+        case .listening:
+            return String(localized: LocalizedStringResource(
+                "workboard.voice.listening",
+                defaultValue: "Listening"
+            ))
+        case .transcribing:
+            return String(localized: LocalizedStringResource(
+                "workboard.voice.transcribing",
+                defaultValue: "Turning speech into text…"
+            ))
+        case .preparing:
+            return String(localized: LocalizedStringResource(
+                "workboard.voice.preparing",
+                defaultValue: "Preparing on-device voice…"
+            ))
+        case .stopped:
+            return String(localized: LocalizedStringResource(
+                "workboard.voice.error.title",
+                defaultValue: "Voice capture stopped"
+            ))
+        }
+    }
+
+    private var workCaptureView: some View {
+        VStack(spacing: 14) {
+            Text(workStatusText(workCaptureStatus))
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(AppColors.textPrimary)
+                .multilineTextAlignment(.center)
+
+            workCaptureDetail
+            workCaptureControls
+
+            // The same boundary the desk's sheet draws, in the same words: the
+            // audio reaches the speech provider the person configured and
+            // nothing else, and this surface may not imply otherwise just
+            // because it is small.
+            Text(String(localized: LocalizedStringResource(
+                "workboard.voice.privacy",
+                defaultValue: "Keeps the recording on your private desk and adds the words when they’re ready. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation, and never through a server of ours."
+            )))
+            .font(.caption2)
+            .foregroundStyle(AppColors.textTertiary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+    }
+
+    /// The per-state second line: the shared dot+timer while the microphone is
+    /// live, the install progress while a voice model is coming down, and the
+    /// recorder's own typed error once it stopped.
+    @ViewBuilder
+    private var workCaptureDetail: some View {
+        switch workRecorder.state {
+        case .recording(let startedAt):
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                let elapsed = max(0, min(
+                    context.date.timeIntervalSince(startedAt),
+                    Constants.maxAudioDuration
+                ))
+                RecordingStatusIndicator(
+                    elapsed: elapsed,
+                    nearMaxDuration: elapsed
+                        >= Constants.maxAudioDuration - Constants.maxAudioDurationWarningOffset
+                )
+            }
+        case .preparingVoice(let progress):
+            if let progress {
+                ProgressView(value: progress)
+                    .frame(maxWidth: 200)
+                    .tint(AppColors.brandAmber)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        case .processing, .idle:
+            ProgressView().controlSize(.small)
+        case .error(let error):
+            VStack(spacing: 6) {
+                Text(verbatim: error.localizedDescription)
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                // A Try Again another surface is already serving changes
+                // nothing at all, so it says what is true rather than raising an
+                // error the recorder never produced. Same sentence the desk's
+                // retry card shows for the same state.
+                if workRecorder.retryRefusedBusy {
+                    Text(String(localized: LocalizedStringResource(
+                        "pendingRetry.card.busy",
+                        defaultValue: "This recording is already being finished. Try again in a moment."
+                    )))
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.warning)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var workCaptureControls: some View {
+        switch workRecorder.state {
+        case .recording:
+            HStack(spacing: 10) {
+                Button {
+                    Task { await coordinator.finishWorkVoiceCapture() }
+                } label: {
+                    Label(
+                        String(localized: LocalizedStringResource(
+                            "workboard.voice.stop",
+                            defaultValue: "Stop and Save"
+                        )),
+                        systemImage: "stop.fill"
+                    )
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color.black)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 34)
+                    .background(Capsule(style: .continuous).fill(AppColors.brandAmber))
+                }
+                .primaryCTAButton()
+
+                // Esc does the same thing. Both discard the recording outright:
+                // nothing has reached the desk yet at this point, so there is no
+                // card to contradict.
+                cancelButton(action: {
+                    coordinator.cancelActiveCapture()
+                    dismiss()
+                })
+            }
+        case .error(let error):
+            if error.isRetryable, workRecorder.canRetryWorkCapture {
+                VStack(spacing: 8) {
+                    // Try Again FINISHES this capture — the card it already
+                    // published, or the words it already recognized. Recording
+                    // again is the separate, separately labelled action,
+                    // because it leaves the first card wordless on the desk and
+                    // puts a second one beside it.
+                    Button {
+                        Task { await coordinator.finishWorkVoiceCapture() }
+                    } label: {
+                        Label(
+                            String(localized: LocalizedStringResource(
+                                "workboard.voice.tryAgain",
+                                defaultValue: "Try Again"
+                            )),
+                            systemImage: "arrow.counterclockwise"
+                        )
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(Color.black)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 34)
+                        .background(Capsule(style: .continuous).fill(AppColors.brandAmber))
+                    }
+                    .primaryCTAButton()
+
+                    HStack(spacing: 12) {
+                        Button(String(localized: LocalizedStringResource(
+                            "workboard.voice.recordAgain",
+                            defaultValue: "Record Again"
+                        ))) {
+                            Task { await coordinator.restartWorkVoiceCapture() }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.callout)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .pointerIconButton(shape: .capsule)
+
+                        Button(String(localized: LocalizedStringResource(
+                            "common.close",
+                            defaultValue: "Close"
+                        ))) {
+                            coordinator.cancelWorkVoiceCapture()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.callout)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .pointerIconButton(shape: .capsule)
+                    }
+                }
+            } else {
+                Button(String(localized: LocalizedStringResource(
+                    "common.close",
+                    defaultValue: "Close"
+                ))) {
+                    coordinator.cancelWorkVoiceCapture()
+                }
+                .buttonStyle(.plain)
+                .font(.callout)
+                .foregroundStyle(AppColors.textSecondary)
+                .pointerIconButton(shape: .capsule)
+            }
+        case .processing, .preparingVoice:
+            Button(String(localized: LocalizedStringResource(
+                "workboard.voice.cancelTranscription",
+                defaultValue: "Cancel Transcription"
+            ))) {
+                coordinator.cancelWorkVoiceCapture()
+            }
+            .buttonStyle(.plain)
+            .font(.callout)
+            .foregroundStyle(AppColors.textSecondary)
+            .pointerIconButton(shape: .capsule)
+        case .idle:
+            EmptyView()
+        }
+    }
+
+    // MARK: - Work acknowledgement
+
+    /// The standalone "Added to Work" band, for the states with no compose
+    /// surface to carry the row.
+    private var workFeedbackBand: some View {
+        Group {
+            if let feedback = coordinator.quickWorkCaptureFeedback {
+                workFeedbackRow(feedback)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+    }
+
+    /// One acknowledgement row, in both places it is drawn.
+    ///
+    /// A SAVED row is a BUTTON, because the sentence it prints is a claim the
+    /// person is entitled to check: the card is on the desk, the desk is one
+    /// click away, and a banner that says a thing happened without offering to
+    /// show it is asking to be believed. A FAILED row stays inert — there is
+    /// nothing on the desk to go and look at.
+    @ViewBuilder
+    private func workFeedbackRow(_ feedback: MenuBarWorkCaptureFeedback) -> some View {
+        switch feedback.kind {
+        case .saved:
+            Button(action: openWorkboard) {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                    Text(feedback.message)
+                        .multilineTextAlignment(.leading)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                }
+                .font(.caption)
+                .foregroundStyle(AppColors.success)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerIconButton(shape: .capsule)
+            .help(String(localized: LocalizedStringResource(
+                "workboard.menuBar.saved.open.help",
+                defaultValue: "Open Work and see the new card"
+            )))
+        case .failed:
+            Label(feedback.message, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(AppColors.error)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Raise the desk on the card that was just added. Same two lines the
+    /// status-item menu's Work entry uses, so the popover and the menu reach the
+    /// board the same way; the popover closes behind it, since the window it
+    /// just raised is where the answer is.
+    private func openWorkboard() {
+        NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.post(name: .showWorkboard, object: nil)
+        dismiss()
     }
 
     // MARK: - Working view (transcribing → gap → answering)
@@ -930,6 +1339,19 @@ struct DictationPopoverView: View {
                 .multilineTextAlignment(.center)
             }
 
+            // The second hotkey, rendered from the user's ACTUAL binding for the
+            // same reason the line above is: both are user-configurable, and a
+            // hint naming the default is wrong on any machine that changed it.
+            if let workShortcut = KeyboardShortcuts.getShortcut(for: .captureToWork) {
+                Text(String(localized: LocalizedStringResource(
+                    "popover.start.workShortcut",
+                    defaultValue: "Press \(workShortcut.description) to keep a private note"
+                )))
+                .font(.caption)
+                .foregroundStyle(AppColors.textTertiary)
+                .multilineTextAlignment(.center)
+            }
+
             if showsScreenshotAskTip {
                 screenshotAskTip
             }
@@ -1067,6 +1489,9 @@ struct DictationPopoverView: View {
     /// footer in mid-turn. Shows on error (Retry/Dismiss), on a failed agent turn
     /// (`sendError` → Retry/Dismiss), and on a settled reply (Copy + Speak).
     private var hasFooterControls: Bool {
+        // The Work HUD owns the whole surface; Copy/Speak/Retry below it would
+        // act on a conversation that is not on screen.
+        if coordinator.workCaptureIsActive { return false }
         if service.state == .recording || isWorking { return false }
         // The refusal notice replaces the content slot, so the reply's Copy /
         // Speak and the error's Retry / Dismiss would be operating on something

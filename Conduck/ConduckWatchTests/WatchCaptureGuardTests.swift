@@ -247,10 +247,10 @@ final class WatchCaptureGuardTests: XCTestCase {
         let gate = AsyncStream<Void> { continuation in
             release = { continuation.finish() }
         }
-        service.relayTranscribe = { _, audioFileURL, _, _ in
+        service.relayTranscribe = { _, audioFileURL, _, _, _ in
             queued.url = audioFileURL
             for await _ in gate {}
-            return "resurrected transcript"
+            return RelayReply(text: "resurrected transcript", workSaved: false)
         }
 
         let audioURL = FileManager.default.temporaryDirectory
@@ -288,7 +288,7 @@ final class WatchCaptureGuardTests: XCTestCase {
         let store = ConversationStore(inMemory: true)
         let service = WatchRecordingService()
         service.store = store
-        service.relayTranscribe = { _, _, _, _ in "hello from the wrist" }
+        service.relayTranscribe = { _, _, _, _, _ in RelayReply(text: "hello from the wrist", workSaved: false) }
 
         let baselineEntries = AppleRelayPendingQueue.shared.entryCount
         let capturedRef = "custom_\(UUID().uuidString)"

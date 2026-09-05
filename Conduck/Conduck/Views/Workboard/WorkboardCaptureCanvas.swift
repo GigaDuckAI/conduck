@@ -179,8 +179,47 @@ struct WorkboardCaptureCanvas: View {
             dismissTransientCaptureUI()
         }
         .onChange(of: workbenchDestinationIsActive) { _, isActive in
-            if !isActive { dismissTransientCaptureUI() }
+            if isActive {
+                // A request that arrived while the pane was hidden was left
+                // unconsumed, not dropped — this is where it lands.
+                consumeVoiceCaptureLaunchRoute()
+            } else {
+                dismissTransientCaptureUI()
+            }
         }
+        .onAppear {
+            consumeVoiceCaptureLaunchRoute()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showWorkboardVoiceCapture)) { _ in
+            consumeVoiceCaptureLaunchRoute()
+        }
+    }
+
+    /// Land a headless "record a note to Work" request on this canvas's own
+    /// voice sheet — the same state the mic button sets, so the two entry points
+    /// cannot present two different recorders.
+    ///
+    /// Both an `.onAppear` and the notification consult it, because a cold
+    /// launch is asked BEFORE this view mounts and never hears the post while a
+    /// warm one hears nothing else.
+    ///
+    /// THE GATES COME BEFORE THE CLAIM, and that ordering is the whole point:
+    /// `consume()` is one-shot read-and-clear, so claiming first and then
+    /// refusing to present would SPEND the request and show nothing. A hidden
+    /// Work pane therefore leaves the route pending until it is on screen —
+    /// `workbenchDestinationIsActive` is the same gate every other capture
+    /// surface here reads, since a sheet presented by a pane the person is not
+    /// looking at arrives over Chat.
+    ///
+    /// `.sources` returns early: only the composer canvas owns the voice sheet,
+    /// and the two are mounted together, so consuming it here would take the
+    /// request away from the surface that can honour it.
+    private func consumeVoiceCaptureLaunchRoute() {
+        guard mode == .composer else { return }
+        guard workbenchDestinationIsActive else { return }
+        guard !showsVoiceCapture else { return }
+        guard WorkVoiceCaptureLaunchRoute.shared.consume() else { return }
+        showsVoiceCapture = true
     }
 
     private var activeFileImporterIsPresented: Binding<Bool> {
@@ -1245,6 +1284,41 @@ private struct WorkboardMaterialBoard: View {
     }
 }
 
+/// How a card spends its tile: on a picture, or on a text column with artwork
+/// beside it.
+///
+/// Stated apart from the view, and pure, because the answer decides two
+/// different layouts AND a scrim that has to stay legible over an arbitrary
+/// photo — a rule that is asserted directly rather than inferred from a
+/// rendered card. Only a picture the board already holds can be spent this way:
+/// a thumbnail-less image card has nothing to fill the tile with, so it keeps
+/// the glyph layout rather than drawing an empty frame with a caption over it.
+enum WorkboardCardArtworkMode: String, Equatable, Sendable {
+    /// The thumbnail IS the tile; the name and footer sit over a bottom scrim.
+    case imageForward
+    /// Artwork (glyph or thumbnail) beside the text column — every other card.
+    case inline
+
+    /// - Parameter footprint: the size the card was actually GRANTED, not the
+    ///   stored choice. A `large` card clamped to a standard slot must resolve
+    ///   as a standard one, or the caption would be laid out for a width the
+    ///   mosaic never handed over.
+    static func resolve(
+        kind: WorkboardMaterialKind,
+        hasThumbnail: Bool,
+        footprint: WorkMaterialCardSize
+    ) -> WorkboardCardArtworkMode {
+        guard kind == .image, hasThumbnail else { return .inline }
+        switch footprint {
+        // A 30pt thumbnail cannot carry a caption over it, so the smallest
+        // footprint keeps artwork + one line of name and reads its picture as
+        // artwork rather than as the tile.
+        case .small: return .inline
+        case .standard, .large: return .imageForward
+        }
+    }
+}
+
 /// One material as a board card at one of three footprints. The card fills the
 /// frame the mosaic proposes — it never states its own height — so a size change
 /// is a single persisted attribute rather than a second layout system.
@@ -1306,7 +1380,22 @@ private struct WorkboardSourceCard: View {
     /// The mosaic hands every card a fixed frame, so content that cannot
     /// compress is clipped rather than allowed to bleed over a neighbouring
     /// tile.
+    ///
+    /// A picture the board already holds fills its own tile; every other card
+    /// draws the padded text layout. The two are separate chains rather than one
+    /// chain with a branching background, so the glyph card's geometry is
+    /// untouched by the existence of the photo card's.
+    @ViewBuilder
     private var tile: some View {
+        switch artworkMode {
+        case .imageForward:
+            imageForwardTile
+        case .inline:
+            inlineTile
+        }
+    }
+
+    private var inlineTile: some View {
         cardBody
             .padding(layoutSize == .small ? 9 : 12)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1317,6 +1406,105 @@ private struct WorkboardSourceCard: View {
                     .strokeBorder(AppColors.borderSubtle, lineWidth: 1)
             }
             .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+    }
+
+    /// What this card spends its tile on. `layoutSize` is deliberate: a `large`
+    /// card the grid clamped to a standard slot must caption a standard tile.
+    private var artworkMode: WorkboardCardArtworkMode {
+        WorkboardCardArtworkMode.resolve(
+            kind: material.kind,
+            hasThumbnail: material.thumbnailData != nil,
+            footprint: layoutSize
+        )
+    }
+
+    private var cardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 13, style: .continuous)
+    }
+
+    /// The picture IS the card: the thumbnail fills the tile edge to edge and
+    /// the name and footer ride a scrim over its bottom.
+    ///
+    /// `Color.clear` states the geometry rather than the image doing it: a
+    /// `scaledToFill` image proposes a size of its own, and letting that reach
+    /// the mosaic's slot would make one photo's aspect ratio move the card it
+    /// sits in. The clip is what turns the overflow into a fill.
+    private var imageForwardTile: some View {
+        Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay { imageForwardArtwork }
+            .overlay(alignment: .topLeading) { imageForwardAvailability }
+            .overlay(alignment: .bottom) { imageForwardCaption }
+            .clipShape(cardShape)
+            .background(AppColors.cardBackgroundElevated, in: cardShape)
+            .overlay {
+                cardShape.strokeBorder(AppColors.borderSubtle, lineWidth: 1)
+            }
+            .contentShape(cardShape)
+    }
+
+    @ViewBuilder
+    private var imageForwardArtwork: some View {
+        if let data = material.thumbnailData {
+            stagedThumbnail(data: data) {
+                // The gap before a decode lands is the card's own surface, not
+                // a glyph: a placeholder symbol at tile size would flash big and
+                // then vanish, which reads as a failure rather than as loading.
+                AppColors.backgroundSecondary
+            }
+            .accessibilityHidden(true)
+        }
+    }
+
+    /// The same glyph and the same tint as the text layout, on a dark disc: the
+    /// tint alone carries the meaning and no tint survives an arbitrary photo.
+    /// An available card draws nothing here, exactly as it draws nothing there.
+    @ViewBuilder
+    private var imageForwardAvailability: some View {
+        if material.availability != .available {
+            Image(systemName: availabilityGlyphName)
+                .font(.caption)
+                .foregroundStyle(availabilityGlyphTint)
+                .padding(5)
+                .background(Color.black.opacity(0.45), in: Circle())
+                .padding(8)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// Name + footer over a bottom scrim.
+    ///
+    /// The gradient is the caption's own background rather than a fixed slice of
+    /// the tile, so it grows WITH the text: at an accessibility type size the
+    /// name still lands on the dark band instead of climbing out of it onto the
+    /// photo. White is a literal, not a semantic colour — the surface underneath
+    /// is a photograph, so it does not follow the appearance.
+    private var imageForwardCaption: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(verbatim: material.name)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.white)
+                .lineLimit(2)
+            footerRow(tint: Color.white.opacity(0.85))
+        }
+        // Padding FIRST, then the width: a `maxWidth: .infinity` frame taken
+        // before the inset would make the block the tile's full width and THEN
+        // add 20pt of padding outside it, pushing the caption under the clip.
+        .padding(.horizontal, 10)
+        .padding(.bottom, 9)
+        .padding(.top, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(alignment: .bottom) {
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0),
+                    Color.black.opacity(0.45),
+                    Color.black.opacity(0.78)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
     }
 
     /// What this card's bytes allow. Asked once and consumed by the tile, the
@@ -1431,6 +1619,13 @@ private struct WorkboardSourceCard: View {
     }
 
     private var cardFooter: some View {
+        footerRow(tint: AppColors.textTertiary)
+    }
+
+    /// Size and age, in one row. The tint is a parameter and not a constant
+    /// because the identical row is also drawn over a photograph, where the
+    /// tertiary text colour is unreadable.
+    private func footerRow(tint: Color) -> some View {
         HStack(spacing: 6) {
             if let byteCount = material.byteCount {
                 Text(ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file))
@@ -1439,7 +1634,7 @@ private struct WorkboardSourceCard: View {
             Text(material.createdAt, format: .relative(presentation: .named))
         }
         .font(.caption2)
-        .foregroundStyle(AppColors.textTertiary)
+        .foregroundStyle(tint)
         .lineLimit(1)
     }
 
@@ -1615,15 +1810,27 @@ private struct WorkboardSourceCard: View {
         }
     }
 
+    /// The one place this card builds a decode of its own thumbnail, so the
+    /// small artwork and the full-bleed tile share a cache entry: the key is
+    /// `(id, byte count, maxPixel, revision)`, and a second construction site
+    /// would drift one of those and pay for the same picture twice.
+    private func stagedThumbnail<Placeholder: View>(
+        data: Data,
+        @ViewBuilder placeholder: @escaping () -> Placeholder
+    ) -> StagedImageTile<Placeholder> {
+        StagedImageTile(
+            id: material.id,
+            data: data,
+            maxPixel: ImageProcessor.thumbnailMaxPixel,
+            cacheVersion: material.revision,
+            placeholder: placeholder
+        )
+    }
+
     @ViewBuilder
     private func artwork(dimension: CGFloat, cornerRadius: CGFloat) -> some View {
         if material.kind == .image, let data = material.thumbnailData {
-            StagedImageTile(
-                id: material.id,
-                data: data,
-                maxPixel: ImageProcessor.thumbnailMaxPixel,
-                cacheVersion: material.revision
-            ) {
+            stagedThumbnail(data: data) {
                 artworkPlaceholder(dimension: dimension, cornerRadius: cornerRadius)
             }
             .frame(width: dimension, height: dimension)
@@ -1647,9 +1854,34 @@ private struct WorkboardSourceCard: View {
             .accessibilityHidden(true)
     }
 
+    private var previewText: String? {
+        WorkboardCardAccessibility.previewText(for: material)
+    }
+
+    private var accessibilitySummary: Text {
+        Text(WorkboardCardAccessibility.summary(
+            material: material,
+            cardSize: size,
+            boardPosition: boardPosition,
+            boardCount: boardCount
+        ))
+    }
+
+    static func boardPositionLabel(position: Int, count: Int) -> String {
+        WorkboardCardAccessibility.boardPositionLabel(position: position, count: count)
+    }
+}
+
+/// What a board card SAYS, apart from what it draws.
+///
+/// Pure and file-scope-internal because the spoken card has to survive every
+/// layout the card has: an image-forward tile hands VoiceOver no picture at all,
+/// so the words are the whole card there, and a label built inside a view body
+/// cannot be asserted. The card is the only caller.
+enum WorkboardCardAccessibility {
     /// `.audio` is listed for exhaustiveness only — a voice note draws
     /// `WorkboardAudioCardView`, never this card.
-    private var previewText: String? {
+    static func previewText(for material: WorkboardMaterialSnapshot) -> String? {
         switch material.kind {
         case .note: return material.textContent
         case .link: return material.urlString
@@ -1657,22 +1889,31 @@ private struct WorkboardSourceCard: View {
         }
     }
 
-    private var accessibilitySummary: Text {
+    /// Kind, name, whatever preview there is, the availability the card is in,
+    /// its footprint, and its place on the board — in that order, and
+    /// independent of how the tile is drawn.
+    static func summary(
+        material: WorkboardMaterialSnapshot,
+        cardSize: WorkMaterialCardSize,
+        boardPosition: Int,
+        boardCount: Int
+    ) -> String {
         var parts = [String(localized: material.kind.title), material.name]
-        if let preview = previewText?.trimmingCharacters(in: .whitespacesAndNewlines), !preview.isEmpty {
+        if let preview = previewText(for: material)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !preview.isEmpty {
             parts.append(preview)
         }
         if material.availability != .available {
-            parts.append(String(localized: availabilityLabel))
+            parts.append(String(localized: availabilityLabel(for: material.availability)))
         }
-        parts.append(String(localized: size.cardSizeTitle))
+        parts.append(String(localized: cardSize.cardSizeTitle))
         // Arranging is what the board is for, so the position is part of the
         // card's identity: it is the only thing that changes when Move
         // Earlier/Later succeeds.
         if boardCount > 0, boardPosition > 0 {
-            parts.append(Self.boardPositionLabel(position: boardPosition, count: boardCount))
+            parts.append(boardPositionLabel(position: boardPosition, count: boardCount))
         }
-        return Text(parts.joined(separator: ". "))
+        return parts.joined(separator: ". ")
     }
 
     static func boardPositionLabel(position: Int, count: Int) -> String {
@@ -1686,8 +1927,10 @@ private struct WorkboardSourceCard: View {
         )
     }
 
-    private var availabilityLabel: LocalizedStringResource {
-        switch material.availability {
+    static func availabilityLabel(
+        for availability: WorkboardMaterialAvailability
+    ) -> LocalizedStringResource {
+        switch availability {
         case .localOnly:
             return LocalizedStringResource(
                 "workboard.material.localOnly",

@@ -299,6 +299,15 @@ struct ConduckApp: App {
                     // event and switches its top-level destination to Work.
                     openWindow(id: "main")
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .showWorkboardVoiceCapture)) { _ in
+                    // A foreground intent asking for Work's recorder posts this
+                    // BEFORE `.showWorkboard` (the route has to be armed before
+                    // anything can mount a desk), so the window has to open for
+                    // either signal — a Mac launched quiet has no window at all,
+                    // and a recorder nobody can see is a recorder nobody can
+                    // stop.
+                    openWindow(id: "main")
+                }
                 .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
                     // The Mac launches quiet (`.accessory`), so the window may
                     // not exist when the notification is tapped. Open it; the

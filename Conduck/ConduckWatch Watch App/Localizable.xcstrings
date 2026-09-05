@@ -3100,6 +3100,193 @@
         }
       }
     },
+    "watch.work.capture.cancel" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "watch.work.capture.deferred" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved on your watch. It reaches Work when your iPhone is nearby."
+          }
+        }
+      }
+    },
+    "watch.work.capture.done" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Done"
+          }
+        }
+      }
+    },
+    "watch.work.capture.saved" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved to Work."
+          }
+        }
+      }
+    },
+    "watch.work.capture.savedWordsOnly" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved the words to Work. Update Conduck on your iPhone to keep recordings."
+          }
+        }
+      }
+    },
+    "watch.work.capture.saving" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saving to Work…"
+          }
+        }
+      }
+    },
+    "watch.work.capture.starting" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Starting…"
+          }
+        }
+      }
+    },
+    "watch.work.capture.stop" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap to Stop"
+          }
+        }
+      }
+    },
+    "watch.work.capture.timeLeft" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "1 min left"
+          }
+        }
+      }
+    },
+    "watch.work.capture.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Save to Work"
+          }
+        }
+      }
+    },
+    "watch.work.launchpad.save" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Save to Work"
+          }
+        }
+      }
+    },
+    "watch.work.noteUnwritten" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn’t add that to Work yet. It’s still on your watch."
+          }
+        }
+      }
+    },
+    "watch.work.notification.saved" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved to Work."
+          }
+        }
+      }
+    },
+    "watch.work.notification.wordsOnly" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved the words to Work. Update Conduck on your iPhone to keep recordings."
+          }
+        }
+      }
+    },
+    "watch.work.refusal.busy" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Finish what you’re doing first, then try again."
+          }
+        }
+      }
+    },
+    "watch.work.refusal.queueFull" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Work is waiting for your iPhone. Bring it nearby first."
+          }
+        }
+      }
+    },
+    "watch.work.tooShort" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That was too short to save. Try again and speak a little longer."
+          }
+        }
+      }
+    },
     "workboard.item.untitled" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {

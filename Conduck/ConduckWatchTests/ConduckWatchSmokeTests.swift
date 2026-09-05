@@ -151,6 +151,48 @@ final class ConduckWatchSmokeTests: XCTestCase {
         XCTAssertEqual(counts.materials, 1)
     }
 
+    // MARK: - Work relay note identity
+
+    /// The words-only fallback writes ONE card no matter how many times the
+    /// queue re-fires the same capture, and that rests entirely on the id being
+    /// derived from the claim token rather than minted per attempt.
+    /// `upsertDeskMaterial` is idempotent on `id`; the intent's default (a fresh
+    /// UUID) is right for a Shortcut run and would turn one retried wrist
+    /// capture into a pile of identical notes.
+    func testTheWorkRelayNoteIDIsDerivedFromTheClaimTokenAndIsStable() {
+        let token = "6F1F2E3D-4C5B-6A79-8899-AABBCCDDEEFF"
+        let first = WatchWorkRelayNoteIdentity.materialID(forRequestID: token)
+        let second = WatchWorkRelayNoteIdentity.materialID(forRequestID: token)
+
+        XCTAssertEqual(
+            first, second,
+            "The same claim token derived two different card ids. Every re-fire of a queue entry reuses its persisted requestID, so a non-deterministic derivation leaves one card per attempt on the desk."
+        )
+        XCTAssertNotEqual(
+            first,
+            WatchWorkRelayNoteIdentity.materialID(forRequestID: UUID().uuidString),
+            "Two different captures derived the same card id — one would overwrite the other's words."
+        )
+
+        // Version 5 / RFC 4122 variant, so the value is a legitimate name-based
+        // UUID rather than a hash with the header bits left as they fell.
+        let bytes = withUnsafeBytes(of: first.uuid) { Array($0) }
+        XCTAssertEqual(bytes[6] & 0xF0, 0x50)
+        XCTAssertEqual(bytes[8] & 0xC0, 0x80)
+    }
+
+    /// The derivation IS RFC 4122 §4.3, checked against the specification's own
+    /// worked example. A hand-rolled hash that merely looked stable would pass
+    /// the test above while being something nobody else can reproduce.
+    func testTheDerivationMatchesTheRFCsWorkedExample() throws {
+        let dns = try XCTUnwrap(UUID(uuidString: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"))
+        XCTAssertEqual(
+            WatchWorkRelayNoteIdentity.uuidV5(namespace: dns, name: "www.example.com")
+                .uuidString.lowercased(),
+            "2ed6657d-e927-568b-95e1-2665a8aea6a2"
+        )
+    }
+
     /// The payload exclusion, observed where it actually applies.
     ///
     /// `ConversationStore.storeDescriptions` returns the Core description ALONE
@@ -208,4 +250,149 @@ final class OfficialIdentityWatchLockTests: XCTestCase {
         XCTAssertEqual(appex.object(forInfoDictionaryKey: "ConduckControlKind") as? String,
                        "ai.gigaduck.AgentRelay.watch.RecordNoteControl")
     }
+}
+
+// MARK: - Work capture UI
+//
+// The wrist's "Save to Work" lane: the route it pushes and the sentence each
+// terminal outcome renders. Both are pure values, so they are testable without
+// a recorder, a relay or a watch face — and both are exactly where a silent
+// mis-wire would be invisible on screen.
+
+/// `@MainActor` because `WatchRoute` lives in a SwiftUI file and therefore
+/// carries main-actor-isolated `Equatable`/`Hashable` conformances — comparing
+/// two routes from a nonisolated test is an error under the Swift 6 language
+/// mode. The copy helpers are `nonisolated` and callable from here either way.
+@MainActor
+final class WatchWorkCaptureUITests: XCTestCase {
+    /// The Work route must be its OWN case, not a chat capture wearing a
+    /// different label. If a Work push could ever compare or hash equal to a
+    /// capture push, `navigationDestination` would build the chat thread for it
+    /// — and a private thought would arrive at a gateway with the microphone
+    /// already live.
+    func testTheWorkCaptureRouteIsDistinctFromEveryChatCaptureRoute() {
+        let nonce = UUID()
+        let work = WatchRoute.workCapture(nonce: nonce)
+        let newChat = WatchRoute.capture(.new(backendRef: "hermes"), nonce: nonce)
+        let existingChat = WatchRoute.capture(.existing(nonce), nonce: nonce)
+
+        XCTAssertNotEqual(work, newChat)
+        XCTAssertNotEqual(work, existingChat)
+        XCTAssertNotEqual(work, WatchRoute.thread(nonce))
+        XCTAssertNotEqual(work, WatchRoute.conversations)
+        XCTAssertEqual(Set([work, newChat, existingChat]).count, 3)
+    }
+
+    /// A second tap must remount rather than re-present: two Work pushes carry
+    /// different nonces and are therefore different route values.
+    func testTwoWorkCapturePushesAreDistinctRouteValues() {
+        XCTAssertNotEqual(WatchRoute.workCapture(nonce: UUID()),
+                          WatchRoute.workCapture(nonce: UUID()))
+        let shared = UUID()
+        XCTAssertEqual(WatchRoute.workCapture(nonce: shared),
+                       WatchRoute.workCapture(nonce: shared))
+    }
+
+    /// Breadcrumbs carry the case kind only, and the Work lane has its own — a
+    /// nav log that called it "capture" would make the one push we most need to
+    /// tell apart indistinguishable from a chat turn.
+    func testTheWorkCaptureRouteHasItsOwnLogLabel() {
+        XCTAssertEqual(WatchRoute.workCapture(nonce: UUID()).logLabel, "workCapture")
+        XCTAssertNotEqual(WatchRoute.workCapture(nonce: UUID()).logLabel,
+                          WatchRoute.capture(.new(backendRef: "hermes"), nonce: UUID()).logLabel)
+    }
+
+    /// The mapping that matters: each outcome renders ITS OWN sentence. Two of
+    /// these mean genuinely different things to the person reading them — "it
+    /// is on the desk" versus "it is still on your wrist" — and a cross-wire
+    /// tells someone their thought is safe when it has not left the watch.
+    func testEveryTerminalOutcomeRendersItsOwnSentence() {
+        XCTAssertEqual(WatchWorkCaptureCopy.terminalLine(for: .saved), "Saved to Work.")
+        XCTAssertEqual(
+            WatchWorkCaptureCopy.terminalLine(for: .deferredToPhone),
+            "Saved on your watch. It reaches Work when your iPhone is nearby."
+        )
+        XCTAssertEqual(
+            WatchWorkCaptureCopy.terminalLine(for: .savedWordsOnly),
+            "Saved the words to Work. Update Conduck on your iPhone to keep recordings."
+        )
+
+        let lines = [
+            WatchWorkCaptureCopy.terminalLine(for: .saved),
+            WatchWorkCaptureCopy.terminalLine(for: .deferredToPhone),
+            WatchWorkCaptureCopy.terminalLine(for: .savedWordsOnly)
+        ]
+        XCTAssertEqual(Set(lines).count, 3, "Two outcomes render the same sentence: \(lines)")
+    }
+
+    /// A refusal's sentence is already resolved by whoever refused (queue full,
+    /// master switch off), so it passes through verbatim. Flattening it into a
+    /// generic apology would delete the only part that says what to do next.
+    func testARefusalRendersItsOwnReasonVerbatim() {
+        let reason = "Work is waiting for your iPhone. Bring it nearby first."
+        XCTAssertEqual(WatchWorkCaptureCopy.terminalLine(for: .refused(reason: reason)), reason)
+    }
+
+    /// Nothing on this surface may describe a thing the Work lane cannot do.
+    /// The desk never reaches a gateway, so a line promising delivery to one is
+    /// wrong twice: it is false, and it is false in the reassuring direction.
+    func testNoTerminalLineSpeaksOfSendingAnythingAnywhere() {
+        let banned = ["send", "sent", "sending", "dispatch", "draft", "brief", "reply", "agent"]
+        for outcome in Self.durableOutcomes {
+            let line = WatchWorkCaptureCopy.terminalLine(for: outcome).lowercased()
+            for word in banned {
+                XCTAssertFalse(
+                    line.split(whereSeparator: { !$0.isLetter }).contains(Substring(word)),
+                    "\(WatchWorkCaptureCopy.logLabel(for: outcome)) says “\(word)”: \(line)"
+                )
+            }
+        }
+    }
+
+    /// Only a refusal captured nothing. The other three are durable somewhere —
+    /// on the desk, or on the wrist waiting for the iPhone — so they earn the
+    /// success haptic and the reassuring tint; a refusal must not.
+    func testOnlyARefusalReadsAsAFailure() {
+        for outcome in Self.durableOutcomes {
+            XCTAssertTrue(WatchWorkCaptureCopy.isReassuring(outcome),
+                          "\(WatchWorkCaptureCopy.logLabel(for: outcome)) should read as safe")
+        }
+        XCTAssertFalse(WatchWorkCaptureCopy.isReassuring(.refused(reason: "nope")))
+    }
+
+    /// Diagnostics carry the case kind only. A refusal sentence can name a
+    /// gateway or a queue state, so it must never reach the log line.
+    func testTheOutcomeLogLabelCarriesTheKindAndNeverTheReason() {
+        XCTAssertEqual(WatchWorkCaptureCopy.logLabel(for: .saved), "saved")
+        XCTAssertEqual(WatchWorkCaptureCopy.logLabel(for: .deferredToPhone), "deferred")
+        XCTAssertEqual(WatchWorkCaptureCopy.logLabel(for: .savedWordsOnly), "wordsOnly")
+        XCTAssertEqual(WatchWorkCaptureCopy.logLabel(for: .refused(reason: "hermes is unreachable")),
+                       "refused")
+    }
+
+    /// The two "it is on the desk" outcomes share the desk glyph the launchpad
+    /// button carries, so the end of the flow answers the button that began it;
+    /// a refusal must not wear it.
+    func testTheOutcomeGlyphsSeparateTheDeskFromTheWristAndTheRefusal() {
+        XCTAssertEqual(WatchWorkCaptureCopy.symbolName(for: .saved), "tray.and.arrow.down.fill")
+        XCTAssertEqual(WatchWorkCaptureCopy.symbolName(for: .savedWordsOnly), "tray.and.arrow.down.fill")
+        XCTAssertNotEqual(WatchWorkCaptureCopy.symbolName(for: .deferredToPhone),
+                          "tray.and.arrow.down.fill")
+        XCTAssertNotEqual(WatchWorkCaptureCopy.symbolName(for: .refused(reason: "x")),
+                          "tray.and.arrow.down.fill")
+    }
+
+    /// The destination raw values are persisted on the relay queue entry and
+    /// stamped on the wire, so a rename would strand every queued capture and
+    /// silently reclassify the ones in flight.
+    func testTheCaptureDestinationRawValuesAreFrozen() {
+        XCTAssertEqual(WatchCaptureDestination.chat.rawValue, "chat")
+        XCTAssertEqual(WatchCaptureDestination.work.rawValue, "work")
+        XCTAssertEqual(WatchCaptureDestination(rawValue: "work"), .work)
+        XCTAssertNil(WatchCaptureDestination(rawValue: "Work"))
+    }
+
+    private static let durableOutcomes: [WatchWorkCaptureOutcome] = [
+        .saved, .deferredToPhone, .savedWordsOnly
+    ]
 }

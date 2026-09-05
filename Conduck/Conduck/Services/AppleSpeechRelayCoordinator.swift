@@ -35,9 +35,20 @@
 //     delivery immediately and routes here. "apple-speech-relay-wake" is
 //     a fire-and-forget wake-ping the Watch sends alongside a
 //     `transferFile`; its delivery launches/wakes us, nothing more.
+//   - "destination" stamp: absent ⇒ the transcript is a CHAT ask and the
+//     wrist hops it to a gateway; "work" ⇒ the clip becomes a Work desk
+//     card here, before transcription, and nothing on that branch touches
+//     a conversation, a gateway ref or the converse pipeline. Chat is
+//     never spelled on the wire, so a legacy wrist build is a chat build
+//     by construction.
 //   - Reply dict shape (identical on BOTH reply channels):
 //        success: ["requestID": String, "kind": "apple-speech-relay-reply",
 //                  "result.text": String]
+//        success (work): the three keys above PLUS "result.work": true —
+//                  the recording is durably on the desk. A work request
+//                  answered WITHOUT that stamp is an older iPhone build:
+//                  the wrist has the words and knows the recording was
+//                  not kept.
 //        failure: ["requestID": String, "kind": "apple-speech-relay-reply",
 //                  "result.errorCode": Int]   // AppError.errorCode
 //   - Reply channel: interactive `sendMessage` when the request stamped
@@ -74,7 +85,9 @@
 // doesn't exist there.
 #if os(iOS)
 
+import CryptoKit
 import Foundation
+import OSLog
 import WatchConnectivity
 import UIKit
 
@@ -135,6 +148,23 @@ final class AppleSpeechRelayCoordinator {
         /// build safety: an old build that never filled `didReceiveMessage`
         /// must keep receiving replies on the channel it knows).
         static let supportsMessageReplyKey = "replySendMessageOK"
+        /// Where the transcribed words are meant to land, present in the
+        /// inline payload AND in `transferFile` metadata. ABSENT means chat —
+        /// the only shape a legacy wrist build can send — so the chat lane is
+        /// never spelled on the wire and an old watch keeps working
+        /// byte-for-byte. Only `destinationWork` diverts a request off the
+        /// converse pipeline.
+        static let destinationKey = "destination"
+        /// The one recognised `destinationKey` value: the words belong on the
+        /// Work desk, and NOTHING on that branch reaches a gateway or a
+        /// conversation.
+        static let destinationWork = "work"
+        /// Reply stamp (Bool `true`), present ONLY on a work reply: the
+        /// recording is durably on the desk. Its ABSENCE on a work request's
+        /// reply is meaningful to the wrist — an older iPhone build
+        /// transcribed the clip without keeping it — so it is never written
+        /// on a chat reply, whose three-key shape is frozen.
+        static let resultWorkSavedKey = "result.work"
     }
 
     /// Routing verdict for a relay request that arrived WITHOUT a providerID
@@ -266,12 +296,19 @@ final class AppleSpeechRelayCoordinator {
         // Stale-watch-build safety: interactive replies ONLY when the Watch
         // explicitly stamped the capability (absent ⇒ legacy transferUserInfo).
         let replyPrefersMessage = metadata[Wire.supportsMessageReplyKey] as? Bool ?? false
+        // Where the words are meant to land. Read on BOTH ingress channels for
+        // the reason the rest of this method exists: a queued file and an
+        // inline message are the SAME request, and a destination visible on
+        // only one of them would send the wrist's private note to a gateway
+        // whenever the phone happened to be unreachable at record time.
+        let destination = metadata[Wire.destinationKey] as? String
         await processRelayRequest(
             requestID: requestID,
             audioURL: fileURL,
             language: language,
             providerID: relayProviderID,
-            replyPrefersMessage: replyPrefersMessage
+            replyPrefersMessage: replyPrefersMessage,
+            destination: destination
         )
     }
 
@@ -284,6 +321,14 @@ final class AppleSpeechRelayCoordinator {
     ///      audio, done — never re-transcribe. In-flight → delete the
     ///      duplicate audio and drop — the running request replies for both.
     ///   2. Mark in-flight; delete the temp audio on EVERY exit (`defer`).
+    ///   2a. WORK destination only: publish the recording as a desk card
+    ///      BEFORE any transcribe arm runs, and while the bytes still exist
+    ///      — the STT arms below defer-delete the temp file out from under
+    ///      us. Same ordering claim as every other Work voice lane: a
+    ///      transcription that never succeeds costs the words and never the
+    ///      recording. A failure HERE replies a RETRYABLE code so the wrist
+    ///      keeps its clip and re-fires; it is never cached
+    ///      (`shouldCacheVerdict`), so the re-fire publishes for real.
     ///   3. Route by `providerID` stamp: a custom-endpoint stamp ⇒ that
     ///      EXACT endpoint; nil ⇒ the iPhone's CURRENT active provider
     ///      (`transcribeWithActiveProvider`); any other
@@ -300,12 +345,18 @@ final class AppleSpeechRelayCoordinator {
     /// the user is on the Watch, may be away from Wi-Fi, and the model
     /// is multi-hundred MB — silent download would be a privacy + data-
     /// quota regression.
+    ///
+    /// `destination` is the raw wire value, not a parsed enum, and it has no
+    /// default: both ingress channels must state it, so a future third
+    /// channel cannot silently inherit chat for a request the wrist marked
+    /// Work.
     func processRelayRequest(
         requestID: String,
         audioURL: URL,
         language: String?,
         providerID: String?,
-        replyPrefersMessage: Bool
+        replyPrefersMessage: Bool,
+        destination: String?
     ) async {
         // ── Idempotency ledger ──────────────────────────
         // Completed before: re-ship the prior verdict. A second transcribe
@@ -347,6 +398,44 @@ final class AppleSpeechRelayCoordinator {
             endBackgroundTaskIfPossible(backgroundTask)
         }
 
+        // ── Work phase 1: the recording before the words ────────────────
+        // NOTHING below this point on the work branch touches a
+        // conversation, a `RemoteAgentRef`, `startConverseHop`,
+        // `startDeferredConverseHop` or `handleQuickSend`. A private thought
+        // spoken into the wrist reaches the desk and stops there; the only
+        // wire the reply crosses is back to the watch.
+        // `WatchWorkRelayPhoneTests` asserts this structurally by reading
+        // this source file, because the failure mode is a silent one line.
+        var workCardID: UUID?
+        if Self.isWorkDestination(destination) {
+            do {
+                // The bytes must be read HERE: the transcribe arms below hand
+                // the URL to `STTClient`, which defer-deletes it, and this
+                // scope's own defer deletes it on every exit. After those, the
+                // recording exists nowhere but on the wrist.
+                workCardID = try await Self.publishRelayedWorkRecording(
+                    requestID: requestID,
+                    audioURL: audioURL
+                )
+            } catch {
+                // Retryable BY CONSTRUCTION (see `workPublicationFailure`):
+                // the wrist leaves the entry queued, keeps the clip, and
+                // re-fires the same requestID. Deliberately NOT cached — the
+                // admission gate already refuses retryables, and a memoized
+                // storage blip would poison every re-fire.
+                let failure = Self.workPublicationFailure
+                sendReply(
+                    requestID: requestID,
+                    errorCode: failure.errorCode,
+                    preferMessage: replyPrefersMessage
+                )
+                #if DEBUG
+                print("[Phone] Work relay phase 1 refused — wrist keeps the clip")
+                #endif
+                return
+            }
+        }
+
         do {
             let text: String
             // A BYO custom endpoint id is EITHER the legacy bare `custom-openai`
@@ -382,12 +471,32 @@ final class AppleSpeechRelayCoordinator {
                 )
                 text = response.text
             }
+            // ── Work phase 2: the words join the recording ──────────────
+            // A throw here is NOT a failure of the capture — the card is
+            // already standing — so the wrist still gets its transcript and
+            // the stamp. The desk is left with a playable recording the
+            // in-app retry surfaces can still fill in, which is exactly the
+            // state the two-phase design exists to produce.
+            if let workCardID {
+                await Self.attachRelayedWorkTranscript(text, toCard: workCardID)
+            }
             // Cache BEFORE shipping: a duplicate landing between ship and
-            // in-flight removal must already see the verdict.
-            replyCache.store(.init(text: text, errorCode: nil), forKey: requestID)
-            sendReply(requestID: requestID, text: text, preferMessage: replyPrefersMessage)
+            // in-flight removal must already see the verdict — INCLUDING the
+            // work stamp, so a replayed work reply is not mistaken for an old
+            // iPhone build that kept no recording.
+            let workSaved = workCardID != nil
+            replyCache.store(
+                .init(text: text, errorCode: nil, workSaved: workSaved ? true : nil),
+                forKey: requestID
+            )
+            sendReply(
+                requestID: requestID,
+                text: text,
+                workSaved: workSaved,
+                preferMessage: replyPrefersMessage
+            )
             #if DEBUG
-            print("[Phone] Relay reply shipped (text length=\(text.count), custom=\(isCustomRelay))")
+            print("[Phone] Relay reply shipped (text length=\(text.count), custom=\(isCustomRelay), work=\(workSaved))")
             #endif
         } catch let appError as AppError {
             // Admission gate: transient failures must NOT be memoized — the
@@ -553,6 +662,193 @@ final class AppleSpeechRelayCoordinator {
         }
     }
 
+    // MARK: - Work destination (Watch → Work relay, phone half)
+
+    /// The verdict a phase-1 refusal travels back on.
+    ///
+    /// It is a named constant rather than an inline literal because its ONE
+    /// required property is invisible at the call site: `workDeskWriteFailed`
+    /// is `isRetryable`, which is precisely what makes the wrist LEAVE its
+    /// entry queued (`AppleRelayPendingQueue.leavesEntryQueued`) and keep the
+    /// only copy of the recording. Substituting a terminal code — an
+    /// `audioProcessingFailed` reflex, say — would have the wrist delete the
+    /// clip on a storage blip the very next attempt would have survived.
+    /// `WatchWorkRelayPhoneTests` pins the retryability, not the spelling.
+    static let workPublicationFailure: AppError = .workDeskWriteFailed
+
+    /// Whether this request's words belong on the Work desk.
+    ///
+    /// Exact match, and deliberately not a case-folded or prefix one: the
+    /// wire value is written by our own wrist build from a shared literal, so
+    /// anything else is drift, and guessing at drift is how an unrecognised
+    /// stamp becomes a destination nobody chose. An unknown value reads as
+    /// chat for the same reason an absent one does — that is the shape every
+    /// shipped watch already sends.
+    static func isWorkDestination(_ raw: String?) -> Bool {
+        raw == Wire.destinationWork
+    }
+
+    /// The desk card id a relayed capture is published under.
+    ///
+    /// The wrist mints its requestID as a UUID, so the common path is an
+    /// identity: one utterance keeps ONE card id across the inline send, the
+    /// file fallback and every drain re-fire, which is what makes the desk
+    /// write idempotent for a claim token the watch retries verbatim.
+    /// A requestID that is NOT a UUID (a foreign or future sender) is hashed
+    /// into one — UUIDv5 in a namespace of this lane's own, the same shape
+    /// and the same reason as `WorkMaterialCollisionEscape`: a random id
+    /// would turn each retry of one utterance into another card.
+    static func workCaptureID(forRequestID requestID: String) -> UUID {
+        if let direct = UUID(uuidString: requestID) { return direct }
+        var hasher = Insecure.SHA1()
+        withUnsafeBytes(of: relayCaptureNamespace.uuid) { hasher.update(bufferPointer: $0) }
+        hasher.update(data: Data(requestID.utf8))
+        var bytes = Array(hasher.finalize().prefix(16))
+        // RFC 4122 §4.3: name-based, SHA-1 (version 5) and the standard variant.
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+
+    /// Compile-time namespace for `workCaptureID(forRequestID:)`. A literal,
+    /// in the same spirit as the desk's own fixed id: two attempts at one
+    /// utterance must derive the same card or the replay duplicates it.
+    /// Changing it re-homes every card already written this way.
+    private static let relayCaptureNamespace =
+        UUID(uuidString: "3EA1CA9D-0000-4000-A000-000000000001")!
+
+    /// PHASE 1 for the relay lane: read the clip off the temp file and put it
+    /// on the desk, stamped with the surface it was SPOKEN at rather than the
+    /// one writing it. Returns the id the card actually landed under.
+    ///
+    /// Reading the bytes is part of this function on purpose. Both transcribe
+    /// arms below hand the URL to `STTClient`, which defer-deletes it, and the
+    /// caller's own defer deletes it on every exit — so a publication deferred
+    /// until after transcription would find nothing to publish.
+    ///
+    /// `invalidMaterialOwner` is the one refusal that is answered rather than
+    /// thrown: the id already names a card of another kind, a state that never
+    /// clears on its own, so every re-fire of this requestID would refuse
+    /// identically and the wrist's entry could never leave its queue. The
+    /// bytes go back under `WorkMaterialCollisionEscape.materialID(forCapture:)`
+    /// — the same single escape the drainer and the recovery lane use, and
+    /// there is no second one.
+    @discardableResult
+    static func publishRelayedWorkRecording(
+        requestID: String,
+        audioURL: URL,
+        createdAt: Date = Date(),
+        store: ConversationStore = .shared
+    ) async throws -> UUID {
+        // An eager read, not `.mappedIfSafe`: the caller deletes this file
+        // moments later, and a mapping outliving its file is a page fault
+        // nobody can catch. A relayed clip is ~50 KB by wrist-side policy.
+        let audio = try Data(contentsOf: audioURL)
+        return try await publishRelayedWorkRecording(
+            requestID: requestID,
+            audio: audio,
+            createdAt: createdAt,
+            store: store
+        )
+    }
+
+    /// Byte-taking half of the phase-1 publication — the whole of the desk
+    /// decision, separated from the file read so it is assertable against an
+    /// isolated store.
+    @discardableResult
+    static func publishRelayedWorkRecording(
+        requestID: String,
+        audio: Data,
+        createdAt: Date = Date(),
+        store: ConversationStore = .shared
+    ) async throws -> UUID {
+        let captureID = workCaptureID(forRequestID: requestID)
+        do {
+            _ = try await WorkVoiceCaptureCoordinator.publishRecording(
+                captureID: captureID,
+                audio: audio,
+                fileExtension: relayRecordingFileExtension,
+                mimeType: relayRecordingMIMEType,
+                createdAt: createdAt,
+                sourceDevice: relaySourceDevice,
+                store: store
+            )
+            return captureID
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
+            _ = try await WorkVoiceCaptureCoordinator.publishRecording(
+                captureID: escapeID,
+                audio: audio,
+                fileExtension: relayRecordingFileExtension,
+                mimeType: relayRecordingMIMEType,
+                createdAt: createdAt,
+                sourceDevice: relaySourceDevice,
+                store: store
+            )
+            return escapeID
+        }
+    }
+
+    /// PHASE 2 for the relay lane. Never throws to the caller and never fails
+    /// the wrist: by the time this runs the recording is already durable and
+    /// the transcript is already in hand, so the only thing a refusal here can
+    /// still cost is the words on the card — and the wrist gets them anyway,
+    /// in the reply.
+    ///
+    /// The two non-attached answers are logged rather than swallowed because
+    /// each one is a BUG on this path, not a state: this lane published the
+    /// card itself, moments earlier, under an id it derived. `recordingMissing`
+    /// means somebody deleted it mid-transcription (possible, and harmless) or
+    /// the write we believed succeeded did not; `notAudio` means the escape
+    /// above chose an id that is also taken, which the escape's own contract
+    /// says cannot happen twice. The log line carries the FACT only — never
+    /// the transcript, the bytes or the requestID.
+    static func attachRelayedWorkTranscript(
+        _ transcript: String,
+        toCard captureID: UUID,
+        store: ConversationStore = .shared
+    ) async {
+        do {
+            switch try await WorkVoiceCaptureCoordinator.attachTranscript(
+                transcript,
+                toRecording: captureID,
+                store: store
+            ) {
+            case .attached:
+                break
+            case .recordingMissing:
+                log.error("Work relay: card gone before its transcript landed")
+            case .notAudio:
+                log.error("Work relay: capture id names a card of another kind")
+            }
+        } catch {
+            log.error("Work relay: transcript not written to a standing card")
+        }
+    }
+
+    /// Container the wrist compresses into, and the MIME type the desk plays
+    /// it back as. Fixed rather than sniffed: `AudioCompressor` on the watch
+    /// produces exactly this, and a card whose type is guessed is a card the
+    /// player refuses.
+    private static let relayRecordingFileExtension = "m4a"
+    private static let relayRecordingMIMEType = "audio/mp4"
+
+    /// The surface the words were SPOKEN at. The phone writes the card, but
+    /// filing every wrist note under the iPhone that happened to be nearby is
+    /// the exact confusion `sourceDevice` exists to prevent. Matches
+    /// `SourceDevice.current` as evaluated on watchOS.
+    private static let relaySourceDevice = "watch"
+
+    private static let log = Logger(
+        subsystem: Constants.identityNamespace,
+        category: "WatchWorkRelay"
+    )
+
     // MARK: - Reply
 
     // Both overloads build their payload through
@@ -562,10 +858,16 @@ final class AppleSpeechRelayCoordinator {
     // through `ship(payload:preferMessage:)`, the single channel-choice
     // site.
 
-    private func sendReply(requestID: String, text: String, preferMessage: Bool) {
+    /// `workSaved` is written only when this request WAS a work request whose
+    /// recording reached the desk, because its absence is what tells a modern
+    /// wrist it is talking to an iPhone that kept no recording.
+    private func sendReply(requestID: String, text: String, workSaved: Bool = false, preferMessage: Bool) {
         ship(
-            payload: RelayReplyCache.CachedReply(text: text, errorCode: nil)
-                .payload(requestID: requestID),
+            payload: RelayReplyCache.CachedReply(
+                text: text,
+                errorCode: nil,
+                workSaved: workSaved ? true : nil
+            ).payload(requestID: requestID),
             preferMessage: preferMessage
         )
     }
