@@ -8,8 +8,8 @@
 // `defaultValue:` at runtime, so a guard that resolves the string proves
 // nothing about the row that ships.
 //
-// Six rules, each of which held false copy in front of a user before it
-// existed:
+// Seven rules. The first six each held false copy in front of a user before
+// they existed; the seventh is preventive, and says why in its own paragraph:
 //
 // (1) VOCABULARY. Work opens, keeps and removes; it never sends, dispatches,
 // briefs, or holds a draft. There is no code path from the desk to a gateway,
@@ -40,6 +40,15 @@
 // may not borrow either of rule (5)'s claims — a dialog that tells someone
 // their recording cannot be recovered when it is sitting on their desk stops
 // them tidying up a queue they are entitled to empty.
+// (7) AN INTENT'S NAME IS SYSTEM COPY, AND THE SYSTEM SHOWS IT EVERYWHERE. A
+// title or description written for the surface its author had open — "Record a
+// note on iPhone" — is read on the Mac's Shortcuts editor, in the Watch's
+// Shortcuts list, in Spotlight and in a Siri suggestion on whichever device is
+// nearest, where it is simply wrong: the same intent runs on all of them. The
+// person cannot correct it and support cannot see it, so it is preventive
+// rather than remedial — the rule exists to stop the sentence being written at
+// all. UI copy is deliberately out of scope: a screen belongs to the device
+// rendering it, and the wrist's own strings already name the iPhone.
 //
 // Rules (1) to (3) are scoped to `workboard.*`. Rules (4) to (6) also cover
 // `pendingRetry.*`, the retry card's own keys: the card is a Work surface, but
@@ -47,7 +56,9 @@
 // are deliberately kept out of the vocabulary scan. `intent.workboardCapture.*`
 // is Shortcut-facing identity whose copy legitimately says "without sending it
 // to an AI", and it is declared twice (app and Watch) so the one-target scan
-// below cannot see both halves.
+// below cannot see both halves. Rule (7) is the one rule scoped to `intent.*`,
+// and to the two rows the system renders as an action's identity — a title and
+// a description, never a parameter value or an error.
 
 import XCTest
 
@@ -109,6 +120,25 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
         "workboard.sync.banner.noAccount",
         "workboard.sync.banner.restricted",
         "workboard.sync.banner.quotaExceeded"
+    ]
+
+    /// Rule (7)'s scope: the two row kinds the system renders as an action's
+    /// identity. `intent.converse.destination*` and the error rows are left
+    /// out — a parameter value or a failure message is read in the context of
+    /// the device the person is holding, and only the identity travels.
+    private static let intentIdentitySuffixes = [".title", ".description"]
+
+    /// The platform names, with the inflections that actually appear in copy.
+    /// An exact word set rather than a substring scan, because "mac" is a
+    /// prefix of "machine" and a guard whose failures are noise gets deleted.
+    /// It stays deliberately strict in the other direction: "watch" is flagged
+    /// in "watch out" too, which is a rewrite somebody can do in seconds.
+    private static let platformWords: Set<String> = [
+        "iphone", "iphones",
+        "ipad", "ipads", "ipados",
+        "mac", "macs", "macos",
+        "watch", "watches", "watchos",
+        "carplay"
     ]
 
     private static let retiredWords = [
@@ -447,6 +477,50 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
             "the singular category still reads as a plural: \(one)"
         )
         XCTAssertTrue(other.contains("recordings"), "the plural category reads as a singular: \(other)")
+    }
+
+    // MARK: - (7) An intent's identity travels to every device
+
+    /// One App Intent is offered on iPhone, iPad, Mac, Watch and CarPlay from
+    /// a single declaration, so its title and description are read on devices
+    /// its author never had open. A name that pins the action to one of them
+    /// is false on the other four, and nobody who sees it can fix it.
+    ///
+    /// The rule is keyed on the catalog rather than the source because the
+    /// catalog's `en` value wins at runtime. Its one blind spot is the
+    /// bare-English literal (`static var title: LocalizedStringResource =
+    /// "Check Conduck Is Ready"`), whose key IS the sentence and carries no
+    /// `intent.` prefix — a new intent that names a platform inline is caught
+    /// in review, not here, which is the reason every Work intent declares its
+    /// identity as a prefixed key.
+    func testNoIntentTitleOrDescriptionNamesAPlatform() throws {
+        let strings = try catalogStrings()
+        var scanned = 0
+
+        for (key, entry) in strings
+        where key.hasPrefix("intent.")
+            && Self.intentIdentitySuffixes.contains(where: { key.hasSuffix($0) }) {
+            guard let value = englishValue(entry) else { continue }
+            scanned += 1
+
+            let words = Set(value.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init))
+            let offenders = words.intersection(Self.platformWords).sorted()
+
+            XCTAssertTrue(
+                offenders.isEmpty,
+                "\(key) names \(offenders.joined(separator: ", ")): \(value)\n"
+                    + "One declaration offers this action on every device the app runs on, and "
+                    + "the Shortcuts editor, Spotlight and Siri all render this row wherever the "
+                    + "person is. Name what the action does, not where it runs."
+            )
+        }
+
+        XCTAssertGreaterThanOrEqual(
+            scanned, 3,
+            "This rule found almost no intent identity rows, so it is asserting nothing. The "
+                + "app ships at least three (the Work capture's title and description, and the "
+                + "converse action's description); a lower count means the key shape moved."
+        )
     }
 
     /// Every `"<prefix>…"` literal in the given text. These keys are always

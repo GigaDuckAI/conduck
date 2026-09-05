@@ -2977,7 +2977,7 @@ private struct InlineTextFileChip: View {
                 let item = try await AgentDownloadScratch.shared.adopt(
                     Data(text.utf8), preferredName: name, mimeType: attachment.mimeType)
                 failureMessage = nil
-                filePreview.present(item, token: token)
+                filePreview.present(PreviewedFile(scratchItem: item), token: token)
             } catch {
                 failureMessage = String(localized: LocalizedStringResource(
                     "fileTransfer.preview.failed", defaultValue: "Couldn't preview the file."))
@@ -3532,7 +3532,7 @@ private struct ServerFileDownloadChip: View {
         do {
             let item = try await AgentDownloadScratch.shared.adopt(
                 tempURL, preferredName: name, mimeType: attachment.mimeType)
-            filePreview.present(item, token: token)
+            filePreview.present(PreviewedFile(scratchItem: item), token: token)
             state = .idle
         } catch {
             try? FileManager.default.removeItem(at: tempURL)
@@ -3581,77 +3581,16 @@ private struct ServerFileDownloadChip: View {
     #endif
 }
 
-/// The thread's single Quick Look presenter — ONE per `ConversationThreadView`,
-/// deliberately never per-chip: macOS `QLPreviewPanel` is application-shared
-/// and responder-chain controlled, so row-local presenters inside the
-/// recycling `LazyVStack` would compete for it. Chips mint a claim at tap time
-/// and hand their adopted scratch item up on completion; the latest claim wins
-/// and a stale completion reclaims its own bytes.
-@MainActor @Observable
-final class FilePreviewCoordinator {
-    /// Drives the thread root's `.quickLookPreview` — the modifier nils it on
-    /// user dismissal.
-    var previewURL: URL?
-    /// The scratch item currently on screen (reclaimed per-platform, see
-    /// `handleDismiss`).
-    private var currentItem: AgentDownloadScratch.ScratchItem?
-    /// Monotonic claim counter — minted at tap time, checked at completion.
-    private var latestToken: UInt64 = 0
-
-    /// Mint a presentation claim at the moment of user intent (chip tap /
-    /// soft-confirm), BEFORE the async download — completion order must not
-    /// decide which file gets the panel.
-    func beginRequest() -> UInt64 {
-        latestToken &+= 1
-        return latestToken
-    }
-
-    /// Whether asynchronous work still owns the most recent user-intent claim.
-    /// Destination cleanup advances the counter, so late downloads can reclaim
-    /// their temp file without presenting UI over another top-level surface.
-    func isCurrent(_ token: UInt64) -> Bool {
-        token == latestToken
-    }
-
-    /// Present an adopted download — or, when a newer claim exists, discard it.
-    func present(_ item: AgentDownloadScratch.ScratchItem, token: UInt64) {
-        guard token == latestToken else {
-            // A newer tap won while this download ran — reclaim quietly.
-            Task { await AgentDownloadScratch.shared.discard(item) }
-            return
-        }
-        #if os(iOS)
-        // Replacing an on-screen preview: the old file is safe to reclaim (the
-        // full-screen QLPreviewController is done with it once swapped). macOS
-        // leaves a replaced file to the age sweep — "Open with" may hold it.
-        if let old = currentItem {
-            Task { await AgentDownloadScratch.shared.discard(old) }
-        }
-        #endif
-        currentItem = item
-        previewURL = item.url
-    }
-
-    /// The user dismissed the preview (the modifier nil'd the binding). iOS
-    /// reclaims immediately — share / Save-to-Files copy before dismissal.
-    /// macOS leaves the file to the age sweep: the panel's "Open with <app>"
-    /// hands the target app the live path, so deleting here would yank it.
-    func handleDismiss() {
-        #if os(iOS)
-        if let item = currentItem {
-            Task { await AgentDownloadScratch.shared.discard(item) }
-        }
-        #endif
-        currentItem = nil
-    }
-
-    /// Cancel the visible preview and every in-flight claim. `present` will
-    /// discard an adopted item carrying an older token, while download routes
-    /// check `isCurrent` before Quick Look or NSSavePanel hand-off.
-    func cancelPendingPresentation() {
-        latestToken &+= 1
-        if previewURL != nil { previewURL = nil }
-        if currentItem != nil { handleDismiss() }
+/// Chat's adapter onto the shared Quick Look presenter (`FilePreviewCoordinator`,
+/// `Views/Components`). A tapped chip's bytes live in `AgentDownloadScratch`,
+/// whose per-download DIRECTORY — never the bare file — is the unit that gets
+/// reclaimed, so the reclaim closure carries the whole scratch handle rather
+/// than letting the presenter walk up from the URL it was handed.
+extension PreviewedFile {
+    init(scratchItem: AgentDownloadScratch.ScratchItem) {
+        self.init(url: scratchItem.url, reclaim: {
+            Task { await AgentDownloadScratch.shared.discard(scratchItem) }
+        })
     }
 }
 

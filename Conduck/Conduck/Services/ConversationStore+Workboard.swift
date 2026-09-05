@@ -40,6 +40,10 @@ nonisolated struct WorkMaterialRowProbe: Sendable, Hashable {
     let contentHash: String?
     let byteSize: Int64?
     let updatedAt: Date?
+    /// Length of the presentation preview this row carries, never its bytes: a
+    /// probe answers which rows got one, and a preview has no business crossing
+    /// the actor boundary to be counted.
+    let thumbnailByteCount: Int?
     /// The two columns a text write touches. The canonical read deduplicates,
     /// so a writer that reached one physical row and skipped a newer duplicate
     /// looks correct through the projection and is only visible here.
@@ -120,6 +124,89 @@ nonisolated struct WorkMaterialCommittedUnavailableError: Error, Sendable {
     /// The card as it stands on the desk after the commit.
     let record: WorkMaterialRecord
 }
+
+/// What one bounded thumbnail-backfill pass did, so a caller (and a test) can
+/// tell "there was nothing left to do" apart from "every candidate was refused".
+/// The counts are LOGICAL cards, not physical rows: a card is one unit of work
+/// however many rows CloudKit merged it into.
+nonisolated struct WorkThumbnailRepairReport: Sendable, Equatable {
+    /// Cards this pass attempted, after the permanently-undecodable ones were
+    /// filtered out. Zero means the pass found nothing left to look at.
+    let examined: Int
+    /// Cards whose physical rows gained a preview in this pass.
+    let filled: Int
+    /// Cards whose bytes read back and are not an image. Remembered, so the
+    /// next pass spends its window on the cards behind them.
+    let undecodable: Int
+
+    static let empty = WorkThumbnailRepairReport(examined: 0, filled: 0, undecodable: 0)
+}
+
+/// One legacy card the backfill may look at, named by the BYTES it claims
+/// rather than by its id alone. The pairing is what makes a remembered failure
+/// safe to keep: a reattach gives the card a different `contentHash`, so the
+/// new payload gets its own attempt instead of inheriting the old verdict.
+private nonisolated struct WorkThumbnailCandidate: Sendable, Hashable {
+    let id: UUID
+    let contentHash: String
+    let byteSize: Int64
+}
+
+/// What reading and decoding one candidate's bytes settled.
+private nonisolated enum WorkThumbnailDecodeOutcome: Sendable {
+    case decoded(Data)
+    /// The bytes are here and ImageIO will not make an image of them. That
+    /// verdict is permanent for these bytes.
+    case undecodable
+    /// The blob has not landed on this device yet. Nothing is remembered: the
+    /// bytes may still arrive, and a card that merely waited for iCloud must
+    /// not be written off.
+    case unavailable
+}
+
+/// Cards whose bytes this PROCESS has already proved undecodable, and the
+/// exclusion that keeps two overlapping reconciles from decoding the same
+/// window twice.
+///
+/// Process-lifetime rather than persisted, deliberately: a stored verdict would
+/// be one more column on a model headed for CloudKit Production, and it could
+/// never be withdrawn. Forgetting on relaunch costs one wasted decode per bad
+/// card per launch, which is the cheaper mistake.
+private actor WorkThumbnailBackfillMemory {
+    private var undecodable: Set<WorkThumbnailCandidate> = []
+    private var passesInFlight: Set<ObjectIdentifier> = []
+
+    /// The candidates still worth decoding, in the order they were selected.
+    func unresolved(_ candidates: [WorkThumbnailCandidate]) -> [WorkThumbnailCandidate] {
+        candidates.filter { !undecodable.contains($0) }
+    }
+
+    func remember(_ candidate: WorkThumbnailCandidate) {
+        undecodable.insert(candidate)
+    }
+
+    /// False while this store already has a pass running. Reconcile fires on
+    /// appearance AND on every foreground, so without this a quick relaunch
+    /// decodes the same window twice.
+    func beginPass(_ store: ObjectIdentifier) -> Bool {
+        passesInFlight.insert(store).inserted
+    }
+
+    func endPass(_ store: ObjectIdentifier) {
+        passesInFlight.remove(store)
+    }
+}
+
+private let workThumbnailBackfillMemory = WorkThumbnailBackfillMemory()
+
+/// Cards one pass will read bytes for. The pass runs on a foreground reconcile,
+/// so it has to finish in a moment and leave the rest to the next one.
+private let workThumbnailRepairPassLimit = 96
+
+/// Decodes in flight. ImageIO downsampling never suspends, so an unbounded
+/// fan-out would hold every cooperative thread; and each job holds a
+/// ceiling-sized payload while it runs, so the width is also the memory bound.
+private let workThumbnailRepairDecodeWidth = 4
 
 extension ConversationStore {
 
@@ -651,6 +738,37 @@ extension ConversationStore {
             onProgress(1)
         }
 
+        // THE ONE PLACE A CAPTURED IMAGE GETS ITS PREVIEW. Every in-app
+        // ingress — picker, drop, camera, the share/Shortcut drainer, chat
+        // capture — lands here, so decoding once at this point is what gives
+        // all of them a card that renders its own artwork instead of a type
+        // glyph. Outside the write context on purpose: ImageIO never suspends,
+        // and holding a Core Data transaction open across it would block every
+        // other writer for the length of a decode.
+        //
+        // SYNCED LANE ONLY, because that is the only lane whose preview may be
+        // persisted: the row is CloudKit-mirrored, so a thumbnail on a
+        // device-local card would export file content the vault exists to keep
+        // off the shared model. A vault image draws its preview transiently
+        // instead, per board load, in the live repository.
+        //
+        // Only when NOTHING already answers for it: a draft that carries its
+        // own thumbnail keeps it, and a replay against a card that already
+        // exists writes no columns here at all — the repair paths repoint
+        // bytes, they do not re-apply the draft.
+        let publishedThumbnail: Data?
+        if existing == nil,
+           draft.kind == .image,
+           draft.thumbnailData == nil,
+           staged?.storageMode == .syncedPayload {
+            publishedThumbnail = await Self.imagePresentationThumbnail(
+                payload: carriedPayload,
+                sourceFileURL: sourceFileURL
+            )
+        } else {
+            publishedThumbnail = nil
+        }
+
         // STEP 1 OF THE PUBLICATION. The blob commits in its own save, before
         // any material row claims `.syncedPayload`. The reverse order is the
         // one state a replay cannot repair from bytes it no longer holds: a
@@ -927,6 +1045,11 @@ extension ConversationStore {
                     byteSize: staged.byteSize,
                     localVaultKey: staged.vaultKey,
                     contentHash: staged.contentHash,
+                    // Decoded above, outside this transaction. It is handed in
+                    // rather than folded into the draft so the draft stays the
+                    // caller's statement of the capture and this stays the
+                    // store's own derivation from the bytes it staged.
+                    thumbnailData: publishedThumbnail,
                     // Rank is decided here rather than by the caller: a headless
                     // capture cannot know how many cards the desk already holds,
                     // and reading the count outside this transaction would race
@@ -1147,6 +1270,31 @@ extension ConversationStore {
             byteSize: write.byteCount,
             vaultKey: write.key
         )
+    }
+
+    /// The small JPEG preview a synced image card carries, or nil when these
+    /// bytes are not an image ImageIO can read.
+    ///
+    /// `@concurrent` is load-bearing, not tidiness. This is called from the
+    /// store's own actor, and a plain `nonisolated async` function runs on its
+    /// caller's executor — so the decode would happen ON the store, holding
+    /// every queued read and write behind an uninterruptible ImageIO pass. This
+    /// spelling is what puts it on the concurrent pool.
+    ///
+    /// A file URL is preferred over bytes in hand: `thumbnailOnly(fromFileAt:)`
+    /// downsamples straight from disk, so a 100 MB capture never has to be
+    /// mapped whole to produce a 256-pixel preview.
+    @concurrent
+    private nonisolated static func imagePresentationThumbnail(
+        payload: Data?,
+        sourceFileURL: URL?
+    ) async -> Data? {
+        if let sourceFileURL,
+           let thumbnail = ImageProcessor.thumbnailOnly(fromFileAt: sourceFileURL) {
+            return thumbnail
+        }
+        guard let payload else { return nil }
+        return ImageProcessor.thumbnailOnly(from: payload)
     }
 
     // MARK: - Payload blobs
@@ -1945,6 +2093,21 @@ extension ConversationStore {
             throw WorkboardStoreError.materialPayloadUnavailable
         }
 
+        // The preview belongs to the bytes, so a reattach mints a new one on
+        // the same terms the capture did — decoded from the file still on disk,
+        // before the swap opens, and only for an image landing on the synced
+        // lane. Everything else leaves the column cleared below, which is what
+        // an unreadable preview of the payload the card just lost would be.
+        let replacementThumbnail: Data?
+        if existing.kind == .image, staged.storageMode == .syncedPayload {
+            replacementThumbnail = await Self.imagePresentationThumbnail(
+                payload: nil,
+                sourceFileURL: sourceURL
+            )
+        } else {
+            replacementThumbnail = nil
+        }
+
         let publishedBlob: WorkMaterialBlobPublication
         if staged.storageMode == .syncedPayload,
            let blobPayload = staged.blobPayload,
@@ -2039,11 +2202,15 @@ extension ConversationStore {
                     row.setValue(sourceDevice, forKey: "sourceDevice")
                     if let filename { row.setValue(filename, forKey: "filename") }
                     if let mimeType { row.setValue(mimeType, forKey: "mimeType") }
-                    // An extract and a preview describe the bytes that were
-                    // here before, and this call is handed neither for the
-                    // bytes replacing them.
+                    // An extract describes the bytes that were here before, and
+                    // this call is handed none for the bytes replacing them.
                     row.setValue(nil, forKey: "textContent")
-                    row.setValue(nil, forKey: "thumbnailData")
+                    // The old preview goes whatever happens. A replacement is
+                    // written only where one was decoded — an image on the
+                    // synced lane — so every other reattach still clears the
+                    // column rather than leaving a picture of a payload the
+                    // card no longer holds.
+                    row.setValue(replacementThumbnail, forKey: "thumbnailData")
                 }
                 owner.setValue(now, forKey: "updatedAt")
                 try context.save()
@@ -2412,6 +2579,193 @@ extension ConversationStore {
             return true
         }
         if changed { await postDidChange() }
+    }
+
+    /// Give synced image cards written before the import site decoded previews
+    /// the preview a capture would mint today. One bounded pass; the caller is
+    /// the desk's storage reconcile, which runs on appearance and on foreground.
+    ///
+    /// A PRESENTATION WRITE, so it stamps NO `updatedAt` — on the material or
+    /// on the desk. That is the same contract `setWorkMaterialCardSize` holds
+    /// and for the same reason: both revisions are derived from `updatedAt`, so
+    /// stamping one would raise "Changed after this was sent" on a brief nobody
+    /// touched because a thumbnail arrived, and would invalidate an approved
+    /// preflight. Every PHYSICAL row is written, because CloudKit can merge one
+    /// logical card into several and whichever wins the canonical read is what
+    /// the person sees.
+    ///
+    /// THE SYNCED LANE ONLY. A vault card's preview may not be persisted at all
+    /// — the row is CloudKit-mirrored and the bytes are meant to stay on this
+    /// device — so a local image keeps the transient preview the live
+    /// repository builds per board load and nothing here touches it.
+    ///
+    /// BOUNDED both ways: `workThumbnailRepairPassLimit` cards per pass, and
+    /// `workThumbnailRepairDecodeWidth` decodes in flight. Bytes are read
+    /// INSIDE each decode job rather than up front, so a pass holds four
+    /// ceiling-sized payloads at once rather than ninety-six.
+    ///
+    /// UNDECODABLE CARDS ARE REMEMBERED for the life of the process. Without
+    /// that, a mislabelled capture whose bytes are not an image sits at the
+    /// head of every pass's window for ever and the cards behind it are never
+    /// reached. The memory is keyed by the bytes the card names, so a reattach
+    /// earns a fresh attempt.
+    ///
+    /// RE-VALIDATED AFTER THE DECODE. A reattach or a synced repair can commit
+    /// while bytes are decoding, so the write refuses any row whose lane or
+    /// pairing has moved since selection: a preview of a payload the card no
+    /// longer holds is worse than no preview.
+    @discardableResult
+    func repairMissingWorkThumbnails() async -> WorkThumbnailRepairReport {
+        guard (try? await ensureLoaded()) != nil else { return .empty }
+        let pass = ObjectIdentifier(self)
+        guard await workThumbnailBackfillMemory.beginPass(pass) else { return .empty }
+        let report = await runWorkThumbnailRepairPass()
+        await workThumbnailBackfillMemory.endPass(pass)
+        return report
+    }
+
+    /// The pass itself, split out so the in-flight claim above is released on
+    /// every exit without a `defer` that would have to spawn a task to do it.
+    private func runWorkThumbnailRepairPass() async -> WorkThumbnailRepairReport {
+        let context = newReadContext()
+        let candidates = await context.perform { [context] () -> [WorkThumbnailCandidate] in
+            let request = NSFetchRequest<NSDictionary>(entityName: "WorkMaterial")
+            request.resultType = .dictionaryResultType
+            // Metadata only, and `thumbnailData` is deliberately NOT among the
+            // projected properties: asking for it would realize the preview of
+            // every card that already has one to discover that it has one.
+            request.propertiesToFetch = ["id", "contentHash", "byteSize"]
+            request.predicate = NSPredicate(
+                format: "kind == %@ AND storageMode == %@ AND thumbnailData == nil",
+                WorkMaterialKind.image.rawValue,
+                WorkMaterialStorageMode.syncedPayload.rawValue
+            )
+            // Newest first: the cards the person is looking at are the ones a
+            // bounded pass should spend its window on.
+            request.sortDescriptors = [NSSortDescriptor(key: "updatedAt", ascending: false)]
+            var seen: Set<UUID> = []
+            var found: [WorkThumbnailCandidate] = []
+            for row in (try? context.fetch(request)) ?? [] {
+                // One LOGICAL card per candidate. Duplicate physical rows are
+                // repaired together by the write, so a merged card must not
+                // spend two of the pass's slots.
+                guard let id = row["id"] as? UUID, seen.insert(id).inserted,
+                      let contentHash = row["contentHash"] as? String, !contentHash.isEmpty,
+                      let byteSize = (row["byteSize"] as? NSNumber)?.int64Value else { continue }
+                found.append(
+                    WorkThumbnailCandidate(id: id, contentHash: contentHash, byteSize: byteSize)
+                )
+            }
+            return found
+        }
+
+        // Filtered BEFORE the window is taken, which is the whole point of
+        // remembering: the bound then applies to work that can still succeed.
+        let jobs = Array(
+            await workThumbnailBackfillMemory
+                .unresolved(candidates)
+                .prefix(workThumbnailRepairPassLimit)
+        )
+        guard !jobs.isEmpty else { return .empty }
+
+        var previews: [(WorkThumbnailCandidate, Data)] = []
+        var undecodable = 0
+        let outcomes = await withTaskGroup(
+            of: (WorkThumbnailCandidate, WorkThumbnailDecodeOutcome).self,
+            returning: [(WorkThumbnailCandidate, WorkThumbnailDecodeOutcome)].self
+        ) { group in
+            var next = 0
+            while next < jobs.count, next < workThumbnailRepairDecodeWidth {
+                let job = jobs[next]
+                group.addTask { (job, await self.decodeWorkThumbnail(for: job)) }
+                next += 1
+            }
+            var values: [(WorkThumbnailCandidate, WorkThumbnailDecodeOutcome)] = []
+            while let value = await group.next() {
+                values.append(value)
+                guard next < jobs.count else { continue }
+                let job = jobs[next]
+                group.addTask { (job, await self.decodeWorkThumbnail(for: job)) }
+                next += 1
+            }
+            return values
+        }
+        for (candidate, outcome) in outcomes {
+            switch outcome {
+            case .decoded(let thumbnail):
+                previews.append((candidate, thumbnail))
+            case .undecodable:
+                undecodable += 1
+                await workThumbnailBackfillMemory.remember(candidate)
+            case .unavailable:
+                break
+            }
+        }
+
+        let filled = await writeWorkThumbnails(previews)
+        if filled > 0 { await postDidChange() }
+        return WorkThumbnailRepairReport(
+            examined: jobs.count,
+            filled: filled,
+            undecodable: undecodable
+        )
+    }
+
+    /// Read one candidate's bytes and decode them, telling apart the two
+    /// failures that matter: bytes that are not an image (permanent, and worth
+    /// remembering) from bytes that have not arrived from iCloud yet
+    /// (transient, and must not be written off).
+    private func decodeWorkThumbnail(
+        for candidate: WorkThumbnailCandidate
+    ) async -> WorkThumbnailDecodeOutcome {
+        // The pairing-aware read, so the bytes decoded here are the ones the
+        // card names rather than whatever blob happens to carry its id.
+        guard let payload = try? await loadWorkMaterialPayload(id: candidate.id),
+              !payload.isEmpty else {
+            return .unavailable
+        }
+        guard let thumbnail = await Self.imagePresentationThumbnail(
+            payload: payload,
+            sourceFileURL: nil
+        ) else {
+            return .undecodable
+        }
+        return .decoded(thumbnail)
+    }
+
+    /// Write the decoded previews onto every physical row that still names the
+    /// bytes they were decoded from, in ONE save and with no timestamp of any
+    /// kind. Returns the number of LOGICAL cards that gained a preview.
+    private func writeWorkThumbnails(
+        _ previews: [(WorkThumbnailCandidate, Data)]
+    ) async -> Int {
+        guard !previews.isEmpty else { return 0 }
+        let context = newWriteContext()
+        return await context.perform { [context] () -> Int in
+            var written = 0
+            for (candidate, thumbnail) in previews {
+                let rows = (try? Self.workMaterialRows(id: candidate.id, in: context)) ?? []
+                var touched = false
+                for row in rows {
+                    // Authoritative HERE and nowhere earlier: between selection
+                    // and this save a reattach can have moved the card onto
+                    // other bytes, or off the synced lane entirely.
+                    guard Self.namesSyncedPayload(
+                        row: row,
+                        contentHash: candidate.contentHash,
+                        byteSize: candidate.byteSize
+                    ), row.value(forKey: "thumbnailData") == nil else { continue }
+                    row.setValue(thumbnail, forKey: "thumbnailData")
+                    touched = true
+                }
+                if touched { written += 1 }
+            }
+            guard written > 0 else { return 0 }
+            // No `updatedAt` on the rows and no touch on the desk row: see the
+            // contract on `repairMissingWorkThumbnails`.
+            try? context.save()
+            return written
+        }
     }
 
     /// Pin or unpin one project. Pin is a fact about the board, never about the
@@ -2815,6 +3169,11 @@ extension ConversationStore {
     /// `sequence` overrides the draft's own rank. A capture lane that cannot
     /// see the board — a headless intent, the share drainer — has no honest
     /// rank to state, so the write that owns the transaction decides it.
+    ///
+    /// `thumbnailData` overrides the draft's the same way and for a sibling
+    /// reason: a preview the STORE decoded from the bytes it staged outranks
+    /// one the caller did not supply. A draft that carries its own is left
+    /// alone.
     private static func apply(
         _ draft: WorkMaterialDraft,
         workItemID: UUID,
@@ -2822,6 +3181,7 @@ extension ConversationStore {
         byteSize: Int64,
         localVaultKey: String?,
         contentHash: String? = nil,
+        thumbnailData: Data? = nil,
         sequence: Int? = nil,
         updatedAt: Date,
         to row: NSManagedObject
@@ -2850,7 +3210,7 @@ extension ConversationStore {
         // A thumbnail is still user file content. Keep it off the shared
         // model whenever the full payload is device-local.
         row.setValue(
-            storageMode == .syncedPayload ? draft.thumbnailData : nil,
+            storageMode == .syncedPayload ? (thumbnailData ?? draft.thumbnailData) : nil,
             forKey: "thumbnailData"
         )
         row.setValue(draft.width.map { NSNumber(value: Int32(clamping: $0)) }, forKey: "width")
@@ -3074,6 +3434,7 @@ extension ConversationStore {
                     contentHash: row.value(forKey: "contentHash") as? String,
                     byteSize: (row.value(forKey: "byteSize") as? NSNumber)?.int64Value,
                     updatedAt: row.value(forKey: "updatedAt") as? Date,
+                    thumbnailByteCount: (row.value(forKey: "thumbnailData") as? Data)?.count,
                     title: row.value(forKey: "title") as? String,
                     textContent: row.value(forKey: "textContent") as? String
                 )
@@ -3146,6 +3507,30 @@ extension ConversationStore {
             request.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
             for row in (try? context.fetch(request)) ?? [] {
                 row.setValue(rawValue, forKey: "cardSize")
+            }
+            try? context.save()
+        }
+    }
+
+    /// TEST SEAM — clear the presentation preview on every physical row of one
+    /// material.
+    ///
+    /// WHY IT HAS TO EXIST. A synced image card with no preview is precisely
+    /// the LEGACY shape the backfill is for: rows written before the import
+    /// site decoded one. Every public path now mints a preview at capture and
+    /// at reattach, so that shape is unreachable through the shipping surface —
+    /// which is what would leave the backfill, and its no-timestamp contract,
+    /// untested until a real account produced the state. Same in-memory gate as
+    /// every other seam: nothing here may reach the founder's real data.
+    func _clearWorkMaterialThumbnailForTesting(materialID: UUID) async {
+        do { try await ensureLoaded() } catch { return }
+        let context = newWriteContext()
+        await context.perform { [context] in
+            guard Self.isInMemory(context) else { return }
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            request.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
+            for row in (try? context.fetch(request)) ?? [] {
+                row.setValue(nil, forKey: "thumbnailData")
             }
             try? context.save()
         }

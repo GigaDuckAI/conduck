@@ -20,6 +20,7 @@
 // Acknowledgement is never self-issued: only the drainer, after the imported
 // material is durably readable, may delete a claim.
 
+import CryptoKit
 import Foundation
 import os
 
@@ -66,6 +67,22 @@ private func workCaptureDarwinChangeCallback(
             object: nil
         )
     }
+}
+
+/// One file a caller hands to `WorkCaptureInbox.publishFileCapture`.
+///
+/// The bytes stay on disk: the publisher copies the file into staging instead of
+/// reading it, so a multi-file capture is bounded by the queue's byte limits and
+/// not by the footprint of the process publishing it — which for a Shortcut is a
+/// headless process the system kills without warning. `byteCount` is what the
+/// caller believes the file weighs; it buys an early refusal, and the queue
+/// still measures the bytes it actually stages.
+struct WorkCaptureFileInput: Sendable {
+    let url: URL
+    let displayName: String?
+    let mimeType: String?
+    let typeIdentifier: String?
+    let byteCount: Int64
 }
 
 actor WorkCaptureInbox {
@@ -303,95 +320,142 @@ actor WorkCaptureInbox {
         captureID: UUID = UUID(),
         createdAt: Date = Date()
     ) throws -> UUID {
-        try ensureScaffold()
-        let id = captureID
-        let publisher = WorkCaptureDirectoryPublisher(
-            inboxURL: baseURL,
-            fileSystem: WorkCaptureFileManagerFileSystem(fileManager: fileManager)
-        )
-        // The capture id is caller-owned and replayable, so the staging name
-        // carries a discriminator: two attempts at one capture must never share
-        // a private directory.
-        let stagingName = "\(id.uuidString)-\(UUID().uuidString)"
-        let published = publisher.publishedURL(for: id)
-
-        // Caller-owned identity makes GigaAction recovery idempotent. If the
-        // intent was killed after its atomic move but before it cleared the
-        // audio retry guard, a later retry observes the same capture rather
-        // than publishing a second project. An already-imported capture may no
-        // longer have either directory; replaying the same id is still safe
-        // because WorkCaptureDrainer persists envelope ids before acknowledge.
-        if fileManager.fileExists(atPath: published.path) || isClaimed(id) {
-            return id
-        }
-        var entries: [WorkCaptureEnvelope.Entry] = []
-
+        var staged: [StagedEntry] = []
         if let imageData {
-            guard Int64(imageData.count) <= WorkCaptureEnvelope.maximumFileBytes else {
-                throw WorkCaptureEnvelope.PublicationValidationFailure.invalidFileEntry
-            }
-            entries.append(WorkCaptureEnvelope.Entry(
-                // App captures currently have at most one image. Reusing the
-                // caller-owned capture id makes its material stable even after
-                // the first envelope was drained and acknowledged before an
-                // intent process died; replay then repairs instead of adding a
-                // second screenshot with a fresh UUID.
-                id: id,
-                kind: .image,
-                sequence: 0,
-                relativePath: "payload-000.\(WorkCaptureEnvelope.safePathExtension((imageFilename as NSString).pathExtension))",
-                displayName: imageFilename,
-                mimeType: imageMIMEType,
-                typeIdentifier: imageTypeIdentifier,
-                byteCount: Int64(imageData.count)
+            staged.append(StagedEntry(
+                entry: WorkCaptureEnvelope.Entry(
+                    // App captures currently have at most one image. Reusing the
+                    // caller-owned capture id makes its material stable even after
+                    // the first envelope was drained and acknowledged before an
+                    // intent process died; replay then repairs instead of adding a
+                    // second screenshot with a fresh UUID.
+                    id: captureID,
+                    kind: .image,
+                    sequence: 0,
+                    relativePath: "payload-000.\(WorkCaptureEnvelope.safePathExtension((imageFilename as NSString).pathExtension))",
+                    displayName: imageFilename,
+                    mimeType: imageMIMEType,
+                    typeIdentifier: imageTypeIdentifier,
+                    byteCount: Int64(imageData.count)
+                ),
+                payload: .inline(imageData)
             ))
         }
-
-        let envelope = WorkCaptureEnvelope(
-            id: id,
+        return try publishCapture(
+            id: captureID,
             createdAt: createdAt,
             note: note,
             source: .app,
-            entries: entries
+            staged: staged
         )
-
-        // The same staging → validate → atomic-rename transaction both share
-        // extensions publish through, so an in-app capture cannot be left half
-        // written by a shape this queue has never exercised.
-        var staged: URL?
-        var didPublish = false
-        defer {
-            // `commit` clears up after its own refusals; this covers the window
-            // between opening the staging directory and reaching it.
-            if !didPublish, let staged { publisher.discard(staged) }
-        }
-        do {
-            let staging = try publisher.beginStaging(named: stagingName)
-            staged = staging
-            if let imageData, let relativePath = entries.first?.relativePath {
-                try publisher.fileSystem.writeProtected(
-                    imageData,
-                    to: staging.appendingPathComponent(relativePath, isDirectory: false)
-                )
-            }
-            try publisher.commit(envelope, staging: staging)
-            didPublish = true
-            postLocalChange()
-            return id
-        } catch let failure as WorkCaptureEnvelope.PublicationValidationFailure {
-            // A refused envelope is the caller's contract violation, not a
-            // transient fault, and must not be reported as one.
-            throw failure
-        } catch {
-            // Another process may have won the same deterministic publication
-            // between the existence check and atomic move. Its complete
-            // directory is the durable result; the losing temp is discarded.
-            if fileManager.fileExists(atPath: published.path) || isClaimed(id) {
-                return id
-            }
-            throw InboxError.filesystemFailure
-        }
     }
+
+    /// Publishes the files a Shortcut handed over as ONE capture: the note and
+    /// every file become cards together or not at all.
+    ///
+    /// Identity is derived rather than minted — the entry at `sequence` is
+    /// UUIDv5 over `(captureID, sequence)` — so a Shortcut killed after the
+    /// publication and rerun repairs the same cards instead of laying a second
+    /// copy of the same files on the desk. That is also why `captureID` belongs
+    /// to the caller: it is the only thing that survives the process.
+    ///
+    /// A set that cannot become one capture is refused whole. Truncating it
+    /// would tell a person who chose forty files that twenty-four of them are
+    /// what they captured, and they would have no way of knowing which.
+    @discardableResult
+    func publishFileCapture(
+        note: String?,
+        files: [WorkCaptureFileInput],
+        captureID: UUID = UUID(),
+        createdAt: Date = Date()
+    ) throws -> UUID {
+        guard files.count <= WorkCaptureEnvelope.maximumEntryCount else {
+            throw WorkCaptureEnvelope.PublicationValidationFailure.tooManyEntries
+        }
+        // The declared sizes are refused first because they cost no I/O: a
+        // caller that already knows the set is too big is told so before the
+        // queue opens a directory. The staged bytes are measured again below,
+        // so a wrong declaration cannot smuggle anything past these limits.
+        var declaredBytes: Int64 = 0
+        for file in files {
+            guard file.byteCount <= WorkCaptureEnvelope.maximumFileBytes else {
+                throw WorkCaptureEnvelope.PublicationValidationFailure.invalidFileEntry
+            }
+            declaredBytes += max(0, file.byteCount)
+            guard declaredBytes <= WorkCaptureEnvelope.maximumEnvelopeBytes else {
+                throw InboxError.invalidEnvelope(captureID, .envelopeTooLarge)
+            }
+        }
+
+        var staged: [StagedEntry] = []
+        for (sequence, file) in files.enumerated() {
+            let displayName = WorkCaptureEnvelope.safeDisplayName(file.displayName)
+                ?? WorkCaptureEnvelope.safeDisplayName(file.url.lastPathComponent)
+            // The staged leaf is generated. Only an extension is taken from the
+            // source's name, and only through the generator that reduces
+            // anything unusable to `dat`, so no foreign name reaches the disk.
+            let namedExtension = displayName.map { ($0 as NSString).pathExtension } ?? ""
+            let pathExtension = WorkCaptureEnvelope.safePathExtension(
+                namedExtension.isEmpty ? file.url.pathExtension : namedExtension
+            )
+            staged.append(StagedEntry(
+                entry: WorkCaptureEnvelope.Entry(
+                    id: Self.fileEntryID(forCapture: captureID, sequence: sequence),
+                    kind: .file,
+                    sequence: sequence,
+                    relativePath: "payload-\(Self.paddedSequence(sequence)).\(pathExtension)",
+                    displayName: displayName,
+                    mimeType: WorkCaptureEnvelope.safeOpaqueMetadata(file.mimeType),
+                    typeIdentifier: WorkCaptureEnvelope.safeOpaqueMetadata(file.typeIdentifier),
+                    byteCount: file.byteCount
+                ),
+                payload: .copiedFile(from: file.url)
+            ))
+        }
+
+        return try publishCapture(
+            id: captureID,
+            createdAt: createdAt,
+            note: note ?? "",
+            source: .shortcut,
+            staged: staged
+        )
+    }
+
+    /// The permanent identity of the file captured at `sequence`.
+    ///
+    /// The same shape as `WorkVoiceScreenshotCoordinator.materialID(forCapture:)`
+    /// — UUIDv5 over a fixed namespace — in a namespace of its OWN, so a file
+    /// entry can never name the card another derivation already owns. The
+    /// position is part of the name because a capture carries many files and
+    /// each needs an identity a rerun reproduces.
+    nonisolated static func fileEntryID(forCapture captureID: UUID, sequence: Int) -> UUID {
+        var hasher = Insecure.SHA1()
+        withUnsafeBytes(of: fileEntryNamespace.uuid) { hasher.update(bufferPointer: $0) }
+        withUnsafeBytes(of: captureID.uuid) { hasher.update(bufferPointer: $0) }
+        // Fixed width and byte order: the name has to be the same on every
+        // device and every build, so the platform's Int is never hashed.
+        var position = UInt32(truncatingIfNeeded: sequence).bigEndian
+        withUnsafeBytes(of: &position) { hasher.update(bufferPointer: $0) }
+        var bytes = Array(hasher.finalize().prefix(16))
+        // RFC 4122 §4.3: name-based, SHA-1 (version 5) and the standard variant.
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+
+    /// Derivation namespace for file entries, a literal in the same spirit as
+    /// the desk's own fixed id. Its only requirement is that no other
+    /// derivation uses it, which is what keeps a captured file from ever naming
+    /// a voice capture's recording, screenshot or fallback note.
+    private nonisolated static let fileEntryNamespace = UUID(
+        uuidString: "F11E0000-0000-4000-A000-000000000001"
+    )!
 
     func pendingCount() throws -> Int {
         try ensureScaffold()
@@ -986,6 +1050,238 @@ actor WorkCaptureInbox {
         let nsError = error as NSError
         return nsError.domain == NSCocoaErrorDomain
             && nsError.code == NSFileWriteFileExistsError
+    }
+
+    // MARK: - Publication transaction
+
+    /// How one staged entry's bytes reach the staging directory.
+    private enum StagedPayload {
+        case inline(Data)
+        /// Copied, never read into memory: the source may be a quarter-gigabyte
+        /// file a Shortcut pointed at.
+        case copiedFile(from: URL)
+    }
+
+    /// One entry and the bytes, if any, that must be in staging before the
+    /// manifest can honestly describe it. The entry's own `byteCount` is what
+    /// the caller believes; the published manifest carries what was staged.
+    private struct StagedEntry {
+        let entry: WorkCaptureEnvelope.Entry
+        let payload: StagedPayload?
+    }
+
+    /// The one staging → validate → atomic-rename transaction behind every
+    /// in-process publication, and the same one both share extensions publish
+    /// through. An in-app or Shortcut capture therefore cannot be left half
+    /// written by a shape this queue has never exercised.
+    ///
+    /// Caller-owned identity makes recovery idempotent. If the publisher was
+    /// killed after its atomic move but before it cleared whatever guard armed
+    /// it, a later retry observes the same capture rather than publishing a
+    /// second project. An already-imported capture may no longer have either
+    /// directory; replaying the same id is still safe because
+    /// `WorkCaptureDrainer` persists envelope ids before acknowledge.
+    private func publishCapture(
+        id: UUID,
+        createdAt: Date,
+        note: String,
+        source: WorkCaptureEnvelope.Source,
+        staged: [StagedEntry]
+    ) throws -> UUID {
+        try ensureScaffold()
+        let publisher = WorkCaptureDirectoryPublisher(
+            inboxURL: baseURL,
+            fileSystem: WorkCaptureFileManagerFileSystem(fileManager: fileManager)
+        )
+        // The capture id is caller-owned and replayable, so the staging name
+        // carries a discriminator: two attempts at one capture must never share
+        // a private directory.
+        let stagingName = "\(id.uuidString)-\(UUID().uuidString)"
+        let published = publisher.publishedURL(for: id)
+
+        if fileManager.fileExists(atPath: published.path) || isClaimed(id) {
+            return id
+        }
+
+        // Every byte limit is checked against the sources before one byte is
+        // copied: a set that cannot become a capture must not first be
+        // duplicated onto a disk the person may already be short of.
+        try refuseOversizedSources(staged, id: id)
+
+        var stagedDirectory: URL?
+        var didPublish = false
+        defer {
+            // `commit` clears up after its own refusals; this covers the window
+            // between opening the staging directory and reaching it.
+            if !didPublish, let stagedDirectory { publisher.discard(stagedDirectory) }
+        }
+        do {
+            let staging = try publisher.beginStaging(named: stagingName)
+            stagedDirectory = staging
+            let entries = try stagePayloads(staged, into: staging, publisher: publisher)
+            let envelope = WorkCaptureEnvelope(
+                id: id,
+                createdAt: createdAt,
+                note: note,
+                source: source,
+                entries: entries
+            )
+            try publisher.commit(envelope, staging: staging)
+            didPublish = true
+            postLocalChange()
+            return id
+        } catch let failure as WorkCaptureEnvelope.PublicationValidationFailure {
+            // A refused envelope is the caller's contract violation, not a
+            // transient fault, and must not be reported as one.
+            throw failure
+        } catch {
+            // Another process may have won the same deterministic publication
+            // between the existence check and atomic move. Its complete
+            // directory is the durable result; the losing temp is discarded.
+            if fileManager.fileExists(atPath: published.path) || isClaimed(id) {
+                return id
+            }
+            throw InboxError.filesystemFailure
+        }
+    }
+
+    /// Refuses a set no capture may carry, measured on the sources rather than
+    /// trusted from the caller. `maximumEntryCount` belongs to the calling API,
+    /// which refuses it before building anything at all.
+    private func refuseOversizedSources(_ staged: [StagedEntry], id: UUID) throws {
+        var totalBytes: Int64 = 0
+        for item in staged {
+            let byteCount: Int64
+            switch item.payload {
+            case .none:
+                continue
+            case .inline(let data):
+                byteCount = Int64(data.count)
+            case .copiedFile(let source):
+                byteCount = try sourceByteCount(at: source)
+            }
+            guard byteCount <= WorkCaptureEnvelope.maximumFileBytes else {
+                throw WorkCaptureEnvelope.PublicationValidationFailure.invalidFileEntry
+            }
+            totalBytes += byteCount
+            guard totalBytes <= WorkCaptureEnvelope.maximumEnvelopeBytes else {
+                throw InboxError.invalidEnvelope(id, .envelopeTooLarge)
+            }
+        }
+    }
+
+    /// Copies or writes every payload into `staging` and returns the entries the
+    /// manifest will carry, each stamped with the size of the file that is
+    /// actually there.
+    ///
+    /// The manifest has to describe the staged bytes exactly: the claim
+    /// validator destroys a capture whose entry disagrees with its payload, so a
+    /// file that changed under the copy fails here — where the person can retry
+    /// — rather than silently at import.
+    private func stagePayloads(
+        _ staged: [StagedEntry],
+        into staging: URL,
+        publisher: WorkCaptureDirectoryPublisher
+    ) throws -> [WorkCaptureEnvelope.Entry] {
+        var entries: [WorkCaptureEnvelope.Entry] = []
+        var totalBytes: Int64 = 0
+        for item in staged {
+            guard let payload = item.payload, let relativePath = item.entry.relativePath else {
+                entries.append(item.entry)
+                continue
+            }
+            let destination = staging.appendingPathComponent(relativePath, isDirectory: false)
+            switch payload {
+            case .inline(let data):
+                try publisher.fileSystem.writeProtected(data, to: destination)
+            case .copiedFile(let source):
+                try copyPayload(from: source, to: destination)
+            }
+            let byteCount = try stagedByteCount(at: destination)
+            guard byteCount <= WorkCaptureEnvelope.maximumFileBytes else {
+                throw WorkCaptureEnvelope.PublicationValidationFailure.invalidFileEntry
+            }
+            totalBytes += byteCount
+            guard totalBytes <= WorkCaptureEnvelope.maximumEnvelopeBytes else {
+                throw WorkCaptureEnvelope.PublicationValidationFailure.invalidFileEntry
+            }
+            entries.append(WorkCaptureEnvelope.Entry(
+                id: item.entry.id,
+                kind: item.entry.kind,
+                sequence: item.entry.sequence,
+                relativePath: relativePath,
+                text: item.entry.text,
+                displayName: item.entry.displayName,
+                mimeType: item.entry.mimeType,
+                typeIdentifier: item.entry.typeIdentifier,
+                byteCount: byteCount
+            ))
+        }
+        return entries
+    }
+
+    /// Copies a caller's file into staging under this queue's own protection.
+    /// A copy inherits the source's protection class, which for a file another
+    /// app handed over is whatever that app chose — and the queue holds a copy
+    /// of private content from here until the app has imported it.
+    private func copyPayload(from source: URL, to destination: URL) throws {
+        try withSecurityScope(source) {
+            try fileManager.copyItem(at: source, to: destination)
+        }
+        #if os(iOS)
+        try? fileManager.setAttributes(
+            [.protectionKey: FileProtectionType.complete],
+            ofItemAtPath: destination.path
+        )
+        #endif
+    }
+
+    /// The size of a file a caller offered. A file that is not there — or is
+    /// not a regular file — is a contract violation and not a transient fault:
+    /// publishing the rest would silently drop something the person chose.
+    private func sourceByteCount(at url: URL) throws -> Int64 {
+        let attributes: [FileAttributeKey: Any]
+        do {
+            attributes = try withSecurityScope(url) {
+                try fileManager.attributesOfItem(atPath: url.path)
+            }
+        } catch {
+            if Self.isMissingFileError(error) {
+                throw WorkCaptureEnvelope.PublicationValidationFailure.invalidFileEntry
+            }
+            throw InboxError.filesystemFailure
+        }
+        guard (attributes[.type] as? FileAttributeType) == .typeRegular,
+              let size = attributes[.size] as? NSNumber else {
+            throw WorkCaptureEnvelope.PublicationValidationFailure.invalidFileEntry
+        }
+        return size.int64Value
+    }
+
+    private func stagedByteCount(at url: URL) throws -> Int64 {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              (attributes[.type] as? FileAttributeType) == .typeRegular,
+              let size = attributes[.size] as? NSNumber else {
+            throw InboxError.filesystemFailure
+        }
+        return size.int64Value
+    }
+
+    /// Reads a caller's file under its security scope. A Shortcut hands over a
+    /// URL the app may only touch while the scope is held, and a local file that
+    /// needs no scope answers false and is read exactly the same way.
+    private func withSecurityScope<T>(_ url: URL, _ body: () throws -> T) rethrows -> T {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        return try body()
+    }
+
+    /// Three digits of sequence, so a capture's payload leaves sort the way its
+    /// entries do. Bounded by `maximumEntryCount`, so the width always holds.
+    private nonisolated static func paddedSequence(_ sequence: Int) -> String {
+        let digits = String(sequence)
+        guard digits.count < 3 else { return digits }
+        return String(repeating: "0", count: 3 - digits.count) + digits
     }
 
     // MARK: - Filesystem helpers

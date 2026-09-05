@@ -46,6 +46,7 @@
 #if !os(watchOS)
 
 import Foundation
+import UniformTypeIdentifiers
 
 actor WorkCaptureDrainer {
     struct Report: Sendable, Equatable {
@@ -873,6 +874,21 @@ actor WorkCaptureDrainer {
         throw WorkCaptureInbox.InboxError.invalidEnvelope(envelope.id, .duplicateEntry)
     }
 
+    /// Whether a file entry carries audio. The MIME type a source app supplied
+    /// is checked first because it is the one annotation every share and
+    /// Shortcut path fills in; the type identifier answers for the sources that
+    /// declare a UTI instead, and conformance rather than equality so a
+    /// recording in any concrete audio type is recognised.
+    private static func isAudioPayload(_ entry: WorkCaptureEnvelope.Entry) -> Bool {
+        if let mimeType = entry.mimeType, mimeType.lowercased().hasPrefix("audio/") {
+            return true
+        }
+        guard let identifier = entry.typeIdentifier, let type = UTType(identifier) else {
+            return false
+        }
+        return type.conforms(to: .audio)
+    }
+
     /// Map one envelope entry to its card. `sequence` is deliberately left at the
     /// draft default: the desk write assigns rank inside its own transaction.
     private static func materialDraft(
@@ -922,6 +938,7 @@ actor WorkCaptureDrainer {
             }
             let isImage = entry.kind == .image
             let isWebPage = entry.kind == .webPage
+            let isAudio = entry.kind == .file && Self.isAudioPayload(entry)
             let fallbackTitle: String = {
                 if isImage {
                     return String(localized: "workboard.capture.image", defaultValue: "Image")
@@ -932,9 +949,18 @@ actor WorkCaptureDrainer {
                 return String(localized: "workboard.capture.file", defaultValue: "File")
             }()
             let filename = entry.displayName ?? entry.relativePath
+            let kind: WorkMaterialKind = {
+                if isImage { return .image }
+                // A shared or Shortcut-captured recording is the same thing on
+                // the desk as one the app recorded: a card that plays. The
+                // envelope has one file kind for every payload, so the card's
+                // kind is read from what the file IS.
+                if isAudio { return .audio }
+                return .file
+            }()
             return WorkMaterialDraft(
                 id: entry.id,
-                kind: isImage ? .image : .file,
+                kind: kind,
                 title: entry.displayName ?? fallbackTitle,
                 // A text extract is still the user's file content, and only the
                 // metadata of a file enters the material row: the bytes are

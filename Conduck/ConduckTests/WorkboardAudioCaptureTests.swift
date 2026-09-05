@@ -77,6 +77,42 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         XCTAssertEqual(desk.materials.count, 1)
     }
 
+    func testTheCardRemembersTheSurfaceTheWordsWereSpokenAtRatherThanTheOneThatWroteThem()
+        async throws
+    {
+        let store = ConversationStore(inMemory: true)
+
+        // A relayed capture: the wrist recorded it, the phone publishes it.
+        // Reading the writer's own device here would file every watch note
+        // under the iPhone that happened to be nearby.
+        let relayed = try await WorkVoiceCaptureCoordinator.publishRecording(
+            captureID: UUID(),
+            audio: Self.recordingBytes,
+            fileExtension: "m4a",
+            mimeType: "audio/mp4",
+            sourceDevice: "carplay",
+            store: store
+        )
+        XCTAssertEqual(relayed.sourceDevice, "carplay")
+
+        // Every lane that DOES run where the person spoke keeps saying so
+        // without spelling it, so the default cannot drift away from the value
+        // the rest of the desk stamps.
+        let local = try await Self.publish(captureID: UUID(), in: store)
+        XCTAssertEqual(
+            local.sourceDevice, SourceDevice.current,
+            "an omitted surface still names the device the capture ran on"
+        )
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(
+            Set(desk.materials.compactMap(\.sourceDevice)),
+            ["carplay", SourceDevice.current],
+            "the stamp survives the write; it is not a value the read path re-derives"
+        )
+    }
+
     // MARK: - Phase 2: the words join the recording they came from
 
     func testTheTranscriptLandsOnTheSameCardRatherThanASecondOne() async throws {

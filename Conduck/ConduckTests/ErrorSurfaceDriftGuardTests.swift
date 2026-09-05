@@ -422,6 +422,13 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
         "Conduck/Views/Conversation/ConversationListView.swift": .notErrorDriven(
             reason: "Reloads the LOCAL conversation store after a read failure; no transport, no `AppError`."
         ),
+        "Conduck/Views/Conversation/AttachmentFullScreenView.swift": .notErrorDriven(
+            reason: """
+            Re-reads and re-decodes LOCAL picture bytes for the page on screen. \
+            The loader is a byte read plus an ImageIO decode — no transport and no \
+            `AppError` reach it, so there is no retryability verdict to consult.
+            """
+        ),
         "Conduck/Views/Workboard/WorkboardView.swift": .notErrorDriven(
             reason: "Reloads the private LOCAL/CloudKit Workboard store after a read failure; it does not replay a gateway request."
         ),

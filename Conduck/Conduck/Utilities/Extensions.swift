@@ -170,6 +170,37 @@ extension Image {
         return nil
         #endif
     }
+
+    /// STRICT bounded decode: ImageIO only, bounded to `maxPixel`, `nil` when
+    /// the bytes do not decode. The sibling of `decoded(from:maxPixel:)` for
+    /// callers that need the BOUND to be a guarantee.
+    ///
+    /// `decoded`'s `platformImage` fallback is UNBOUNDED, which is a correctness
+    /// net there and a hazard here: the full-screen gallery decodes ORIGINALS a
+    /// user stored, and a payload ImageIO declines would inflate to its whole
+    /// bitmap on a surface that keeps several pages resident at once. A page
+    /// that cannot be decoded within the bound must say so — an explicit failure
+    /// with Retry is cheaper than a memory spike the user cannot see coming.
+    ///
+    /// No decode logic of its own: `ImageProcessor.displayCGImage` already owns
+    /// the ImageIO options (immediate caching, EXIF transform, the max-pixel
+    /// bound) and already reports failure by returning nil.
+    @concurrent
+    nonisolated static func decodedStrictlyBounded(from data: Data, maxPixel: Int) async -> Image? {
+        guard let cgImage = ImageProcessor.displayCGImage(from: data, maxPixel: maxPixel) else {
+            return nil
+        }
+        #if os(iOS)
+        return Image(uiImage: UIImage(cgImage: cgImage))
+        #elseif os(macOS)
+        return Image(nsImage: NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: cgImage.width, height: cgImage.height)
+        ))
+        #else
+        return nil
+        #endif
+    }
 }
 
 /// A staged composer attachment's image tile: decodes ONCE per stable tile

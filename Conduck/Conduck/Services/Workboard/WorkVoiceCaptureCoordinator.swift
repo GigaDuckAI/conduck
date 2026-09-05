@@ -153,6 +153,13 @@ enum WorkVoiceCaptureCoordinator {
     /// A throw means the recording is not on the desk. There is no answer for
     /// that but to keep the bytes and try again — a capture whose card never
     /// landed is not a capture that succeeded with words only.
+    ///
+    /// `sourceDevice` names the surface the words were SPOKEN at, which is not
+    /// always the process doing the writing: a wrist recording is relayed to
+    /// the phone and published there, so `SourceDevice.current` would call it
+    /// an iPhone note. Every surface that captures somewhere else passes its
+    /// own value; the default keeps the in-app and intent lanes, which do run
+    /// where the person spoke, spelling it exactly once.
     @discardableResult
     static func publishRecording(
         captureID: UUID,
@@ -160,6 +167,7 @@ enum WorkVoiceCaptureCoordinator {
         fileExtension: String,
         mimeType: String,
         createdAt: Date = Date(),
+        sourceDevice: String = SourceDevice.current,
         store: ConversationStore = .shared
     ) async throws -> WorkMaterialRecord {
         try await store.upsertDeskMaterial(
@@ -171,7 +179,7 @@ enum WorkVoiceCaptureCoordinator {
                 mimeType: mimeType,
                 payload: audio,
                 byteSize: Int64(audio.count),
-                sourceDevice: SourceDevice.current,
+                sourceDevice: sourceDevice,
                 createdAt: createdAt
             )
         )
