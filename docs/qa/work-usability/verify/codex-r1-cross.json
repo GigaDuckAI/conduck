@@ -1,0 +1,119 @@
+{
+ "slice": "cross-cutting completeness critic",
+ "verdict": "findings",
+ "findings": [
+  {
+   "id": "S1",
+   "severity": "major",
+   "title": "Watch deletes the recording after a retryable desk-write failure",
+   "file": "Conduck/ConduckWatch Watch App/Services/WatchRecordingService.swift:1832",
+   "claim": "The live Work relay deletes its only recording when the phone returns workDeskWriteFailed.",
+   "evidence": "The generic catch calls 'AppleRelayPendingQueue.shared.claimEntry(requestID: requestID)'. claimEntry deletes the audio at AppleRelayPendingQueue.swift:256. The phone returns '.workDeskWriteFailed' after publication throws at Services/AppleSpeechRelayCoordinator.swift:426; AppError.swift:1179 classifies it as retryable.",
+   "scenario": "Save to Work on the Watch → phone cannot publish the audio card → error 78 reaches the live continuation → the Watch removes its queue entry and audio, although no card exists.",
+   "fix": "Make failure retention destination-aware in the live, drain and reconciliation paths. Preserve unacknowledged Work audio on failures; retain Chat's existing terminal-error behavior.",
+   "refutationAttempt": "The queue's retryability predicate preserves error 78 during deferred delivery, but the live handler never calls it. Its only deferrals are provider-unreachable and key-unreadable. Deferred terminal failures also delete Work audio without acknowledgement, including failures from an older phone."
+  },
+  {
+   "id": "S2",
+   "severity": "major",
+   "title": "Different files collide under the Shortcut's capture identity",
+   "file": "Conduck/Conduck/Intents/AddFilesToWorkIntent.swift:249",
+   "claim": "Hashing only the note, filenames and sizes merges distinct captures and can overwrite an earlier card's bytes.",
+   "evidence": "captureIdentity hashes 'name(of: file)' and 'file.byteCount', excluding contents and invocation identity. publishCapture returns immediately for an existing capture ID at WorkCaptureInbox.swift:1116. After import, ConversationStore+Workboard.swift:946 deletes superseded blobs and :991 repoints existing rows during replay.",
+   "scenario": "Add note.txt containing 'one', then independently add note.txt containing 'two', both without a note. Both derive capture ID 65261bb4-d954-5989-a053-90773865d312. If the first capture remains queued, the second is ignored; if imported into synced storage, its card can be overwritten by the second file.",
+   "fix": "Mint a fresh capture ID per independent invocation, retaining deterministic entry IDs within that capture. Any retry identity must identify the actual invocation, not approximate file metadata.",
+   "refutationAttempt": "The fixnote deliberately deduplicates unchanged inputs, but these inputs contain different bytes. Store content hashing does not distinguish captures: it operates after the colliding material ID has already selected the existing card."
+  },
+  {
+   "id": "S3",
+   "severity": "major",
+   "title": "An asynchronous Work save can clear the Chat composition",
+   "file": "Conduck/Conduck/MenuBar/MenuBarCoordinator.swift:2057",
+   "claim": "Save completion clears whichever composition is active then, rather than the composition that was published.",
+   "evidence": "saveQuickDraftToWork captures only 'compose.activeText', awaits publication and draining, then calls 'compose.clearActive(ifStillEqualTo: draftAtCommit)'. At :2600 that method compares and clears the current activeText. MenuBarController.swift:208 can switch the target through closeWorkOnlyCompose during those awaits.",
+   "scenario": "Chat and Work each contain 'Review this tomorrow'. Save the Work composition, then press the Chat shortcut while publication is suspended. Completion finds matching Chat text and deletes that unsaved Chat composition, leaving the saved Work composition uncleared.",
+   "fix": "Capture the composition target alongside its text and conditionally clear that specific slot on completion.",
+   "refutationAttempt": "The equality guard protects subsequent text edits, but equal text in two independent slots defeats it. The saving flag blocks another save; it does not block the controller's navigation shortcut."
+  },
+  {
+   "id": "S4",
+   "severity": "minor",
+   "title": "The pending voice route does not preserve navigation to Work",
+   "file": "Conduck/Conduck/Intents/RecordWorkNoteIntent.swift:62",
+   "claim": "A launcher request arriving before the shell mounts can leave the app on Chats without presenting the recorder.",
+   "evidence": "The intent retains the voice flag but reveals Work only through '.showWorkboard'. PersonalWorkbenchRouter defaults to '.chats' at PersonalWorkbenchView.swift:358, and its mounting task does not inspect that flag. WorkboardCaptureCanvas.swift:219 refuses consumption unless Work is already active.",
+   "scenario": "Run Record a Note to Work before the shell's notification receiver exists, including a newly opened Mac window. Both notifications pass before mounting; the shell starts on Chats and the pending recording request remains stranded until the user manually selects Work.",
+   "fix": "Have the shell check the pending route on appearance and activate Work before the composer consumes it; retain notification handling for warm launches.",
+   "refutationAttempt": "The canvas has appearance and notification consumers, but both require an already-active Work destination. The Mac notification handler opens a window without retaining its requested destination. The route tests exercise flag consumption without this navigation gate."
+  },
+  {
+   "id": "S5",
+   "severity": "minor",
+   "title": "Vault images lose their existing Share action",
+   "file": "Conduck/Conduck/Views/Workboard/PersonalWorkbenchView.swift:447",
+   "claim": "Routing every image into the gallery removes the export path previously available to vault-backed images.",
+   "evidence": "The image branch now always presents '.imageGallery'. The removed file-preview sheet contained 'ShareLink(item: url)'; no ShareLink remains under Views/Workboard, and AttachmentFullScreenView offers no sharing action. Plan.md:26 explicitly says 'Keep ShareLink'.",
+   "scenario": "Open a large image stored in the local vault. Previously its file sheet offered Share; now its gallery and card menu provide no way to share the original.",
+   "fix": "Restore an explicit image Share action using a disposable original-file copy and the existing availability gate.",
+   "refutationAttempt": "Quick Look supplies system sharing for files and audio, but images no longer reach Quick Look. integrate-1.md:119 acknowledges the missing image sharing without implementing a replacement."
+  },
+  {
+   "id": "S6",
+   "severity": "minor",
+   "title": "New voice-capture copy denies its cloud speech transfer",
+   "file": "Conduck/Conduck/Intents/RecordWorkNoteIntent.swift:40",
+   "claim": "The recording action promises that nothing is sent to an AI although it uses the configured cloud transcription provider.",
+   "evidence": "The description says 'Nothing is sent to an AI.' The launched WorkboardVoiceCaptureView uses InAppAudioRecorder, whose cloud branch calls 'STTClient.shared.transcribe' at InAppAudioRecorder.swift:861. STTProvider.swift:176 includes gpt-4o-transcribe. The new Mac voice completion also reuses 'Added to Work. Nothing was sent.' at MenuBarCoordinator.swift:1984.",
+   "scenario": "Select OpenAI transcription, then record through the new action or Mac Work shortcut. Audio is uploaded to that AI provider while the action description or completion denies the transfer.",
+   "fix": "Use new keys that describe transcription through the selected speech provider and the absence of a conversation/gateway turn. Give voice completion its own accurate receipt.",
+   "refutationAttempt": "Work remains isolated from conversational gateways, but 'an AI' and 'nothing was sent' make broader claims. The existing WorkboardCopyTruthGuardTests explicitly explain why the same denial is false for Work voice capture."
+  },
+  {
+   "id": "S7",
+   "severity": "minor",
+   "title": "The dismissal regression test never performs a dismissal",
+   "file": "Conduck/ConduckTests/MenuBarWorkCaptureStateTests.swift:63",
+   "claim": "The claimed click-away preservation test passes without exercising or inspecting the production dismissal path.",
+   "evidence": "testAClickAwayDismissalReleasesNeitherTheWordsNorTheAim sets fixture state, executes only 'let reopened = compose', then asserts the same values.",
+   "scenario": "Add a Work-composition discard to MenuBarController.popoverDidClose: clicking away now loses the private text, but this test still passes because it never calls the controller, its close hook, or any dismissal operation.",
+   "fix": "Exercise a production dismissal-policy seam, or add a source guard on the actual close path alongside the value-type assertions.",
+   "refutationAttempt": "The new wiring guards inspect recording, submission and shortcut handlers, but do not inspect popoverDidClose. Existing quick-typed close-hook tests do not exercise this new Work composition."
+  },
+  {
+   "id": "S8",
+   "severity": "minor",
+   "title": "Gallery memory-pressure handling is absent on macOS",
+   "file": "Conduck/Conduck/Views/Conversation/AttachmentFullScreenView.swift:174",
+   "claim": "The macOS gallery never releases neighboring decoded images in response to memory pressure as required by the plan.",
+   "evidence": "The only assignment 'residencyRadius = 0' is inside '#if os(iOS)' and observes UIApplication.didReceiveMemoryWarningNotification. On macOS the radius remains 1 and neighboring pages retain their fullImage state.",
+   "scenario": "Open the middle image in a Mac gallery with three large resident images, then encounter memory pressure. Neighboring decoded images remain retained instead of reducing residency to the current page.",
+   "fix": "Connect macOS memory-pressure notifications to the same permanent radius-zero transition.",
+   "refutationAttempt": "The ordinary residency window bounds retained images, but does not implement the additional pressure response in plan.md:25. The radius-zero unit test exercises the calculation, not a macOS event source."
+  },
+  {
+   "id": "S9",
+   "severity": "minor",
+   "title": "The committed change omits the promised documentation pass",
+   "file": "docs/qa/work-usability/plan.md:68",
+   "claim": "The reviewed commits leave required architecture and surface documentation unchanged and contradicting the new behavior.",
+   "evidence": "Neither commit changes README.md, docs/ai-context/spec.md or docs/ai-context/project-structure.md. At the reviewed commit, spec.md:298 still says CarPlay has nowhere to preserve captures, and :457 says cloud transcription uploads directly from the Watch. Plan.md:62 and :68 require updating these contracts.",
+   "scenario": "A maintainer follows the current architecture document while extending Work capture and assumes CarPlay recordings cannot be recovered or Work cloud transcription should bypass the phone.",
+   "fix": "Complete the scoped documentation pass: distinguish Chat and Work preservation/relay behavior, update the specified surface documentation and README, and reconcile the requested project-structure update with its map-only rule.",
+   "refutationAttempt": "Fixnotes accurately describe the new behavior and supply open items and founder QA, but the repository designates the architecture documents as the copy of record. Concurrent uncommitted documentation edits are outside ec8b27f..692608d."
+  }
+ ],
+ "checkedInvariants": [
+  "All three WorkCaptureEnvelope, WorkCaptureDirectoryPublisher and ShareTargetsSnapshot copies are byte-identical from import Foundation onward.",
+  "No envelope-schema, Core Data model, identity xcconfig, CaptureWorkboardIntent or shipped Shortcut-phrase changes.",
+  "All 25 new main-app and 17 new Watch catalog rows have production references and matching defaults after interpolation normalization; no existing catalog value or keyed source default was reworded.",
+  "No intent title/description contains a platform name. The unchanged workboard.menuBar.ask.help sending text is the existing explicitly exempt Chat action.",
+  "Both relay Wire enums contain the same 14 literal pairs; Chat success replies retain their unstamped shape.",
+  "Desk-entity insertion scans identify only the designated app and Watch writers, with the isolated test seam narrowly exempted.",
+  "Exactly one workboardViewModel.load() remains in PersonalWorkbenchView.",
+  "sourceDevice retains its default; the recovery-stamping caveat is documented in f1-voice-source.md:79.",
+  "No direct reversal of a fixnote's Nobody undo instruction was identified; the filename/size identity rule itself remains defective.",
+  "Watch assertions reside in existing test files; the explicit only-testing filter found in fixnotes names a real class.",
+  "Folder-map, legal-copy, SPDX and diff-whitespace checks passed. The storage-seam script emitted sandbox heredoc errors despite exiting zero and is not counted as passing."
+ ],
+ "notes": "Reviewed ec8b27f..692608dacb7e7602c833e1b362b37ef79b0f60d6, comprising f713c52 and 692608d. No files were modified and no builds or simulator tests were run. Missing plan implementation: line 25, macOS memory-pressure release (S8); line 26, retained ShareLink/export behavior (S5); line 62, CarPlay preservation specification rewrite; line 68, spec Work/surface updates, README per-surface Work coverage and the requested project-structure update (S9). Partially implemented contracts also fail at line 34, cold-launch routing (S4); lines 42–43, Work failure retention (S1); and line 50, composition ownership across completion (S3). Open items, entitlement risk and founder QA are present in fixnotes. Already-satisfied unchanged requirements, including preview sweep coverage and window defaults, were not counted as omissions. Historical registry context was used only for worktree orientation; findings were checked against the pinned commit.\n"
+}

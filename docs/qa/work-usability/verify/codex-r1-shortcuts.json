@@ -1,0 +1,50 @@
+{
+ "slice": "Shortcuts",
+ "verdict": "findings",
+ "findings": [
+  {
+   "id": "S1",
+   "severity": "major",
+   "title": "Different files with identical names and sizes overwrite earlier captures",
+   "file": "Conduck/Conduck/Intents/AddFilesToWorkIntent.swift:249",
+   "claim": "Capture identity conflates different file contents, causing successful captures to replace or discard unrelated bytes.",
+   "evidence": "captureIdentity hashes only the note, filename and byteCount: 'hasher.update(data: Data(name(of: file).utf8))' and 'var size = UInt64(bitPattern: file.byteCount).bigEndian'. Entry IDs derive from that capture ID. ConversationStore+Workboard.swift:946 deletes superseded blobs, and :991 repoints existing card rows to the newly published bytes.",
+   "scenario": "Capture memo.txt containing 'alpha' with no note, then a minute later capture another memo.txt containing 'bravo'. Both are five bytes and derive UUID dadd2eda-96fe-579d-ac9f-91d19dd0c74d. The second capture replaces the first card's synced payload instead of adding a distinct card, destroying the earlier saved contents.",
+   "fix": "Include a digest of the staged contents, computed incrementally with bounded memory, in capture identity; retain stable entry IDs for genuine replays.",
+   "refutationAttempt": "The header explicitly accepts deduplicating unchanged inputs, but these inputs contain different bytes. Existing identity tests vary size, order and note without testing equal-size content changes. The store's collision escape checks kind and ownership, so two ordinary file cards do not escape."
+  },
+  {
+   "id": "S2",
+   "severity": "minor",
+   "title": "Cold-launch voice requests remain stranded behind Chats",
+   "file": "Conduck/Conduck/Views/Workboard/WorkboardCaptureCanvas.swift:219",
+   "claim": "The pending route preserves the recording request but cannot select Work when the launch notifications precede view mounting.",
+   "evidence": "The consumer returns at 'guard workbenchDestinationIsActive else { return }' before consuming the route. PersonalWorkbenchView.swift:358 initializes 'var destination: Destination = .chats'; its switch to Work at :987 depends exclusively on receiving .showWorkboard. RecordWorkNoteIntent.swift:60–65 stores the voice request but only posts the destination change.",
+   "scenario": "RecordWorkNoteIntent performs before PersonalWorkbenchView mounts. Both notifications are missed. The root subsequently opens on Chats; a mounted hidden composer refuses consumption, while a lazily mounted composer never appears. The recorder opens only after the user manually selects Work.",
+   "fix": "Have the root inspect the pending request on appearance and select Work without consuming it; leave consumption to the visible composer. Apply the same pending-request handling to the macOS window-opening path.",
+   "refutationAttempt": "The route's stored flag and the canvas's appearance, notification and active-destination handlers preserve the request correctly. None changes the root destination, however, so the active-destination handler cannot resolve a missed reveal notification."
+  },
+  {
+   "id": "S3",
+   "severity": "minor",
+   "title": "An oversized note falsely reports an unreadable file",
+   "file": "Conduck/Conduck/Intents/AddFilesToWorkIntent.swift:304",
+   "claim": "A valid file accompanied by an oversized note fails with an incorrect file-read error that gives no actionable remedy.",
+   "evidence": "WorkCaptureEnvelope.swift:161 throws '.noteTooLong' above maximumNoteCharacters. The intent's publicationFailure switch handles only '.tooManyEntries' and '.emptyCapture'; its default maps every other failure to '.unreadableFile(name: files.first...)'.",
+   "scenario": "Supply one readable memo.txt and a note containing 16,001 characters. Publication correctly refuses the note, but Shortcuts reports that memo.txt could not be read. Selecting the file again cannot resolve the failure.",
+   "fix": "Handle .noteTooLong explicitly with a catalog-keyed message asking the user to shorten the note.",
+   "refutationAttempt": "The intent trims whitespace but does not limit or validate note length. Its earlier refusal function checks only files, and the envelope preserves oversized notes rather than truncating them, so this error necessarily reaches the misleading default."
+  }
+ ],
+ "checkedInvariants": [
+  "CaptureWorkboardIntent and the three shipped AppShortcut entries are unchanged from ec8b27f.",
+  "File entry IDs use fixed namespaces, UUIDv5 bits and fixed-width sequence encoding.",
+  "The publisher refuses oversized sets, copies URL-backed payloads under security scope, records staged byte counts and discards failed staging.",
+  "Headless publication precedes the inline drain; a published envelope survives process termination.",
+  "Image metadata produces image entries; audio mapping uses the common payload store and playback path.",
+  "Hidden and source-only canvases cannot consume the voice route.",
+  "New keyed intent strings exist in the catalog; identity copy contains no platform names.",
+  "Envelope mirror triplets remain identical; no new capture path calls conversation or gateway transport."
+ ],
+ "notes": "Reviewed ec8b27f..692608d. No files were modified by this verifier; Swift tests were not executed. Read-only checks passed for frozen source, mirrors, catalogs, SPDX headers, folder mapping, legal copies and storage seams. The storage guard required replacing shell here-strings with pipes in memory because temporary writes were denied. Concurrent edits to supporting files were checked against committed HEAD and excluded.\n"
+}

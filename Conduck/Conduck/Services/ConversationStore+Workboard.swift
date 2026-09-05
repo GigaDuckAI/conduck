@@ -2718,10 +2718,26 @@ extension ConversationStore {
     private func decodeWorkThumbnail(
         for candidate: WorkThumbnailCandidate
     ) async -> WorkThumbnailDecodeOutcome {
-        // The pairing-aware read, so the bytes decoded here are the ones the
-        // card names rather than whatever blob happens to carry its id.
-        guard let payload = try? await loadWorkMaterialPayload(id: candidate.id),
-              !payload.isEmpty else {
+        // Paired to the CANDIDATE's own `(id, contentHash, byteSize)`, never
+        // through `loadWorkMaterialPayload`: that loader answers for the
+        // CANONICAL row, and a CloudKit merge can leave the canonical row on
+        // other bytes — or on the vault lane entirely — while the row this
+        // candidate stands for still names its own blob. The write below
+        // accepts a row on the candidate's pairing alone, so a payload resolved
+        // through any other row would persist one card's picture onto another
+        // card's bytes, on a CloudKit-mirrored column.
+        let paired = WorkMaterialBlobPairing(
+            contentHash: candidate.contentHash,
+            byteSize: candidate.byteSize
+        )
+        let blob = try? await newestCompleteBlobPayload(
+            materialID: candidate.id,
+            pairedWith: paired
+        )
+        // `?? nil` flattens the `Data??` a `try?` over an optional-returning
+        // read produces: a throw and "no complete blob here yet" are the same
+        // transient answer.
+        guard let payload = blob ?? nil, !payload.isEmpty else {
             return .unavailable
         }
         guard let thumbnail = await Self.imagePresentationThumbnail(
@@ -2768,11 +2784,7 @@ extension ConversationStore {
         }
     }
 
-    /// Pin or unpin one project. Pin is a fact about the board, never about the
-    /// brief: it is absent from every prompt and dispatch snapshot, so this
-    /// writes NO `updatedAt`. That is the whole contract — the brief revision is
-    /// derived from `updatedAt`, so stamping it would raise "Changed after this
-    /// was sent" on an untouched brief and invalidate an approved preflight
+    /// One card and its bytes together; nil when no card carries that id, and a nil payload when the card's bytes have not arrived here yet.
     func loadWorkMaterial(id: UUID) async throws -> LoadedWorkMaterial? {
         guard let record = try await fetchWorkMaterial(id: id) else { return nil }
         return LoadedWorkMaterial(record: record, payload: try await loadWorkMaterialPayload(id: id))
@@ -3522,7 +3534,17 @@ extension ConversationStore {
     /// which is what would leave the backfill, and its no-timestamp contract,
     /// untested until a real account produced the state. Same in-memory gate as
     /// every other seam: nothing here may reach the founder's real data.
-    func _clearWorkMaterialThumbnailForTesting(materialID: UUID) async {
+    ///
+    /// - Parameter contentHash: Clears only the rows naming THIS blob, when the
+    ///   duplicates of one card have to end up in different states. A merge can
+    ///   leave one physical row without a preview beside another that has one
+    ///   and names other bytes, and that asymmetry is the only shape in which a
+    ///   backfill can be caught decoding the wrong row's payload — every row
+    ///   sharing one state hides it. Nil clears every row, as a legacy card is.
+    func _clearWorkMaterialThumbnailForTesting(
+        materialID: UUID,
+        contentHash: String? = nil
+    ) async {
         do { try await ensureLoaded() } catch { return }
         let context = newWriteContext()
         await context.perform { [context] in
@@ -3530,6 +3552,8 @@ extension ConversationStore {
             let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
             request.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
             for row in (try? context.fetch(request)) ?? [] {
+                if let contentHash,
+                   row.value(forKey: "contentHash") as? String != contentHash { continue }
                 row.setValue(nil, forKey: "thumbnailData")
             }
             try? context.save()

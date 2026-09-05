@@ -58,6 +58,15 @@ struct RootView: View {
                 PersonalWorkbenchView {
                     ContentView()
                 }
+                // A launch the Work voice intent asked for lands here, not on
+                // Chats. The intent performs before any of this exists, so both
+                // of its notifications are delivered to nobody and the shell
+                // would otherwise open on its default destination with the
+                // request still pending — the composer refuses to claim one it
+                // cannot present. This reveals Work; the composer consumes.
+                .onAppear {
+                    WorkVoiceCaptureLaunchRoute.shared.revealWorkIfPending()
+                }
             }
         }
         // One-time backfill so EXISTING conversations get a denormalized

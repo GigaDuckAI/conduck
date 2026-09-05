@@ -178,6 +178,32 @@ final class MacMenuBarWorkShortcutDriftGuardTests: XCTestCase {
         }
     }
 
+    /// A thread reported as VISIBLE is acknowledged as read and has its arrival
+    /// banner suppressed. The Work HUD is the whole popover, so a reply landing
+    /// behind it was never seen: neither the summon that opens onto a running
+    /// capture nor the settled-state callback may report one while Work owns the
+    /// surface — and the same callback is what restores it afterwards.
+    func testNoThreadIsReportedVisibleWhileTheWorkHUDOwnsThePopover() throws {
+        let summon = try Self.controllerFunction("showPopover")
+        XCTAssertTrue(
+            summon.contains(Self.squeezed(
+                "if dictationService.state == .idle, !coordinator.workCaptureIsActive {"
+            )),
+            "`showPopover` reports the quick thread as visible even when a Work capture owns the "
+            + "popover. The reply that lands behind the HUD is then marked read and loses its banner, "
+            + "having never been on screen."
+        )
+
+        let settled = try Self.controllerFunction("handleStateChange")
+        XCTAssertTrue(
+            settled.contains(Self.squeezed(
+                "if popover.isShown, !coordinator.workCaptureIsActive {"
+            )),
+            "The settled-state callback no longer stands down for a Work capture — and it is also the "
+            + "path that RESTORES visibility once the capture releases the surface."
+        )
+    }
+
     // MARK: - (5) The menu door and the Settings row
 
     func testTheContextMenuOffersRecordToWorkRightAfterScreenshotAndAsk() throws {

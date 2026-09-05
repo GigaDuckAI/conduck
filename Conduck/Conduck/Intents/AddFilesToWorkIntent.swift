@@ -28,6 +28,18 @@
 // one set of cards, which is the same answer the desk gives for every other
 // replayed capture.
 //
+// THE INPUT IS THE BYTES, not just the name and the size. Repair means one
+// capture REPLACES another's payload, so anything the identity cannot tell
+// apart is destroyed by the next capture it collides with: two files both
+// called `memo.txt`, both five bytes, holding different words are one id under
+// a name-and-size hash, and the second run overwrites the first person's card.
+// The digest is therefore streamed in fixed chunks (`SHA256` over a
+// `FileHandle`) rather than loaded — the memory a headless process must not
+// spend is RAM, and reading a file in 256 KB pieces spends none of it — so the
+// distinction costs one extra pass over bytes that are about to be copied
+// anyway, and a genuine replay of the SAME bytes still lands on the same id and
+// still repairs.
+//
 // The dialog is true at PUBLICATION time, not at import time. The drain below
 // is best-effort — if the process dies before it, the envelope is still queued
 // and the cards land at the next app launch — so the count spoken back is the
@@ -90,6 +102,12 @@ struct AddFilesToWorkIntent: AppIntent {
         guard !files.isEmpty else { throw WorkFileCaptureRefusal.noFiles }
 
         let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Refused HERE rather than at the queue, and before a byte is staged: a
+        // shortcut can pipe a whole document into this parameter, and the
+        // envelope's own verdict for it is a size violation the caller has to
+        // translate — untranslated it reads as "that file could not be read",
+        // which names the wrong thing and offers a remedy that cannot work.
+        if let refusal = Self.refusal(forNote: trimmedNote) { throw refusal }
 
         // Bytes that arrive WITHOUT a URL are the only ones this process writes,
         // and it writes them under a leaf `TempScratchSweeper.ownedPrefixes`
@@ -217,6 +235,20 @@ struct AddFilesToWorkIntent: AppIntent {
         return nil
     }
 
+    /// The note's own whole-set refusal, split out because it is decided before
+    /// anything is staged and asserted without a filesystem.
+    ///
+    /// The ceiling is the envelope's, single-sourced: `validateForPublication`
+    /// refuses `.noteTooLong` above it and the queue preserves what the caller
+    /// supplied rather than shortening it, so a note that is too long here is a
+    /// note that is too long there.
+    static func refusal(forNote note: String?) -> WorkFileCaptureRefusal? {
+        guard let note, note.count > WorkCaptureEnvelope.maximumNoteCharacters else {
+            return nil
+        }
+        return .noteTooLong
+    }
+
     private static func name(of file: WorkCaptureFileInput) -> String {
         let declared = file.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let declared, !declared.isEmpty { return declared }
@@ -226,7 +258,7 @@ struct AddFilesToWorkIntent: AppIntent {
     // MARK: - Identity
 
     /// The permanent name of this capture: UUIDv5 over the note and, in the
-    /// order they were handed over, each file's name and size.
+    /// order they were handed over, each file's name, size and CONTENT DIGEST.
     ///
     /// ORDER IS PART OF THE NAME, deliberately. The entry ids under this id are
     /// derived from the POSITION, so a set hashed order-insensitively would let
@@ -234,10 +266,18 @@ struct AddFilesToWorkIntent: AppIntent {
     /// order instead makes a reordered set a different capture, which is the
     /// honest answer.
     ///
-    /// Names and sizes rather than bytes: a headless process must not read a
-    /// quarter of a gigabyte to decide what to call something, and two runs
-    /// carrying identically named files of identical size over the same note
-    /// are the replay this derivation exists to catch.
+    /// THE BYTES ARE PART OF THE NAME, and they have to be. The name and size
+    /// alone are not an identity: two different `memo.txt`s of five bytes each
+    /// derive the same id, and the second capture then REPAIRS the first — the
+    /// queue republishes over the earlier cards and the bytes the person saved
+    /// an hour ago are gone. A digest is the only thing that separates "the
+    /// same set again" (repair, which is what makes a killed shortcut safe)
+    /// from "a different set that happens to be named alike".
+    ///
+    /// Bounded memory, not bounded I/O: the digest is streamed in fixed chunks
+    /// (`contentDigest(at:)`), so a 256 MB file costs a read and a constant
+    /// amount of RAM. A headless intent process must never hold a file, but it
+    /// may read one.
     static func captureIdentity(note: String?, files: [WorkCaptureFileInput]) -> UUID {
         var hasher = Insecure.SHA1()
         withUnsafeBytes(of: captureIdentityNamespace.uuid) { hasher.update(bufferPointer: $0) }
@@ -250,6 +290,9 @@ struct AddFilesToWorkIntent: AppIntent {
             hasher.update(data: Data([0x00]))
             var size = UInt64(bitPattern: file.byteCount).bigEndian
             withUnsafeBytes(of: &size) { hasher.update(bufferPointer: $0) }
+            // Fixed width, always: a digest that were sometimes absent would
+            // put a variable-length field between two names.
+            hasher.update(data: contentDigest(at: file.url))
         }
         var bytes = Array(hasher.finalize().prefix(16))
         // RFC 4122 §4.3: name-based, SHA-1 (version 5) and the standard variant.
@@ -280,6 +323,42 @@ struct AddFilesToWorkIntent: AppIntent {
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
         return Int64(size ?? 0)
     }
+
+    /// SHA-256 of a source's bytes, read in fixed chunks under its security
+    /// scope — the one thing that tells two same-named, same-sized files apart.
+    ///
+    /// `FileHandle`, never `Data(contentsOf:)`: the ceiling is 256 MB a file
+    /// and 512 MB a set, and this runs in a process the system kills without
+    /// warning. Memory here is one chunk regardless of the file's size.
+    ///
+    /// A source that cannot be read digests as a fixed sentinel rather than as
+    /// an empty file: SHA-256 never answers all-zero, so an unreadable file can
+    /// neither collide with a real one nor make the field disappear. Such a set
+    /// is refused by the queue moments later anyway — an unreadable source
+    /// never becomes a card.
+    private static func contentDigest(at url: URL) -> Data {
+        let unreadable = Data(repeating: 0, count: 32)
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return unreadable }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            let chunk: Data?
+            do {
+                chunk = try handle.read(upToCount: digestChunkBytes)
+            } catch {
+                return unreadable
+            }
+            guard let chunk, !chunk.isEmpty else { break }
+            hasher.update(data: chunk)
+        }
+        return Data(hasher.finalize())
+    }
+
+    /// 256 KB — big enough that a large file is not a syscall storm, small
+    /// enough that the ceiling on this process's memory is a rounding error.
+    private static let digestChunkBytes = 256 * 1024
 }
 
 /// Why a set of files did not become cards. Every case is a whole-set refusal:
@@ -291,6 +370,7 @@ enum WorkFileCaptureRefusal: LocalizedError, Equatable {
     case fileTooLarge(name: String)
     case setTooLarge
     case unreadableFile(name: String)
+    case noteTooLong
 
     /// The queue's verdicts, restated as the sentence the person reads. The
     /// queue refuses per rule; this maps each rule onto the one thing they can
@@ -301,6 +381,11 @@ enum WorkFileCaptureRefusal: LocalizedError, Equatable {
             self = .tooManyFiles(limit: WorkCaptureEnvelope.maximumEntryCount)
         case .emptyCapture:
             self = .noFiles
+        case .noteTooLong:
+            // Named rather than defaulted: the files are fine, and telling a
+            // person one of them could not be read sends them to re-pick a file
+            // that was never the problem.
+            self = .noteTooLong
         default:
             // `.invalidFileEntry` and every other envelope verdict reach here
             // only after the size rules above already passed, so what is left is
@@ -340,6 +425,14 @@ enum WorkFileCaptureRefusal: LocalizedError, Equatable {
             return String(
                 localized: "intent.workAddFiles.error.unreadableFile",
                 defaultValue: "“\(name)” couldn’t be read, so nothing was added to Work."
+            )
+        case .noteTooLong:
+            // The note is named, because the files are not the problem and a
+            // sentence that does not say which half to shorten is a sentence
+            // the person cannot act on.
+            return String(
+                localized: "intent.workAddFiles.error.noteTooLong",
+                defaultValue: "That note is too long to add to Work. Shorten it, then try again."
             )
         }
     }

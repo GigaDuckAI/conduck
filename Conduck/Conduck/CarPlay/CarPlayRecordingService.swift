@@ -1426,11 +1426,27 @@ final class CarPlayRecordingService {
             workCapture = secured
         }
 
+        // AUDIO CLEANUP MANDATE, caller's half. The scratch copy the Work lane
+        // wrote above lives until the speech hop takes it — `transcribe`
+        // deletes it on every one of its own exits — so the only paths that
+        // could leak it are the refusals BETWEEN the fork and that call (the
+        // custom-endpoint refusal, the key verdicts, the staleness check).
+        // Handing it over is the flag; anything else deletes it.
+        var workUploadHandedToSTT = false
+        defer {
+            if let workCapture, !workUploadHandedToSTT {
+                try? FileManager.default.removeItem(at: workCapture.audioFileURL)
+            }
+        }
+
         // A reservation lasts one deferred-notification window and the speech
         // hop below can outlast it, so a live holder has to keep asking for it.
-        // Losing it is not fatal — the attach is idempotent by capture id and
-        // the disarm is refused rather than misapplied — but it would leave a
-        // finished capture sitting in the phone's retry queue.
+        // Renewal can itself fail (a store the OS suspended, a write refused),
+        // so the hold is never ASSUMED downstream: `attachWorkNoteTranscript`
+        // re-asks `stillOwnsCapture` before it writes, because a lapsed hold
+        // can be taken by the phone's retry card — which transcribes and
+        // finishes the same recording — and this lane's words would then
+        // overwrite that surface's on the very same card.
         let workLeaseRenewal: Task<Void, Never>?
         if let workCapture {
             let token = workCapture.guardToken
@@ -1553,6 +1569,10 @@ final class CarPlayRecordingService {
         let uploadURL: URL
         if let workCapture {
             uploadURL = workCapture.audioFileURL
+            // Every refusal that could have leaked it is behind us, and the
+            // next statement that touches this URL is `transcribe`, which owns
+            // the file's deletion from here.
+            workUploadHandedToSTT = true
         } else {
             let chatUploadURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("carplay_upload_\(UUID().uuidString).m4a")
@@ -1789,6 +1809,19 @@ final class CarPlayRecordingService {
             return nil
         }
 
+        // AUDIO CLEANUP MANDATE. From here the scratch file has exactly one
+        // owner: this function until it hands the capture back, `STTClient`'s
+        // own `defer` once the caller passes it to `transcribe`, and the
+        // caller's `defer` for the refusals in between. Deleting it costs
+        // nothing the retry lane needs — `PendingRetryGuard.arm` writes its own
+        // App Group copy of the same bytes, and the in-app retry
+        // re-materialises a fresh temp file from THOSE (the metadata's
+        // `audioFileURL` is bookkeeping, never read back).
+        var handedOff = false
+        defer {
+            if !handedOff { try? FileManager.default.removeItem(at: audioFileURL) }
+        }
+
         let token = await PendingRetryGuard.arm(
             audio: compression.data,
             metadata: PendingRetryMetadata(
@@ -1855,6 +1888,9 @@ final class CarPlayRecordingService {
         guard isCurrentListen(attemptID) else { return nil }
         // Back to "Thinking…" for the speech hop the caller runs next.
         voiceControlTemplate.activateVoiceControlState(withIdentifier: VoiceState.processing)
+        // The scratch file leaves with the capture: the caller reads it for the
+        // speech hop and owns it from here.
+        handedOff = true
         return WorkNoteCapture(
             captureID: captureID,
             audioFileURL: audioFileURL,
@@ -1884,11 +1920,36 @@ final class CarPlayRecordingService {
     /// sits BETWEEN them on purpose: a session that ended under the attach
     /// still owns a finished capture, and leaving it queued would put a retry
     /// card on the phone for words that are already on the desk.
+    ///
+    /// OWNERSHIP is asked FIRST, exactly as `ConverseIntent` asks it before its
+    /// own Work write. The attach is idempotent only for IDENTICAL words: the
+    /// store compares the stored text and rewrites the row whenever it differs
+    /// (`applyWorkVoiceTranscript`). So a reservation that lapsed while the
+    /// speech hop ran — renewal is best-effort and the hop can outlast the
+    /// window — can be taken by the phone's retry card, which transcribes the
+    /// same bytes and saves its own words on this same card; writing here
+    /// afterwards would overwrite that surface's transcript with this one.
+    /// The recording is on the desk either way, so the honest line is the
+    /// saved-without-words one: the note is safe and the phone is where its
+    /// words are being finished.
     private func attachWorkNoteTranscript(
         _ capture: WorkNoteCapture,
         transcript: String,
         attemptID: UInt64
     ) async {
+        guard await PendingRetryGuard.stillOwnsCapture(capture.guardToken) else {
+            // Nothing is written and nothing is disarmed — the entry belongs to
+            // whichever surface holds it, and that surface's verdict is the one
+            // that counts.
+            Self.log.info("CarPlay Work capture overtaken; transcript not attached")
+            guard isCurrentListen(attemptID) else { return }
+            endSession(speak: Self.workNoteAcknowledgement(for: .savedWithoutWords))
+            return
+        }
+        // The ownership question suspends, and everything below it either
+        // speaks or writes.
+        guard isCurrentListen(attemptID) else { return }
+
         voiceControlTemplate.activateVoiceControlState(withIdentifier: VoiceState.saving)
         let outcome: WorkVoiceAttachOutcome
         do {

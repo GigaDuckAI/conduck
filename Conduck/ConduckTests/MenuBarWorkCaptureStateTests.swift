@@ -103,7 +103,7 @@ final class MenuBarWorkCaptureStateTests: XCTestCase {
         compose.aimAtWork()
         compose.activeText = "published"
 
-        XCTAssertTrue(compose.clearActive(ifStillEqualTo: "published"))
+        XCTAssertTrue(compose.clearCommitted("published", aimedAt: .work))
         XCTAssertTrue(compose.workText.isEmpty)
         XCTAssertEqual(compose.target, .chat,
                        "A finished Work capture hands the surface back; it is not a sticky mode.")
@@ -118,17 +118,60 @@ final class MenuBarWorkCaptureStateTests: XCTestCase {
         compose.activeText = "published"
         compose.activeText = "published and then some more"
 
-        XCTAssertFalse(compose.clearActive(ifStillEqualTo: "published"))
+        XCTAssertFalse(compose.clearCommitted("published", aimedAt: .work))
         XCTAssertEqual(compose.workText, "published and then some more")
         XCTAssertEqual(compose.target, .work,
                        "Words that survive a commit must not be handed to the gateway lane.")
+    }
+
+    /// The commit runs across an `await`, and ⌃⌘W can re-aim the surface under
+    /// it. The published words are still sitting in the slot they were typed in,
+    /// so the consume has to NAME that slot: clearing "whatever is active now"
+    /// would leave a saved private sentence in the field Chat's Return sends,
+    /// and would empty the untouched composition the person moved to instead.
+    func testACommitConsumesTheSlotItTookTheWordsFromEvenAfterTheSurfaceIsReAimed() {
+        var compose = MenuBarComposeState()
+        compose.chatText = "a private note, saved with Add to Work"
+        let aimAtCommit = compose.target          // .chat — the Chat surface's button
+        let draftAtCommit = compose.activeText
+
+        compose.aimAtWork()                        // ⌃⌘W lands while the save runs
+        compose.activeText = "something else entirely"
+
+        XCTAssertTrue(compose.clearCommitted(draftAtCommit, aimedAt: aimAtCommit))
+        XCTAssertTrue(compose.chatText.isEmpty,
+                      "Saved words must never survive in the field Chat's Return sends.")
+        XCTAssertEqual(compose.workText, "something else entirely",
+                       "The composition the person navigated to is not the one that gets emptied.")
+        XCTAssertEqual(compose.target, .work,
+                       "A commit for a slot nobody is looking at must not re-aim the surface.")
+    }
+
+    /// The mirror case: the Work surface's own Return, with ⌘⇧1 pressed under
+    /// the save. The Work slot is consumed, the Chat draft the person landed on
+    /// is untouched, and nothing hands them a surface they did not ask for.
+    func testACommitOnAParkedSlotLeavesTheSurfaceWhereTheUserPutIt() {
+        var compose = MenuBarComposeState()
+        compose.aimAtWork()
+        compose.activeText = "words for the desk"
+        let aimAtCommit = compose.target
+        let draftAtCommit = compose.activeText
+
+        compose.returnToChat()                     // ⌘⇧1 under the save
+        compose.activeText = "a chat draft"
+
+        XCTAssertTrue(compose.clearCommitted(draftAtCommit, aimedAt: aimAtCommit))
+        XCTAssertTrue(compose.workText.isEmpty,
+                      "The published Work words are consumed, so a second Return cannot save them twice.")
+        XCTAssertEqual(compose.chatText, "a chat draft")
+        XCTAssertEqual(compose.target, .chat)
     }
 
     func testTheChatLaneCommitsThroughTheSameRule() {
         var compose = MenuBarComposeState()
         compose.chatText = "sent"
 
-        XCTAssertTrue(compose.clearActive(ifStillEqualTo: "sent"))
+        XCTAssertTrue(compose.clearCommitted("sent", aimedAt: .chat))
         XCTAssertTrue(compose.chatText.isEmpty)
         XCTAssertEqual(compose.target, .chat)
     }
@@ -189,6 +232,7 @@ final class MenuBarWorkCaptureStateTests: XCTestCase {
 
     private static let popoverPath = "Conduck/MenuBar/DictationPopoverView.swift"
     private static let coordinatorPath = "Conduck/MenuBar/MenuBarCoordinator.swift"
+    private static let controllerPath = "Conduck/MenuBar/MenuBarController.swift"
 
     /// Comments cannot satisfy any assertion below, and neither can formatting:
     /// every check runs over comment-stripped, whitespace-squeezed source.
@@ -313,5 +357,151 @@ final class MenuBarWorkCaptureStateTests: XCTestCase {
             XCTAssertFalse(source.contains(forbidden),
                            "\(forbidden) has no business in the menu-bar popover.")
         }
+    }
+
+    /// The value rule above is only worth having if the commit actually uses it.
+    /// `saveQuickDraftToWork` has to snapshot the SLOT alongside the words, or
+    /// the consume it performs two `await`s later names whichever composition
+    /// the person happens to be looking at by then.
+    func testTheDeskCommitSnapshotsTheSlotItIsConsuming() throws {
+        let source = try Self.squeezedSource(at: Self.coordinatorPath)
+        let body = try RefusalLaneSource.body(
+            ofFunction: "saveQuickDraftToWork",
+            in: source,
+            path: Self.coordinatorPath
+        )
+        XCTAssertTrue(body.contains("let aimAtCommit = compose.target"),
+                      "The commit no longer snapshots the aim with the words: \(body.prefix(200))")
+        XCTAssertTrue(
+            body.contains("compose.clearCommitted(draftAtCommit, aimedAt: aimAtCommit)"),
+            "The consume no longer names the slot it published from, so re-aiming the surface during "
+            + "the save clears the wrong composition: \(body.prefix(400))"
+        )
+    }
+
+    /// The recorder is `.idle` for the whole start, which is the one state
+    /// `cancelWorkVoiceCapture` can do nothing about. Without a token the start
+    /// carries, an Esc pressed while the microphone comes up closes the popover
+    /// and the capture then begins behind it, with no surface left to stop it.
+    func testAStartCancelledUnderItsOwnSuspensionTearsTheMicrophoneDown() throws {
+        let source = try Self.squeezedSource(at: Self.coordinatorPath)
+        let begin = try RefusalLaneSource.body(
+            ofFunction: "beginWorkVoiceCapture",
+            in: source,
+            path: Self.coordinatorPath
+        )
+        guard let taken = begin.range(of: "let startToken = workVoiceStartToken"),
+              let start = begin.range(of: "await workVoiceRecorder.startRecording()"),
+              let check = begin.range(of: "guard startToken == workVoiceStartToken else"),
+              let teardown = begin.range(of: "cancelWorkVoiceCapture()") else {
+            return XCTFail("The start no longer carries a cancellable token: \(begin.prefix(500))")
+        }
+        XCTAssertTrue(taken.upperBound < start.lowerBound,
+                      "The token has to be taken BEFORE the suspension it protects.")
+        XCTAssertTrue(start.upperBound < check.lowerBound,
+                      "…and checked after it, which is where a cancellation can have landed.")
+        XCTAssertTrue(check.upperBound < teardown.lowerBound,
+                      "A start that was cancelled under itself must tear the microphone down.")
+
+        let cancel = try RefusalLaneSource.body(
+            ofFunction: "cancelWorkVoiceCapture",
+            in: source,
+            path: Self.coordinatorPath
+        )
+        XCTAssertTrue(
+            cancel.contains("workVoiceStartToken &+= 1"),
+            "The cancel no longer invalidates a start in flight, so it is a no-op for exactly the "
+            + "window in which the popover is closing: \(cancel.prefix(300))"
+        )
+    }
+
+    /// A reply that lands behind the Work HUD was never seen. Reporting its
+    /// thread as visible acknowledges it as read AND suppresses its banner, so
+    /// the capture has to take the thread off screen when it takes the surface.
+    func testStartingAWorkCaptureTakesTheVisibleThreadOffScreen() throws {
+        let source = try Self.squeezedSource(at: Self.coordinatorPath)
+        let begin = try RefusalLaneSource.body(
+            ofFunction: "beginWorkVoiceCapture",
+            in: source,
+            path: Self.coordinatorPath
+        )
+        XCTAssertTrue(
+            begin.contains("setPopoverVisibleConversation(nil)"),
+            "The Work HUD takes the popover without releasing the thread underneath it, which is then "
+            + "marked read for a reply nobody saw: \(begin.prefix(400))"
+        )
+    }
+
+    /// The click-away rule, asserted where it can actually be broken.
+    ///
+    /// `testAClickAwayDismissalReleasesNeitherTheWordsNorTheAim` above proves
+    /// that the VALUE releases nothing on a dismissal — but a dismissal is the
+    /// ABSENCE of a mutation, so that test passes whether or not the production
+    /// close path adds one. The two hooks every popover close runs through are
+    /// where such a mutation would appear, and there it would be the exact
+    /// failure the two-slot design exists to prevent: an outside click is an
+    /// IMPLICIT gesture, and a private sentence taken by one is a sentence the
+    /// person never chose to lose. Esc is the EXPLICIT bail and routes through
+    /// `cancelActiveCapture`, which is not this path — so that name is forbidden
+    /// here too, since routing the close hook into it would silently turn every
+    /// click-away into a discard.
+    func testNoPopoverCloseHookTouchesTheWorkComposition() throws {
+        let coordinatorHook = try RefusalLaneSource.body(
+            ofFunction: "popoverDidCloseHook",
+            in: try Self.squeezedSource(at: Self.coordinatorPath),
+            path: Self.coordinatorPath
+        )
+        let controllerHook = try RefusalLaneSource.body(
+            ofFunction: "popoverDidClose",
+            in: try Self.squeezedSource(at: Self.controllerPath),
+            path: Self.controllerPath
+        )
+
+        // Control: prove both extractions landed on the real hook bodies, or
+        // every `AssertFalse` below is a claim about an empty string.
+        XCTAssertTrue(coordinatorHook.contains("resetQuickDestinationAfterTurn()"),
+                      "The coordinator's close hook is not the body this guard read: \(coordinatorHook.prefix(200))")
+        XCTAssertTrue(controllerHook.contains("coordinator.setPopoverVisibleConversation(nil)"),
+                      "The controller's close hook is not the body this guard read: \(controllerHook.prefix(200))")
+
+        for (path, hook) in [(Self.coordinatorPath, coordinatorHook),
+                             (Self.controllerPath, controllerHook)] {
+            for forbidden in [
+                "discardWorkOnlyCompose",
+                "closeWorkOnlyCompose",
+                "discardActive",
+                "clearCommitted",
+                "returnToChat",
+                "quickWorkDraft",
+                "compose.workText",
+                "cancelActiveCapture"
+            ] {
+                XCTAssertFalse(
+                    hook.contains(forbidden),
+                    "The popover close hook in \(path) names `\(forbidden)`. A close is an implicit "
+                    + "dismissal that must PRESERVE the composition — dropping the words, or merely "
+                    + "dropping the aim, hands a private sentence to the field Chat's Return sends. "
+                    + "Hook: \(hook.prefix(400))"
+                )
+            }
+        }
+    }
+
+    /// A read-only shared-reply override hides the compose surface outright, so
+    /// ⌃⌘W onto one would show neither the Work field nor the words parked in
+    /// it. Clearing it is a DISPLAY change; arming a chat capture here is not
+    /// available to this lane at all.
+    func testWorkComposeClearsTheReadOnlyOverrideWithoutArmingAChatCapture() throws {
+        let source = try Self.squeezedSource(at: Self.coordinatorPath)
+        let body = try RefusalLaneSource.body(
+            ofFunction: "openComposeForWorkOnly",
+            in: source,
+            path: Self.coordinatorPath
+        )
+        XCTAssertTrue(body.contains("clearPopoverOverride()"),
+                      "⌃⌘W over a read-only reply still has no compose surface: \(body)")
+        XCTAssertTrue(body.contains("compose.aimAtWork()"), body)
+        XCTAssertFalse(body.contains("armQuickCapture"),
+                       "The Work lane may never latch the chat lane's destination snapshot: \(body)")
     }
 }

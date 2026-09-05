@@ -277,6 +277,15 @@ struct ConduckApp: App {
                 MainWindowView(coordinator: appDelegate.coordinator)
             }
                 .frame(minWidth: 880, minHeight: 600)
+                // The window a quiet Mac opens FOR the Work voice intent has to
+                // open ON Work. The intent performs before this window exists,
+                // so its `.showWorkboard` is delivered to nobody and the window
+                // would come up on Chats with the request still pending — the
+                // composer will not claim a request it cannot present. Reveal
+                // only; the composer still consumes.
+                .onAppear {
+                    WorkVoiceCaptureLaunchRoute.shared.revealWorkIfPending()
+                }
                 .onReceive(NotificationCenter.default.publisher(for: .openOnboardingWindow)) { _ in
                     openWindow(id: "onboarding")
                 }

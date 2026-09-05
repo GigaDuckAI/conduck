@@ -1842,6 +1842,13 @@ final class MenuBarCoordinator {
     /// frame of Chat chrome over words meant for the desk.
     func openComposeForWorkOnly() {
         quickWorkCaptureFeedback = nil
+        // A read-only shared-reply override (a dot-click peek at another
+        // thread) hides the compose surface entirely, so ⌃⌘W onto an open
+        // override would show neither the Work field nor the words parked in
+        // it. Dropping the override is a DISPLAY change only — it arms no
+        // capture and touches no destination, unlike the Chat lane's
+        // `armQuickCapture()`, which a Work composition may never run.
+        clearPopoverOverride()
         compose.aimAtWork()
     }
 
@@ -1896,6 +1903,15 @@ final class MenuBarCoordinator {
     /// and the recording that justified it.
     private(set) var isStartingWorkVoiceCapture = false
 
+    /// Identifies the start that is currently in flight, so a cancellation
+    /// pressed DURING it can be honored once the microphone finally comes up.
+    ///
+    /// The recorder is `.idle` for the whole start, which is the one state
+    /// `cancelWorkVoiceCapture` has nothing to act on — so without this token an
+    /// Esc that closed the popover mid-start would be followed, moments later,
+    /// by a live microphone with no surface anywhere to stop it.
+    private var workVoiceStartToken = 0
+
     /// Start a Work capture. Returns whether the microphone actually came up.
     ///
     /// A refusal is surfaced HERE rather than left to the caller, because the
@@ -1916,8 +1932,26 @@ final class MenuBarCoordinator {
             self?.noteWorkCaptureFinished(result)
         }
         isStartingWorkVoiceCapture = true
+        workVoiceStartToken &+= 1
+        let startToken = workVoiceStartToken
+        // The HUD is the surface from here on, so whatever thread the popover
+        // was showing is no longer being looked at. Leaving it marked visible
+        // would let a reply that lands behind the HUD be acknowledged as read
+        // and have its banner suppressed. `MenuBarController.handleStateChange`
+        // re-reports it when the capture releases the surface.
+        setPopoverVisibleConversation(nil)
         await workVoiceRecorder.startRecording()
         isStartingWorkVoiceCapture = false
+
+        // Cancelled under the start (Esc, the HUD's ✕, a dismissal): the
+        // microphone that just came up belongs to a capture nobody is watching,
+        // so tear it down here rather than leave it running behind a closed
+        // popover. A refusal is torn down the same way and says nothing — the
+        // person already withdrew the request.
+        guard startToken == workVoiceStartToken else {
+            cancelWorkVoiceCapture()
+            return false
+        }
 
         if case .recording = workVoiceRecorder.state { return true }
         presentWorkVoiceStartRefusal()
@@ -1954,6 +1988,10 @@ final class MenuBarCoordinator {
     /// none of which touches a card already on the desk or the queued recording
     /// behind an unfinished capture, both of which outlive this popover.
     func cancelWorkVoiceCapture() {
+        // Invalidate a start still in its suspension. The recorder reads `.idle`
+        // throughout it, so the switch below has nothing to cancel — the token
+        // is what makes this press reach the microphone that comes up after it.
+        workVoiceStartToken &+= 1
         switch workVoiceRecorder.state {
         case .recording:
             workVoiceRecorder.cancelRecording()
@@ -2024,6 +2062,11 @@ final class MenuBarCoordinator {
     /// are one code path: there is exactly one way words reach the desk from
     /// this popover, and it publishes an envelope rather than writing a card.
     func saveQuickDraftToWork() {
+        // The SLOT is snapshotted with the words. ⌃⌘W / ⌘⇧1 can re-aim the
+        // surface while the publication runs, and a consume that trusted the
+        // aim it finds on return would clear the wrong composition and leave
+        // the saved words in the other one.
+        let aimAtCommit = compose.target
         let draftAtCommit = compose.activeText
         let thought = WorkboardWorkspaceCaptureLogic.normalizedThought(draftAtCommit)
         let screenshotAtCommit = pendingCaptureImage
@@ -2054,7 +2097,7 @@ final class MenuBarCoordinator {
                 // the exact values that were published; text or a screenshot added
                 // during the await belongs to the next capture and must survive —
                 // and a composition that kept its words keeps its aim with them.
-                compose.clearActive(ifStillEqualTo: draftAtCommit)
+                compose.clearCommitted(draftAtCommit, aimedAt: aimAtCommit)
                 if pendingCaptureImage == screenshotAtCommit { clearPendingCaptureImage() }
                 if quickDraft.isEmpty, pendingCaptureImage == nil {
                     resetQuickDestinationAfterTurn()
@@ -2560,17 +2603,26 @@ struct MenuBarComposeState: Equatable, Sendable {
 
     /// The text the compose surface is editing right now.
     var activeText: String {
-        get {
-            switch target {
-            case .chat: return chatText
-            case .work: return workText
-            }
+        get { text(for: target) }
+        set { setText(newValue, for: target) }
+    }
+
+    /// One slot's words, named by the aim that owns them. A commit runs across
+    /// an `await` during which the surface can be re-aimed, so every consumer
+    /// that snapshotted a composition has to be able to name the slot it took
+    /// the words from rather than trusting whatever is on screen when it
+    /// returns.
+    func text(for aim: MenuBarComposeTarget) -> String {
+        switch aim {
+        case .chat: return chatText
+        case .work: return workText
         }
-        set {
-            switch target {
-            case .chat: chatText = newValue
-            case .work: workText = newValue
-            }
+    }
+
+    private mutating func setText(_ value: String, for aim: MenuBarComposeTarget) {
+        switch aim {
+        case .chat: chatText = value
+        case .work: workText = value
         }
     }
 
@@ -2590,17 +2642,26 @@ struct MenuBarComposeState: Equatable, Sendable {
         target = .chat
     }
 
-    /// Consume exactly the text that was committed, and answer whether it was.
+    /// Consume exactly the composition that was committed — the words AND the
+    /// slot they were written in — and answer whether it was.
     ///
-    /// A commit runs across an `await`, and anything typed during it belongs to
-    /// the NEXT capture — so a composition that changed under the write keeps
-    /// both its words and its aim, and only an unchanged one is cleared and
-    /// released back to Chat.
+    /// Both halves of that snapshot are load-bearing, because a commit runs
+    /// across an `await` and two different things can happen under it. The
+    /// person can TYPE, and those words belong to the next capture, so a slot
+    /// that changed keeps both its words and its aim. Or the person can RE-AIM
+    /// the surface (⌃⌘W onto Work, ⌘⇧1 back to Chat) — the published words are
+    /// still sitting in the slot they were typed in, so consuming "whatever is
+    /// active now" would leave them behind for the other lane's Return to pick
+    /// up and would empty an innocent composition instead.
+    ///
+    /// The surface is handed back to Chat only when it is still showing the
+    /// slot that was consumed: a composition the person navigated to is never
+    /// re-aimed under them.
     @discardableResult
-    mutating func clearActive(ifStillEqualTo committed: String) -> Bool {
-        guard activeText == committed else { return false }
-        activeText = ""
-        target = .chat
+    mutating func clearCommitted(_ committed: String, aimedAt aim: MenuBarComposeTarget) -> Bool {
+        guard text(for: aim) == committed else { return false }
+        setText("", for: aim)
+        if target == aim { target = .chat }
         return true
     }
 

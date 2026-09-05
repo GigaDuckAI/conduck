@@ -1,0 +1,54 @@
+{
+ "slice": "Watch → Work (c1/c2/c3)",
+ "verdict": "findings",
+ "findings": [
+  {
+   "id": "S1",
+   "severity": "major",
+   "title": "Live publication failures delete the only recording",
+   "file": "Conduck/ConduckWatch Watch App/Services/WatchRecordingService.swift:1832",
+   "claim": "A retryable phone desk-write failure causes the live wrist relay to delete its unacknowledged Work recording.",
+   "evidence": "The phone sends workPublicationFailure (.workDeskWriteFailed, code 78) at AppleSpeechRelayCoordinator.swift:426. AppError.swift:1179 classifies it as retryable and :1443 reconstructs it correctly. However, runRelay only defers sttProviderUnreachable and sttKeyUnreadable before reaching 'guard AppleRelayPendingQueue.shared.claimEntry(requestID: requestID) != nil'. AppleRelayPendingQueue.swift:256 deletes the claimed audio file.",
+   "scenario": "Record a Work note with the phone reachable; its phase-1 store write fails before publication. Code 78 arrives while the live continuation exists. The wrist claims and deletes the clip, while the phone's defer also removes its temporary file. No durable recording remains.",
+   "fix": "Before the live failure claims, defer retryable Work errors and retain the queue entry; preserve Chat's existing behavior.",
+   "refutationAttempt": "The deferred queue correctly checks isRetryable, but handleReply resumes an existing continuation directly, bypassing that protection. The phone's publication test checks the error classification, not this live consumer."
+  },
+  {
+   "id": "S2",
+   "severity": "major",
+   "title": "Terminal replies from older phones destroy Work captures",
+   "file": "Conduck/ConduckWatch Watch App/Services/AppleRelayPendingQueue.swift:310",
+   "claim": "Work entries still inherit Chat's destructive terminal-error handling despite having no durable acknowledgement.",
+   "evidence": "reconcile checks only 'Self.leavesEntryQueued(after: error)' before claiming; that predicate is '(error as? AppError)?.isRetryable ?? false' at :505. drain likewise claims terminal errors at :462. Neither failure path checks entry.destination. The live model-not-installed branch also claims at WatchRecordingService.swift:1818.",
+   "scenario": "A new wrist queues a Work recording while disconnected. An older phone later receives it with no usable speech model and returns code 18. That phone has no Work publication branch and deletes its temporary audio. Reconciliation treats code 18 as terminal and deletes the wrist's sole remaining copy, without saving words or receiving result.work.",
+   "fix": "Make failure retention destination-specific across live, reconciliation and drain paths: retain unacknowledged Work recordings until durable settlement or explicit discard, while preserving Chat's terminal-error behavior.",
+   "refutationAttempt": "A current phone often publishes audio before transcription fails, but the supported older-phone scenario has no such publication. The words-only fallback cannot rescue an error reply because it runs exclusively on success."
+  },
+  {
+   "id": "S3",
+   "severity": "minor",
+   "title": "A late acknowledgement marks a different capture as saved",
+   "file": "Conduck/ConduckWatch Watch App/Services/WatchRecordingService.swift:794",
+   "claim": "Deferred settlement updates the visible Work outcome without correlating it to the capture being displayed.",
+   "evidence": "AppleRelayPendingQueue.swift:653 calls 'noteWorkCaptureSettled(settlement)' without the entry's requestID. That method unconditionally assigns 'workCaptureOutcome = .saved' or '.savedWordsOnly'. WatchWorkCaptureView.swift:61 renders this shared outcome; its requestID is used only for logging.",
+   "scenario": "Record Work captures A and B while delivery is unavailable; both time out and remain queued. Leave B's deferred-outcome screen open. A's delayed acknowledgement arrives while B remains undelivered. The service is idle, so reconciliation proceeds and B's screen changes to 'Saved to Work.'",
+   "fix": "Associate the displayed outcome with its relay requestID and update it only for a matching settlement; retain notifications for other captures.",
+   "refutationAttempt": "The busy guard blocks settlement during recording or uploading, but deferred Work captures explicitly return to idle. Distinct navigation nonces do not help because the view reads an unscoped singleton outcome."
+  }
+ ],
+ "checkedInvariants": [
+  "Both Wire enums contain the same 14 ordered literals; the original 11 remain unchanged.",
+  "Chat success payloads retain exactly three keys; successful Work replies and cached replays carry result.work.",
+  "Both inline-message and transferFile ingress thread destination.",
+  "Successful Work settlement cannot invoke either converse hop; claims remain the onward-hop permit for Chat.",
+  "Old-phone successful transcripts use stable UUIDv5 note IDs and await persistence before claiming or announcing.",
+  "Work entries are exempt from age and count eviction; new Work capture checks capacity before recording.",
+  "Phone publication precedes transcription, derives captureID deterministically and stamps sourceDevice as watch.",
+  "attachTranscript outcomes are explicitly switched; attachment exceptions are logged.",
+  "Save to Work is a separate button with distinct Hashable routes; disabled and busy captions remain.",
+  "Watch desk insertion scanning identifies only WorkboardCaptureIntent.swift.",
+  "No Watch test file was added; all modified Watch test files already belong to the target.",
+  "Updated blackout source-guard anchors and counts are satisfied."
+ ],
+ "notes": "Reviewed ec8b27f..692608d against the binding plan and implementation notes. No files modified; no build or simulator test suites run. Targeted read-only source checks passed. Historical memory supplied orientation only; findings rely on current source.\n"
+}

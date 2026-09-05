@@ -134,6 +134,44 @@ final class WorkboardGalleryPagesTests: XCTestCase {
         XCTAssertEqual(empty.startIndex, 0)
     }
 
+    // MARK: - Which card the tap actually stands for
+
+    /// The desk wins over the snapshot the gesture carried. Presentation runs
+    /// after the tap, so a peer's reattach can move the card in between, and the
+    /// availability that decides what happens must be the current one.
+    func testTheDesksOwnCardAnswersForATapTakenBeforeItChanged() {
+        let cardID = UUID()
+        let tapped = WorkboardMaterialSnapshot(
+            id: cardID, kind: .image, name: "Sketch", availability: .available
+        )
+        let refreshed = WorkboardMaterialSnapshot(
+            id: cardID, kind: .image, name: "Sketch", availability: .syncPending
+        )
+
+        let resolved = PersonalWorkbenchRouter.currentDeskCard(
+            in: [image("Photo 1"), refreshed],
+            for: tapped
+        )
+
+        XCTAssertEqual(resolved.availability, .syncPending,
+                       "the card the desk holds is the one the gate answers for")
+    }
+
+    /// And the card the desk no longer carries stays itself, so a board that
+    /// reloaded underneath the gesture never turns into a dead tap.
+    func testATapOnACardTheDeskNoLongerCarriesResolvesToItself() {
+        let tapped = image("Photo 9")
+
+        XCTAssertEqual(
+            PersonalWorkbenchRouter.currentDeskCard(in: (1...3).map { image("Photo \($0)") }, for: tapped).id,
+            tapped.id
+        )
+        XCTAssertEqual(
+            PersonalWorkbenchRouter.currentDeskCard(in: [], for: tapped).id,
+            tapped.id
+        )
+    }
+
     // MARK: - What one page carries
 
     /// The label VoiceOver speaks is the card's own name — the words the person

@@ -1,0 +1,61 @@
+{
+ "slice": "desk cards + preview",
+ "verdict": "findings",
+ "findings": [
+  {
+   "id": "S1",
+   "severity": "major",
+   "title": "Thumbnail backfill can persist vault content through an older duplicate",
+   "file": "Conduck/Conduck/Services/ConversationStore+Workboard.swift:2723",
+   "claim": "Backfill can decode a newer vault payload and write its thumbnail onto an older CloudKit-mirrored synced row.",
+   "evidence": "Candidates retain a physical row's contentHash and byteSize, but decoding calls \"loadWorkMaterialPayload(id: candidate.id)\". That loader selects the newest physical row at lines 2788–2809 and may return vault bytes. The write at lines 2753–2758 checks \"namesSyncedPayload(...candidate.contentHash...candidate.byteSize)\" against each destination row without verifying that the decoded bytes match that candidate.",
+   "scenario": "CloudKit leaves two image rows with the same ID: older synced row A has hash A and no thumbnail; newer canonical row B names a readable vault image. Selection chooses A, loading reads B, and the write accepts A's unchanged metadata, persisting B's thumbnail into the synced store.",
+   "fix": "Load the synced blob using the candidate's exact ID/hash/size pairing instead of the general material loader; retain the transaction-time row checks.",
+   "refutationAttempt": "Checked canonical-row ordering, duplicate handling, vault reconciliation, and the existing duplicate-thumbnail test. Reads deliberately preserve physical duplicates; reconciliation only sweeps unreferenced vault files. The test duplicates identical payload metadata, so it cannot expose this mismatch. The destination-row check does not validate the loaded payload."
+  },
+  {
+   "id": "S2",
+   "severity": "minor",
+   "title": "Gallery fallback bypasses a refreshed card's availability",
+   "file": "Conduck/Conduck/Views/Workboard/PersonalWorkbenchView.swift:506",
+   "claim": "A stale readable tap can reopen an image that the current desk already identifies as syncPending.",
+   "evidence": "After filtering the desk through WorkboardCardActionPolicy, selection uses \"let materials = openable.contains { $0.id == tapped.id } ? openable : [tapped]\". This treats a present-but-refused card as absent. The router's earlier guard checks only the captured tapped snapshot; opening is scheduled asynchronously at line 847.",
+   "scenario": "A localOnly image is tapped; before the presentation task runs, a peer's reattachment updates the desk's same-ID card to syncPending. The current card is filtered out, but the fallback reinstates the old readable snapshot and opens its thumbnail in the gallery.",
+   "fix": "When the tapped ID exists in the current desk, use that current card and refuse presentation if its availability disallows opening. Restrict the standalone fallback to genuinely absent, openable cards.",
+   "refutationAttempt": "The existing tests cover a directly tapped syncPending snapshot and an ID completely absent from the desk. Neither covers an old readable snapshot whose same-ID current card is refused. The initial router guard therefore does not close this path."
+  },
+  {
+   "id": "S3",
+   "severity": "minor",
+   "title": "Vault images lose their existing Share action",
+   "file": "Conduck/Conduck/Views/Workboard/PersonalWorkbenchView.swift:1221",
+   "claim": "Routing every image into the gallery removes sharing for vault images despite Slice A3's explicit requirement to keep ShareLink.",
+   "evidence": "The image presentation now renders \"AttachmentFullScreenView(... fullDecodeMaxPixel: 4096)\". The diff deletes the former file sheet's \"ShareLink(item: url)\", and no ShareLink remains in the main app. The gallery offers dismissal and Retry; the card menu offers no sharing replacement.",
+   "scenario": "Open an oversized image stored in the vault and try to export it. At ec8b27f its file preview supplied Share; at HEAD neither the gallery nor the card provides that action.",
+   "fix": "Restore sharing for readable images through a ShareLink backed by a disposable preview copy, preserving availability checks and file-lifetime rules.",
+   "refutationAttempt": "Quick Look retains system sharing for files and recordings, but images always bypass Quick Look. The a3 fixnote acknowledges the removal as an unresolved question; it does not supersede the binding plan's \"Keep ShareLink\" requirement."
+  },
+  {
+   "id": "S4",
+   "severity": "minor",
+   "title": "macOS never releases gallery neighbours under memory pressure",
+   "file": "Conduck/Conduck/Views/Conversation/AttachmentFullScreenView.swift:174",
+   "claim": "The required memory-pressure reduction of gallery residency is implemented only on iOS.",
+   "evidence": "\"residencyRadius\" starts at 1, and its only subsequent assignment, \"residencyRadius = 0\", is inside \"#if os(iOS)\" around UIApplication.didReceiveMemoryWarningNotification. There is no macOS pressure handler.",
+   "scenario": "On macOS, resident pages hold three large decoded images when memory pressure occurs. The radius remains 1, retaining neighbouring images instead of releasing them as required by plan line 25.",
+   "fix": "Add a macOS memory-pressure observer that reduces residencyRadius to zero for the remainder of the presentation.",
+   "refutationAttempt": "Checked every assignment to residencyRadius and searched the app for another memory-pressure handler. None covers macOS. The strict 4096-pixel bound limits individual images but does not release neighbouring images."
+  }
+ ],
+ "checkedInvariants": [
+  "Capture and reattachment thumbnail generation uses the staged storage mode, preserves the syncedPayload persistence gate, and decodes through an @concurrent helper before the write context.",
+  "Backfill writes no updatedAt, visits every matching physical row, limits payload attempts to 96 with four concurrent jobs, and excludes overlapping passes on the same store instance.",
+  "Ordinary gallery selection preserves board order and filters unavailable images; the stale-tap exception is reported above.",
+  "Work originals use strict bounded ImageIO decoding; loader/decode failures expose Retry, and residency cancellation checks precede image assignment.",
+  "Quick Look preserves platform reclaim policies and stale-token disposal; destination changes invalidate Work claims, while Chat retains its visibility gate and cancellation.",
+  "Non-image card bodies, small-card layout, availability glyphs, context menus, and inline tile geometry match the base; accessibility composition retains kind, name, and exceptional availability.",
+  "Exactly one workboardViewModel.load() occurs in PersonalWorkbenchView.swift.",
+  "Bidirectional catalog checks found no missing or orphaned workboard.* or pendingRetry.* keys; both new gallery keys exist."
+ ],
+ "notes": "Reviewed ec8b27f..692608d and the relevant plan, fixnotes, source, and tests. Checks were read-only source comparisons and in-memory predicate traces; no builds or XCTest suites were run. The worktree remains clean."
+}

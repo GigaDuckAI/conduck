@@ -222,6 +222,78 @@ final class WorkboardOpenPathTests: XCTestCase {
         }
     }
 
+    /// The tap carried a snapshot; the desk moved before the presentation ran.
+    ///
+    /// `present` is scheduled from the gesture rather than run inside it, so a
+    /// peer's reattach can land in between and put the card back on `.syncPending`
+    /// while its replacement bytes travel. The gate has to answer for the card
+    /// the desk holds NOW — with the stale snapshot it passes, and the gallery
+    /// then shows the card's thumbnail as though the picture had arrived.
+    func testAStaleReadableTapIsRefusedWhenTheDeskCardIsNoLongerReadable() async throws {
+        let router = PersonalWorkbenchRouter()
+        let cardID = UUID()
+        // What the gesture captured: readable, with a preview.
+        let tapped = WorkboardMaterialSnapshot(
+            id: cardID,
+            kind: .image,
+            name: "Kitchen sketch",
+            mimeType: "image/jpeg",
+            thumbnailData: Data([0xFF, 0xD8, 0xFF, 0xE0]),
+            availability: .available
+        )
+        // What the desk holds by the time the presentation runs.
+        let refreshed = WorkboardMaterialSnapshot(
+            id: cardID,
+            kind: .image,
+            name: "Kitchen sketch",
+            mimeType: "image/jpeg",
+            thumbnailData: Data([0xFF, 0xD8, 0xFF, 0xE0]),
+            availability: .syncPending
+        )
+        router.deskMaterials = { [
+            WorkboardMaterialSnapshot(kind: .image, name: "Photo 1", availability: .available),
+            refreshed
+        ] }
+
+        await router.present(tapped)
+
+        XCTAssertNil(
+            router.materialPresentation,
+            "the desk's own verdict decides, not the snapshot the tap carried"
+        )
+        let message = try XCTUnwrap(
+            router.previewNotice?.message,
+            "the refusal is explained, and with the CURRENT state's words"
+        )
+        XCTAssertFalse(message.isEmpty)
+    }
+
+    /// The positive control for the same resolution: a tap whose card the desk
+    /// no longer carries at all still opens. A board that reloaded underneath
+    /// the gesture must not turn into a dead tap on a card that is on screen.
+    func testATapOnACardTheDeskNoLongerCarriesStillOpens() async throws {
+        let router = PersonalWorkbenchRouter()
+        let photo = WorkboardMaterialSnapshot(
+            kind: .image,
+            name: "Photo 9",
+            mimeType: "image/jpeg",
+            availability: .available
+        )
+        router.deskMaterials = { [
+            WorkboardMaterialSnapshot(kind: .image, name: "Photo 1", availability: .available)
+        ] }
+
+        await router.present(photo)
+
+        XCTAssertNil(router.previewNotice)
+        let presentation = try XCTUnwrap(router.materialPresentation)
+        guard case .imageGallery(let pages, let startIndex) = presentation.content else {
+            return XCTFail("an image card presents as a gallery")
+        }
+        XCTAssertEqual(pages.map(\.id), [photo.id], "it opens alone, on the card that was tapped")
+        XCTAssertEqual(startIndex, 0)
+    }
+
     // MARK: - What the preview copy is called
 
     /// A card's name is a TITLE — a recording's is "Voice note" — while Quick

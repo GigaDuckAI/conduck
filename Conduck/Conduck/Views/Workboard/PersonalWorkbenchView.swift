@@ -394,7 +394,7 @@ final class PersonalWorkbenchRouter {
         self.filePreview = filePreview ?? FilePreviewCoordinator()
     }
 
-    func present(_ material: WorkboardMaterialSnapshot) async {
+    func present(_ tapped: WorkboardMaterialSnapshot) async {
         closeMaterial()
         let requestID = UUID()
         materialRequestID = requestID
@@ -402,6 +402,15 @@ final class PersonalWorkbenchRouter {
         // `present` that follows the load: completion order must not decide
         // which file wins the application-shared Quick Look panel.
         let previewToken = filePreview.beginRequest()
+        let desk = deskMaterials()
+        // The card as the desk holds it NOW. Presentation is scheduled from the
+        // tap rather than run inside it, so the snapshot the gesture carried can
+        // already be one write behind: a peer's reattach landing in that gap
+        // moves the card to `.syncPending` while its replacement bytes travel.
+        // The gate below has to answer for the card that exists, not for the one
+        // that was tapped — otherwise a stale readable snapshot walks a refused
+        // card into the gallery and presents its thumbnail as the picture.
+        let material = Self.currentDeskCard(in: desk, for: tapped)
         do {
             // Opening, previewing, sharing and playing all run through this one
             // presenter, so the readability gate belongs HERE and not only in
@@ -437,8 +446,11 @@ final class PersonalWorkbenchRouter {
             // No bytes are read here: the gallery resolves each page's original
             // itself, when that page is the one being looked at.
             case .image:
+                // The SAME desk read the gate above answered from: reading it
+                // twice would let a card pass the gate in one snapshot and be
+                // filtered out of the pages in the next.
                 let selection = Self.gallerySelection(
-                    desk: deskMaterials(),
+                    desk: desk,
                     tapped: material
                 )
                 commit(
@@ -485,6 +497,21 @@ final class PersonalWorkbenchRouter {
         filePreview.cancelPendingPresentation()
     }
 
+    /// The card the desk holds under the tapped card's id, or the tapped card
+    /// itself when the desk no longer carries it.
+    ///
+    /// The tap's snapshot is a value copied at gesture time; the desk is read
+    /// when the presentation actually runs. Where the two disagree the DESK
+    /// wins — it is the state the person's other devices have already changed —
+    /// and the fall back to the tapped card keeps a board that reloaded
+    /// underneath the gesture from turning into a dead tap.
+    static func currentDeskCard(
+        in desk: [WorkboardMaterialSnapshot],
+        for tapped: WorkboardMaterialSnapshot
+    ) -> WorkboardMaterialSnapshot {
+        desk.first { $0.id == tapped.id } ?? tapped
+    }
+
     /// The pages a tap on one image card opens, and where that tap landed.
     ///
     /// The desk is filtered through the SAME gate the tap itself passed, so a
@@ -495,6 +522,12 @@ final class PersonalWorkbenchRouter {
     /// A tapped card that is not in the desk it was tapped on (a board reloaded
     /// underneath the gesture) still opens, alone: refusing it would turn a
     /// stale read into a dead tap on a card the person is looking at.
+    ///
+    /// That lone-card fallback is for an ABSENT card only. `present` resolves
+    /// the tap against this same desk through `currentDeskCard` and refuses a
+    /// card the desk still holds but the policy will not open, so a card that
+    /// was filtered out of the pages can never be reinstated here by a snapshot
+    /// taken before it changed.
     static func gallerySelection(
         desk: [WorkboardMaterialSnapshot],
         tapped: WorkboardMaterialSnapshot

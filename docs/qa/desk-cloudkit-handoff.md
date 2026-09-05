@@ -1,5 +1,7 @@
 # Desk + CloudKit Byte Sync — Handoff
 
+*Superseded as the current handoff by [`docs/qa/work-usability/handoff.md`](work-usability/handoff.md), which carries this document's release gates forward; the wave described below is still the foundation everything there sits on.*
+
 **Status: BUILT, REVIEWED, MERGED WITH `main`, awaiting founder Gate-2 QA.** Branch `feature/agent-workboard` (worktree `.codex/worktrees/conduck-agent-workboard`, whose root IS the Conduck app repo). Everything is local — never pushed. Six adversarial Codex review rounds ran over the build; every finding was confirmed by an independent fixer with a measured counterfactual, none was refuted, and the review loop was closed by founder decision after round 6 (its residue is recorded under §Open items, not fixed). The `/code-review` gate is satisfied by that verification; do not run it again.
 
 ## What this branch is

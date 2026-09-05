@@ -826,6 +826,17 @@
         }
       }
     },
+    "carplay.hint.captureStartFailed.detail.work" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap Add to Work to try again."
+          }
+        }
+      }
+    },
     "carplay.hint.captureStartFailed.title" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6687,6 +6698,17 @@
         }
       }
     },
+    "intent.workAddFiles.error.noteTooLong" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That note is too long to add to Work. Shorten it, then try again."
+          }
+        }
+      }
+    },
     "intent.workAddFiles.error.setTooLarge" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -6753,18 +6775,18 @@
         }
       }
     },
-    "intent.workRecordNote.description" : {
+    "intent.workVoiceNote.description" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Open Work and start recording a voice note. Nothing is sent to an AI."
+            "value" : "Open Work and start recording a voice note. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation."
           }
         }
       }
     },
-    "intent.workRecordNote.title" : {
+    "intent.workVoiceNote.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {

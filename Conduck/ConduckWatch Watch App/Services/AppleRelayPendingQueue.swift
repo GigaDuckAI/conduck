@@ -289,13 +289,21 @@ final class AppleRelayPendingQueue {
     ///     became false) + error notification (claim already removed the
     ///     entry + audio).
     func reconcile(requestID: String, outcome: RelayReplyOutcome) async {
-        if case .failure(let error) = outcome,
-           Self.leavesEntryQueued(after: error) {
-            WatchLog.note(.queue, "queue.reconcile.requeued", [
-                "id": WatchLog.shortID(requestID),
-                "code": error.errorCode
-            ])
-            return
+        if case .failure(let error) = outcome {
+            // Read the entry's PERSISTED destination BEFORE deciding: an
+            // unacknowledged Work capture is retained after any failure, and the
+            // claim below is what deletes the recording. Peeking is what makes
+            // that possible — claiming is the only other way to see an entry,
+            // and by then the audio is gone. A missing entry reads as chat,
+            // which is what the claim-nil drop already assumes.
+            let destination = peekEntry(requestID: requestID)?.captureDestination ?? .chat
+            if Self.leavesEntryQueued(after: error, destination: destination) {
+                WatchLog.note(.queue, "queue.reconcile.requeued", [
+                    "id": WatchLog.shortID(requestID),
+                    "code": error.errorCode
+                ])
+                return
+            }
         }
         guard WatchRecordingService.shared.canAcceptDeferredDispatch else {
             WatchLog.note(.queue, "queue.reconcile.deferred", ["id": WatchLog.shortID(requestID)])
@@ -448,11 +456,17 @@ final class AppleRelayPendingQueue {
                 // requestID is unchanged, so the iPhone's ledger converges the
                 // re-fire. The entry (and its outstanding transfer, if any)
                 // stays put.
-                if Self.leavesEntryQueued(after: error) {
+                if Self.leavesEntryQueued(after: error, destination: entry.captureDestination) {
                     WatchLog.note(.queue, "queue.drain.requeued", [
                         "id": WatchLog.shortID(requestID),
                         "code": (error as? AppError)?.errorCode ?? -1
                     ])
+                    // A Work entry retained on a TERMINAL verdict is a statement
+                    // about this one clip, not about the iPhone — and Work never
+                    // ages out, so stopping here would wedge every entry behind
+                    // it forever. Move on instead; the next trigger re-fires
+                    // this one.
+                    guard Self.sameBytesCanStillSucceed(after: error) else { continue }
                     return
                 }
                 // Terminal failure for this entry (e.g. model not installed
@@ -492,17 +506,57 @@ final class AppleRelayPendingQueue {
     ///
     /// UNBOUNDED QUEUEING is prevented by `enforceCaps`, which runs at the head
     /// of every drain that gets past `drain()`'s own guards — always before any
-    /// entry reaches this predicate, never after it returns true. A capture
+    /// entry reaches this predicate, never after it returns true. A CHAT capture
     /// stranded on a condition that never clears ages out at `maxEntryAge` and
     /// the user hears about it through `postEvictionNotification`. There is
     /// deliberately no attempt counter: a Keychain blackout can outlive dozens
     /// of idle edges before the user next unlocks their phone, and a count would
     /// give up on a capture that one unlock would have delivered.
     ///
+    /// WORK ANSWERS THE QUESTION DIFFERENTLY, and it is the destination — not
+    /// the error — that decides. A chat entry's audio is a means to a transcript
+    /// the iPhone has already produced or will refuse to produce again; a WORK
+    /// entry's audio is the thing itself, and until the iPhone says it published
+    /// it (`result.work == true`) or its words are on the desk, this queue holds
+    /// the only copy in existence. So a Work entry is retained after ANY failed
+    /// delivery — retryable or terminal — because "terminal" describes the
+    /// attempt, and no attempt's verdict is worth the person's recording. An old
+    /// iPhone that answers a Work capture with a terminal code (it predates the
+    /// destination, so it has no Work branch at all and kept nothing itself)
+    /// must not take the wrist's copy down with it. Work entries are exempt from
+    /// both caps, so the compensating bound is `refusesNewWorkCapture`, which
+    /// refuses a NEW capture at capacity rather than evicting an old one.
+    ///
     /// `static` for `notificationBody`'s reason — it makes the classification
     /// reachable from `ConduckWatchTests` without the singleton's disk-touching
-    /// `init`.
-    static func leavesEntryQueued(after error: Error) -> Bool {
+    /// `init`. The default argument keeps the chat reading callable as the bare
+    /// predicate it has always been.
+    static func leavesEntryQueued(
+        after error: Error,
+        destination: WatchCaptureDestination = .chat
+    ) -> Bool {
+        if destination == .work { return true }
+        return sameBytesCanStillSucceed(after: error)
+    }
+
+    /// Whether the IDENTICAL bytes can still succeed against this verdict once
+    /// something OUTSIDE the request changes — the iPhone comes back in range,
+    /// its Keychain is unlocked after a reboot, the provider's outage clears.
+    /// The taxonomy's own `AppError.isRetryable`, the property every retry
+    /// affordance in the app gates on.
+    ///
+    /// It answers a SECOND question the retention rule cannot: whether the
+    /// whole drain should stop. A retryable verdict is one the iPhone gave about
+    /// ITSELF — it cannot serve any relay right now — so every entry behind this
+    /// one would buy the identical answer at the price of a file transfer and a
+    /// reply timeout each. A verdict about this ONE clip (a Work entry retained
+    /// on a terminal code) says nothing about the entries behind it, and
+    /// stopping there would wedge them behind a Work entry that never ages out.
+    ///
+    /// A non-`AppError` throw is not retryable: nothing in the taxonomy vouches
+    /// for it, and an unrecognised failure that halted the drain would strand
+    /// every queued ask on a verdict no one can reason about.
+    static func sameBytesCanStillSucceed(after error: Error) -> Bool {
         (error as? AppError)?.isRetryable ?? false
     }
 
@@ -650,7 +704,16 @@ final class AppleRelayPendingQueue {
         // degraded entry whose clip never made it into the owned directory.
         try? FileManager.default.removeItem(at: URL(fileURLWithPath: entry.audioFilePath))
         postWorkNotification(settlement)
-        WatchRecordingService.shared.noteWorkCaptureSettled(settlement)
+        // The banner is for the capture that settled; the on-screen line is for
+        // whatever capture the wrist is SHOWING, so the claim token travels with
+        // the settlement and the service decides whether the two are the same
+        // one. A deferred queue holds several Work captures at once, and a line
+        // that says "Saved to Work." over a different, still-undelivered
+        // recording is the one lie this surface must never tell.
+        WatchRecordingService.shared.noteWorkCaptureSettled(
+            settlement,
+            requestID: entry.requestID
+        )
     }
 
     /// Write a relayed transcript to the Work desk as a note. Returns false —

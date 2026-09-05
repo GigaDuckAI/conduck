@@ -64,4 +64,35 @@ final class WorkVoiceCaptureLaunchRoute {
         pending = false
         return true
     }
+
+    /// A PEEK, never a claim: a shell that only needs to know whether to reveal
+    /// Work must not spend the request the visible composer is going to answer.
+    var isPending: Bool { pending }
+
+    /// Reveal Work when a request is still waiting, WITHOUT consuming it.
+    ///
+    /// The cold-launch hole this closes: a foreground intent performs before any
+    /// desk exists, so both `.showWorkboardVoiceCapture` and the `.showWorkboard`
+    /// posted after it are delivered to nobody. The root then opens on its
+    /// default destination — Chats — and the composer's own consumer refuses to
+    /// claim a request it cannot present (a sheet raised by a hidden pane
+    /// arrives over Chat), so the recorder waits for a manual tap on Work that
+    /// the person has no reason to make.
+    ///
+    /// Called from the shell's appearance, which is the first moment a surface
+    /// that can honour the request exists. Consumption stays with the composer:
+    /// this only puts it on screen.
+    ///
+    /// NEXT MAIN-ACTOR TURN, deliberately. An appearance callback can run while
+    /// the surfaces observing `.showWorkboard` are still being installed, and a
+    /// post delivered to nobody would be the same drop one level up. The flag is
+    /// re-read after the hop so a composer that mounted visible and answered the
+    /// request in between is not sent a reveal it no longer needs.
+    func revealWorkIfPending() {
+        guard pending else { return }
+        Task { @MainActor [self] in
+            guard pending else { return }
+            NotificationCenter.default.post(name: .showWorkboard, object: nil)
+        }
+    }
 }

@@ -24,6 +24,15 @@
 // itself follows one level down: `.showWorkboard` can mount a desk
 // synchronously, and a desk that mounts before the flag is set would read an
 // empty route and open on nothing.
+//
+// THE DESCRIPTION MAY NOT SAY "NOTHING IS SENT", which the files action next to
+// it truthfully does. A Work recording has one outbound hop — the speech
+// provider the person configured, whose roster is mostly cloud vendors and
+// several of whose entries ARE AI models — so denying it here would be a claim
+// the code cannot keep. What the desk does enforce is the boundary the sentence
+// names instead: the audio is turned into words and never becomes a
+// conversation turn, because no path runs from Work to a gateway. Same honest
+// shape as `workboard.voice.privacy`, which the sheet shows for the same lane.
 
 #if !os(watchOS)
 import AppIntents
@@ -31,14 +40,14 @@ import Foundation
 
 struct RecordWorkNoteIntent: AppIntent {
     static var title: LocalizedStringResource = LocalizedStringResource(
-        "intent.workRecordNote.title",
+        "intent.workVoiceNote.title",
         defaultValue: "Record a Note to Work"
     )
 
     static var description = IntentDescription(
         LocalizedStringResource(
-            "intent.workRecordNote.description",
-            defaultValue: "Open Work and start recording a voice note. Nothing is sent to an AI."
+            "intent.workVoiceNote.description",
+            defaultValue: "Open Work and start recording a voice note. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation."
         )
     )
 

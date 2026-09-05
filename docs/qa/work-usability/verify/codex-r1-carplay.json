@@ -1,0 +1,50 @@
+{
+ "slice": "CarPlay",
+ "verdict": "findings",
+ "findings": [
+  {
+   "id": "S1",
+   "severity": "major",
+   "title": "A stale capture can overwrite a retry's transcript",
+   "file": "Conduck/Conduck/CarPlay/CarPlayRecordingService.swift:1895",
+   "claim": "CarPlay attaches words without confirming capture ownership, allowing a superseded transcription to overwrite newer saved words.",
+   "evidence": "The lane calls `WorkVoiceCaptureCoordinator.attachTranscript(transcript, toRecording: capture.captureID)` without `PendingRetryGuard.stillOwnsCapture`. Renewal's result is ignored at line 1443. In WorkVoiceCaptureCoordinator.swift:553–561, differing words pass the comparison and `row.setValue(transcript, forKey: \"textContent\")` replaces the existing text. ConverseIntent.swift:617 checks ownership before its Work write.",
+   "scenario": "Lease renewal fails long enough for the 90-second reservation to expire. After storage recovers, phone Retry claims the recording and saves transcript B. The original CarPlay request subsequently returns transcript A while its listen remains active. CarPlay overwrites B with A despite no longer owning the capture.",
+   "fix": "Check `PendingRetryGuard.stillOwnsCapture(capture.guardToken)` before attachment, then recheck `isCurrentListen` after that suspension; return without writing when either fails.",
+   "refutationAttempt": "Checked the fixnote's assertion that attachment is idempotent by capture ID, the renewal loop, and reservation-protected disarm. Attachment is idempotent only for identical words; renewal can fail, and refusing disarm cannot undo the preceding overwrite. The listen check verifies session identity, not queue ownership."
+  },
+  {
+   "id": "S2",
+   "severity": "minor",
+   "title": "Pre-transcription exits leave temporary recordings behind",
+   "file": "Conduck/Conduck/CarPlay/CarPlayRecordingService.swift:1783",
+   "claim": "The new compressed scratch recording lacks cleanup on paths that return before STT starts, violating the audio cleanup invariant.",
+   "evidence": "`compression.data.write(to: audioFileURL, options: .atomic)` creates `carplay_work_<id>.<ext>`. The custom-provider refusal at lines 1470–1476 and key refusals at lines 1512–1547 return before `STTClient.transcribe`. `endSession` at lines 2713–2717 deletes only `recordingURL`, the original CAF. STTClient.swift:217 deletes the compressed file only when transcription is called.",
+   "scenario": "Publish a Work recording successfully with a missing STT key. The acknowledgement finishes and the session ends, but the compressed scratch file remains. Repeating this accumulates extra audio copies even if the user subsequently discards the retry and deletes the desk card.",
+   "fix": "Give the compressed file explicit cleanup ownership covering every exit: clean failed exits inside `secureWorkNote`, and use a caller-scoped defer after successful handoff.",
+   "refutationAttempt": "Checked PendingRetryStore deletion and the scratch sweeper. The retry store removes its own App Group files, not this temporary URL. The recognized `carplay_` prefix permits eventual sweeping, but the sweeper excludes files younger than 24 hours and does not provide operation-end cleanup."
+  },
+  {
+   "id": "S3",
+   "severity": "minor",
+   "title": "Work microphone failures are silent without a gateway",
+   "file": "Conduck/Conduck/CarPlay/CarPlaySceneDelegate.swift:717",
+   "claim": "The newly reachable no-gateway Work session drops the only feedback provided for microphone startup failures.",
+   "evidence": "The no-gateway branch builds `[item]`, appends `makeWorkNoteItem(service:)`, updates sections, and returns at line 721. It never renders `oneShotStartFailureHint`; that check occurs only at line 769. Recording-service startup failures invoke `onCaptureStartFailed?()` and `endSession(speak: nil)` at lines 738–739 and 833–834.",
+   "scenario": "With no gateway configured, tap Add to Work and encounter an audio-session activation failure or exhausted engine-start retries. The modal disappears silently and the picker shows only the unchanged setup and Work rows, with no indication that recording failed.",
+   "fix": "Render the one-shot microphone failure hint in the no-gateway branch too, with retry wording naming Add to Work and its row included in the budget.",
+   "refutationAttempt": "Checked for a spoken fallback and another hint renderer. These startup failures deliberately suppress speech, and the no-gateway early return bypasses the sole hint renderer. The existing hint also directs users to New voice chat, which this branch does not offer."
+  }
+ ],
+ "checkedInvariants": [
+  "Work publication precedes key readiness and STT; retry metadata selects .work, records publication outcomes, and disarms only after attachment.",
+  "Session staleness checks cover compression, preservation, key readiness, STT results, and attachment outcomes; queue ownership is separately defective as reported.",
+  "Work avoids gateway dispatch and empty-transcript re-arming; session destination resets in both endSession and teardown.",
+  "Picker arithmetic subtracts the Work row and optional hint; recentCap is unchanged and both gateway branches offer Work.",
+  "Saving uses the shared voice template with buttons installed before presentation; acknowledgement completion drives idle, dismissal, and audio deactivation.",
+  "Temporary filenames retain carplay_; no Work card content or new CPAlertTemplate is displayed.",
+  "Attachment handles recordingMissing, notAudio, and throws explicitly.",
+  "New source guards read comment-stripped function bodies and contain non-vacuity assertions; the staleness guard counts checks rather than proving every suspension's ordering."
+ ],
+ "notes": "Read-only review of ec8b27f..692608d. Scoped git diff --check passed. No builds or simulator tests were executed. Initial system Git emitted Xcode tool-discovery messages; subsequent Git reads used the bundled binary directly. Findings are supported by current repository source.\n"
+}

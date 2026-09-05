@@ -341,6 +341,209 @@ final class WatchRelayQueueRetryabilityTests: XCTestCase {
         }
     }
 
+    // MARK: - 1c. Destination-specific FAILURE retention
+    //
+    // The classification above answers "can the identical bytes still succeed?"
+    // — the right question for a chat ask, whose audio is a means to a
+    // transcript. It is the WRONG question for a Work capture, whose audio IS
+    // the thing: until the iPhone answers `result.work == true`, or its words
+    // reach the desk, the queue holds the only copy in existence. So a Work
+    // entry is retained after ANY failed attempt, and "terminal" describes the
+    // attempt rather than the capture. Two shipped realities make that concrete:
+    // a current iPhone whose desk write fails deliberately replies a RETRYABLE
+    // code so the wrist keeps the clip, and an iPhone predating Work has no Work
+    // branch at all — it publishes nothing, deletes its own temp file, and can
+    // answer a TERMINAL code that would otherwise take the last copy with it.
+
+    /// An unacknowledged Work entry survives every verdict, on both sides of the
+    /// retryable/terminal line — with the chat reading of the same errors as the
+    /// control, so a predicate that simply started answering true would fail.
+    func testAnUnacknowledgedWorkEntryIsRetainedAfterEveryFailedAttempt() {
+        let verdicts: [AppError] = [
+            // The phone's own phase-1 refusal: retryable BY CONSTRUCTION.
+            .workDeskWriteFailed,
+            // Retryable, and already covered for chat — pinned here so the Work
+            // arm is not accidentally narrower.
+            .sttKeyUnreadable,
+            // TERMINAL, and the reason this rule exists: an iPhone that predates
+            // Work answers exactly like this and kept nothing itself.
+            .appleSpeechModelNotInstalled,
+            .sttMissingAPIKey,
+            .audioProcessingFailed,
+        ]
+        for error in verdicts {
+            XCTAssertTrue(
+                AppleRelayPendingQueue.leavesEntryQueued(after: error, destination: .work),
+                "\(error) claimed an unacknowledged Work entry. The claim deletes the recording, and on this lane nothing else holds a copy — no attempt's verdict is worth the person's audio."
+            )
+            XCTAssertEqual(
+                AppleRelayPendingQueue.leavesEntryQueued(after: error, destination: .chat),
+                error.isRetryable,
+                "The chat reading of \(error) changed. Chat's retention is the taxonomy's own and must be byte-identical to what it always was."
+            )
+        }
+    }
+
+    /// A throw the taxonomy has never seen still keeps a Work entry: an
+    /// unrecognised failure is the LEAST reason to delete the only copy.
+    func testAnUnrecognisedThrowStillKeepsAWorkEntry() {
+        struct Boom: Error {}
+        XCTAssertTrue(AppleRelayPendingQueue.leavesEntryQueued(after: Boom(), destination: .work))
+        XCTAssertFalse(AppleRelayPendingQueue.leavesEntryQueued(after: Boom(), destination: .chat))
+    }
+
+    /// Retention and the DRAIN's halt are two different questions, and merging
+    /// them wedges the queue: a Work entry retained on a terminal verdict never
+    /// ages out (it is exempt from both caps), so a drain that stopped there
+    /// would leave every entry behind it undelivered forever.
+    func testOnlyAVerdictAboutThePhoneItselfHaltsTheDrain() {
+        XCTAssertTrue(
+            AppleRelayPendingQueue.sameBytesCanStillSucceed(after: AppError.sttKeyUnreadable),
+            "A retryable verdict is the iPhone saying it cannot serve ANY relay right now; the entries behind this one would buy the identical answer."
+        )
+        XCTAssertFalse(
+            AppleRelayPendingQueue.sameBytesCanStillSucceed(after: AppError.appleSpeechModelNotInstalled),
+            "A terminal verdict is about this one clip. A Work entry retained on it must not stop the drain, or it wedges every entry behind it — permanently, since Work never ages out."
+        )
+        struct Boom: Error {}
+        XCTAssertFalse(AppleRelayPendingQueue.sameBytesCanStillSucceed(after: Boom()))
+    }
+
+    // MARK: - 1d. The LIVE relay leg, driven end to end
+    //
+    // The predicate governs the queue's two deferred paths. The third path is
+    // the live continuation in `WatchRecordingService.runRelay`, which is where
+    // the defect actually bit: it recognised two deferral cases by name and
+    // CLAIMED on everything else, so the iPhone's own "keep your clip, my desk
+    // write failed" (retryable, code 78) deleted the recording it was asking the
+    // wrist to hold. Driven through the `relayTranscribe` seam, against the real
+    // queue, so the retention is observed rather than argued.
+
+    private func makeRelayAudio() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("work-retention-\(UUID().uuidString).m4a")
+        try Data(repeating: 0xCD, count: 4096).write(to: url)
+        return url
+    }
+
+    /// A Work capture the iPhone refused — on EITHER side of the taxonomy —
+    /// keeps its entry, keeps its audio on disk, and says the deferral line.
+    func testAFailedWorkRelayKeepsTheRecordingAndShowsTheDeferralLine() async throws {
+        for verdict in [AppError.workDeskWriteFailed, .appleSpeechModelNotInstalled] {
+            let service = WatchRecordingService()
+            service.store = ConversationStore(inMemory: true)
+            var relayed: String?
+            service.relayTranscribe = { requestID, _, _, _, _ in
+                relayed = requestID
+                throw verdict
+            }
+
+            let baseline = AppleRelayPendingQueue.shared.entryCount
+            let audioURL = try makeRelayAudio()
+            defer { try? FileManager.default.removeItem(at: audioURL) }
+
+            await service.runRelay(
+                audioFileURL: audioURL,
+                originalFileURL: audioURL,
+                providerID: nil,
+                destination: .work
+            )
+
+            let requestID = try XCTUnwrap(relayed, "The relay seam was never reached.")
+            defer { _ = AppleRelayPendingQueue.shared.claimEntry(requestID: requestID) }
+
+            let entry = try XCTUnwrap(
+                AppleRelayPendingQueue.shared.peekEntry(requestID: requestID),
+                "\(verdict) claimed the Work entry on the live leg. The claim deletes the queued recording, and on this lane nothing else has a copy — the capture is simply gone (I6)."
+            )
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: entry.audioFilePath),
+                "The queued Work recording was deleted after \(verdict)."
+            )
+            XCTAssertEqual(AppleRelayPendingQueue.shared.entryCount, baseline + 1)
+            XCTAssertEqual(
+                service.workCaptureOutcome, .deferredToPhone,
+                "A retained Work capture must read as deferred, not as a failure: the recording is safe on this watch and the next delivery attempt carries it."
+            )
+            XCTAssertEqual(service.state, .idle, "Work parks nothing in the state machine.")
+        }
+    }
+
+    /// NEGATIVE CONTROL, and the byte-identical half of the rule: a CHAT ask
+    /// still claims on a terminal verdict. Without this the assertion above
+    /// would pass on a `runRelay` that had simply stopped claiming anything.
+    func testAFailedChatRelayStillClaimsItsEntry() async throws {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        var relayed: String?
+        service.relayTranscribe = { requestID, _, _, _, _ in
+            relayed = requestID
+            throw AppError.appleSpeechModelNotInstalled
+        }
+
+        let baseline = AppleRelayPendingQueue.shared.entryCount
+        let audioURL = try makeRelayAudio()
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+
+        await service.runRelay(audioFileURL: audioURL, originalFileURL: audioURL, providerID: nil)
+
+        let requestID = try XCTUnwrap(relayed)
+        XCTAssertNil(
+            AppleRelayPendingQueue.shared.peekEntry(requestID: requestID),
+            "A terminal chat verdict must still claim — an entry that never claims re-fires until it ages out and the user is never told why."
+        )
+        XCTAssertEqual(AppleRelayPendingQueue.shared.entryCount, baseline)
+        XCTAssertNil(service.workCaptureOutcome, "A chat failure must never write the Work lane's line.")
+        guard case .error = service.state else {
+            return XCTFail("Chat keeps its error state and its Retry affordance.")
+        }
+    }
+
+    /// The wrist can hold several deferred Work captures at once, so the one
+    /// that settles is routinely NOT the one on screen. The settlement carries
+    /// the claim token and is applied only when it names the displayed capture;
+    /// a sibling's acknowledgement still posts its banner (the queue does that
+    /// before this call) but leaves the line alone.
+    func testALateSettlementForAnotherCaptureLeavesTheDisplayedLineAlone() async throws {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        var relayed: String?
+        service.relayTranscribe = { requestID, _, _, _, _ in
+            relayed = requestID
+            throw AppError.sttProviderUnreachable
+        }
+
+        let audioURL = try makeRelayAudio()
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+        await service.runRelay(
+            audioFileURL: audioURL,
+            originalFileURL: audioURL,
+            providerID: nil,
+            destination: .work
+        )
+        let requestID = try XCTUnwrap(relayed)
+        defer { _ = AppleRelayPendingQueue.shared.claimEntry(requestID: requestID) }
+
+        XCTAssertEqual(service.workCaptureOutcome, .deferredToPhone)
+        XCTAssertEqual(service.workRelayRequestID, requestID,
+                       "The displayed capture must remember the token its settlement will arrive under.")
+
+        service.noteWorkCaptureSettled(.workAcknowledged, requestID: UUID().uuidString)
+        XCTAssertEqual(
+            service.workCaptureOutcome, .deferredToPhone,
+            "A sibling capture's acknowledgement repainted this screen as saved, over a recording still sitting on the wrist. That is the one lie this surface must never tell."
+        )
+        service.noteWorkCaptureSettled(.workWordsOnly, requestID: nil)
+        XCTAssertEqual(service.workCaptureOutcome, .deferredToPhone,
+                       "A settlement with no token names nothing and may claim no screen.")
+
+        service.noteWorkCaptureSettled(.workAcknowledged, requestID: requestID)
+        XCTAssertEqual(
+            service.workCaptureOutcome, .saved,
+            "The displayed capture's OWN settlement must still land, or the deferral line outlives the delivery it promised."
+        )
+    }
+
     // MARK: - 2. The notification sentence
 
     /// The shared 75 copy says "this device". This body renders on the WRIST —
@@ -430,6 +633,95 @@ final class WatchRelayQueueRetryabilityTests: XCTestCase {
         XCTAssertFalse(
             code.contains("case .sttProviderUnreachable"),
             "A single-case `if case .sttProviderUnreachable` is back in the queue. That is the defect shape: it classifies exactly one retryable verdict as leave-queued and sends every other one — a Keychain blackout among them — into the branch that claims the entry and deletes the user's audio."
+        )
+    }
+
+    /// …and both of them ASK ABOUT THE DESTINATION. The predicate answering
+    /// correctly proves nothing if a dispatch path calls it with the default
+    /// chat reading: the entry's persisted destination is the whole rule, and
+    /// this is a lane where a wrong answer deletes the only copy of a recording.
+    func testBothDispatchPathsAskAboutTheEntrysDestination() throws {
+        let code = try queueSource()
+        XCTAssertEqual(
+            code.components(separatedBy: "leavesEntryQueued(after: error, destination:").count - 1, 2,
+            "`drain()` and `reconcile()` must both pass the ENTRY's destination. A bare `leavesEntryQueued(after:)` takes the chat reading by default, which claims an unacknowledged Work entry — and the claim deletes the recording."
+        )
+        XCTAssertTrue(
+            code.contains("destination: entry.captureDestination"),
+            "`drain()` reads the destination off the entry it is re-firing. A live reading would be wrong twice over: this drain may run in a process that never saw the capture."
+        )
+        XCTAssertTrue(
+            code.contains("let destination = peekEntry(requestID: requestID)?.captureDestination ?? .chat"),
+            "`reconcile()` must PEEK the entry before deciding. Claiming is the only other way to see an entry, and by then the recording is already deleted."
+        )
+    }
+
+    /// The drain's halt is a separate question from retention, asked through its
+    /// own predicate. Merging the two wedges the queue: a Work entry retained on
+    /// a terminal verdict never ages out, so a drain that stopped on it would
+    /// leave every entry behind it undelivered forever.
+    func testTheDrainStopsOnlyOnAVerdictAboutThePhoneItself() throws {
+        let code = try queueSource()
+        XCTAssertTrue(
+            code.contains("guard Self.sameBytesCanStillSucceed(after: error) else { continue }"),
+            "`drain()` no longer separates 'this entry is retained' from 'stop the whole drain'. A retained Work entry that halts the loop blocks every queued ask behind it, permanently."
+        )
+    }
+}
+
+// MARK: - The wrist's Work outcome belongs to ONE capture
+//
+// `workCaptureOutcome` is a single value on a process-wide service, and the
+// queue can hold several deferred Work captures at once (they are exempt from
+// both caps). So the capture that settles is routinely not the capture on
+// screen, and both halves of the correlation have to hold: the service refuses a
+// settlement that names another token (exercised directly in
+// `WatchRelayQueueRetryabilityTests`), and the screen refuses a line stamped
+// with another capture's nonce — which has no runtime seam, because it is a
+// SwiftUI body, so it is read off the source.
+@MainActor
+final class WatchWorkOutcomeOwnershipTests: XCTestCase {
+
+    private func captureViewSource() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // .../ConduckWatchTests
+            .deletingLastPathComponent()   // .../Conduck/Conduck
+            .appendingPathComponent("ConduckWatch Watch App/Views/WatchWorkCaptureView.swift")
+        guard let source = try? String(contentsOf: url, encoding: .utf8) else {
+            throw XCTSkip("Capture-view source unreadable at \(url.path) — this guard runs against a checkout only.")
+        }
+        return source
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                guard let marker = line.range(of: "//") else { return line }
+                return line[line.startIndex..<marker.lowerBound]
+            }
+            .joined(separator: "\n")
+    }
+
+    func testTheCaptureScreenRendersOnlyItsOwnOutcome() throws {
+        let code = try captureViewSource()
+        XCTAssertTrue(
+            code.contains("guard recordingService.workCaptureID == requestID else { return nil }"),
+            "The capture screen reads the service's outcome unscoped again. Two deferred Work captures then share one line, and the sibling that settles first repaints the other's screen as saved."
+        )
+        XCTAssertEqual(
+            code.components(separatedBy: "recordingService.workCaptureOutcome").count - 1, 2,
+            "Exactly two reads of the raw outcome are expected: the scoped accessor, and the `onChange` trigger that observes it. A third is a surface reading past the ownership stamp."
+        )
+    }
+
+    /// The service half, stated as the rule rather than as one scenario: a
+    /// settlement applies only when its token names the capture on screen, and
+    /// an absent token names nothing.
+    func testASettlementAppliesOnlyToTheCaptureItNames() {
+        let service = WatchRecordingService()
+        XCTAssertNil(service.workRelayRequestID,
+                     "A fresh service is showing no Work capture, so no settlement can claim its screen.")
+        service.noteWorkCaptureSettled(.workAcknowledged, requestID: UUID().uuidString)
+        XCTAssertNil(
+            service.workCaptureOutcome,
+            "A settlement landed on a wrist that is showing no Work capture at all. The banner is what the person reads then; the screen has nothing to correct."
         )
     }
 }

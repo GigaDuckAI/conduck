@@ -269,6 +269,98 @@ final class CarPlayWorkNoteTests: XCTestCase {
                       "the release belongs to `.attached` alone; a card that is gone is settled on the phone")
     }
 
+    /// The words may only be written while this process still HOLDS the
+    /// capture.
+    ///
+    /// The attach is idempotent for identical words only: the store compares
+    /// the stored text and rewrites the row whenever it differs. Lease renewal
+    /// is best-effort and the speech hop can outlast the reservation window, so
+    /// a lapsed hold can be taken by the phone's retry card — which transcribes
+    /// the same bytes and saves its own words on this same card. Writing here
+    /// afterwards would overwrite that surface's transcript with this one.
+    func testTheWordsAreNotWrittenUnlessThisProcessStillHoldsTheCapture() throws {
+        let source = try Self.recordingServiceSource()
+        let body = try RefusalLaneSource.body(
+            ofFunction: "attachWorkNoteTranscript", in: source, path: Self.recordingServicePath
+        )
+        let write = try XCTUnwrap(
+            body.range(of: "WorkVoiceCaptureCoordinator.attachTranscript("),
+            "the desk write is what the ownership question stands in front of"
+        )
+        let beforeTheWrite = body[..<write.lowerBound]
+        XCTAssertTrue(
+            beforeTheWrite.contains("PendingRetryGuard.stillOwnsCapture(capture.guardToken)"),
+            "the transcript is written without asking whether the capture is still this process's — a retry card that took it has already saved its own words on that card"
+        )
+        let ownership = try XCTUnwrap(beforeTheWrite.range(of: "PendingRetryGuard.stillOwnsCapture("))
+        let staleness = try XCTUnwrap(
+            beforeTheWrite.range(of: "isCurrentListen("),
+            "the ownership question suspends, so a staleness check has to follow it"
+        )
+        XCTAssertTrue(
+            ownership.lowerBound < staleness.lowerBound,
+            "a staleness check that runs before the ownership question does not cover its suspension"
+        )
+        XCTAssertGreaterThanOrEqual(
+            beforeTheWrite.components(separatedBy: "isCurrentListen(").count - 1, 2,
+            "both exits from the ownership gate — the refusal and the continuation — end a session that moved on"
+        )
+        // Refusing ownership writes NOTHING and releases NOTHING: the entry
+        // belongs to whichever surface holds it.
+        let refusal = beforeTheWrite[ownership.lowerBound...]
+        XCTAssertFalse(refusal.contains("PendingRetryGuard.disarm("),
+                       "a capture this process no longer owns is not this process's to release")
+    }
+
+    /// The compressed scratch copy has exactly one owner at every instant.
+    ///
+    /// `STTClient.transcribe` deletes it on all of its own exits, so the leak
+    /// window is the refusals between the fork and that call — plus every
+    /// failed exit inside phase one, where the file exists but no capture is
+    /// ever handed back.
+    func testTheCompressedScratchCopyIsDeletedOnEveryExitThatNeverReachesTheSpeechHop() throws {
+        let source = try Self.recordingServiceSource()
+
+        let secured = try RefusalLaneSource.body(
+            ofFunction: "secureWorkNote", in: source, path: Self.recordingServicePath
+        )
+        let phaseOneDefer = try XCTUnwrap(
+            secured.range(of: "defer {"),
+            "a per-exit removal would be forgotten by the next refusal added below it"
+        )
+        let phaseOneRemoval = try XCTUnwrap(
+            secured.range(of: "removeItem(at: audioFileURL)"),
+            "phase one leaves the scratch file behind on every exit that returns nil"
+        )
+        XCTAssertTrue(phaseOneDefer.lowerBound < phaseOneRemoval.lowerBound,
+                      "the removal is the defer's, so it covers exits that do not exist yet")
+        let handOff = try XCTUnwrap(secured.range(of: "handedOff = true"))
+        let handBack = try XCTUnwrap(secured.range(of: "return WorkNoteCapture("))
+        XCTAssertTrue(handOff.lowerBound < handBack.lowerBound,
+                      "the file survives only the exit that hands the capture to the caller")
+
+        let body = try RefusalLaneSource.body(
+            ofFunction: "processRecording", in: source, path: Self.recordingServicePath
+        )
+        XCTAssertTrue(
+            body.contains("removeItem(at: workCapture.audioFileURL)"),
+            "the refusals between the fork and the speech hop return without deleting the scratch copy"
+        )
+        let callerDefer = try XCTUnwrap(body.range(of: "if let workCapture, !workUploadHandedToSTT"))
+        let callerHandOff = try XCTUnwrap(body.range(of: "workUploadHandedToSTT = true"))
+        let speech = try XCTUnwrap(body.range(of: "STTClient.shared.transcribe("))
+        XCTAssertTrue(callerDefer.lowerBound < callerHandOff.lowerBound,
+                      "the caller's cleanup is armed at the fork, not after the refusals it exists for")
+        XCTAssertTrue(callerHandOff.lowerBound < speech.lowerBound,
+                      "ownership passes to `transcribe`, which deletes the file on every one of its exits")
+        let lastRefusal = try XCTUnwrap(
+            body.range(of: "endRefusalBelowFork(", options: .backwards),
+            "the refusals below the fork are what the caller's cleanup covers"
+        )
+        XCTAssertTrue(lastRefusal.lowerBound < callerHandOff.lowerBound,
+                      "a refusal that runs after the hand-off would leak the file it no longer owns")
+    }
+
     func testEverySuspensionOnTheWorkLaneIsFollowedByAStalenessCheck() throws {
         let source = try Self.recordingServiceSource()
         for function in ["secureWorkNote", "attachWorkNoteTranscript"] {
@@ -380,6 +472,47 @@ final class CarPlayWorkNoteTests: XCTestCase {
             XCTAssertFalse(source.contains(forbidden),
                            "the CarPlay scene reads \(forbidden): the desk is never browsed at the wheel")
         }
+    }
+
+    /// A start failure ends the session silently — no TTS over a wedged
+    /// session, no `CPAlertTemplate` racing the modal dismiss — so the hint row
+    /// is the ONLY feedback it gets. The no-gateway picker became startable
+    /// when "Add to Work" was added to it, so it needs the row too, and with
+    /// the sentence that names the row it actually draws.
+    func testTheMicCouldNotStartHintIsRenderedInTheNoGatewayPickerToo() throws {
+        let source = try Self.sceneDelegateSource()
+        let picker = try RefusalLaneSource.body(
+            ofFunction: "refreshPicker", in: source, path: Self.sceneDelegatePath
+        )
+        XCTAssertEqual(
+            picker.components(separatedBy: "carplay.hint.captureStartFailed.title").count - 1, 2,
+            "the hint belongs in BOTH picker states; the one that offers only Work is where a silent failure is least explicable"
+        )
+
+        // Scoped to the no-gateway branch itself — the branch runs from the
+        // emptiness test to its `return`, which the roster fetch below it
+        // marks. A hint rendered only in the configured branch would pass a
+        // whole-function count.
+        let branch = try XCTUnwrap(picker.range(of: "configuredRefs.isEmpty"))
+        let configured = try XCTUnwrap(
+            picker.range(of: "gatewayBadgeRoster("),
+            "the first statement after the no-gateway branch returns"
+        )
+        let noGateway = picker[branch.upperBound..<configured.lowerBound]
+        XCTAssertTrue(noGateway.contains("oneShotStartFailureHint"),
+                      "the no-gateway picker never asks whether the microphone failed, so it shows nothing when it did")
+        XCTAssertTrue(
+            noGateway.contains("carplay.hint.captureStartFailed.detail.work"),
+            "this state draws no “New voice chat” row, so the shared retry sentence would point at a row that is not there"
+        )
+        XCTAssertTrue(noGateway.contains("makeWorkNoteItem("),
+                      "the row the hint tells the driver to tap has to be the row this state offers")
+        // The budget: this state draws a fixed three rows at most (hint, setup
+        // hint, Work) and no recent list, so there is nothing for the hint's row
+        // to be priced out of — `recentRowBudget` pays for it in the branch that
+        // does draw recents.
+        XCTAssertFalse(noGateway.contains("fetchRecentForPicker"),
+                       "a recent list here would need the hint priced into its own budget")
     }
 
     // MARK: - Source access

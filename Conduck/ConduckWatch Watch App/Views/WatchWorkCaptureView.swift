@@ -49,16 +49,29 @@ struct WatchWorkCaptureView: View {
     /// that from buzzing twice for one capture.
     @State private var announcedOutcome = false
 
+    /// The terminal line THIS screen may show.
+    ///
+    /// The service holds one outcome, but the wrist can hold several deferred
+    /// Work captures at once (they are exempt from both queue caps), so the
+    /// capture that settles is routinely not the capture on screen. The service
+    /// stamps each outcome with the nonce it belongs to; this is where that
+    /// stamp is honoured, so a sibling's acknowledgement can post its banner
+    /// without ever repainting this screen's line.
+    private var outcome: WatchWorkCaptureOutcome? {
+        guard recordingService.workCaptureID == requestID else { return nil }
+        return recordingService.workCaptureOutcome
+    }
+
     /// True while the microphone is being armed or is genuinely live for this
     /// capture — the window in which leaving the screen must DISCARD rather
     /// than abandon a hot recorder.
     private var isCapturing: Bool {
-        recordingService.workCaptureOutcome == nil && recordingService.isCapturing
+        outcome == nil && recordingService.isCapturing
     }
 
     var body: some View {
         Group {
-            if let outcome = recordingService.workCaptureOutcome {
+            if let outcome {
                 terminalView(outcome: outcome)
             } else if isLuminanceReduced {
                 // Always On Display: red dot + timer only, matching the chat
@@ -262,7 +275,7 @@ struct WatchWorkCaptureView: View {
     // MARK: - Haptics
 
     private func announceOutcomeIfNeeded() {
-        guard !announcedOutcome, let outcome = recordingService.workCaptureOutcome else { return }
+        guard !announcedOutcome, let outcome else { return }
         announcedOutcome = true
         WKInterfaceDevice.current().play(
             WatchWorkCaptureCopy.isReassuring(outcome) ? .success : .failure

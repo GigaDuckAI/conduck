@@ -715,6 +715,26 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 )
                 item.setImage(UIImage(systemName: "iphone"))
                 var firstSectionItems: [CPListItem] = [item]
+                // The one-shot mic-couldn't-start hint belongs in THIS state
+                // too, and only became reachable here when "Add to Work" made
+                // the state startable at all: a start failure ends the session
+                // silently (no TTS over a wedged session, no CPAlertTemplate),
+                // so without the row the modal simply vanishes and the picker
+                // looks untouched. Its retry sentence names the row this state
+                // actually draws — "New voice chat" is not offered here.
+                if self.oneShotStartFailureHint {
+                    let hint = CPListItem(
+                        text: String(localized: "carplay.hint.captureStartFailed.title", defaultValue: "Mic couldn't start"),  // xcstrings
+                        detailText: String(localized: "carplay.hint.captureStartFailed.detail.work", defaultValue: "Tap Add to Work to try again.")  // xcstrings
+                    )
+                    hint.setImage(UIImage(systemName: "mic.slash.fill"))
+                    hint.handler = { _, completion in completion() }
+                    firstSectionItems.insert(hint, at: 0)
+                }
+                // Three rows at most (hint + setup + Work), so this state cannot
+                // reach `CPListTemplate.maximumItemCount`; it draws no recents,
+                // which is what the hint's row is priced out of in the branch
+                // below.
                 firstSectionItems.append(self.makeWorkNoteItem(service: service))
                 template.leadingNavigationBarButtons = []
                 template.updateSections([CPListSection(items: firstSectionItems)])

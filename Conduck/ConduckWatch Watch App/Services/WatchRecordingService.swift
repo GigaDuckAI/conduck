@@ -319,6 +319,22 @@ final class WatchRecordingService {
     /// a source change in every one of them for a value none of them mean.
     private(set) var workCaptureOutcome: WatchWorkCaptureOutcome?
 
+    /// WHICH Work capture `workCaptureOutcome` describes — the route nonce the
+    /// launchpad minted, which is also the value the capture screen was pushed
+    /// with. The screen renders the line only when the two match.
+    ///
+    /// Without it the outcome is a process-wide singleton, and the wrist can
+    /// hold several deferred Work captures at once: one settling would repaint
+    /// whatever capture's screen happened to be open with a verdict that is not
+    /// its own — "Saved to Work." over a recording still sitting on the wrist.
+    private(set) var workCaptureID: UUID?
+
+    /// The relay claim token that same capture was queued under. The settlement
+    /// arrives from the queue naming the TOKEN (the reply may land in a process
+    /// that never saw the capture), so this is the only thing that can tell a
+    /// settlement for the displayed capture from a settlement for a sibling.
+    private(set) var workRelayRequestID: String?
+
     /// True between the soft-warning fire and the hard cap. Drives the
     /// orange timer + "1 min left" label in the recording view.
     var nearMaxDuration: Bool = false
@@ -744,6 +760,12 @@ final class WatchRecordingService {
     @discardableResult
     func startWorkCapture(requestID: UUID) -> WatchCaptureStartOutcome {
         if case .error = state, captureRequestID != requestID { dismissError() }
+        // The screen this start belongs to owns every line below, refusals
+        // included — so the ownership stamp is written BEFORE the first exit,
+        // and the previous capture's relay token goes with it (a settlement for
+        // that one may still be in flight, and it no longer owns this screen).
+        workCaptureID = requestID
+        workRelayRequestID = nil
         guard state == .idle else {
             if let live = captureRequestID, live == requestID {
                 WatchLog.note(.capture, "capture.duplicate", ["via": "startWorkCapture", "state": state.phaseKind])
@@ -785,13 +807,36 @@ final class WatchRecordingService {
     /// previous one's outcome.
     func clearWorkCaptureOutcome() {
         workCaptureOutcome = nil
+        // The ownership stamp goes with the line: the person has read this
+        // capture's verdict and left, so a settlement that lands afterwards has
+        // no screen to correct — it still posts its banner, which is what the
+        // person actually reads by then.
+        workCaptureID = nil
+        workRelayRequestID = nil
     }
 
     /// Report a DEFERRED Work settlement — the queue resolved an entry whose
     /// capture view is long gone. Called by `AppleRelayPendingQueue`; the
     /// banner it posts alongside is what the person actually reads, and this
     /// keeps the wrist's own surface truthful if they are still looking at it.
-    func noteWorkCaptureSettled(_ settlement: AppleRelayPendingQueue.RelaySettlement) {
+    ///
+    /// `requestID` is the settled entry's claim token, and it is CHECKED rather
+    /// than assumed: the wrist can hold several deferred Work captures at once
+    /// (they are exempt from both queue caps), so the one that settles is
+    /// routinely not the one on screen. A mismatch is not an error — the banner
+    /// has already gone out and the entry is durably settled; the only thing
+    /// withheld is a line about a capture the person is not looking at.
+    func noteWorkCaptureSettled(
+        _ settlement: AppleRelayPendingQueue.RelaySettlement,
+        requestID: String?
+    ) {
+        guard let requestID, let shown = workRelayRequestID, shown == requestID else {
+            WatchLog.note(.capture, "work.settled.elsewhere", [
+                "id": WatchLog.shortID(requestID ?? ""),
+                "how": String(describing: settlement)
+            ])
+            return
+        }
         switch settlement {
         case .converseHop:
             return
@@ -1688,6 +1733,10 @@ final class WatchRecordingService {
         // Publish the id BEFORE the first byte leaves, so a cancel landing at
         // any point from here on can claim the entry out from under the relay.
         pendingRelayRequestID = requestID
+        // A Work capture's screen outlives this leg (a deferral settles minutes
+        // later, from the queue, naming this token), so the token is what binds
+        // that settlement back to the capture the person is looking at.
+        if destination == .work { workRelayRequestID = requestID }
 
         do {
             let reply = try await relayTranscribe(requestID, queuedAudioURL, language, providerID, destination)
@@ -1752,6 +1801,34 @@ final class WatchRecordingService {
         } catch {
             if bailIfCancelledRelay(generation: generation) { return }
             pendingRelayRequestID = nil
+            // WORK, ANY FAILURE — the entry stays queued, and nothing below runs.
+            //
+            // Every arm under this one ends by CLAIMING, and a claim deletes the
+            // queued recording. For a chat ask that is the right trade: the
+            // audio was only ever a means to a transcript the iPhone has now
+            // refused to produce. For Work the audio IS the capture, and until
+            // the iPhone answers `result.work == true` (or its words reach the
+            // desk on the words-only path) this queue holds the ONLY copy — so
+            // no failed attempt earns it, retryable or terminal. The two cases
+            // that make this concrete: a current iPhone whose desk write fails
+            // replies a retryable code precisely so the wrist keeps the clip
+            // (`AppleSpeechRelayCoordinator.workPublicationFailure`), and an
+            // iPhone predating Work has no Work branch at all — it publishes
+            // nothing, deletes its temp file and can answer a terminal code,
+            // which must not take the wrist's copy down with it.
+            //
+            // The line is the deferral, not a failure: what is true for the
+            // person is that their recording is safe on this watch and will
+            // reach Work when the iPhone can take it. `leavesEntryQueued(after:
+            // destination:)` states the same rule for the queue's own two paths.
+            if destination == .work {
+                WatchLog.note(.stt, "stt.relay.work.requeued", [
+                    "turn": turnTag,
+                    "code": (error as? AppError)?.errorCode ?? -1
+                ])
+                finishWorkCapture(.deferredToPhone)
+                return
+            }
             // `AppError` has associated values, so Equatable is not
             // synthesized — `if case` is the canonical pattern match.
             if let appError = error as? AppError,

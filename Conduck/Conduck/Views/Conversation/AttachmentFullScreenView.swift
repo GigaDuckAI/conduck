@@ -20,8 +20,9 @@
 //
 // MEMORY policy: loading is lazy PER PAGE and only the RESIDENT pages — the
 // current one plus its neighbours — hold a decoded full-size image. A page that
-// leaves that window drops its full image and keeps only the thumbnail, and a
-// memory warning shrinks the window to the current page alone. Without this a
+// leaves that window drops its full image and keeps only the thumbnail, and
+// system memory pressure — iOS's memory warning, the Mac's pressure source —
+// shrinks the window to the current page alone. Without this a
 // desk-wide gallery of originals would hold one full bitmap per card: at the
 // 4096 px bound Work passes, three resident pages already cost ~192 MiB.
 
@@ -103,7 +104,8 @@ struct AttachmentFullScreenView: View {
 
     @State private var selection: Int
     /// How far from the current page a decoded full image survives. Drops to 0
-    /// on a memory warning and STAYS there for the life of this presentation:
+    /// under system memory pressure and STAYS there for the life of this
+    /// presentation:
     /// re-widening the window would re-run the very allocation the system just
     /// complained about, and a fresh presentation starts at 1 again.
     @State private var residencyRadius = 1
@@ -180,6 +182,23 @@ struct AttachmentFullScreenView: View {
             residencyRadius = 0
         }
         #endif
+        #if os(macOS)
+        // The same rule on the Mac, where the system's signal is a dispatch
+        // memory-pressure source rather than a notification: AppKit posts no
+        // memory warning at all, so without this the neighbours a Mac gallery
+        // decoded — up to two more 4096 px bitmaps — stay resident exactly when
+        // the system is asking for memory back.
+        //
+        // The `.task` owns the source: it is torn down when this presentation
+        // goes away, and the loop ends at the FIRST signal because the radius
+        // stays 0 for the life of the presentation, as on iOS.
+        .task {
+            for await _ in MemoryPressureSignal.warnings() {
+                residencyRadius = 0
+                break
+            }
+        }
+        #endif
     }
 
     private var doneButton: some View {
@@ -210,6 +229,31 @@ struct AttachmentFullScreenView: View {
         }
     }
 }
+
+#if os(macOS)
+/// The Mac's memory-warning equivalent, as an async sequence.
+///
+/// macOS has no `didReceiveMemoryWarningNotification`; the system's signal is a
+/// dispatch memory-pressure source. Wrapping it in an `AsyncStream` is what
+/// keeps the gallery's rule in one place: the consumer is a `.task`, so the
+/// source is created with the presentation and cancelled with it, and no view
+/// state is mutated from a queue callback.
+enum MemoryPressureSignal {
+    /// Warning-level pressure or worse. The stream ends when the consuming task
+    /// is cancelled, which cancels the underlying source with it.
+    static func warnings() -> AsyncStream<Void> {
+        AsyncStream { continuation in
+            let source = DispatchSource.makeMemoryPressureSource(
+                eventMask: [.warning, .critical],
+                queue: .main
+            )
+            source.setEventHandler { continuation.yield(()) }
+            continuation.onTermination = { _ in source.cancel() }
+            source.activate()
+        }
+    }
+}
+#endif
 
 // MARK: - Chat's byte loader
 

@@ -180,4 +180,39 @@ final class AttachmentGalleryPageTests: XCTestCase {
     func testTheBoundedPrimitiveAlsoRefusesNonImageBytes() {
         XCTAssertNil(ImageProcessor.displayCGImage(from: Data("nope".utf8), maxPixel: 128))
     }
+
+    // MARK: - Memory pressure, on both platforms
+
+    /// SOURCE-SHAPE GUARD: the residency window shrinks under memory pressure on
+    /// EVERY platform the gallery runs on.
+    ///
+    /// It has to be a source check because neither signal can be raised from a
+    /// test: iOS's is a system notification and the Mac's is a dispatch
+    /// memory-pressure source, and the arithmetic they drive
+    /// (`residentIndices(radius: 0)`) is already pinned above. What no
+    /// behavioural test can hold is that both lanes EXIST — a Mac gallery
+    /// without one keeps two extra 4096 px bitmaps decoded at exactly the moment
+    /// the system is asking for memory back, and nothing fails.
+    func testBothPlatformsShrinkTheResidencyWindowUnderMemoryPressure() throws {
+        let path = "Conduck/Views/Conversation/AttachmentFullScreenView.swift"
+        let source = try RefusalLaneSource.source(at: path)
+
+        XCTAssertTrue(
+            source.contains("UIApplication.didReceiveMemoryWarningNotification"),
+            "iOS shrinks the window on the system memory warning"
+        )
+        XCTAssertTrue(
+            source.contains("DispatchSource.makeMemoryPressureSource"),
+            """
+            macOS posts no memory warning, so its equivalent signal is a dispatch \
+            memory-pressure source. Without one the Mac gallery holds its \
+            neighbours' originals through the pressure.
+            """
+        )
+        XCTAssertEqual(
+            source.components(separatedBy: "residencyRadius = 0").count - 1,
+            2,
+            "one release lane per platform, and both drop the radius to the current page alone"
+        )
+    }
 }

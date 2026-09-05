@@ -72,24 +72,86 @@ final class WorkShortcutIntentsTests: XCTestCase {
         XCTAssertFalse(route.consume(), "the observer's read consumed it")
     }
 
+    /// A shell reveals Work for a pending request and leaves the request alone:
+    /// the composer is the only surface that can actually present the recorder,
+    /// so a shell that consumed would spend a request nothing then answers.
+    func testRevealingAPendingRequestDoesNotSpendIt() {
+        let route = WorkVoiceCaptureLaunchRoute()
+        let revealed = expectation(forNotification: .showWorkboard, object: nil)
+
+        route.request()
+        XCTAssertTrue(route.isPending, "a peek reads the request without claiming it")
+        route.revealWorkIfPending()
+
+        wait(for: [revealed], timeout: 2)
+        XCTAssertTrue(route.isPending, "the reveal left the request for the composer")
+        XCTAssertTrue(route.consume(), "the composer still gets to answer it")
+    }
+
+    /// The other half of the same rule: nothing pending means nothing is
+    /// revealed, so a plain launch never yanks a person off Chats.
+    func testRevealingWithoutARequestPostsNothing() {
+        let route = WorkVoiceCaptureLaunchRoute()
+        var reveals = 0
+        let token = NotificationCenter.default.addObserver(
+            forName: .showWorkboard,
+            object: nil,
+            queue: nil
+        ) { _ in reveals += 1 }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        route.revealWorkIfPending()
+        let settled = expectation(description: "the reveal's main-actor hop has had its turn")
+        Task { @MainActor in settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+
+        XCTAssertEqual(reveals, 0, "an unasked-for launch must stay on its own destination")
+    }
+
+    /// The cold-launch hole S2 named, closed at the shell: the root (and the
+    /// Mac's window) reveal Work on appearance when a request is still pending.
+    /// Source-shaped, because the alternative is standing up a SwiftUI
+    /// hierarchy on two platforms to observe one notification.
+    func testTheShellsRevealWorkForAPendingRequestAndLeaveConsumptionToTheComposer() throws {
+        for path in ["Conduck/RootView.swift", "Conduck/ConduckApp.swift"] {
+            let source = try RefusalLaneSource.source(at: path)
+            XCTAssertTrue(
+                source.contains("WorkVoiceCaptureLaunchRoute.shared.revealWorkIfPending()"),
+                "\(path) no longer reveals Work for a request that arrived before it mounted"
+            )
+            XCTAssertFalse(
+                source.contains("WorkVoiceCaptureLaunchRoute.shared.consume()"),
+                "\(path) claims the request; only the visible composer can present the recorder"
+            )
+        }
+    }
+
     // MARK: - Identity copy carries no platform name
 
     /// Apple rejects an upload whose intent title or description names a
     /// platform (ITMS-90626), and the catalog-side rule cannot see a value that
     /// has not been written into the catalog yet.
+    ///
+    /// The FILES action's keys are pinned by name; the voice action's are pinned
+    /// by shape (one keyed title, one keyed description), because its copy — and
+    /// with it its keys — is owned by the claims lane next door.
     func testNoNewIntentTitleOrDescriptionNamesAPlatform() throws {
         let rows = try intentIdentityRows()
 
         XCTAssertEqual(
-            Set(rows.map(\.key)),
-            [
-                "intent.workAddFiles.title",
-                "intent.workAddFiles.description",
-                "intent.workRecordNote.title",
-                "intent.workRecordNote.description",
-            ],
-            "both new intents declare a keyed title AND a keyed description"
+            Set(rows.filter { $0.path.contains("AddFilesToWork") }.map(\.key)),
+            ["intent.workAddFiles.title", "intent.workAddFiles.description"],
+            "the files action declares a keyed title AND a keyed description"
         )
+        XCTAssertEqual(
+            Set(
+                rows.filter { $0.path.contains("RecordWorkNote") }
+                    .compactMap { $0.key.split(separator: ".").last.map(String.init) }
+            ),
+            ["title", "description"],
+            "the voice action declares a keyed title AND a keyed description"
+        )
+        XCTAssertEqual(rows.count, 4, "four identity rows across the two intent files")
         for row in rows {
             let words = Set(
                 row.value.lowercased()
@@ -238,6 +300,36 @@ final class WorkShortcutIntentsTests: XCTestCase {
         XCTAssertNil(AddFilesToWorkIntent.refusal(for: [Self.input(named: "unknown.bin", byteCount: 0)]))
     }
 
+    // MARK: - The note is refused as a note
+
+    /// The ceiling itself passes; one character past it is the note's own
+    /// refusal, decided before a byte is staged.
+    func testAnOversizedNoteIsRefusedAsANote() {
+        let atCeiling = String(repeating: "a", count: WorkCaptureEnvelope.maximumNoteCharacters)
+
+        XCTAssertNil(AddFilesToWorkIntent.refusal(forNote: nil))
+        XCTAssertNil(AddFilesToWorkIntent.refusal(forNote: atCeiling))
+        XCTAssertEqual(
+            AddFilesToWorkIntent.refusal(forNote: atCeiling + "a"),
+            .noteTooLong
+        )
+    }
+
+    /// And if the queue is the one that says so, the sentence still names the
+    /// note. Mapping this verdict onto "that file couldn't be read" sends a
+    /// person to re-pick a file that was never the problem, and re-picking it
+    /// cannot make the capture succeed.
+    func testTheQueuesNoteVerdictIsNotReportedAsAnUnreadableFile() {
+        let refusal = WorkFileCaptureRefusal(
+            publicationFailure: .noteTooLong,
+            files: [Self.input(named: "memo.txt", byteCount: 5)]
+        )
+
+        XCTAssertEqual(refusal, .noteTooLong)
+        XCTAssertNotEqual(refusal, .unreadableFile(name: "memo.txt"))
+        XCTAssertNotNil(refusal.errorDescription)
+    }
+
     // MARK: - The capture identity a rerun reproduces
 
     func testTheCaptureIdentityIsDerivedFromTheInput() {
@@ -282,7 +374,200 @@ final class WorkShortcutIntentsTests: XCTestCase {
         XCTAssertEqual(id.uuid.8 & 0xC0, 0x80, "RFC 4122 variant")
     }
 
+    /// The collision that makes repair destructive. Two different `memo.txt`s of
+    /// equal size are ONE id under a name-and-size hash, and the second capture
+    /// then republishes over the first's cards — the bytes saved an hour ago are
+    /// gone. The digest is what separates them, and it must not separate a
+    /// genuine replay of the same bytes, which is the property the whole derived
+    /// identity exists for.
+    func testTwoFilesAlikeInNameAndSizeButNotInBytesAreDifferentCaptures() throws {
+        let root = try Self.makeScratchDirectory()
+        let first = try Self.writeFile(named: "memo.txt", bytes: "alpha", under: root, in: "one")
+        let second = try Self.writeFile(named: "memo.txt", bytes: "bravo", under: root, in: "two")
+        let replay = try Self.writeFile(named: "memo.txt", bytes: "alpha", under: root, in: "three")
+
+        let firstID = AddFilesToWorkIntent.captureIdentity(note: nil, files: [first])
+
+        XCTAssertNotEqual(
+            firstID,
+            AddFilesToWorkIntent.captureIdentity(note: nil, files: [second]),
+            "different bytes are a different capture — the same id would overwrite the first card"
+        )
+        XCTAssertEqual(
+            firstID,
+            AddFilesToWorkIntent.captureIdentity(note: nil, files: [replay]),
+            "the same bytes are the same capture, so a killed shortcut's rerun still repairs"
+        )
+        XCTAssertEqual(firstID.uuid.6 & 0xF0, 0x50, "still version 5")
+    }
+
+    /// A source that cannot be read digests as a sentinel rather than as an
+    /// empty file: an unreadable file must not take on the identity of a real,
+    /// empty one. (The queue refuses such a set moments later regardless.)
+    func testAnUnreadableSourceIsNotTheSameCaptureAsAnEmptyFile() throws {
+        let root = try Self.makeScratchDirectory()
+        let empty = try Self.writeFile(named: "note.txt", bytes: "", under: root, in: "present")
+        let missing = WorkCaptureFileInput(
+            url: root.appendingPathComponent("absent/note.txt"),
+            displayName: "note.txt",
+            mimeType: nil,
+            typeIdentifier: nil,
+            byteCount: 0
+        )
+
+        XCTAssertNotEqual(
+            AddFilesToWorkIntent.captureIdentity(note: nil, files: [empty]),
+            AddFilesToWorkIntent.captureIdentity(note: nil, files: [missing])
+        )
+    }
+
+    // MARK: - The digest reads bytes without holding them
+
+    /// BOUNDED MEMORY, not bounded I/O. The digest is the one thing in this file
+    /// that touches a person's bytes, and it runs in a headless process the
+    /// system kills without warning: a per-file ceiling of 256 MB means naming a
+    /// capture with `Data(contentsOf:)` is the jetsam the envelope queue exists
+    /// to avoid. Reading the same bytes in fixed chunks costs a pass over a file
+    /// that is about to be copied anyway and holds one chunk at a time.
+    ///
+    /// Source-shaped because a peak footprint is not observable from a unit
+    /// test, and the property is about HOW the bytes are read, not what they
+    /// hash to.
+    func testTheCaptureDigestStreamsTheBytesRatherThanLoadingThem() throws {
+        let source = try RefusalLaneSource.source(at: "Conduck/Intents/AddFilesToWorkIntent.swift")
+
+        XCTAssertTrue(
+            source.contains("FileHandle(forReadingFrom:"),
+            "the digest no longer reads through a handle"
+        )
+        XCTAssertTrue(
+            source.contains("read(upToCount:"),
+            "the digest no longer reads in fixed chunks — one read of a 256 MB file is the crash"
+        )
+        XCTAssertFalse(
+            source.contains("Data(contentsOf:"),
+            "a headless intent process must never hold a whole file in memory"
+        )
+    }
+
+    // MARK: - The rows these actions ship
+
+    /// Every keyed string these two files ask for has a row in the shipped
+    /// catalog. A referenced key with no row renders the source's
+    /// `defaultValue:` forever and can never be translated, and neither half is
+    /// visible in a diff — `WorkboardCopyTruthGuardTests`' both-directions rule
+    /// walks `workboard.*` and `pendingRetry.*`, never `intent.*`.
+    func testEveryIntentKeyTheseFilesReferenceHasACatalogRow() throws {
+        let strings = try catalogStrings()
+        let expression = try NSRegularExpression(pattern: #""(intent\.[A-Za-z0-9.]+)""#)
+        var scanned = 0
+
+        for path in Self.intentPaths {
+            let source = try RefusalLaneSource.source(at: path)
+            let range = NSRange(source.startIndex..<source.endIndex, in: source)
+            for match in expression.matches(in: source, range: range) {
+                guard let range = Range(match.range(at: 1), in: source) else { continue }
+                let key = String(source[range])
+                scanned += 1
+                XCTAssertNotNil(
+                    strings[key],
+                    "\(key) is referenced in \(path) but has no catalog row"
+                )
+            }
+        }
+
+        XCTAssertGreaterThanOrEqual(scanned, 12, "the key scan found almost nothing to check")
+    }
+
+    /// The voice action may not borrow the files action's promise. Its lane has
+    /// ONE outbound hop — the speech provider the person configured, whose
+    /// roster is mostly cloud vendors and several of whose entries are AI models
+    /// — so "nothing is sent to an AI" is a claim the code cannot keep. What it
+    /// may promise is the boundary the desk enforces: the audio becomes words
+    /// and never becomes a conversation. Same honest shape as
+    /// `workboard.voice.privacy`, which the sheet shows for the same lane.
+    func testTheVoiceActionsDescriptionNamesItsOneOutboundHopInsteadOfDenyingIt() throws {
+        let strings = try catalogStrings()
+        let value = try XCTUnwrap(
+            englishValue(try XCTUnwrap(strings["intent.workVoiceNote.description"])),
+            "the voice action's description has no catalog row"
+        ).lowercased()
+
+        XCTAssertTrue(
+            value.contains("speech provider"),
+            "the one place the audio goes has to be named: \(value)"
+        )
+        XCTAssertTrue(
+            value.contains("conversation"),
+            "the boundary that IS true — never a conversation turn — is the promise to make"
+        )
+        for denial in ["nothing is sent", "nothing was sent", "never reaches an ai", "not to an ai"] {
+            XCTAssertFalse(
+                value.contains(denial),
+                "the voice lane has an outbound hop, so it may not deny one: \(value)"
+            )
+        }
+    }
+
     // MARK: - Fixtures
+
+    /// Scratch under the sweeper-owned prefix, removed at teardown — the same
+    /// leaf discipline the intent's own data fallback follows.
+    private static func makeScratchDirectory() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("conduck-workboard-intake-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        scratchRoots.append(root)
+        return root
+    }
+
+    private static var scratchRoots: [URL] = []
+
+    override class func tearDown() {
+        for root in scratchRoots { try? FileManager.default.removeItem(at: root) }
+        scratchRoots.removeAll()
+        super.tearDown()
+    }
+
+    /// The same leaf name in a different directory, so the inputs differ in
+    /// exactly the thing under test.
+    private static func writeFile(
+        named name: String,
+        bytes: String,
+        under root: URL,
+        in folder: String
+    ) throws -> WorkCaptureFileInput {
+        let directory = root.appendingPathComponent(folder, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(name, isDirectory: false)
+        try Data(bytes.utf8).write(to: url, options: .atomic)
+        return WorkCaptureFileInput(
+            url: url,
+            displayName: name,
+            mimeType: nil,
+            typeIdentifier: nil,
+            byteCount: Int64(bytes.utf8.count)
+        )
+    }
+
+    /// The shipped catalog's `strings` table, read from disk: the `en` value in
+    /// it is what a person actually reads, and it wins over a source
+    /// `defaultValue:` at runtime.
+    private func catalogStrings() throws -> [String: Any] {
+        let url = RefusalLaneSource.projectContainerURL
+            .appendingPathComponent("Conduck/Localizable.xcstrings")
+        let data = try Data(contentsOf: url)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return try XCTUnwrap(json?["strings"] as? [String: Any], "the catalog has no strings table")
+    }
+
+    private func englishValue(_ entry: Any) -> String? {
+        guard let entry = entry as? [String: Any],
+              let localizations = entry["localizations"] as? [String: Any],
+              let english = localizations["en"] as? [String: Any],
+              let unit = english["stringUnit"] as? [String: Any] else { return nil }
+        return unit["value"] as? String
+    }
 
     private static let intentPaths = [
         "Conduck/Intents/AddFilesToWorkIntent.swift",
@@ -298,6 +583,7 @@ final class WorkShortcutIntentsTests: XCTestCase {
     ]
 
     private struct IdentityRow {
+        let path: String
         let key: String
         let value: String
     }
@@ -314,7 +600,11 @@ final class WorkShortcutIntentsTests: XCTestCase {
             for match in expression.matches(in: source, range: range) {
                 guard let key = Range(match.range(at: 1), in: source),
                       let value = Range(match.range(at: 2), in: source) else { continue }
-                rows.append(IdentityRow(key: String(source[key]), value: String(source[value])))
+                rows.append(IdentityRow(
+                    path: path,
+                    key: String(source[key]),
+                    value: String(source[value])
+                ))
             }
         }
         return rows

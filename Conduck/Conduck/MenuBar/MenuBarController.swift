@@ -415,7 +415,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // recording/processing/error) the popover shows a HUD, not the quick
         // thread, and the quick lane may be stale. `handleStateChange` re-sets
         // this when a reply settles into an already-open popover.
-        if dictationService.state == .idle {
+        //
+        // A Work capture owns the whole popover for the same reason and with
+        // the same consequence: the surface on screen is its HUD, so a reply
+        // arriving behind it was never seen, and marking its thread visible
+        // would clear the unread mark and swallow the banner.
+        if dictationService.state == .idle, !coordinator.workCaptureIsActive {
             coordinator.setPopoverVisibleConversation(coordinator.displayedPopoverConversationID)
         }
     }

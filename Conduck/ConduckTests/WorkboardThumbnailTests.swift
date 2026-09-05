@@ -305,6 +305,84 @@ final class WorkboardThumbnailTests: XCTestCase {
         let card = try XCTUnwrap(desk.materials.first { $0.id == material.id })
         XCTAssertNil(card.thumbnailData)
     }
+
+    /// A merge left one card with two physical rows naming DIFFERENT blobs, and
+    /// the row without a preview is not the one the canonical read answers with.
+    ///
+    /// The preview a row gets has to be decoded from the bytes THAT ROW names.
+    /// Reading the card's payload through the ordinary loader answers for the
+    /// canonical row instead, so the picture of one payload would be written
+    /// onto a row that still claims another — on a CloudKit-mirrored column,
+    /// where it then travels to every device as that card's artwork.
+    func testTheBackfillDecodesTheBytesTheRepairedRowNamesNotTheCanonicalRows() async throws {
+        let store = isolated.make()
+        // Two shapes, so the previews they produce cannot be confused: the
+        // assertion below is meaningless if both decode to the same bytes.
+        let ownBytes = try imageBytes(width: 640, height: 400)
+        let peerBytes = try imageBytes(width: 300, height: 900, as: .jpeg)
+
+        let material = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                kind: .image,
+                title: "Ferry board",
+                filename: "ferry.png",
+                mimeType: "image/png",
+                payload: ownBytes
+            )
+        )
+        XCTAssertEqual(material.storageMode, .syncedPayload)
+        let originalRows = await store._workMaterialRowsForTesting(id: material.id)
+        let ownHash = try XCTUnwrap(originalRows.first?.contentHash)
+        let ownSize = try XCTUnwrap(originalRows.first?.byteSize)
+
+        // The other device's payload, imported under the same material id...
+        let peerHash = "peer-content-hash"
+        await store._insertWorkMaterialBlobRowForTesting(
+            materialID: material.id,
+            payload: peerBytes,
+            byteSize: Int64(peerBytes.count),
+            contentHash: peerHash,
+            updatedAt: material.updatedAt.addingTimeInterval(120)
+        )
+        // ...and the merged row that names it, NEWER, so it — and not the row
+        // being repaired — is what the canonical read resolves.
+        await store._duplicateWorkMaterialRowForTesting(
+            id: material.id,
+            updatedAt: material.updatedAt.addingTimeInterval(120),
+            contentHash: peerHash,
+            byteSize: Int64(peerBytes.count)
+        )
+        // Only the ORIGINAL row is legacy-shaped. The merged row keeps its
+        // preview, so it is not a candidate and cannot mask the mismatch.
+        await store._clearWorkMaterialThumbnailForTesting(
+            materialID: material.id,
+            contentHash: ownHash
+        )
+
+        let report = await store.repairMissingWorkThumbnails()
+        XCTAssertEqual(report.examined, 1)
+        XCTAssertEqual(report.filled, 1, "the row still names complete bytes, so it is repairable")
+
+        let expectedOwn = try XCTUnwrap(ImageProcessor.thumbnailOnly(from: ownBytes))
+        let expectedPeer = try XCTUnwrap(ImageProcessor.thumbnailOnly(from: peerBytes))
+        XCTAssertNotEqual(
+            expectedOwn.count, expectedPeer.count,
+            "the two fixtures must produce distinguishable previews, or this case proves nothing"
+        )
+
+        let afterRows = await store._workMaterialRowsForTesting(id: material.id)
+        let repaired = try XCTUnwrap(
+            afterRows.first { $0.contentHash == ownHash && $0.byteSize == ownSize }
+        )
+        XCTAssertEqual(
+            repaired.thumbnailByteCount, expectedOwn.count,
+            "the preview must be decoded from the payload this row names, never the canonical row's"
+        )
+        XCTAssertNotEqual(
+            repaired.thumbnailByteCount, expectedPeer.count,
+            "a merged duplicate's payload must never become another row's artwork"
+        )
+    }
 }
 
 #endif
