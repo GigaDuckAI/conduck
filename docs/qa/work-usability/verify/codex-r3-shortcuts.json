@@ -1,0 +1,32 @@
+{
+ "slice": "shortcuts",
+ "verdict": "findings",
+ "round1": [
+  {
+   "id": "R1",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "AddFilesToWorkIntent.swift:178–197 snapshots every input before deriving identity and passes snapshot URLs to publication. At :389–400, each successfully written chunk is the chunk hashed; captureIdentity at :292 performs no file I/O. Read/write failures throw before publication. WorkCaptureFileCaptureTests.swift:303–350 rewrites the external source after identity calculation and asserts that the claimed payload remains 'alpha', while a subsequent snapshot of 'bravo' produces a different ID. Publishing the original source in that scenario would fail the payload assertion. The test exercises the helpers and publisher directly, rather than perform()."
+  },
+  {
+   "id": "R2",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "AppDelegate.swift:280 and :450 invoke the application-lifetime hook. Its pending guard at :315 precedes activation and reveal at :319–320; an ordinary launch therefore does neither. The reveal reaches ConduckApp.swift:305–309, which opens main. Consumption remains behind the composer and active-destination guards in WorkboardCaptureCanvas.swift:218–222. A read-only reproduction of the new source guard passed against HEAD and failed against 5c401df, where both lifecycle calls and the hook are absent. Actual AppKit cold-launch timing was not exercised."
+  }
+ ],
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "minor",
+   "title": "Snapshot copying has no enforced byte limit",
+   "file": "Conduck/Conduck/Intents/AddFilesToWorkIntent.swift:395",
+   "claim": "A source enlarged after preflight is copied completely before its measured size is refused. The new snapshot stage can therefore consume arbitrarily more disk than the documented approximately 1 GB peak.",
+   "evidence": "perform() checks declared sizes at :170, snapshots the entire set at :178–186, and checks measured sizes only at :191. snapshot() reads until EOF and writes every chunk at :389–400 without checking maximumFileBytes or the remaining envelope budget. Before this fix, identity calculation only read the source; WorkCaptureInbox.swift:1122 then remeasured it through refuseOversizedSources before copying. The existing size tests exercise the inbox directly and bypass the newly introduced snapshot stage.",
+   "scenario": "Preflight observes a small video. Before snapshot() opens it, an editor or file provider replaces it with a multi-gigabyte version. The shortcut writes the replacement into scratch until EOF or disk exhaustion, despite the 256 MB per-file ceiling. With sufficient space it eventually reports fileTooLarge; without it, it consumes the available space and reports unreadableFile.",
+   "fix": "Enforce the per-file ceiling and remaining aggregate budget before each snapshot write. Abort and reclaim staging immediately when either would be exceeded. Add a regression where the source grows after its declared size is captured.",
+   "refutationAttempt": "The second refusal prevents oversized publication, but runs after the disk consumption. The defer cleans up an ordinary failure, and the recognized scratch prefix allows later sweeping after process death; neither limits peak usage. Fixed-size reads bound memory, not bytes written."
+  }
+ ],
+ "notes": "Reviewed 5c401df..e90aae6f1a4a8b72c70437b07f0268b7da823de2 and the scoped wave context. No files were modified; no builds or Swift tests were run. System tool shims emitted Xcode discovery diagnostics before direct toolchain binaries were used. Diff whitespace and changed-source SPDX checks passed; the worktree remains clean. Scratch cleanup and prefix ownership are intact. The shared inbox, drainer, shipped intent registrations, and launch route are unchanged in the fix range. No additional Chat regression or unjustified reversal of a Nobody undo instruction was established."
+}

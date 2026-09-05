@@ -43,7 +43,11 @@
 // spent, and a genuine replay of the SAME bytes still lands on the same id and
 // still repairs. A source that cannot be read refuses the capture rather than
 // digesting as a sentinel: a name nobody could verify must not be allowed to
-// replace a card.
+// replace a card. The copy carries the ceilings with it — a size read before
+// the copy is a claim about a file this process does not own, so each chunk is
+// checked against the per-file limit and the set's remaining budget before it
+// is written and an over-ceiling copy is abandoned and reclaimed where it
+// stands.
 //
 // The dialog is true at PUBLICATION time, not at import time. The drain below
 // is best-effort — if the process dies before it, the envelope is still queued
@@ -175,14 +179,31 @@ struct AddFilesToWorkIntent: AppIntent {
         )
         stagedAnything = true
         var snapshots: [Snapshot] = []
+        // The set's ceiling, spent down by what each snapshot ACTUALLY held.
+        // The pass above measured sources this process does not own, so those
+        // sizes are claims: a file can be replaced by a far bigger one between
+        // the stat and the copy. Handing every file the whole envelope budget
+        // would let a set write it many times over before anything measured the
+        // result, so what is LEFT travels with each copy.
+        var remainingSetBytes = WorkCaptureEnvelope.maximumEnvelopeBytes
         for (position, file) in files.enumerated() {
+            let staged: Snapshot
             if file.fileURL == nil {
-                snapshots.append(
-                    try Self.snapshot(declared[position], bytes: file.data, into: leaves[position])
+                staged = try Self.snapshot(
+                    declared[position],
+                    bytes: file.data,
+                    into: leaves[position],
+                    setBudget: remainingSetBytes
                 )
             } else {
-                snapshots.append(try Self.snapshot(declared[position], into: leaves[position]))
+                staged = try Self.snapshot(
+                    declared[position],
+                    into: leaves[position],
+                    setBudget: remainingSetBytes
+                )
             }
+            remainingSetBytes -= max(0, staged.input.byteCount)
+            snapshots.append(staged)
         }
 
         // The sizes the envelope will carry, measured on the bytes that are
@@ -367,7 +388,27 @@ struct AddFilesToWorkIntent: AppIntent {
     /// sentinel would give every unreadable file one shared name, and that name
     /// replaces whatever it collides with — the exact loss the digest exists to
     /// prevent.
-    static func snapshot(_ file: WorkCaptureFileInput, into destination: URL) throws -> Snapshot {
+    ///
+    /// THE CEILINGS BIND THE COPY, NOT ITS RESULT. The size this file was
+    /// admitted on was read from a source somebody else's process owns, so an
+    /// editor or a file provider can put a multi-gigabyte file behind that URL
+    /// before the first chunk is read. A copy that measured only what it ended
+    /// up with would write all of that onto a disk the person may be short of
+    /// and refuse it afterwards. Each chunk is therefore checked against the
+    /// per-file ceiling and the set's REMAINING budget before it is written,
+    /// and the abandoned copy is reclaimed inside this process's own scratch
+    /// leaf on the way out — so the most this stage can leave behind is nothing
+    /// and the most it can write is the ceiling plus one chunk.
+    ///
+    /// Both limits are parameters carrying the production ceilings, so every
+    /// caller gets them without asking and the abort can be exercised without
+    /// staging 256 MB to see it.
+    static func snapshot(
+        _ file: WorkCaptureFileInput,
+        into destination: URL,
+        fileCeiling: Int64 = WorkCaptureEnvelope.maximumFileBytes,
+        setBudget: Int64 = WorkCaptureEnvelope.maximumEnvelopeBytes
+    ) throws -> Snapshot {
         let fileName = name(of: file)
         let source = file.url
         let scoped = source.startAccessingSecurityScopedResource()
@@ -377,9 +418,14 @@ struct AddFilesToWorkIntent: AppIntent {
               let writer = try? FileHandle(forWritingTo: destination) else {
             throw WorkFileCaptureRefusal.unreadableFile(name: fileName)
         }
+        var staged = false
         defer {
             try? reader.close()
             try? writer.close()
+            // Reclaimed where it stands, not left for the sweeper: a copy the
+            // ceiling stopped is exactly the copy whose bytes must not sit on
+            // the disk, and this leaf belongs to this process.
+            if !staged { try? FileManager.default.removeItem(at: destination) }
         }
         var hasher = SHA256()
         var byteCount: Int64 = 0
@@ -391,14 +437,26 @@ struct AddFilesToWorkIntent: AppIntent {
                 throw WorkFileCaptureRefusal.unreadableFile(name: fileName)
             }
             guard let chunk, !chunk.isEmpty else { break }
+            // BEFORE the write, so the bytes that would break a ceiling are
+            // never on the disk at all. The per-file limit is asked first
+            // because it is the one a person can act on by re-picking a file;
+            // the set's remaining budget is the whole-set sentence.
+            let projected = byteCount + Int64(chunk.count)
+            guard projected <= fileCeiling else {
+                throw WorkFileCaptureRefusal.fileTooLarge(name: fileName)
+            }
+            guard projected <= setBudget else {
+                throw WorkFileCaptureRefusal.setTooLarge
+            }
             do {
                 try writer.write(contentsOf: chunk)
             } catch {
                 throw WorkFileCaptureRefusal.unreadableFile(name: fileName)
             }
             hasher.update(data: chunk)
-            byteCount += Int64(chunk.count)
+            byteCount = projected
         }
+        staged = true
         return Snapshot(
             input: WorkCaptureFileInput(
                 url: destination,
@@ -414,11 +472,25 @@ struct AddFilesToWorkIntent: AppIntent {
     /// The same snapshot for a file handed over as BYTES rather than as a URL —
     /// a shortcut graph produces both shapes. The bytes are already this
     /// process's own, so they are written once and digested where they sit.
+    ///
+    /// The ceilings are asked before the write for the same reason as above,
+    /// even though nothing can have grown here: an earlier file in the set may
+    /// have, and what is left of the envelope budget is then smaller than this
+    /// one's own size. Refusing before the write keeps the disk out of it.
     static func snapshot(
         _ file: WorkCaptureFileInput,
         bytes: Data,
-        into destination: URL
+        into destination: URL,
+        fileCeiling: Int64 = WorkCaptureEnvelope.maximumFileBytes,
+        setBudget: Int64 = WorkCaptureEnvelope.maximumEnvelopeBytes
     ) throws -> Snapshot {
+        let byteCount = Int64(bytes.count)
+        guard byteCount <= fileCeiling else {
+            throw WorkFileCaptureRefusal.fileTooLarge(name: name(of: file))
+        }
+        guard byteCount <= setBudget else {
+            throw WorkFileCaptureRefusal.setTooLarge
+        }
         do {
             try bytes.write(to: destination, options: .atomic)
         } catch {
@@ -430,7 +502,7 @@ struct AddFilesToWorkIntent: AppIntent {
                 displayName: file.displayName,
                 mimeType: file.mimeType,
                 typeIdentifier: file.typeIdentifier,
-                byteCount: Int64(bytes.count)
+                byteCount: byteCount
             ),
             digest: Data(SHA256.hash(data: bytes))
         )

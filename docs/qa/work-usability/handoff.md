@@ -34,6 +34,8 @@ Round 2 raised ten findings of its own — two majors (a Shortcut capture identi
 
 The reports are `verify/codex-r1-*.json` and `verify/codex-r2-*.json`; every fix is argued in `fixnotes/fix-r1-*.md` and `fixnotes/fix-r2-*.md`, and `integrate-2.md` / `integrate-3.md` hold the measured runs behind the gate table above.
 
+A third, focused Codex round re-read only the two round-2 major fixes (`verify/codex-r3-shortcuts.json`, `verify/codex-r3-watch.json`): the wrist acknowledgement is clean; the Shortcut identity fix is closed, and its one new minor — a source enlarged after preflight was copied to scratch in full before its size was refused — is fixed in `Intents/AddFilesToWorkIntent.swift` (the streamed snapshot now aborts and reclaims the moment the next chunk would cross the per-file or aggregate ceiling; `fixnotes/fix-r3-shortcuts.md`). No round-3 finding remains open.
+
 ## What shipped
 
 **Thumbnails.** A preview is minted at the one common import site — `ConversationStore.upsertDeskMaterial`, before the write context — and again inside the transaction that replaces a payload, so picker, drop, camera, share sheet, Shortcut drainer and chat capture are all covered by one edit. The decode runs on a `@concurrent` hop, never on the store actor, and the lane gate reads the *staged* storage mode rather than the draft's claim, so vault bytes never buy a preview that CloudKit would carry. `repairMissingWorkThumbnails()` fills rows that carry none, bounded to 96 rows and 4 concurrent decodes per pass, writing every physical row and no `updatedAt` — a revision moved by a preview nobody asked for reads as an edit and invalidates an approved preflight.

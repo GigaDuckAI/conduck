@@ -478,6 +478,115 @@ final class WorkShortcutIntentsTests: XCTestCase {
         }
     }
 
+    // MARK: - The ceilings bind the copy, not its result
+
+    /// The window a declared size cannot cover. A source belongs to somebody
+    /// else's process until it is copied, so the size preflight admitted it on
+    /// is a claim about a file that can be replaced a moment later — and a copy
+    /// that measured only its RESULT would write every byte of a multi-gigabyte
+    /// replacement onto a disk the person may be short of before refusing it.
+    ///
+    /// The ceiling is INJECTED rather than reached: the production limit is 256
+    /// MB and no unit test should stage that, so the parameter carries the real
+    /// one for every caller and a small one here. The small one is still bigger
+    /// than a 256 KB chunk, so the abort lands part way THROUGH the copy rather
+    /// than before it starts, which is the half a result-time check would miss.
+    func testASourceThatOutgrewItsDeclaredSizeIsRefusedMidCopyAndLeavesNothingStaged() throws {
+        let root = try Self.makeScratchDirectory()
+        let grown = try Self.writeFile(
+            named: "video.mov",
+            byteCount: 768 * 1_024,
+            declaring: 5,
+            under: root,
+            in: "grown"
+        )
+        XCTAssertNil(
+            AddFilesToWorkIntent.refusal(for: [grown]),
+            "the declared size passes preflight — that the copy is the only thing left is the premise"
+        )
+        let destination = root.appendingPathComponent("snapshot-grown.mov", isDirectory: false)
+
+        XCTAssertThrowsError(
+            try AddFilesToWorkIntent.snapshot(grown, into: destination, fileCeiling: 300 * 1_024)
+        ) { error in
+            XCTAssertEqual(
+                error as? WorkFileCaptureRefusal,
+                .fileTooLarge(name: "video.mov"),
+                "the person reads the size sentence they can act on, not “couldn’t be read”"
+            )
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: destination.path),
+            "the abandoned partial copy is reclaimed where it stands, not left for the sweeper"
+        )
+    }
+
+    /// The other half of the same rule: what is LEFT of the set's budget stops
+    /// a copy too, and it is a whole-set sentence — naming one file would send
+    /// the person to re-pick a file that is not individually too big.
+    func testASnapshotThatWouldExhaustTheRemainingSetBudgetIsRefusedAsASet() throws {
+        let root = try Self.makeScratchDirectory()
+        let source = try Self.writeFile(
+            named: "clip.mov",
+            byteCount: 768 * 1_024,
+            declaring: 5,
+            under: root,
+            in: "budget"
+        )
+        let refused = root.appendingPathComponent("snapshot-over-budget.mov", isDirectory: false)
+
+        XCTAssertThrowsError(
+            try AddFilesToWorkIntent.snapshot(source, into: refused, setBudget: 300 * 1_024)
+        ) { error in
+            XCTAssertEqual(
+                error as? WorkFileCaptureRefusal,
+                .setTooLarge,
+                "the aggregate is the set's refusal, not one file's"
+            )
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: refused.path),
+            "nothing of the refused copy survives"
+        )
+
+        // The budget is spendable to its last byte: an exact fit that refused
+        // would turn every full set into a false refusal.
+        let fits = root.appendingPathComponent("snapshot-exact.mov", isDirectory: false)
+        let staged = try AddFilesToWorkIntent.snapshot(source, into: fits, setBudget: 768 * 1_024)
+
+        XCTAssertEqual(staged.input.byteCount, Int64(768 * 1_024), "the ceiling itself is allowed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fits.path), "a copy within budget is kept")
+    }
+
+    /// The budget belongs to the SET, so it only means something if the staging
+    /// loop spends it down: a loop that handed every file the whole envelope
+    /// ceiling would let twenty-four files each write it.
+    ///
+    /// Source-shaped because the loop lives inside `perform()`, which needs an
+    /// intent process, an App Group and a filesystem to reach — the three
+    /// things the rest of this file exists to avoid.
+    func testTheStagingLoopSpendsTheSetBudgetDownFileByFile() throws {
+        let path = "Conduck/Intents/AddFilesToWorkIntent.swift"
+        let body = try RefusalLaneSource.body(
+            ofFunction: "perform",
+            in: try RefusalLaneSource.source(at: path),
+            path: path
+        )
+
+        XCTAssertTrue(
+            body.contains("var remainingSetBytes = WorkCaptureEnvelope.maximumEnvelopeBytes"),
+            "the staging loop carries no set budget"
+        )
+        XCTAssertTrue(
+            body.contains("setBudget: remainingSetBytes"),
+            "a snapshot is not told what is left of the set, so the aggregate binds nothing while copying"
+        )
+        XCTAssertTrue(
+            body.contains("remainingSetBytes -= max(0, staged.input.byteCount)"),
+            "the budget is not spent down by what each snapshot actually held"
+        )
+    }
+
     // MARK: - The digest reads bytes without holding them
 
     /// BOUNDED MEMORY, not bounded I/O. The digest is the one thing in this file
@@ -653,6 +762,31 @@ final class WorkShortcutIntentsTests: XCTestCase {
             mimeType: nil,
             typeIdentifier: nil,
             byteCount: Int64(bytes.utf8.count)
+        )
+    }
+
+    /// A source whose REAL size and DECLARED size disagree — the shape a file
+    /// takes when it is replaced between the preflight that measured it and the
+    /// copy that stages it. Generated rather than written from a fixture: a
+    /// repeating pattern is all a ceiling test needs, and three chunks of it
+    /// cost nothing.
+    private static func writeFile(
+        named name: String,
+        byteCount: Int,
+        declaring declared: Int64,
+        under root: URL,
+        in folder: String
+    ) throws -> WorkCaptureFileInput {
+        let directory = root.appendingPathComponent(folder, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(name, isDirectory: false)
+        try Data(repeating: 0x41, count: byteCount).write(to: url, options: .atomic)
+        return WorkCaptureFileInput(
+            url: url,
+            displayName: name,
+            mimeType: nil,
+            typeIdentifier: nil,
+            byteCount: declared
         )
     }
 
