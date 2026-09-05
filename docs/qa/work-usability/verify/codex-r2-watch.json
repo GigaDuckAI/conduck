@@ -1,0 +1,38 @@
+{
+ "slice": "watch",
+ "verdict": "findings",
+ "round1": [
+  {
+   "id": "S1",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "WatchRecordingService.swift:1824-1830 returns through finishWorkCapture(.deferredToPhone) for every Work failure before any destructive claim. testAFailedWorkRelayKeepsTheRecordingAndShowsTheDeferralLine drives runRelay with codes 78 and 18 and checks the retained entry, existing audio, queue depth and outcome. Without this branch, both errors reach claims and the entry assertions fail. The Chat negative control still exercises terminal claiming."
+  },
+  {
+   "id": "S2",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "AppleRelayPendingQueue.swift:299-305 reads the persisted destination before reconciliation can claim; :459-470 passes the drained entry's destination and retains terminal Work failures while continuing to subsequent entries. The predicate at :538 retains every Work failure, including unknown throws. Removing that Work branch fails the terminal-error assertions; reverting either caller fails the destination source guard. Those source checks passed against HEAD and failed against the pre-fix source. The original old-phone recording-loss scenario is closed; the new settlement interaction is reported separately."
+  },
+  {
+   "id": "S3",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "WatchRecordingService.swift:1739 retains the displayed capture's relay token; :833 rejects absent or foreign settlement tokens. AppleRelayPendingQueue.swift:713-715 supplies the settled entry's token. WatchWorkCaptureView.swift:60-62 additionally scopes rendering to the route nonce. testALateSettlementForAnotherCaptureLeavesTheDisplayedLineAlone checks foreign, absent and matching tokens; removing the correlation guard fails its unchanged-outcome assertions. The view source guard also fails against the pre-fix source."
+  }
+ ],
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "major",
+   "title": "Cached transcription failures strand saved Work entries and can evict Chat recordings",
+   "file": "Conduck/ConduckWatch Watch App/Services/AppleRelayPendingQueue.swift:538",
+   "claim": "The new failure-retention rule leaves already-published Work recordings occupying queue capacity because the current phone caches terminal transcription errors without acknowledging publication. Ten such entries refuse further Work captures and cause a subsequently queued Chat recording to be evicted before retry.",
+   "evidence": "The phone publishes at Conduck/Conduck/Services/AppleSpeechRelayCoordinator.swift:416, but its transcription catch at :506-509 caches and sends only the error, ignoring the populated workCardID. Replays return that cached error at :366-372 before attempting publication or transcription. RelayReplyCache.swift:90 has capacity 16 and no expiry, so all ten Work errors can remain cached. The wrist now retains them in both live and deferred paths. AppleRelayPendingQueue.swift:357 applies caps before retrying; :877-879 selects the first Chat entry whenever total depth exceeds ten, and :914 deletes its audio.",
+   "scenario": "With both devices on HEAD, save ten Work recordings while the phone's selected Apple speech model is unavailable. Their playable cards are published, but code 18 is cached for each request and all wrist entries remain. Installing the model without restarting the phone does not settle them: retries hit the cache. Then record a Chat ask while the phone is unavailable. Once it is queued, the next drain sees ten Work entries plus that Chat entry and deletes the Chat recording before attempting its delivery.",
+   "fix": "When Work publication succeeded, return and cache an acknowledged Work success even if transcription subsequently fails, using an empty result.text and result.work=true. Preserve unstamped failure retention for older phones and phase-1 failures. Add coverage spanning publication success, transcription failure, cached replay and wrist settlement.",
+   "refutationAttempt": "Continuing past terminal Work failures prevents immediate FIFO starvation but never removes these cached entries. Correcting the speech configuration cannot bypass the cache; process restart or sufficient unrelated cache eviction is required. The old-phone parking limitation is documented, but this occurs with the current phone after successful publication. c1-phone-relay.md:384-390 and handoff.md:98 describe the remaining issue as copy-only; the new retention makes that assessment incomplete. Source checks confirmed the capacity rule selects the sole Chat entry for eviction in this state."
+  }
+ ],
+ "notes": "Reviewed 692608d..5c401df with ec8b27f..HEAD context. No files modified; no builds or XCTest suites run. Read-only checks confirmed 14 identical ordered wire literals, unchanged original 11 literals, unchanged Chat catch and completeEntry bodies, and ten added tests inside an existing Watch target member. No new Watch test file was added. Memory supplied worktree orientation only; conclusions rely on current source.\n"
+}

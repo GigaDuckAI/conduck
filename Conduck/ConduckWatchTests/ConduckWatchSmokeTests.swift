@@ -392,7 +392,48 @@ final class WatchWorkCaptureUITests: XCTestCase {
         XCTAssertNil(WatchCaptureDestination(rawValue: "Work"))
     }
 
+    /// The fourth line, and the one that is easiest to get wrong by reusing
+    /// another: the iPhone kept the RECORDING and had no words for it — the
+    /// exact mirror of `savedWordsOnly`. Saying "Saved to Work." here hides the
+    /// one thing the person has to do next; saying the words-only sentence
+    /// tells them their recording was thrown away, which is the opposite of
+    /// what happened. The wording is CarPlay's own for the same state, because
+    /// one product should not describe one outcome two ways.
+    func testTheWordlessSaveNamesTheHalfThatIsMissing() {
+        XCTAssertEqual(
+            WatchWorkCaptureCopy.terminalLine(for: .savedWithoutWords),
+            "Saved to Work. Add the words on your iPhone."
+        )
+        let lines = Self.durableOutcomes.map(WatchWorkCaptureCopy.terminalLine(for:))
+        XCTAssertEqual(
+            Set(lines).count, Self.durableOutcomes.count,
+            "Two durable outcomes render the same sentence: \(lines)"
+        )
+        XCTAssertEqual(WatchWorkCaptureCopy.logLabel(for: .savedWithoutWords), "withoutWords")
+        XCTAssertEqual(
+            WatchWorkCaptureCopy.symbolName(for: .savedWithoutWords),
+            "tray.and.arrow.down.fill",
+            "The card IS on the desk, so it wears the desk's glyph."
+        )
+    }
+
+    /// Settlement → line, in ONE place, because the live relay leg and the
+    /// deferred queue both read it and a screen contradicting the banner beside
+    /// it is the failure this mapping exists to prevent.
+    func testEverySettlementNamesItsOwnLine() {
+        XCTAssertEqual(WatchWorkCaptureOutcome.forSettlement(.workAcknowledged), .saved)
+        XCTAssertEqual(
+            WatchWorkCaptureOutcome.forSettlement(.workRecordingOnly), .savedWithoutWords,
+            "A stamped reply with no words reported a clean save, over a card with nothing on it."
+        )
+        XCTAssertEqual(WatchWorkCaptureOutcome.forSettlement(.workWordsOnly), .savedWordsOnly)
+        XCTAssertNil(
+            WatchWorkCaptureOutcome.forSettlement(.converseHop),
+            "A chat ask has no Work line; writing one would leave the next Work capture opening on it."
+        )
+    }
+
     private static let durableOutcomes: [WatchWorkCaptureOutcome] = [
-        .saved, .deferredToPhone, .savedWordsOnly
+        .saved, .deferredToPhone, .savedWordsOnly, .savedWithoutWords
     ]
 }

@@ -3144,6 +3144,17 @@
         }
       }
     },
+    "watch.work.capture.savedWithoutWords" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved to Work. Add the words on your iPhone."
+          }
+        }
+      }
+    },
     "watch.work.capture.savedWordsOnly" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -3239,6 +3250,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Saved to Work."
+          }
+        }
+      }
+    },
+    "watch.work.notification.savedWithoutWords" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved to Work. Add the words on your iPhone."
           }
         }
       }

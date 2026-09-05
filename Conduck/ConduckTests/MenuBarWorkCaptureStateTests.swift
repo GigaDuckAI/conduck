@@ -504,4 +504,174 @@ final class MenuBarWorkCaptureStateTests: XCTestCase {
         XCTAssertFalse(body.contains("armQuickCapture"),
                        "The Work lane may never latch the chat lane's destination snapshot: \(body)")
     }
+
+    // MARK: - The voice lane's own ownership and its own receipt
+
+    /// OWNERSHIP FIRST, SURFACE SECOND.
+    ///
+    /// `showPopover` reports the thread it opens onto as VISIBLE, and a thread
+    /// reported visible is acknowledged as read and loses its arrival banner.
+    /// The ⌃⌘W HUD is about to cover that thread, and nothing later can hand an
+    /// unread mark back — so the claim has to precede the summon rather than
+    /// arrive with the microphone start, which is a hop later.
+    func testTheWorkVoiceSummonTakesThePopoverBeforeItShowsIt() throws {
+        let controller = try Self.squeezedSource(at: Self.controllerPath)
+        let press = try RefusalLaneSource.body(
+            ofFunction: "handleWorkCapturePress",
+            in: controller,
+            path: Self.controllerPath
+        )
+        guard let claim = press.range(of: "coordinator.claimPopoverForWorkVoiceCapture()") else {
+            return XCTFail(
+                "The ⌃⌘W handler no longer claims the popover before summoning it, so the summon "
+                + "acknowledges whatever reply the HUD is about to cover: \(press.prefix(500))"
+            )
+        }
+        let before = String(press[..<claim.lowerBound])
+        let after = String(press[claim.upperBound...])
+
+        XCTAssertTrue(
+            before.contains("openComposeForWorkOnly() showPopover() return"),
+            "The one summon allowed ahead of the claim is the TEXT arm's, which returns — in text mode "
+            + "the popover really does show the thread above the compose band: \(before.prefix(400))"
+        )
+        XCTAssertEqual(
+            before.components(separatedBy: "showPopover()").count - 1, 1,
+            "A second summon ahead of the claim is the bug this guard exists for: \(before.prefix(400))"
+        )
+        XCTAssertTrue(
+            after.contains("showPopover()"),
+            "The voice summon has to FOLLOW the claim: \(after.prefix(400))"
+        )
+        XCTAssertTrue(
+            after.contains("beginWorkVoiceCapture()"),
+            "…and the microphone start still follows the summon: \(after.prefix(400))"
+        )
+
+        let coordinator = try Self.squeezedSource(at: Self.coordinatorPath)
+        let claimBody = try RefusalLaneSource.body(
+            ofFunction: "claimPopoverForWorkVoiceCapture",
+            in: coordinator,
+            path: Self.coordinatorPath
+        )
+        XCTAssertTrue(claimBody.contains("isSummoningWorkVoiceCapture = true"), claimBody)
+        XCTAssertTrue(
+            claimBody.contains("setPopoverVisibleConversation(nil)"),
+            "The claim is what takes the thread off screen; a claim that only raised a flag would let "
+            + "the summon mark it read anyway: \(claimBody)"
+        )
+        XCTAssertTrue(
+            coordinator.contains(
+                "var workCaptureIsActive: Bool { if isSummoningWorkVoiceCapture "
+                + "|| isStartingWorkVoiceCapture { return true }"
+            ),
+            "`showPopover` stands down on `workCaptureIsActive`, so the claim is only worth making "
+            + "while that property counts it."
+        )
+
+        let begin = try RefusalLaneSource.body(
+            ofFunction: "beginWorkVoiceCapture",
+            in: coordinator,
+            path: Self.coordinatorPath
+        )
+        guard let handover = begin.range(of: "isSummoningWorkVoiceCapture = false"),
+              let reentrancy = begin.range(of: "guard !workCaptureIsActive else") else {
+            return XCTFail("The start no longer takes the claim over: \(begin.prefix(400))")
+        }
+        XCTAssertTrue(
+            handover.upperBound < reentrancy.lowerBound,
+            "The start has to take the claim over BEFORE its own re-entrancy guard reads it, or every "
+            + "⌃⌘W refuses the capture its own press claimed the popover for: \(begin.prefix(400))"
+        )
+    }
+
+    /// The two Work receipts are not interchangeable.
+    ///
+    /// A TYPED note is inert: the words were written on the desk's own surface
+    /// and nothing carried them anywhere, so "Nothing was sent" is true. A
+    /// SPOKEN one was just transcribed by the speech provider the person
+    /// configured, and `STTClient`'s roster is mostly cloud vendors — so the
+    /// same sentence there denies the upload that produced the words on screen,
+    /// which is the one claim a privacy surface may never make.
+    func testTheVoiceReceiptNamesItsSpeechProviderAndTheTypedNoteKeepsItsInertness() throws {
+        let source = try Self.squeezedSource(at: Self.coordinatorPath)
+
+        let spokenPath = try RefusalLaneSource.body(
+            ofFunction: "noteWorkCaptureFinished",
+            in: source,
+            path: Self.coordinatorPath
+        )
+        XCTAssertTrue(
+            spokenPath.contains("\"workboard.menuBar.voice.saved\""),
+            "The voice completion no longer prints its own receipt: \(spokenPath.prefix(400))"
+        )
+        XCTAssertFalse(
+            spokenPath.contains("\"workboard.menuBar.saved\""),
+            "The voice completion borrowed the typed note's receipt, which denies the transcription "
+            + "that just happened: \(spokenPath.prefix(400))"
+        )
+
+        let typedPath = try RefusalLaneSource.body(
+            ofFunction: "saveQuickDraftToWork",
+            in: source,
+            path: Self.coordinatorPath
+        )
+        XCTAssertTrue(
+            typedPath.contains("\"workboard.menuBar.saved\""),
+            "The typed note's receipt is true and stays: \(typedPath.prefix(400))"
+        )
+        XCTAssertFalse(
+            typedPath.contains("\"workboard.menuBar.voice.saved\""),
+            "…and it may not borrow the voice line either — nothing was handed to a speech provider "
+            + "here: \(typedPath.prefix(400))"
+        )
+
+        let strings = try Self.catalogStrings()
+        let spoken = try XCTUnwrap(
+            Self.englishValue(strings["workboard.menuBar.voice.saved"]),
+            "workboard.menuBar.voice.saved has no English row — the source default would ship "
+            + "untranslatable"
+        ).lowercased()
+        XCTAssertTrue(
+            spoken.contains("speech provider"),
+            "The voice receipt has to name where the audio actually went: \(spoken)"
+        )
+        for denial in ["nothing was sent", "nothing is sent", "nothing leaves"] {
+            XCTAssertFalse(
+                spoken.contains(denial),
+                "The recording was handed to the configured speech provider, so this receipt may not "
+                + "deny it: \(spoken)"
+            )
+        }
+
+        let typed = try XCTUnwrap(
+            Self.englishValue(strings["workboard.menuBar.saved"]),
+            "workboard.menuBar.saved has no English row"
+        ).lowercased()
+        XCTAssertTrue(
+            typed.contains("nothing was sent"),
+            "The typed note's inertness promise is TRUE and is the reason the lane exists: \(typed)"
+        )
+    }
+
+    // MARK: - Catalog access (the shipped row, not the source default)
+
+    /// The `strings` table of the app target's catalog. Read from disk because
+    /// the catalog's `en` value wins over a source `defaultValue:` at runtime —
+    /// a guard that resolved the string would prove nothing about the row that
+    /// ships.
+    private static func catalogStrings() throws -> [String: Any] {
+        let url = RefusalLaneSource.projectContainerURL
+            .appendingPathComponent("Conduck/Localizable.xcstrings")
+        let json = try JSONSerialization.jsonObject(with: try Data(contentsOf: url)) as? [String: Any]
+        return try XCTUnwrap(json?["strings"] as? [String: Any], "the catalog has no strings table")
+    }
+
+    private static func englishValue(_ entry: Any?) -> String? {
+        guard let entry = entry as? [String: Any],
+              let localizations = entry["localizations"] as? [String: Any],
+              let english = localizations["en"] as? [String: Any],
+              let unit = english["stringUnit"] as? [String: Any] else { return nil }
+        return unit["value"] as? String
+    }
 }

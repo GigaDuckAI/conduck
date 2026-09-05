@@ -318,6 +318,14 @@ nonisolated enum WatchWorkCaptureCopy {
                 "watch.work.capture.savedWordsOnly",
                 defaultValue: "Saved the words to Work. Update Conduck on your iPhone to keep recordings."
             ))
+        case .savedWithoutWords:
+            // The mirror of the line above, and the wording CarPlay already
+            // speaks for the same state: the recording is on the desk, the
+            // words are not, and the iPhone is where they get added.
+            return String(localized: LocalizedStringResource(
+                "watch.work.capture.savedWithoutWords",
+                defaultValue: "Saved to Work. Add the words on your iPhone."
+            ))
         case .refused(let reason):
             return reason
         }
@@ -328,7 +336,7 @@ nonisolated enum WatchWorkCaptureCopy {
     /// so the end of the flow visibly answers the button that began it.
     static func symbolName(for outcome: WatchWorkCaptureOutcome) -> String {
         switch outcome {
-        case .saved, .savedWordsOnly: return "tray.and.arrow.down.fill"
+        case .saved, .savedWordsOnly, .savedWithoutWords: return "tray.and.arrow.down.fill"
         case .deferredToPhone: return "clock.arrow.circlepath"
         case .refused: return "exclamationmark.triangle.fill"
         }
@@ -339,7 +347,7 @@ nonisolated enum WatchWorkCaptureCopy {
     /// green tint; a refusal is the only outcome that captured nothing.
     static func isReassuring(_ outcome: WatchWorkCaptureOutcome) -> Bool {
         switch outcome {
-        case .saved, .deferredToPhone, .savedWordsOnly: return true
+        case .saved, .deferredToPhone, .savedWordsOnly, .savedWithoutWords: return true
         case .refused: return false
         }
     }
@@ -351,6 +359,7 @@ nonisolated enum WatchWorkCaptureCopy {
         case .saved: return "saved"
         case .deferredToPhone: return "deferred"
         case .savedWordsOnly: return "wordsOnly"
+        case .savedWithoutWords: return "withoutWords"
         case .refused: return "refused"
         }
     }

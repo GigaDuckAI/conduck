@@ -23349,6 +23349,17 @@
         }
       }
     },
+    "workboard.menuBar.voice.saved" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Added to Work. The words came from your speech provider."
+          }
+        }
+      }
+    },
     "workboard.sync.banner.noAccount" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {

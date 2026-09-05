@@ -1,0 +1,118 @@
+{
+ "slice": "cross",
+ "verdict": "findings",
+ "round1": [
+  {
+   "id": "S1",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "WatchRecordingService.swift:1824 retains Work entries on every live relay failure. AppleRelayPendingQueue.swift:299 and :459 use the persisted destination before claiming in reconciliation and draining. Chat retains its previous error classification. testAFailedWorkRelayKeepsTheRecordingAndShowsTheDeferralLine checks the real queue entry and audio file after retryable and terminal failures; restoring the old catch would fail its assertions."
+  },
+  {
+   "id": "S2",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "still-open",
+   "evidence": "The streamed digest distinguishes stable same-name, same-size files, and testTwoFilesAlikeInNameAndSizeButNotInBytesAreDifferentCaptures would fail without it. However, identity hashes the external source before publication copies it. A same-size edit between those operations still publishes different bytes under an earlier capture's identity. See R1."
+  },
+  {
+   "id": "S3",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "MenuBarCoordinator.swift:2069 snapshots compose.target, and :2100 clears that named slot. clearCommitted at :2661 compares that slot's text and changes the visible target only if it still names the committed slot. Equal text in Chat and Work no longer clears Chat after a Work save. The added tests exercise switching in both directions, and the production wiring guard requires the snapshot and its use."
+  },
+  {
+   "id": "S4",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "still-open",
+   "evidence": "The shell appearance hooks repair navigation once a window appears, and the notification tests exercise that repair. The fully quit Mac case remains explicitly unresolved in fix-r1-shortcuts.md:86: notifications arriving before scene observers exist open no window. All new recovery hooks require appearance of that window. See R3."
+  },
+  {
+   "id": "S5",
+   "fixerVerdict": "open",
+   "yourVerdict": "recorded",
+   "evidence": "fix-r1-desk.md:77 accurately records the lost vault-image export path. Images still route to the gallery, which has no Share action. The fixnote correctly distinguishes this regression from the plan's narrower requirement to retain sharing for files through Quick Look. It does not claim an implemented replacement."
+  },
+  {
+   "id": "S6",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "still-open",
+   "evidence": "RecordWorkNoteIntent and intent.workVoiceNote.description now name the selected speech provider; the new description test would reject the previous denial. The Mac voice-success branch still uses workboard.menuBar.saved and displays 'Added to Work. Nothing was sent.' after cloud transcription. That explicitly identified half of S6 was not fixed. See R2."
+  },
+  {
+   "id": "S7",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "The original value-copy test remains vacuous as a dismissal test, but testNoPopoverCloseHookTouchesTheWorkComposition now reads both actual production close hooks, checks positive extraction controls, and rejects discard/clear/navigation mutations. Adding the originally proposed discard to popoverDidClose now fails this additional guard."
+  },
+  {
+   "id": "S8",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "AttachmentFullScreenView.swift:195 consumes a macOS dispatch memory-pressure source and sets residencyRadius to zero. The existing residency logic then excludes neighboring originals. testBothPlatformsShrinkTheResidencyWindowUnderMemoryPressure would fail against the previous source because the dispatch source and second radius-zero assignment were absent. Actual system-pressure delivery was not exercised."
+  },
+  {
+   "id": "S9",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "still-open",
+   "evidence": "README, spec, project-structure and handoff updates landed, including the Work relay and CarPlay preservation distinctions. However, the README introduces an incorrect transfer denial, and the handoff repeats the disproven CarPlay ownership rationale. The spec also omits the content-based Shortcut identity and completion ownership across Mac composition switches. See R4 and R5."
+  }
+ ],
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "major",
+   "title": "The content digest does not identify the bytes actually published",
+   "file": "Conduck/Conduck/Intents/AddFilesToWorkIntent.swift:295",
+   "claim": "A mutable source can still overwrite an earlier capture because hashing and copying read the external file separately.",
+   "evidence": "perform computes captureIdentity before awaiting publishFileCapture at :184. The digest closes its FileHandle before WorkCaptureInbox.stagePayloads copies the source at WorkCaptureInbox.swift:1211. Publication checks sizes, never the staged content digest. ConversationStore+Workboard.swift:946 deletes superseded blobs and :991 repoints eligible existing rows under the reused material ID.",
+   "scenario": "First capture and import memo.txt containing 'alpha'. During a later invocation, hash the same five-byte contents, then let an editor or file provider replace them with 'bravo' before the queue copies the source. The second envelope has the first capture's ID but newer creation time and different bytes, so importing it replaces the first card's payload.",
+   "fix": "Copy each source into an owned snapshot first, derive identity from those staged bytes, and publish those same bytes. Refuse digest-read errors rather than substituting a shared sentinel. Add a regression that changes the external source between identity calculation and publication.",
+   "refutationAttempt": "The added test proves different stable files hash differently, but never changes a source between operations. Size validation cannot distinguish 'alpha' from 'bravo'. The material publication lock serializes database writes; it does not lock the external source. The older-row protection permits this later invocation to repoint the earlier card."
+  },
+  {
+   "id": "R2",
+   "severity": "minor",
+   "title": "Mac voice completion still denies its cloud transcription transfer",
+   "file": "Conduck/Conduck/MenuBar/MenuBarCoordinator.swift:2030",
+   "claim": "Successful Work voice capture still displays 'Nothing was sent' after uploading audio to the configured speech provider.",
+   "evidence": "finishWorkVoiceCapture calls workVoiceRecorder.stopAndUpload at :1969. InAppAudioRecorder.swift:861 calls STTClient.shared.transcribe for cloud speech. noteWorkCaptureFinished then selects workboard.menuBar.saved at :2030; its source default and catalog value retain the denial.",
+   "scenario": "Configure cloud transcription, record through the Mac Work hotkey, and finish successfully. The success receipt denies the transfer that just occurred.",
+   "fix": "Give voice completion an accurate, separate receipt key and guard the production receipt selection as well as its catalog wording.",
+   "refutationAttempt": "The renamed intent description and recorder privacy text acknowledge speech processing, but neither changes this contradictory success receipt. The new copy test inspects only the intent description."
+  },
+  {
+   "id": "R3",
+   "severity": "minor",
+   "title": "Cold Mac recovery still depends on a window appearing independently",
+   "file": "Conduck/Conduck/ConduckApp.swift:286",
+   "claim": "The fix repairs the destination of an appearing window but does not complete the pending route when the initial window-opening notifications were missed.",
+   "evidence": "RecordWorkNoteIntent posts transient notifications after setting the pending flag. The new Mac recovery call is inside the main window's onAppear; its openWindow handlers are also scene subscribers. AppDelegate.swift:80 deliberately suppresses automatic window presentation and has no pending Work-route activation hook. fix-r1-shortcuts.md:86 explicitly records this residual.",
+   "scenario": "On a fully quit, onboarded Mac, perform runs before the scene observers install. Both notifications are missed. The pending request waits until the user independently opens a window.",
+   "fix": "Handle the pending request from an application-lifetime launch or activation path that can create the main window, leaving recorder consumption with the visible composer.",
+   "refutationAttempt": "The new tests prove notification replay and presence of shell call sites. They do not establish that a missed cold-launch request creates a window. The fixer also explicitly excludes this remaining case from the implemented repair."
+  },
+  {
+   "id": "R4",
+   "severity": "minor",
+   "title": "The README introduces an incorrect no-transfer promise",
+   "file": "README.md:55",
+   "claim": "The new Work description says 'Nothing on it is sent anywhere', although Work recordings use configured cloud transcription and Work payloads sync through iCloud.",
+   "evidence": "InAppAudioRecorder.swift:861 uploads Work audio through STTClient. The same README paragraph says cards reach other devices through private iCloud, and spec.md:430 describes syncing payload bytes through CloudKit.",
+   "scenario": "A reader chooses Work voice capture believing its contents remain on the capturing device, while their configured cloud speech provider receives the recording.",
+   "fix": "Describe the actual boundary: Work never initiates a conversation or gateway turn; recordings use the selected speech provider and eligible materials sync through private iCloud.",
+   "refutationAttempt": "The adjacent 'nothing ... becomes a turn' statement is accurate, but it does not narrow the separate, absolute claim that nothing is sent anywhere."
+  },
+  {
+   "id": "R5",
+   "severity": "minor",
+   "title": "The handoff restores the ownership rationale the CarPlay fixer disproved",
+   "file": "docs/qa/work-usability/handoff.md:106",
+   "claim": "The new handoff incorrectly records the CarPlay ownership gate as absent and unnecessary, contradicting both the implemented fix and its explicit preservation instruction.",
+   "evidence": "U-30 says there is no ownership re-check and calls that safe because attachment is idempotent by capture ID. CarPlayRecordingService.swift:1940 now requires stillOwnsCapture before attachment. fix-r1-carplay.md explains that different transcripts overwrite and its Nobody undo section requires this gate. U-22 at handoff.md:98 also still says terminal Work relay failures display failure, although WatchRecordingService.swift:1829 now reports deferral. spec.md:434 omits the Shortcut content-identity rule, and its Mac paragraph at :458 omits ownership of completion by the snapshotted composition.",
+   "scenario": "A maintainer follows the new handoff when simplifying CarPlay attachment and removes the ownership check on the documented premise that it is redundant, reopening transcript overwrite after retry takeover.",
+   "fix": "Reconcile the handoff with the fixed code and remove the disproven safety rationale. State the content-based capture identity and composition-completion ownership as concise invariants in the appropriate documentation.",
+   "refutationAttempt": "The original CarPlay fixnote explicitly supersedes its earlier rationale, but the newly committed handoff presents that obsolete rationale as a current open item. Its reference to the fixnotes does not resolve the contradiction."
+  }
+ ],
+ "notes": "Reviewed 692608d..5c401df, consulting ec8b27f for original behavior. No files were modified and no builds or simulator tests were run. Catalogs parsed with duplicate-key detection: main 2295, Watch 316, iOS extension 43, Mac extension 42; no duplicate keys. All added/renamed rows have production references, active fix-diff keys have rows, and no old intent.workRecordNote references remain in production Swift or catalogs. All three mirror triplets remain byte-identical and unchanged; both Wire enums retain the same 14 literals unchanged. No newly added test was found to pass vacuously for its stated narrow assertion; source guards do not establish runtime UI behavior. Diff whitespace, changed-source SPDX headers, legal-copy equality and spec word limits passed read-only checks. All 17 findings in the five platform lenses received fixer treatment; desk S3/cross S5 is honestly open, and shortcuts S2/cross S4 records its residual. The Mac receipt portion of cross S6 remains unaddressed. Historical memory was used only for worktree orientation; conclusions were checked against current files.\n"
+}

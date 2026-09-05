@@ -348,13 +348,18 @@ final class CarPlayRecordingService {
     @ObservationIgnored var isVoiceModalPresented: (@MainActor () -> Bool)?
 
     /// Fired when the microphone could not be started at all (activation
-    /// failure, or engine-start retry exhaustion) and the scene is still
-    /// active. The scene delegate uses it to show a one-shot visible hint on
-    /// the picker — the ONLY feedback channel these failures have, because
-    /// their sessions end SILENTLY by doctrine (speaking over a wedged audio
-    /// session is what escalates a recoverable start failure into a
-    /// `mediaserverd` teardown + CarPlay-scene drop). Display copy lives in
-    /// the scene layer. Nil wiring is a no-op.
+    /// failure, capture-file/VAD setup failure, or engine-start retry
+    /// exhaustion) and the scene is still active. It is the scene's ONLY
+    /// signal for these ends, because their sessions end SILENTLY by doctrine
+    /// (speaking over a wedged audio session is what escalates a recoverable
+    /// start failure into a `mediaserverd` teardown + CarPlay-scene drop) AND
+    /// their `endSession` cannot reach the state observer: the listen never
+    /// left `.idle`, so the closing `state = .idle` is an equal assignment
+    /// `@Observable` does not publish. The scene therefore owns both halves —
+    /// raise the one-shot picker hint AND run the end's normal
+    /// dismiss-then-refresh — see `endSilentlyAfterCaptureStartFailure`, which
+    /// is the only caller and fires this AFTER the teardown. Display copy
+    /// lives in the scene layer. Nil wiring is a no-op.
     @ObservationIgnored var onCaptureStartFailed: (@MainActor () -> Void)?
 
     // MARK: - Recording state
@@ -731,12 +736,10 @@ final class CarPlayRecordingService {
                 // End SILENTLY (no error TTS): there is no usable session to
                 // speak on, and speaking over a half-activated session is what
                 // escalates a recoverable start failure into a `mediaserverd`
-                // teardown + CarPlay-scene drop. The one-shot picker hint is
-                // the feedback instead (gated on the modal still being up, same
-                // reasoning as the retry-exhaustion site — see
-                // `startCaptureEngineWithRetry`'s caller).
-                if isSceneActive, isVoiceModalPresented?() ?? true { onCaptureStartFailed?() }
-                endSession(speak: nil)
+                // teardown + CarPlay-scene drop. The picker hint — and the
+                // modal dismiss that has to go with it — is the feedback
+                // instead: see `endSilentlyAfterCaptureStartFailure`.
+                endSilentlyAfterCaptureStartFailure()
                 return
             }
         }
@@ -771,7 +774,7 @@ final class CarPlayRecordingService {
                 interleaved: false
             )
         } catch {
-            endSession(speak: nil)
+            endSilentlyAfterCaptureStartFailure()
             return
         }
 
@@ -807,7 +810,7 @@ final class CarPlayRecordingService {
             try await detector.start()
         } catch {
             try? FileManager.default.removeItem(at: url)
-            endSession(speak: nil)
+            endSilentlyAfterCaptureStartFailure()
             return
         }
 
@@ -823,15 +826,11 @@ final class CarPlayRecordingService {
             detector.stop()
             try? FileManager.default.removeItem(at: url)
             // Recovery may have ended the session (End / disconnect mid-retry) —
-            // only end here if it is still live. The hint fires BEFORE the end,
-            // so the `.idle`-driven picker refresh already sees it. It is also
-            // gated on the voice modal still being up: a retry aborted because
-            // the DRIVER dismissed the modal is not a microphone failure, and
-            // "Mic couldn't start" would be a false accusation — while a
-            // genuine start failure always still has the modal presented (g1).
+            // only end here if it is still live (the shared terminal re-checks
+            // the same flag; the explicit test is kept because THIS is the site
+            // where recovery can have raced us).
             if sessionActive {
-                if isSceneActive, isVoiceModalPresented?() ?? true { onCaptureStartFailed?() }
-                endSession(speak: nil)
+                endSilentlyAfterCaptureStartFailure()
             }
             return
         }
@@ -894,6 +893,38 @@ final class CarPlayRecordingService {
         state = .recording
         scheduleMaxDurationTimer()
         scheduleSilenceTimer(isFollowUp: isFollowUp)
+    }
+
+    /// Terminal path for a listen that FAILED BEFORE `.recording`: end the
+    /// session silently, then TELL the scene it ended.
+    ///
+    /// The notification is not a nicety, and its position after the teardown is
+    /// the whole point. `endSession` normally reaches the scene through
+    /// `state = .idle` — but a listen that never reached `.recording` leaves
+    /// `state` already `.idle`, and `@Observable` publishes nothing for an
+    /// equal assignment, so the scene's state observer never fires. Left to
+    /// that assignment alone the voice modal stays presented over a DEAD
+    /// session whose "End" button is already a no-op (`endSession` guards on
+    /// `sessionActive`, which this call just cleared), the audio session is
+    /// never deactivated in the dismiss completion, and the one-shot
+    /// "Mic couldn't start" hint is never rendered. So `onCaptureStartFailed`
+    /// fires AFTER the teardown and carries both jobs: raise the hint AND
+    /// finish the end. Firing it after costs the ordering nothing on the
+    /// re-arm path, where `state` really does change: that observation is
+    /// delivered on a main-actor hop, so its refresh still sees the flag.
+    ///
+    /// Gated on the scene being foreground and the voice modal still being up:
+    /// a start aborted because the DRIVER dismissed the modal is not a
+    /// microphone failure, and "Mic couldn't start" would be a false
+    /// accusation — while a genuine start failure always still has the modal
+    /// presented (g1). The `sessionActive` guard keeps a start that lost its
+    /// session mid-`await` (End / disconnect) from accusing the microphone of
+    /// a failure the driver caused: that end owns its own scene transition.
+    private func endSilentlyAfterCaptureStartFailure() {
+        guard sessionActive else { return }
+        let shouldNotifyScene = isSceneActive && (isVoiceModalPresented?() ?? true)
+        endSession(speak: nil)
+        if shouldNotifyScene { onCaptureStartFailed?() }
     }
 
     /// Build a fresh `AVAudioEngine`, install the capture tap, and `start()` it —

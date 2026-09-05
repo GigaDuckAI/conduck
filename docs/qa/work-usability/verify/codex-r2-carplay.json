@@ -1,0 +1,38 @@
+{
+ "slice": "carplay",
+ "verdict": "findings",
+ "round1": [
+  {
+   "id": "S1",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "CarPlayRecordingService.swift:1940 checks stillOwnsCapture before attachment, with isCurrentListen checks on both outcomes. Refusal neither writes nor disarms. PendingRetryGuard.swift:242 correctly permits completion when preservation failed and no competing queue entry exists. The new ownership test's source predicates pass on HEAD and fail against 692608d."
+  },
+  {
+   "id": "S2",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "CarPlayRecordingService.swift:1820 installs cleanup for unsuccessful secureWorkNote exits; :1435 covers caller exits before ownership transfers to STT at :1575. STTClient.swift:217 installs its cleanup before every transcription branch. Retry uses separate preserved bytes, rematerialized at ContentView.swift:1743. The new cleanup test's source predicates pass on HEAD and fail against 692608d."
+  },
+  {
+   "id": "S3",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "still-open",
+   "evidence": "The no-gateway renderer now includes the hint, but an initial startup failure never triggers that renderer. beginWorkNote leaves state at .idle; startup failures call endSession(speak: nil), which assigns .idle again. The scene observes only state, and Observation suppresses equal-value assignments. The new renderer test detects the old missing branch but does not cover this lifecycle failure; see R1."
+  }
+ ],
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "minor",
+   "title": "Initial microphone failures never trigger the new hint or modal dismissal",
+   "file": "Conduck/Conduck/CarPlay/CarPlaySceneDelegate.swift:725",
+   "claim": "S3 remains reproducible because the added hint depends on a picker refresh that silent initial-start failures do not schedule.",
+   "evidence": "CarPlayRecordingService.State is Equatable (:142), initially .idle (:162). beginWorkNote (:603) changes sessionActive but leaves state unchanged; state becomes .recording only after successful startup (:894). Activation failure (:738) or exhausted engine retries (:833) sets the hint callback and calls endSession(speak: nil), whose final assignment is state = .idle (:2791). CarPlaySceneDelegate.swift:124 only sets the hint flag, while :1065 observes only service.state. Equal assignments bypass notification in the installed Observation macro, matching the [official Swift Observable macro](https://github.com/swiftlang/swift/blob/swift-6.2-RELEASE/lib/Macros/Sources/ObservationMacros/ObservableMacro.swift#L342). Consequently applyState(.idle), dismissal and refreshPicker are not invoked.",
+   "scenario": "With microphone permission granted and no gateway configured, let the initial picker refresh finish. Tap Add to Work and encounter an activation failure or exhausted engine-start retries before recording begins. The session ends internally, but the Listening modal remains and the new microphone-failure hint is not shown. If activation succeeded before engine failure, dismissal-driven audio deactivation is also missed.",
+   "fix": "Explicitly notify the scene after silent startup teardown so it dismisses the modal and refreshes the picker without relying on an idle-to-idle assignment. Add a regression covering the startup-failure event path.",
+   "refutationAttempt": "Checked other observed properties, speech completion, conversation notifications and the End button. The observer tracks only state; an initial silent failure has no speech completion or conversation write. End subsequently reaches endSession's sessionActive guard and returns. An unrelated later scene activation can recover the UI, but does not close the reported scenario. CarPlayWorkNoteTests.swift:482 checks renderer text only and passes with this failure intact."
+  }
+ ],
+ "notes": "Reviewed 692608d..5c401df03d16d4712492ebce0f2ea1a11d000438 with whole-wave context. Read-only source-predicate comparisons confirmed all three new guards reject pre-fix source; XCTest was not executed. Scoped diff checks passed and the worktree remained clean. No builds or simulator tests were run. System tool shims emitted Xcode tool-discovery messages. No additional fix-induced defects were substantiated."
+}

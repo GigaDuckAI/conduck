@@ -335,6 +335,138 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
         )
     }
 
+    // MARK: - Phase 2 settles without words: the recording is still kept
+
+    func testASettledTranscriptionFailureOnAPublishedCaptureIsAcknowledged() {
+        // The defect: a card standing on the desk was reported to the wrist as
+        // a failure, so the wrist kept the (now redundant) clip. A Work entry
+        // never ages out and the phone answers every re-fire of this requestID
+        // from its cache, so "kept" meant FOR EVER — ten of them refuse the
+        // eleventh capture and push a queued chat ask out of the queue.
+        for settled in [
+            AppError.appleSpeechModelNotInstalled,
+            .audioProcessingFailed,
+            .audioInvalid,
+            .audioTooLarge,
+            .sttMissingAPIKey,
+            .sttCustomEndpointNotConfigured,
+        ] {
+            XCTAssertFalse(settled.isRetryable, "fixture drift: \(settled) is not a settled verdict")
+            XCTAssertTrue(
+                AppleSpeechRelayCoordinator.acknowledgesRecording(after: settled),
+                """
+                \(settled) is a verdict every re-fire reproduces, so no later attempt can add the \
+                words — and the recording is already on the desk. Answering it as a failure leaves \
+                the wrist holding a clip it can never settle.
+                """
+            )
+        }
+    }
+
+    func testARetryableTranscriptionFailureStillTravelsBackAsAnError() {
+        // The other half of the rule, and the reason it is not simply "always
+        // acknowledge": these verdicts are the phone saying "not right now".
+        // They are never cached, the wrist keeps its entry, and the very next
+        // re-fire can still land the words on the card. Acknowledging here
+        // would throw the transcript away to save a retry.
+        for transient in [
+            AppError.sttProviderUnreachable,
+            .sttKeyUnreadable,
+            .workDeskWriteFailed,
+        ] {
+            XCTAssertTrue(transient.isRetryable, "fixture drift: \(transient) is not retryable")
+            XCTAssertFalse(
+                AppleSpeechRelayCoordinator.acknowledgesRecording(after: transient),
+                "\(transient) can still succeed on the same bytes; the wrist keeps its entry and wins the words."
+            )
+        }
+    }
+
+    func testTheAcknowledgementIsASuccessReplyWithNoWordsInIt() {
+        // Success-SHAPED, with an empty transcript — and NO new wire literal:
+        // `result.text` and `result.work` are the two keys a stamped work reply
+        // already carries, and emptiness is the value that says no words came.
+        let acknowledgement = AppleSpeechRelayCoordinator.workRecordingAcknowledgement()
+        XCTAssertEqual(acknowledgement.text, "")
+        XCTAssertNil(acknowledgement.errorCode, "an acknowledgement is not a failure")
+        XCTAssertEqual(acknowledgement.workSaved, true)
+
+        let payload = acknowledgement.payload(requestID: "req-ack")
+        XCTAssertEqual(payload.count, 4, "the stamped work shape — never a fifth key for this state")
+        XCTAssertEqual(payload[AppleSpeechRelayCoordinator.Wire.resultTextKey] as? String, "")
+        XCTAssertEqual(payload[AppleSpeechRelayCoordinator.Wire.resultWorkSavedKey] as? Bool, true)
+        XCTAssertNil(
+            payload[AppleSpeechRelayCoordinator.Wire.resultErrorCodeKey],
+            "an error slot beside the stamp is a reply the wrist reads as a failure"
+        )
+    }
+
+    func testAReplayedAcknowledgementSettlesTheWristToo() {
+        // The cache is what a re-fire hits FIRST, before publication and before
+        // transcription. A replay that carried the old error would re-strand the
+        // very entry this fix exists to settle.
+        let cache = RelayReplyCache()
+        cache.store(AppleSpeechRelayCoordinator.workRecordingAcknowledgement(), forKey: "req-ack")
+        let replayed = cache.cachedReply(forKey: "req-ack")
+        XCTAssertEqual(replayed?.workSaved, true)
+        XCTAssertEqual(replayed?.text, "")
+        XCTAssertNil(replayed?.errorCode)
+    }
+
+    func testBothTranscriptionFailureArmsAnswerAPublishedCaptureFirst() throws {
+        // Structural, because `processRelayRequest` has no seam: it needs an
+        // activated `WCSession` and a paired watch. What has to hold is an
+        // ORDER — in each catch arm the published-capture branch comes before
+        // the error reply — and a missing branch is one deleted `if`.
+        let source = try String(
+            contentsOf: Self.projectContainerURL()
+                .appendingPathComponent("Conduck/Services/AppleSpeechRelayCoordinator.swift"),
+            encoding: .utf8
+        )
+        let code = Self.strippingComments(source)
+        let catchStart = try XCTUnwrap(
+            code.range(of: "catch let appError as AppError")?.lowerBound,
+            "the typed catch arm has moved; re-anchor this guard on whatever replaces it"
+        )
+        // Bounded at the next declaration so the helper's own definition,
+        // further down the file, is not counted as a third call site.
+        let tailEnd = try XCTUnwrap(
+            code.range(of: "private func transcribeViaCustomEndpoint")?.lowerBound,
+            "the coordinator's next declaration has been renamed; re-anchor this guard's end"
+        )
+        XCTAssertLessThan(catchStart, tailEnd, "extractor sanity: the catch arms precede the next declaration")
+        let tail = String(code[catchStart..<tailEnd])
+
+        let acknowledgements = Self.occurrences(of: "shipWorkRecordingAcknowledgement(", in: tail)
+        let errorReplies = Self.occurrences(of: "sendReply(requestID: requestID, errorCode:", in: tail)
+        XCTAssertEqual(
+            acknowledgements.count, 2,
+            """
+            Both transcription-failure arms — the typed one and the unknown-error one — must ask \
+            whether the recording is already on the desk. An arm that stopped asking answers a \
+            standing card with a failure, and the wrist holds its clip for ever.
+            """
+        )
+        XCTAssertEqual(errorReplies.count, 2, "extractor sanity: both arms still ship an error reply")
+        for (acknowledgement, errorReply) in zip(acknowledgements, errorReplies) {
+            XCTAssertLessThan(
+                acknowledgement.lowerBound, errorReply.lowerBound,
+                """
+                An arm ships its error reply BEFORE consulting the published capture, so the \
+                acknowledgement can never be the answer.
+                """
+            )
+        }
+        XCTAssertTrue(
+            code.contains("workCardID != nil, Self.acknowledgesRecording(after:"),
+            """
+            The branch no longer reads BOTH facts. Publication alone is not enough (a retryable \
+            verdict must keep travelling back as an error so the words can still arrive), and \
+            the verdict alone is not enough (an unpublished capture has nothing to acknowledge).
+            """
+        )
+    }
+
     // MARK: - Isolation: nothing on this branch reaches a gateway
 
     func testTheRelayCoordinatorNeverReachesAGatewayOrAConversation() throws {
@@ -381,6 +513,18 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+    }
+
+    /// Every range at which `needle` appears, in order — the ordering is what
+    /// the guard above measures, so a bare count would not do.
+    private static func occurrences(of needle: String, in haystack: String) -> [Range<String.Index>] {
+        var found: [Range<String.Index>] = []
+        var searchStart = haystack.startIndex
+        while let next = haystack.range(of: needle, range: searchStart..<haystack.endIndex) {
+            found.append(next)
+            searchStart = next.upperBound
+        }
+        return found
     }
 
     /// Swift source with every comment removed, so a guard reads CODE and not

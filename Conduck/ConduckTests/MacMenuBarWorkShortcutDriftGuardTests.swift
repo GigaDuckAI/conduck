@@ -282,6 +282,50 @@ final class MacMenuBarWorkShortcutDriftGuardTests: XCTestCase {
                        + "guard that trips on prose gets deleted by the next person who reads it.")
     }
 
+    /// The pin has to cover the START, not only the live recording.
+    ///
+    /// The microphone can take seconds to come up — a permission prompt, the
+    /// speech preflight — and `workVoiceRecorder.state` reads `.idle` for every
+    /// bit of it. A pin scoped to `.recording` therefore leaves the popover
+    /// `.transient` across exactly the window in which there is nothing on
+    /// screen to justify it yet: one click outside, and the recording begins
+    /// behind a closed popover with no surface anywhere to stop it.
+    func testTheWorkVoiceStartPinsThePopoverBeforeTheRecordingIsLive() throws {
+        let behavior = try Self.controllerFunction("updatePopoverBehavior")
+        let pin = try XCTUnwrap(
+            behavior.range(of: "coordinator.workVoiceStartIsInFlight")?.lowerBound,
+            "`updatePopoverBehavior` pins only the LIVE recording, so a click-away during the start "
+            + "closes the popover and the microphone comes up behind it."
+        )
+        let applicationDefined = try XCTUnwrap(
+            behavior.range(of: ".applicationDefined", range: pin..<behavior.endIndex)?.lowerBound,
+            "The start no longer resolves to `.applicationDefined`."
+        )
+        XCTAssertLessThan(pin, applicationDefined)
+
+        let observed = try Self.controllerFunction("observe")
+        XCTAssertTrue(
+            observed.contains("coordinator.workVoiceStartIsInFlight"),
+            "The observation set no longer tracks the claim, so nothing re-evaluates the popover "
+            + "behaviour when the start begins — or, worse, when it ends and the pin must be released."
+        )
+
+        let press = try Self.controllerFunction("handleWorkCapturePress")
+        guard let claim = press.range(of: "coordinator.claimPopoverForWorkVoiceCapture()"),
+              let applied = press.range(of: "updatePopoverBehavior()") else {
+            return XCTFail("The ⌃⌘W press no longer pins the popover as it claims it: \(press.prefix(400))")
+        }
+        XCTAssertTrue(
+            claim.upperBound <= applied.lowerBound,
+            "The pin is applied from the press itself rather than waiting for an observation tick: "
+            + "\(press.prefix(400))"
+        )
+        XCTAssertTrue(
+            press[applied.upperBound...].contains("showPopover()"),
+            "…and before the summon it protects: \(press.prefix(400))"
+        )
+    }
+
     // MARK: - Source access
 
     /// Comment-stripped and whitespace-free, so indentation and line breaks

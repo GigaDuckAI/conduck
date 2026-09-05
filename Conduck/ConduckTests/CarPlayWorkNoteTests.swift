@@ -515,6 +515,81 @@ final class CarPlayWorkNoteTests: XCTestCase {
                        "a recent list here would need the hint priced into its own budget")
     }
 
+    /// The hint only becomes visible if something REFRESHES the picker, and a
+    /// startup failure has nothing to refresh it with: the listen never reached
+    /// `.recording`, so `endSession`'s closing `state = .idle` is an equal
+    /// assignment and `@Observable` publishes nothing for it — no observation,
+    /// no dismiss, no refresh. The driver is then parked on a Listening modal
+    /// over a dead session whose "End" button is already a no-op (`endSession`
+    /// guards on `sessionActive`), with the car audio session never freed in a
+    /// dismiss completion. So the end has to TELL the scene, and the scene has
+    /// to run the transition itself.
+    func testASilentStartupFailureEndsTheSessionAndThenDrivesTheSceneItself() throws {
+        let service = try Self.recordingServiceSource()
+        let terminal = try RefusalLaneSource.body(
+            ofFunction: "endSilentlyAfterCaptureStartFailure", in: service, path: Self.recordingServicePath
+        )
+        XCTAssertTrue(
+            terminal.contains("guard sessionActive else { return }"),
+            "a start that lost its session mid-await must not accuse the microphone of the driver's own End"
+        )
+        let end = try XCTUnwrap(
+            terminal.range(of: "endSession(speak: nil)"),
+            "the failure still ends the session silently — no TTS over a wedged audio session"
+        )
+        let notify = try XCTUnwrap(
+            terminal.range(of: "onCaptureStartFailed?()"),
+            "the scene is told explicitly, because the state assignment tells it nothing"
+        )
+        XCTAssertTrue(
+            end.lowerBound < notify.lowerBound,
+            "the scene is notified AFTER the teardown, so what it dismisses is a session already torn down"
+        )
+
+        // Every pre-`.recording` exit goes through that terminal. One left
+        // ending on its own is one stuck Listening modal.
+        let listen = try RefusalLaneSource.body(
+            ofFunction: "startListening", in: service, path: Self.recordingServicePath
+        )
+        XCTAssertFalse(
+            listen.contains("endSession(speak: nil)"),
+            "a startup failure that ends the session directly leaves the voice modal up with nothing to dismiss it"
+        )
+        XCTAssertFalse(
+            listen.contains("onCaptureStartFailed?()"),
+            "the hint and the end belong to the same terminal; raised before the teardown it cannot dismiss anything"
+        )
+        XCTAssertEqual(
+            listen.components(separatedBy: "endSilentlyAfterCaptureStartFailure()").count - 1, 4,
+            "the four exits that fail before the `.recording` commit: activation, capture file, VAD start, engine retries"
+        )
+
+        // The scene half: the handler is the missing transition, not just a flag.
+        let scene = try Self.sceneDelegateSource()
+        let handler = try RefusalLaneSource.trailingClosure(
+            after: "service.onCaptureStartFailed =", in: scene, path: Self.sceneDelegatePath
+        )
+        let flag = try XCTUnwrap(
+            handler.range(of: "oneShotStartFailureHint = true"),
+            "the hint flag is what the refresh below renders"
+        )
+        let apply = try XCTUnwrap(
+            handler.range(of: "applyState("),
+            "setting a flag nothing repaints is exactly the silent failure this lane had"
+        )
+        XCTAssertTrue(
+            flag.lowerBound < apply.lowerBound,
+            "the refresh has to run with the flag already set, or it repaints the picker without the hint"
+        )
+        // `applyState(.idle)` is dismiss-then-refresh; both halves matter (the
+        // dismiss completion is where the car audio session is freed).
+        let idleArm = try RefusalLaneSource.body(
+            ofFunction: "applyState", in: scene, path: Self.sceneDelegatePath
+        )
+        XCTAssertTrue(idleArm.contains("ensureVoiceDismissed(animated: animated)"))
+        XCTAssertTrue(idleArm.contains("refreshPicker()"))
+    }
+
     // MARK: - Source access
 
     private static let recordingServicePath = "Conduck/CarPlay/CarPlayRecordingService.swift"

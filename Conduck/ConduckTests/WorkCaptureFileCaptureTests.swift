@@ -288,6 +288,68 @@ final class WorkCaptureFileCaptureTests: XCTestCase {
         XCTAssertEqual(pending, 0)
     }
 
+    // MARK: - The bytes the identity names are the bytes that land
+
+    /// THE COLLISION THE DIGEST ALONE DOES NOT CLOSE. A capture id derived from
+    /// a read of the SOURCE describes bytes that belong to somebody else's
+    /// process: an editor, a sync client or a file provider can rewrite that
+    /// file between the read that names the capture and the copy that publishes
+    /// it, and the desk then repairs an existing card with content nothing ever
+    /// described. Both runs are five bytes, so no size check can see it.
+    ///
+    /// The whole lane is exercised here — snapshot, identity, publication —
+    /// because the property is a relationship BETWEEN those steps, and either
+    /// one alone looks correct.
+    func testASourceRewrittenAfterItsIdentityCannotPublishUnderTheEarlierCapture() async throws {
+        let inbox = WorkCaptureInbox(baseURL: root)
+        let source = input(try writeFile(named: "memo.txt", contents: "alpha"))
+        let snapshots = sources.appendingPathComponent("snapshots", isDirectory: true)
+        try FileManager.default.createDirectory(at: snapshots, withIntermediateDirectories: true)
+
+        let snapshot = try AddFilesToWorkIntent.snapshot(
+            source,
+            into: snapshots.appendingPathComponent("payload-000.txt", isDirectory: false)
+        )
+        let captureID = AddFilesToWorkIntent.captureIdentity(note: nil, files: [snapshot])
+
+        // The window the finding is about: the source changes between naming
+        // the capture and publishing it.
+        try Data("bravo".utf8).write(to: source.url, options: .atomic)
+
+        _ = try await inbox.publishFileCapture(
+            note: nil,
+            files: [snapshot.input],
+            captureID: captureID
+        )
+        let claimValue = try await inbox.claimNext()
+        let claim = try XCTUnwrap(claimValue)
+        let entry = try XCTUnwrap(claim.envelope.entries.first)
+        let published = try Data(contentsOf: try XCTUnwrap(claim.payloadURL(for: entry)))
+
+        XCTAssertEqual(
+            published,
+            Data("alpha".utf8),
+            "the envelope carries the snapshot's bytes — the ones the capture id was derived from"
+        )
+        XCTAssertEqual(entry.byteCount, 5)
+
+        // And the rewritten source is its own capture, so republishing it
+        // cannot repair — that is, overwrite — the card above.
+        let rewritten = try AddFilesToWorkIntent.snapshot(
+            input(source.url),
+            into: snapshots.appendingPathComponent("payload-001.txt", isDirectory: false)
+        )
+        XCTAssertNotEqual(
+            AddFilesToWorkIntent.captureIdentity(note: nil, files: [rewritten]),
+            captureID,
+            "different bytes must never share a capture id: the second run would replace the first card"
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: rewritten.input.url),
+            Data("bravo".utf8)
+        )
+    }
+
     // MARK: - Fixtures
 
     private func input(

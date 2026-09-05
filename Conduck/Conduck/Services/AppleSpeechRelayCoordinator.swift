@@ -48,7 +48,11 @@
 //                  the recording is durably on the desk. A work request
 //                  answered WITHOUT that stamp is an older iPhone build:
 //                  the wrist has the words and knows the recording was
-//                  not kept.
+//                  not kept. An EMPTY "result.text" beside the stamp is
+//                  the third answer: the recording is on the desk and no
+//                  words came with it, because transcription settled
+//                  against this clip. No key is added for it — emptiness
+//                  is the value.
 //        failure: ["requestID": String, "kind": "apple-speech-relay-reply",
 //                  "result.errorCode": Int]   // AppError.errorCode
 //   - Reply channel: interactive `sendMessage` when the request stamped
@@ -476,7 +480,10 @@ final class AppleSpeechRelayCoordinator {
             // already standing — so the wrist still gets its transcript and
             // the stamp. The desk is left with a playable recording the
             // in-app retry surfaces can still fill in, which is exactly the
-            // state the two-phase design exists to produce.
+            // state the two-phase design exists to produce. A SETTLED throw
+            // says the same thing with an empty transcript rather than an
+            // error code (`acknowledgesRecording(after:)`), so the wrist can
+            // release a clip the desk already holds.
             if let workCardID {
                 await Self.attachRelayedWorkTranscript(text, toCard: workCardID)
             }
@@ -499,6 +506,20 @@ final class AppleSpeechRelayCoordinator {
             print("[Phone] Relay reply shipped (text length=\(text.count), custom=\(isCustomRelay), work=\(workSaved))")
             #endif
         } catch let appError as AppError {
+            // The recording is ALREADY on the desk and a settled verdict means
+            // no re-fire will ever add the words, so the wrist is owed an
+            // acknowledgement rather than a failure — see
+            // `acknowledgesRecording(after:)`.
+            if workCardID != nil, Self.acknowledgesRecording(after: appError) {
+                shipWorkRecordingAcknowledgement(
+                    requestID: requestID,
+                    preferMessage: replyPrefersMessage
+                )
+                #if DEBUG
+                print("[Phone] Work relay kept the recording, lost the words — acknowledged")
+                #endif
+                return
+            }
             // Admission gate: transient failures must NOT be memoized — the
             // Watch leaves the entry queued on a retryable code and re-fires
             // the SAME requestID expecting a fresh attempt, not a replay of
@@ -519,6 +540,18 @@ final class AppleSpeechRelayCoordinator {
             // `audioProcessingFailed` is permanent ⇒ cached; a future
             // re-classification is respected automatically).
             let fallback = AppError.audioProcessingFailed
+            // Same reading as the typed arm above: a published recording is a
+            // kept capture, and this verdict is settled, so the reply says so.
+            if workCardID != nil, Self.acknowledgesRecording(after: fallback) {
+                shipWorkRecordingAcknowledgement(
+                    requestID: requestID,
+                    preferMessage: replyPrefersMessage
+                )
+                #if DEBUG
+                print("[Phone] Work relay kept the recording, lost the words — acknowledged")
+                #endif
+                return
+            }
             if Self.shouldCacheVerdict(for: fallback) {
                 replyCache.store(.init(text: nil, errorCode: fallback.errorCode), forKey: requestID)
             }
@@ -675,6 +708,35 @@ final class AppleSpeechRelayCoordinator {
     /// clip on a storage blip the very next attempt would have survived.
     /// `WatchWorkRelayPhoneTests` pins the retryability, not the spelling.
     static let workPublicationFailure: AppError = .workDeskWriteFailed
+
+    /// Whether a phase-2 failure on a capture whose RECORDING already reached
+    /// the desk is answered as an acknowledgement instead of an error.
+    ///
+    /// The question is exactly the cache's own admission question, and that is
+    /// the point rather than a coincidence: a SETTLED verdict is one that every
+    /// re-fire of this requestID reproduces, so the words are not coming, and a
+    /// wrist told "failed" would keep a clip whose recording is already on the
+    /// desk — for ever, since a Work entry never ages out and the phone answers
+    /// each retry from its cache. A RETRYABLE verdict is the opposite state:
+    /// the identical bytes can still be transcribed once the phone recovers, it
+    /// is never cached, and the wrist keeping its entry is what wins the words.
+    /// So retryables keep travelling back as errors, exactly as before.
+    static func acknowledgesRecording(after error: AppError) -> Bool {
+        shouldCacheVerdict(for: error)
+    }
+
+    /// The verdict a Work request earns once phase 1 published its recording
+    /// and phase 2 settled without words.
+    ///
+    /// SUCCESS-SHAPED, with an EMPTY transcript and the durability stamp — and
+    /// it introduces no wire literal: `result.text` and `result.work` are the
+    /// two keys a stamped work reply already carries. Empty text is the honest
+    /// value: there are no words. The wrist reads the stamp as "the phone holds
+    /// the recording" (so it settles its entry and deletes its clip) and the
+    /// emptiness as "no words came" (so it says which half is missing).
+    static func workRecordingAcknowledgement() -> RelayReplyCache.CachedReply {
+        RelayReplyCache.CachedReply(text: "", errorCode: nil, workSaved: true)
+    }
 
     /// Whether this request's words belong on the Work desk.
     ///
@@ -868,6 +930,22 @@ final class AppleSpeechRelayCoordinator {
                 errorCode: nil,
                 workSaved: workSaved ? true : nil
             ).payload(requestID: requestID),
+            preferMessage: preferMessage
+        )
+    }
+
+    /// Ship — and CACHE — the acknowledgement a published recording earns when
+    /// its words never arrived.
+    ///
+    /// The store is unconditional rather than admission-gated: this verdict is
+    /// settled by construction (the desk write happened, once, and cannot
+    /// un-happen), and a replay that dropped it would answer a re-fire with the
+    /// old error, which is the exact state that stranded the wrist's entry.
+    private func shipWorkRecordingAcknowledgement(requestID: String, preferMessage: Bool) {
+        let acknowledgement = Self.workRecordingAcknowledgement()
+        replyCache.store(acknowledgement, forKey: requestID)
+        ship(
+            payload: acknowledgement.payload(requestID: requestID),
             preferMessage: preferMessage
         )
     }

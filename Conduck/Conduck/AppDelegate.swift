@@ -274,6 +274,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+
+        // A Work voice request that reached a fully QUIT Mac has no window to
+        // land in. See `revealWorkForAPendingVoiceRequest()`.
+        revealWorkForAPendingVoiceRequest()
+    }
+
+    /// Open the main window for a Work voice request that arrived before any
+    /// window existed.
+    ///
+    /// THE COLD-LAUNCH SLIVER the appearance hooks cannot reach.
+    /// `RecordWorkNoteIntent.perform()` runs while this app is launching, so
+    /// both `.showWorkboardVoiceCapture` and the `.showWorkboard` behind it are
+    /// posted before the `main` scene's subscribers exist and are delivered to
+    /// nobody. This Mac launches quiet (`.accessory`, see
+    /// `applicationWillFinishLaunching`), so no window opens on its own either,
+    /// and every appearance-time recovery is waiting for an appearance nothing
+    /// is going to cause. The route's flag survives all of it, which makes the
+    /// application lifetime the one level that can still answer: activate, then
+    /// post the reveal the scene's own `.onReceive` turns into
+    /// `openWindow(id: "main")`.
+    ///
+    /// A PEEK, never a claim. Consumption stays with the visible composer — the
+    /// only surface that can actually present the recorder — so a request this
+    /// hook reveals is still there to be answered.
+    ///
+    /// The 500 ms is the same wait the onboarding open takes, for the same
+    /// reason: SwiftUI installs the scene's `.onReceive` subscribers after this
+    /// method returns, and a post delivered before they exist is the very drop
+    /// being repaired. The flag is re-read afterwards, so a request a composer
+    /// answered in the meantime costs nothing but the sleep.
+    ///
+    /// Called from launch AND from activation because the ordering between
+    /// `perform()` and this delegate is the system's to choose: a request that
+    /// arrives a moment after launch is answered by the activation the
+    /// foreground intent itself causes.
+    private func revealWorkForAPendingVoiceRequest() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard WorkVoiceCaptureLaunchRoute.shared.isPending else { return }
+            // An `.accessory` app that opens a window without activating puts it
+            // behind whatever is frontmost, and a recorder nobody can see is a
+            // recorder nobody can stop.
+            NSApp.activate(ignoringOtherApps: true)
+            WorkVoiceCaptureLaunchRoute.shared.revealWorkIfPending()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -398,6 +443,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // row leaves the Personal AI / Voice list. Posts change only when
         // something moved.
         Task { await SettingsManager.shared.catchUpSyncedRostersOnActivate() }
+
+        // The foreground Work voice intent activates this app; if its request
+        // arrived after launch and before any window existed, this is the hook
+        // that opens one. No-op when nothing is pending.
+        revealWorkForAPendingVoiceRequest()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {

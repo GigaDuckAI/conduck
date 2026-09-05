@@ -572,6 +572,13 @@ final class AppleRelayPendingQueue {
         /// (`result.work == true`): claim the entry — the phone's copy is now
         /// the durable one — and report it saved.
         case workAcknowledged
+        /// Work, the iPhone published the RECORDING, and it had no words to
+        /// send with it: transcription settled against this clip, so no re-fire
+        /// will produce any. Claims exactly as `workAcknowledged` does — the
+        /// phone holds the durable copy either way — and differs only in what
+        /// the person is told, because a card they must open their iPhone to
+        /// finish is not the same event as a card that is done.
+        case workRecordingOnly
         /// Work, with a transcript but no durability stamp: an iPhone build
         /// that predates the Work destination transcribed the clip and kept
         /// nothing. The words are all that can be rescued, so they are written
@@ -581,14 +588,28 @@ final class AppleRelayPendingQueue {
 
     /// The classification, pure. Absent destination already read as `.chat` by
     /// `Entry.captureDestination`, so this sees only the two real answers.
+    /// `hasWords` is defaulted so every existing call site — and every
+    /// assertion written against them — keeps its two-argument spelling; only
+    /// the reply that carries the stamp WITHOUT a transcript needs the third
+    /// answer.
     static func settlement(
         for destination: WatchCaptureDestination,
-        workSaved: Bool
+        workSaved: Bool,
+        hasWords: Bool = true
     ) -> RelaySettlement {
         switch destination {
         case .chat: return .converseHop
-        case .work: return workSaved ? .workAcknowledged : .workWordsOnly
+        case .work:
+            guard workSaved else { return .workWordsOnly }
+            return hasWords ? .workAcknowledged : .workRecordingOnly
         }
+    }
+
+    /// Whether a reply carries anything worth putting on a card. Whitespace is
+    /// not: a card whose text is a space reads as transcribed and is not, and
+    /// the words-only lane's `prepare` refuses the same value.
+    static func carriesWords(_ text: String) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Apply a settled success verdict in the order its destination requires.
@@ -615,15 +636,22 @@ final class AppleRelayPendingQueue {
         writeWorkWords: (String) async -> Bool,
         finishWork: (RelaySettlement) -> Void
     ) async -> RelaySettlementResult {
-        switch settlement(for: destination, workSaved: reply.workSaved) {
+        let outcome = settlement(
+            for: destination,
+            workSaved: reply.workSaved,
+            hasWords: carriesWords(reply.text)
+        )
+        switch outcome {
         case .converseHop:
             guard claim() else { return .superseded }
             await completeChat(reply.text)
             return .applied(.converseHop)
-        case .workAcknowledged:
+        case .workAcknowledged, .workRecordingOnly:
+            // One arm for both: the stamp is the durability claim, and the
+            // presence of words changes only the sentence `finishWork` shows.
             guard claim() else { return .superseded }
-            finishWork(.workAcknowledged)
-            return .applied(.workAcknowledged)
+            finishWork(outcome)
+            return .applied(outcome)
         case .workWordsOnly:
             // Write, THEN claim. A failed write leaves the entry — and the
             // recording — exactly where they were, so the next drain tries
@@ -1102,16 +1130,20 @@ final class AppleRelayPendingQueue {
     /// Terminal banner for a WORK relay that settled while the capture view was
     /// long gone (the deferred case this queue exists for).
     ///
-    /// FIXED COPY on both arms, for the same reason `postTranscriptNotification`
+    /// FIXED COPY on every arm, for the same reason `postTranscriptNotification`
     /// carries none: the transcript is untrusted text from a speech endpoint,
     /// and this body persists in Notification Center and mirrors to the paired
     /// iPhone's lock screen. The words themselves are on the desk, which is a
     /// surface that can render them safely.
     ///
-    /// The words-only arm NAMES the gap rather than claiming a clean save,
-    /// because the person's recording is genuinely gone from this lane: their
-    /// iPhone transcribed it on a build that had nowhere to put the audio. The
-    /// sentence tells them what survived and what would keep the next one.
+    /// The two partial arms NAME the gap rather than claiming a clean save,
+    /// and they name opposite halves of it. Words-only: the person's recording
+    /// is genuinely gone from this lane, because their iPhone transcribed it on
+    /// a build that had nowhere to put the audio. Recording-only: the card is
+    /// playable on the desk and has no words on it, so the sentence sends them
+    /// to the one surface that can add them. A banner is often the ONLY thing
+    /// read on a deferred settlement, so a shared "Saved to Work." would leave
+    /// half of these people believing a card is finished when it is not.
     private func postWorkNotification(_ settlement: RelaySettlement) {
         let body: String
         switch settlement {
@@ -1121,6 +1153,11 @@ final class AppleRelayPendingQueue {
             body = String(
                 localized: "watch.work.notification.saved",
                 defaultValue: "Saved to Work."
+            )
+        case .workRecordingOnly:
+            body = String(
+                localized: "watch.work.notification.savedWithoutWords",
+                defaultValue: "Saved to Work. Add the words on your iPhone."
             )
         case .workWordsOnly:
             body = String(

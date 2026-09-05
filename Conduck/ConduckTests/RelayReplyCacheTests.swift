@@ -150,6 +150,22 @@ final class RelayReplyCacheTests: XCTestCase {
         XCTAssertTrue(AppleSpeechRelayCoordinator.shouldCacheVerdict(for: .sttCustomEndpointNotConfigured))
         XCTAssertTrue(AppleSpeechRelayCoordinator.shouldCacheVerdict(for: .audioProcessingFailed))
     }
+    /// The verdict that survives a phase-2 failure on a capture whose recording
+    /// already reached the desk. It is a SUCCESS with nothing in it, and the LRU
+    /// has to keep that distinction: an empty transcript is a value ("no words
+    /// came"), while a nil one is the shape a FAILURE takes. Collapsing the two
+    /// would have the wrist read a settled acknowledgement as a malformed reply
+    /// and hold its clip.
+    func testAnEmptyTranscriptRoundTripsAsASuccessNotAnAbsence() {
+        let cache = RelayReplyCache()
+        cache.store(AppleSpeechRelayCoordinator.workRecordingAcknowledgement(), forKey: "req-ack")
+
+        let replayed = cache.cachedReply(forKey: "req-ack")
+        XCTAssertEqual(replayed?.text, "", "empty is a transcript that says there are none")
+        XCTAssertNil(replayed?.errorCode, "an acknowledgement is not a failure")
+        XCTAssertEqual(replayed?.workSaved, true, "and the replay still claims the recording is kept")
+        XCTAssertEqual(cache.count, 1)
+    }
     #endif // os(iOS)
 }
 

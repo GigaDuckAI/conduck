@@ -1886,7 +1886,7 @@ final class MenuBarCoordinator {
     /// the Try Again which finishes it must outrank everything else the popover
     /// could show.
     var workCaptureIsActive: Bool {
-        if isStartingWorkVoiceCapture { return true }
+        if isSummoningWorkVoiceCapture || isStartingWorkVoiceCapture { return true }
         switch workVoiceRecorder.state {
         case .recording, .processing, .preparingVoice:
             return true
@@ -1902,6 +1902,34 @@ final class MenuBarCoordinator {
     /// render one frame of the ordinary content between the press that opened it
     /// and the recording that justified it.
     private(set) var isStartingWorkVoiceCapture = false
+
+    /// True from the ⌃⌘W press that summons the voice HUD until the start it
+    /// schedules picks the capture up.
+    ///
+    /// The press shows the popover SYNCHRONOUSLY and only then hops to
+    /// `beginWorkVoiceCapture`, so for that hop Work would otherwise own
+    /// nothing — and `MenuBarController.showPopover` reports whatever thread it
+    /// opens onto as visible, which acknowledges it as read and swallows its
+    /// banner. A reply the HUD is about to cover would be retired by the summon
+    /// that covers it, and nothing later can give an unread mark back.
+    private(set) var isSummoningWorkVoiceCapture = false
+
+    /// True while the microphone is being claimed for Work — the press, and the
+    /// start's own suspension. The recorder reads `.idle` for all of it, so this
+    /// is the window `workVoiceRecorder.state` cannot describe.
+    var workVoiceStartIsInFlight: Bool {
+        isSummoningWorkVoiceCapture || isStartingWorkVoiceCapture
+    }
+
+    /// Take the popover for a Work voice capture BEFORE the summon that shows
+    /// it: ownership first, surface second. Called by the ⌃⌘W handler, which
+    /// cannot pre-set `isStartingWorkVoiceCapture` instead — that flag is the
+    /// start's own re-entrancy guard, and `beginWorkVoiceCapture` refuses a
+    /// capture that is already active.
+    func claimPopoverForWorkVoiceCapture() {
+        isSummoningWorkVoiceCapture = true
+        setPopoverVisibleConversation(nil)
+    }
 
     /// Identifies the start that is currently in flight, so a cancellation
     /// pressed DURING it can be honored once the microphone finally comes up.
@@ -1926,6 +1954,11 @@ final class MenuBarCoordinator {
     /// opinion derived from it could only ever disagree with the truth.
     @discardableResult
     func beginWorkVoiceCapture() async -> Bool {
+        // The summon hands its claim over to the start here, so the re-entrancy
+        // guard below reads the capture itself rather than the press that asked
+        // for one. Clearing it unconditionally also means a claim can never
+        // outlive the hop it was made for.
+        isSummoningWorkVoiceCapture = false
         guard !workCaptureIsActive else { return false }
         quickWorkCaptureFeedback = nil
         workVoiceRecorder.onAutoStopResult = { [weak self] result in
@@ -2024,11 +2057,18 @@ final class MenuBarCoordinator {
             )
             return
         }
+        // The VOICE receipt is its own row, and it may not borrow the typed
+        // note's. A typed note really is inert — the words were on the desk's
+        // own surface and nothing carried them anywhere — but a spoken one was
+        // just transcribed by the speech provider the person configured, and
+        // `STTClient`'s roster is mostly cloud vendors. "Nothing was sent" over
+        // an upload that just happened is the one claim a privacy surface may
+        // never make, so this lane names the destination instead.
         quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(
             kind: .saved,
             message: String(localized: LocalizedStringResource(
-                "workboard.menuBar.saved",
-                defaultValue: "Added to Work. Nothing was sent."
+                "workboard.menuBar.voice.saved",
+                defaultValue: "Added to Work. The words came from your speech provider."
             ))
         )
     }

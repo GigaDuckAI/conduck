@@ -334,8 +334,8 @@ final class WorkShortcutIntentsTests: XCTestCase {
 
     func testTheCaptureIdentityIsDerivedFromTheInput() {
         let files = [
-            Self.input(named: "one.txt", byteCount: 10),
-            Self.input(named: "two.txt", byteCount: 20),
+            Self.snapshot(named: "one.txt", byteCount: 10, digest: 0x11),
+            Self.snapshot(named: "two.txt", byteCount: 20, digest: 0x22),
         ]
 
         let first = AddFilesToWorkIntent.captureIdentity(note: "survey", files: files)
@@ -356,9 +356,17 @@ final class WorkShortcutIntentsTests: XCTestCase {
             first,
             AddFilesToWorkIntent.captureIdentity(
                 note: "survey",
-                files: [Self.input(named: "one.txt", byteCount: 11), files[1]]
+                files: [Self.snapshot(named: "one.txt", byteCount: 11, digest: 0x11), files[1]]
             ),
             "a file that changed size is a different file"
+        )
+        XCTAssertNotEqual(
+            first,
+            AddFilesToWorkIntent.captureIdentity(
+                note: "survey",
+                files: [Self.snapshot(named: "one.txt", byteCount: 10, digest: 0x99), files[1]]
+            ),
+            "a file that changed CONTENT is a different file, at the same name and size"
         )
     }
 
@@ -367,7 +375,7 @@ final class WorkShortcutIntentsTests: XCTestCase {
     func testTheCaptureIdentityIsANameBasedUUID() {
         let id = AddFilesToWorkIntent.captureIdentity(
             note: nil,
-            files: [Self.input(named: "one.txt", byteCount: 1)]
+            files: [Self.snapshot(named: "one.txt", byteCount: 1, digest: 0x01)]
         )
 
         XCTAssertEqual(id.uuid.6 & 0xF0, 0x50, "version 5")
@@ -382,9 +390,21 @@ final class WorkShortcutIntentsTests: XCTestCase {
     /// identity exists for.
     func testTwoFilesAlikeInNameAndSizeButNotInBytesAreDifferentCaptures() throws {
         let root = try Self.makeScratchDirectory()
-        let first = try Self.writeFile(named: "memo.txt", bytes: "alpha", under: root, in: "one")
-        let second = try Self.writeFile(named: "memo.txt", bytes: "bravo", under: root, in: "two")
-        let replay = try Self.writeFile(named: "memo.txt", bytes: "alpha", under: root, in: "three")
+        let first = try Self.snapshot(
+            of: Self.writeFile(named: "memo.txt", bytes: "alpha", under: root, in: "one"),
+            under: root,
+            leaf: "snapshot-one.txt"
+        )
+        let second = try Self.snapshot(
+            of: Self.writeFile(named: "memo.txt", bytes: "bravo", under: root, in: "two"),
+            under: root,
+            leaf: "snapshot-two.txt"
+        )
+        let replay = try Self.snapshot(
+            of: Self.writeFile(named: "memo.txt", bytes: "alpha", under: root, in: "three"),
+            under: root,
+            leaf: "snapshot-three.txt"
+        )
 
         let firstID = AddFilesToWorkIntent.captureIdentity(note: nil, files: [first])
 
@@ -401,12 +421,44 @@ final class WorkShortcutIntentsTests: XCTestCase {
         XCTAssertEqual(firstID.uuid.6 & 0xF0, 0x50, "still version 5")
     }
 
-    /// A source that cannot be read digests as a sentinel rather than as an
-    /// empty file: an unreadable file must not take on the identity of a real,
-    /// empty one. (The queue refuses such a set moments later regardless.)
-    func testAnUnreadableSourceIsNotTheSameCaptureAsAnEmptyFile() throws {
+    /// The snapshot is a COPY, and the digest describes that copy. A source the
+    /// person's editor rewrites a moment later cannot change what this capture
+    /// is called, because the bytes it was named after are already this
+    /// process's own.
+    func testTheSnapshotFreezesTheBytesTheIdentityWasTakenOver() throws {
         let root = try Self.makeScratchDirectory()
-        let empty = try Self.writeFile(named: "note.txt", bytes: "", under: root, in: "present")
+        let source = try Self.writeFile(named: "memo.txt", bytes: "alpha", under: root, in: "source")
+        let snapshot = try Self.snapshot(of: source, under: root, leaf: "snapshot.txt")
+        let id = AddFilesToWorkIntent.captureIdentity(note: nil, files: [snapshot])
+
+        try Data("bravo".utf8).write(to: source.url, options: .atomic)
+
+        XCTAssertEqual(
+            try Data(contentsOf: snapshot.input.url),
+            Data("alpha".utf8),
+            "the published bytes are the snapshot's, not whatever the source now holds"
+        )
+        XCTAssertEqual(
+            id,
+            AddFilesToWorkIntent.captureIdentity(note: nil, files: [snapshot]),
+            "the identity is a fact about the snapshot, so a rewritten source cannot move it"
+        )
+        XCTAssertNotEqual(
+            id,
+            AddFilesToWorkIntent.captureIdentity(
+                note: nil,
+                files: [try Self.snapshot(of: source, under: root, leaf: "snapshot-after.txt")]
+            ),
+            "the rewritten source is a different capture — one id for both would overwrite the card"
+        )
+    }
+
+    /// A source that cannot be read REFUSES the whole capture rather than
+    /// digesting as a sentinel: one shared name for every unreadable file is a
+    /// name that replaces whatever it collides with, which is the loss the
+    /// digest exists to prevent.
+    func testAnUnreadableSourceRefusesTheCaptureInsteadOfNamingIt() throws {
+        let root = try Self.makeScratchDirectory()
         let missing = WorkCaptureFileInput(
             url: root.appendingPathComponent("absent/note.txt"),
             displayName: "note.txt",
@@ -415,10 +467,15 @@ final class WorkShortcutIntentsTests: XCTestCase {
             byteCount: 0
         )
 
-        XCTAssertNotEqual(
-            AddFilesToWorkIntent.captureIdentity(note: nil, files: [empty]),
-            AddFilesToWorkIntent.captureIdentity(note: nil, files: [missing])
-        )
+        XCTAssertThrowsError(
+            try Self.snapshot(of: missing, under: root, leaf: "snapshot-missing.txt")
+        ) { error in
+            XCTAssertEqual(
+                error as? WorkFileCaptureRefusal,
+                .unreadableFile(name: "note.txt"),
+                "the sentence names the file the person has to re-pick"
+            )
+        }
     }
 
     // MARK: - The digest reads bytes without holding them
@@ -447,6 +504,55 @@ final class WorkShortcutIntentsTests: XCTestCase {
         XCTAssertFalse(
             source.contains("Data(contentsOf:"),
             "a headless intent process must never hold a whole file in memory"
+        )
+        XCTAssertTrue(
+            source.contains("try writer.write(contentsOf: chunk)"),
+            "the copy and the digest are no longer ONE pass — a digest of a separate read describes bytes the desk may never receive"
+        )
+    }
+
+    // MARK: - The window a fully quit Mac never opened
+
+    /// The last sliver of the cold-launch hole, and the one no appearance hook
+    /// can reach: on a Mac that is fully QUIT the intent performs before the
+    /// scene's subscribers exist, so nothing opens a window and every
+    /// appearance-time recovery waits for an appearance that never comes. The
+    /// application lifetime is the only level that can create that window.
+    ///
+    /// Source-shaped for the same reason as the shells' guard above: the
+    /// alternative is driving an AppKit launch from a unit test.
+    func testTheMacLifetimeOpensAWindowForARequestThatArrivedBeforeAnyExisted() throws {
+        let path = "Conduck/AppDelegate.swift"
+        let source = try RefusalLaneSource.source(at: path)
+
+        for lifecycle in ["applicationDidFinishLaunching", "applicationDidBecomeActive"] {
+            let body = try RefusalLaneSource.body(ofFunction: lifecycle, in: source, path: path)
+            XCTAssertTrue(
+                body.contains("revealWorkForAPendingVoiceRequest()"),
+                "\(lifecycle) no longer answers a Work voice request that arrived before any window existed"
+            )
+        }
+
+        let hook = try RefusalLaneSource.body(
+            ofFunction: "revealWorkForAPendingVoiceRequest",
+            in: source,
+            path: path
+        )
+        XCTAssertTrue(
+            hook.contains("WorkVoiceCaptureLaunchRoute.shared.isPending"),
+            "the hook no longer checks for a pending request, so it reveals Work at every launch"
+        )
+        XCTAssertTrue(
+            hook.contains("NSApp.activate"),
+            "a quiet Mac that opens the window without activating puts it behind whatever is frontmost"
+        )
+        XCTAssertTrue(
+            hook.contains("WorkVoiceCaptureLaunchRoute.shared.revealWorkIfPending()"),
+            "the hook no longer opens the window for the pending request"
+        )
+        XCTAssertFalse(
+            hook.contains("consume()"),
+            "the launch hook claims the request; only the visible composer can present the recorder"
         )
     }
 
@@ -608,6 +714,33 @@ final class WorkShortcutIntentsTests: XCTestCase {
             }
         }
         return rows
+    }
+
+    /// The production snapshot: a real copy under the scratch root, digested in
+    /// the same pass. Used wherever the property under test is about the bytes
+    /// that get PUBLISHED rather than about the hash's shape.
+    private static func snapshot(
+        of file: WorkCaptureFileInput,
+        under root: URL,
+        leaf: String
+    ) throws -> AddFilesToWorkIntent.Snapshot {
+        try AddFilesToWorkIntent.snapshot(
+            file,
+            into: root.appendingPathComponent(leaf, isDirectory: false)
+        )
+    }
+
+    /// A snapshot with a made-up digest, for the assertions about the identity's
+    /// SHAPE — those need no filesystem at all now that the derivation is pure.
+    private static func snapshot(
+        named name: String,
+        byteCount: Int64,
+        digest: UInt8
+    ) -> AddFilesToWorkIntent.Snapshot {
+        AddFilesToWorkIntent.Snapshot(
+            input: input(named: name, byteCount: byteCount),
+            digest: Data(repeating: digest, count: 32)
+        )
     }
 
     private static func input(named name: String, byteCount: Int64) -> WorkCaptureFileInput {

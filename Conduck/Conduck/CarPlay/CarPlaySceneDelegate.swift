@@ -119,10 +119,22 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             self?.interfaceController?.presentedTemplate != nil
         }
 
-        // Mic-couldn't-start feedback: the service fires this BEFORE its silent
-        // `endSession`, so the `.idle`-driven `refreshPicker` sees the flag.
-        service.onCaptureStartFailed = { [weak self] in
-            self?.oneShotStartFailureHint = true
+        // Mic-couldn't-start feedback: the service fires this AFTER its silent
+        // `endSession`, and this handler owns BOTH halves of that end — the
+        // hint flag the refresh renders, and the dismiss-then-refresh itself.
+        //
+        // The state observer cannot own the second half here. A listen that
+        // failed BEFORE `.recording` never left `.idle`, so `endSession`'s
+        // closing `state = .idle` is an equal assignment and `@Observable`
+        // publishes nothing for it: no observation fires, and the driver is
+        // left on a Listening modal over a dead session whose "End" button is
+        // already a no-op. Running the `applyState` chokepoint by hand here is
+        // that missing transition — same dismiss (whose completion frees the
+        // car audio session), same refreshed picker, now carrying the hint.
+        service.onCaptureStartFailed = { [weak self, weak service] in
+            guard let self, let service else { return }
+            self.oneShotStartFailureHint = true
+            self.applyState(service.state, service: service)
         }
 
         // Build the picker once; rebuilt-in-place on refresh + permission states.

@@ -363,6 +363,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             showPopover()
             return
         }
+        // OWNERSHIP FIRST, SURFACE SECOND. `showPopover` reports the thread it
+        // opens onto as visible, which acknowledges it as read and swallows its
+        // banner — and the HUD this press is about to raise covers that thread.
+        // The claim also pins the popover below: the microphone can take
+        // seconds to come up, and the recorder reads `.idle` for all of it.
+        coordinator.claimPopoverForWorkVoiceCapture()
+        updatePopoverBehavior()
         showPopover()
         // The same "capture armed, start talking" cue ⌘⇧2 plays, and for the
         // same reason: it has to precede the mic going live, or it lands in the
@@ -599,6 +606,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 // outside would close it and orphan a live audio session — and
                 // the status item would sit on the idle duck while the mic ran.
                 _ = coordinator.workVoiceRecorder.state
+                // …and the claim that PRECEDES that state. The recorder is
+                // `.idle` from the ⌃⌘W press until the microphone is actually
+                // live, so untracked, the popover would stay `.transient`
+                // across the one window in which a click-away can orphan a
+                // start — and would never be released again afterwards either.
+                _ = coordinator.workVoiceStartIsInFlight
             } onChange: {
                 Task { @MainActor [weak self] in
                     self?.handleStateChange()
@@ -729,7 +742,14 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // that orphaned it would lose words the desk had already promised to
         // keep. Checked first because the Work lane is invisible to
         // `dictationService.state`, which reads `.idle` throughout.
-        if workRecordingIsLive {
+        //
+        // The START is pinned with it. The microphone can take seconds to come
+        // up (a permission prompt, the speech preflight) and the RECORDER reads
+        // `.idle` for that whole stretch too, so a pin scoped to `.recording`
+        // leaves the popover transient exactly while there is nothing on screen
+        // yet to justify it: one click outside and the recording begins behind a
+        // closed popover, with no surface anywhere to stop it.
+        if workRecordingIsLive || coordinator.workVoiceStartIsInFlight {
             popover.behavior = .applicationDefined
             return
         }

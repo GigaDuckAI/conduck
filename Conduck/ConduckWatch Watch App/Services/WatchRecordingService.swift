@@ -90,9 +90,34 @@ enum WatchWorkCaptureOutcome: Equatable, Sendable {
     /// that predates the Work destination). The words are on the desk; the
     /// recording is not.
     case savedWordsOnly
+    /// The iPhone published the recording and had no words for it —
+    /// transcription settled against this clip, so none are coming. The
+    /// opposite half of `savedWordsOnly`: the card is playable on the desk and
+    /// the words have to be added there.
+    case savedWithoutWords
     /// Refused, with the sentence to show. Carries the message rather than a
     /// code so the capture view renders one line without a second switch.
     case refused(reason: String)
+}
+
+extension WatchWorkCaptureOutcome {
+    /// The line a settled Work relay leaves on the wrist.
+    ///
+    /// ONE mapping for both settlement paths — the live continuation in
+    /// `runRelay` and the deferred one the queue reconciles — because the two
+    /// drifting apart is precisely how a screen ends up saying something the
+    /// banner beside it contradicts. `nil` for `.converseHop`: a chat ask has
+    /// no Work line, and this lane never shows one for it.
+    nonisolated static func forSettlement(
+        _ settlement: AppleRelayPendingQueue.RelaySettlement
+    ) -> WatchWorkCaptureOutcome? {
+        switch settlement {
+        case .converseHop: return nil
+        case .workAcknowledged: return .saved
+        case .workRecordingOnly: return .savedWithoutWords
+        case .workWordsOnly: return .savedWordsOnly
+        }
+    }
 }
 
 /// Why a Work capture cannot start right now. Asked BEFORE the microphone arms,
@@ -837,14 +862,11 @@ final class WatchRecordingService {
             ])
             return
         }
-        switch settlement {
-        case .converseHop:
+        guard let outcome = WatchWorkCaptureOutcome.forSettlement(settlement) else {
+            // `.converseHop` — a chat ask, which has no Work line to write.
             return
-        case .workAcknowledged:
-            workCaptureOutcome = .saved
-        case .workWordsOnly:
-            workCaptureOutcome = .savedWordsOnly
         }
+        workCaptureOutcome = outcome
     }
 
     /// Retire a Work capture's live leg with the line to show for it.
@@ -1777,7 +1799,8 @@ final class WatchRecordingService {
                     )
                 },
                 finishWork: { settlement in
-                    finishWorkCapture(settlement == .workAcknowledged ? .saved : .savedWordsOnly)
+                    guard let outcome = WatchWorkCaptureOutcome.forSettlement(settlement) else { return }
+                    finishWorkCapture(outcome)
                 }
             )
             switch result {

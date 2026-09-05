@@ -544,6 +544,158 @@ final class WatchRelayQueueRetryabilityTests: XCTestCase {
         )
     }
 
+    // MARK: - 1e. A stamped reply with no words
+    //
+    // The iPhone publishes the recording BEFORE it transcribes, so a
+    // transcription that settles against the clip leaves a playable card on the
+    // desk and no words on it. That reply is success-shaped with an EMPTY
+    // transcript, and it has to settle the wrist: the phone holds the durable
+    // copy, so a retained entry is a clip nothing will ever claim — and Work
+    // entries never age out, so "never" is literal.
+
+    func testAStampedReplyWithNoWordsStillSettlesTheEntry() async {
+        for transcript in ["", "   ", "\n"] {
+            var hops = 0
+            var claims = 0
+            var writes = 0
+            var finished: [AppleRelayPendingQueue.RelaySettlement] = []
+            let result = await AppleRelayPendingQueue.applySettledSuccess(
+                destination: .work,
+                reply: RelayReply(text: transcript, workSaved: true),
+                claim: { claims += 1; return true },
+                completeChat: { _ in hops += 1 },
+                writeWorkWords: { _ in writes += 1; return true },
+                finishWork: { finished.append($0) }
+            )
+            XCTAssertEqual(
+                claims, 1,
+                "A stamped reply with no words left the entry queued. The iPhone holds the recording, so this clip is one the wrist can never settle — and a Work entry never ages out."
+            )
+            XCTAssertEqual(hops, 0, "Nothing on the Work lane may reach the converse hop.")
+            XCTAssertEqual(
+                writes, 0,
+                "There are no words to write. The words-only lane is for an OLD iPhone that kept no recording; this one kept it."
+            )
+            XCTAssertEqual(finished, [.workRecordingOnly])
+            XCTAssertEqual(result, .applied(.workRecordingOnly))
+        }
+    }
+
+    /// NEGATIVE CONTROL: words plus the stamp is still the clean save, or the
+    /// assertion above would pass on a lane that had stopped telling the two
+    /// apart in the other direction.
+    func testAStampedReplyWithWordsIsStillACleanSave() async {
+        var finished: [AppleRelayPendingQueue.RelaySettlement] = []
+        let result = await AppleRelayPendingQueue.applySettledSuccess(
+            destination: .work,
+            reply: RelayReply(text: "remember the oat milk", workSaved: true),
+            claim: { true },
+            completeChat: { _ in XCTFail("a Work capture reached the converse hop") },
+            writeWorkWords: { _ in XCTFail("a stamped reply needs no words written"); return true },
+            finishWork: { finished.append($0) }
+        )
+        XCTAssertEqual(finished, [.workAcknowledged])
+        XCTAssertEqual(result, .applied(.workAcknowledged))
+    }
+
+    /// The classification itself, in both dimensions. An UNSTAMPED reply is the
+    /// old-iPhone lane whatever its transcript looks like — the words are the
+    /// only thing that can be rescued there — so emptiness must not divert it.
+    func testTheWordlessAnswerIsScopedToAStampedWorkReply() {
+        XCTAssertEqual(
+            AppleRelayPendingQueue.settlement(for: .work, workSaved: true, hasWords: false),
+            .workRecordingOnly
+        )
+        XCTAssertEqual(
+            AppleRelayPendingQueue.settlement(for: .work, workSaved: true, hasWords: true),
+            .workAcknowledged
+        )
+        XCTAssertEqual(
+            AppleRelayPendingQueue.settlement(for: .work, workSaved: false, hasWords: false),
+            .workWordsOnly,
+            "An unstamped reply kept no recording; its entry is settled by the WRITE, not by a stamp it never carried."
+        )
+        XCTAssertEqual(
+            AppleRelayPendingQueue.settlement(for: .chat, workSaved: true, hasWords: false),
+            .converseHop,
+            "The destination decides. A chat ask with an empty transcript is still a chat ask."
+        )
+        XCTAssertFalse(AppleRelayPendingQueue.carriesWords(" \t\n"))
+        XCTAssertTrue(AppleRelayPendingQueue.carriesWords("oat milk"))
+    }
+
+    /// The LIVE leg, driven end to end against the real queue: the iPhone kept
+    /// the recording, so the wrist releases its clip — and says which half of
+    /// the card is missing rather than reporting a clean save.
+    func testAStampedEmptyReplyReleasesTheWristsClipAndNamesTheGap() async throws {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        var relayed: String?
+        service.relayTranscribe = { requestID, _, _, _, _ in
+            relayed = requestID
+            return RelayReply(text: "", workSaved: true)
+        }
+
+        let baseline = AppleRelayPendingQueue.shared.entryCount
+        let audioURL = try makeRelayAudio()
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+
+        await service.runRelay(
+            audioFileURL: audioURL,
+            originalFileURL: audioURL,
+            providerID: nil,
+            destination: .work
+        )
+
+        let requestID = try XCTUnwrap(relayed, "The relay seam was never reached.")
+        XCTAssertNil(
+            AppleRelayPendingQueue.shared.peekEntry(requestID: requestID),
+            "The wrist kept a clip whose recording is already on the desk. Nothing will ever settle it: the phone answers every re-fire of this requestID from its verdict cache, and Work entries never age out."
+        )
+        XCTAssertEqual(AppleRelayPendingQueue.shared.entryCount, baseline)
+        XCTAssertEqual(
+            service.workCaptureOutcome, .savedWithoutWords,
+            "The card is on the desk with no words on it. Reporting the clean save hides the one thing the person has to do next; reporting a failure hides the card."
+        )
+        XCTAssertEqual(service.state, .idle, "Work parks nothing in the state machine.")
+    }
+
+    /// The DEFERRED half of the same settlement: the capture screen is still up
+    /// minutes later, and the line it flips to is the one that names the gap.
+    func testADeferredSettlementWithNoWordsRepaintsTheLineItNames() async throws {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        var relayed: String?
+        service.relayTranscribe = { requestID, _, _, _, _ in
+            relayed = requestID
+            throw AppError.sttProviderUnreachable
+        }
+
+        let audioURL = try makeRelayAudio()
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+        await service.runRelay(
+            audioFileURL: audioURL,
+            originalFileURL: audioURL,
+            providerID: nil,
+            destination: .work
+        )
+        let requestID = try XCTUnwrap(relayed)
+        defer { _ = AppleRelayPendingQueue.shared.claimEntry(requestID: requestID) }
+        XCTAssertEqual(service.workCaptureOutcome, .deferredToPhone)
+
+        service.noteWorkCaptureSettled(.workRecordingOnly, requestID: UUID().uuidString)
+        XCTAssertEqual(
+            service.workCaptureOutcome, .deferredToPhone,
+            "A sibling's settlement may not repaint this screen, whatever shape it takes."
+        )
+
+        service.noteWorkCaptureSettled(.workRecordingOnly, requestID: requestID)
+        XCTAssertEqual(
+            service.workCaptureOutcome, .savedWithoutWords,
+            "The displayed capture's own settlement must land, or the deferral line outlives the delivery it promised."
+        )
+    }
+
     // MARK: - 2. The notification sentence
 
     /// The shared 75 copy says "this device". This body renders on the WRIST —
