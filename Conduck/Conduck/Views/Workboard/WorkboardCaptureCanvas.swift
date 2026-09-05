@@ -334,6 +334,7 @@ struct WorkboardCaptureCanvas: View {
                     viewModel: viewModel,
                     item: item,
                     onOpen: openMaterial,
+                    onShare: shareMaterial,
                     onReattach: beginReattachment
                 )
             }
@@ -351,6 +352,16 @@ struct WorkboardCaptureCanvas: View {
             open: { viewModel.openMaterial(material) },
             reattach: { beginReattachment(material) }
         )
+    }
+
+    /// The desk's door to the share presenter, behind the SAME gate Open uses.
+    /// Sharing reads the card's bytes, so a card whose bytes are not readable
+    /// here must reach it no more than the preview router does — and the
+    /// coordinator re-asks on the current card anyway, because this snapshot
+    /// was taken when the board last loaded.
+    private func shareMaterial(_ material: WorkboardMaterialSnapshot) {
+        guard WorkboardCardActionPolicy.allows(.open, when: material.availability) else { return }
+        viewModel.shareMaterial(material)
     }
 
     private func beginReattachment(_ material: WorkboardMaterialSnapshot) {
@@ -1068,6 +1079,7 @@ private struct WorkboardMaterialBoard: View {
     @Bindable var viewModel: WorkboardViewModel
     let item: WorkboardItemSnapshot
     let onOpen: (WorkboardMaterialSnapshot) -> Void
+    let onShare: (WorkboardMaterialSnapshot) -> Void
     let onReattach: (WorkboardMaterialSnapshot) -> Void
 
     @Environment(\.layoutDirection) private var layoutDirection
@@ -1206,6 +1218,7 @@ private struct WorkboardMaterialBoard: View {
                 boardPosition: index + 1,
                 boardCount: item.materials.count,
                 onOpen: { onOpen(material) },
+                onShare: { onShare(material) },
                 onReattach: { onReattach(material) },
                 onSetSize: { size in setSize(size, for: material) },
                 onMoveEarlier: onMoveEarlier,
@@ -1220,6 +1233,7 @@ private struct WorkboardMaterialBoard: View {
                 boardPosition: index + 1,
                 boardCount: item.materials.count,
                 onOpen: { onOpen(material) },
+                onShare: { onShare(material) },
                 onReattach: { onReattach(material) },
                 onSetSize: { size in setSize(size, for: material) },
                 onMoveEarlier: onMoveEarlier,
@@ -1332,6 +1346,7 @@ private struct WorkboardSourceCard: View {
     var boardPosition: Int = 0
     var boardCount: Int = 0
     let onOpen: () -> Void
+    var onShare: (() -> Void)?
     var onReattach: (() -> Void)?
     var onSetSize: ((WorkMaterialCardSize) -> Void)?
     var onMoveEarlier: (() -> Void)?
@@ -1518,6 +1533,12 @@ private struct WorkboardSourceCard: View {
         permittedActions.contains(.open) ? onOpen : nil
     }
 
+    /// Share rides the SAME permission as Open — both read the card's bytes —
+    /// so a card that cannot be opened here cannot be shared from here either.
+    private var shareAction: (() -> Void)? {
+        permittedActions.contains(.open) ? onShare : nil
+    }
+
     private var reattachAction: (() -> Void)? {
         permittedActions.contains(.reattach) ? onReattach : nil
     }
@@ -1700,9 +1721,9 @@ private struct WorkboardSourceCard: View {
         )))
     }
 
-    /// Open and Reattach are the two rows the bytes decide: a card offers
+    /// Open, Share and Reattach are the rows the bytes decide: a card offers
     /// exactly the actions its availability permits, and a card that permits
-    /// neither still carries its arrange rows.
+    /// none of them still carries its arrange rows.
     @ViewBuilder
     private var cardMenuContent: some View {
         if let openAction {
@@ -1710,6 +1731,14 @@ private struct WorkboardSourceCard: View {
                 Label(
                     LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
                     systemImage: "arrow.up.forward.square"
+                )
+            }
+        }
+        if let shareAction {
+            Button(action: shareAction) {
+                Label(
+                    LocalizedStringResource("workboard.material.share", defaultValue: "Share"),
+                    systemImage: "square.and.arrow.up"
                 )
             }
         }
@@ -1769,8 +1798,17 @@ private struct WorkboardSourceCard: View {
         }
     }
 
+    /// The ellipsis menu is hidden from VoiceOver — every action it carries has
+    /// to be reachable here or it is not reachable at all. Open is absent on
+    /// purpose: the tile ITSELF is the open control and already activates.
     @ViewBuilder
     private var cardAccessibilityActions: some View {
+        if let shareAction {
+            Button(
+                LocalizedStringResource("workboard.material.share", defaultValue: "Share"),
+                action: shareAction
+            )
+        }
         if let reattachAction {
             Button(
                 LocalizedStringResource(

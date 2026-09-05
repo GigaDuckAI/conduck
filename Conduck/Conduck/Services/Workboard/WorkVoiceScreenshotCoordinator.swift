@@ -17,10 +17,10 @@
 // capture repairs the same screenshot card instead of adding a second.
 //
 // Publication goes through the App-Group queue rather than straight into the
-// store for the reason `WorkCaptureRetryCoordinator` does: the published
-// envelope is the durable boundary, so a Core Data failure leaves the bytes in
-// the queue for the foreground observer to drain rather than losing them, and
-// the card it produces is byte-for-byte the one a shared image produces.
+// store because `WorkCaptureInbox`'s published envelope is the durable
+// boundary: a Core Data failure leaves the bytes in the queue for the
+// foreground observer to drain rather than losing them, and the card it
+// produces is byte-for-byte the one a shared image produces.
 
 #if !os(watchOS)
 

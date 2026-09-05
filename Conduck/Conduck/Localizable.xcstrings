@@ -23217,6 +23217,94 @@
         }
       }
     },
+    "workboard.material.share" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Share"
+          }
+        }
+      }
+    },
+    "workboard.material.share.dismissFailure" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Dismisses this message"
+          }
+        }
+      }
+    },
+    "workboard.material.share.failed.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn’t share this material"
+          }
+        }
+      }
+    },
+    "workboard.material.share.noAnchor" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The share options couldn’t be opened from this window."
+          }
+        }
+      }
+    },
+    "workboard.material.share.preparing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Preparing…"
+          }
+        }
+      }
+    },
+    "workboard.material.share.stale" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This card changed while it was being prepared, so nothing was shared."
+          }
+        }
+      }
+    },
+    "workboard.material.share.syncPending" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This material is still arriving from iCloud. It can be shared once it lands on this device."
+          }
+        }
+      }
+    },
+    "workboard.material.share.unavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This material is not available on this device. Reattach it here to share it."
+          }
+        }
+      }
+    },
     "workboard.material.syncPending" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {

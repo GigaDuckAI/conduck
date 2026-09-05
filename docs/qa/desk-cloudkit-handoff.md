@@ -49,7 +49,7 @@
 ## Founder decisions open
 
 **Copy (nine, all live in the catalog with a placeholder the founder has not read):** (a) voice-sheet privacy line — now concedes that the chosen speech provider may itself be an AI ("…never into a conversation, and never through a server of ours"); reassurance or confession? (b) the three desk sync-banner sentences; (c) `workboard.workspace.drop.overlay.caption` "…Nothing is sent."; (d) the recovered-note title (first line of the transcript); (e) tutorial line + large-file confirm; (f) `workboard.capture.discarded.message.one` is half true for a terminally refused capture; (g) backlog count "2 recordings waiting" as a caption (iOS) vs the whole sentence (macOS); (h) the shared Discard title "Discard this recording?" for a published Work capture; (i) `AppError.workDeskWriteFailed` (78) wording claims transience.
-**Structure:** delete `WorkCaptureRetryCoordinator.swift` (zero callers, compiles without it) — yes/no.
+**Structure:** `WorkCaptureRetryCoordinator.swift` is deleted (it had zero callers); the two negative source guards that name it stay, since they pin its absence.
 **Chat behaviour changes this branch introduces (intended, but the founder should know):** starting the in-app microphone stops an active Chat read-aloud; one read-aloud stops another across windows; Chat read-aloud and Work card playback are mutually exclusive; CarPlay dictation uploads now carry `audio/x-caf` instead of a false `audio/mp4` (Gemini WAV canary, release gate 3); the Chat retry card shows a backlog count, stays retry-capable after one finish, and gains Discard.
 
 ## Open items (integrate-h §5, condensed — full table with evidence in `desk-cloudkit/fixnotes/integrate-h.md`)

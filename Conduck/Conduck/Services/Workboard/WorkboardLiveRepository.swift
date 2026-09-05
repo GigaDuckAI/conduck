@@ -20,6 +20,7 @@ final class WorkboardLiveRepository {
     private let store: ConversationStore
     private let captureDrainer: WorkCaptureDrainer
     private let openMaterialHandler: @MainActor (WorkboardMaterialSnapshot) -> Void
+    private let shareMaterialHandler: @MainActor (WorkboardMaterialSnapshot) -> Void
     private var localThumbnailCache: [UUID: CachedLocalThumbnail] = [:]
 
     private struct CachedLocalThumbnail {
@@ -37,13 +38,15 @@ final class WorkboardLiveRepository {
     /// awaiting continuation in the process, not a throughput knob.
     private static let maximumConcurrentThumbnailDecodes = 4
 
-    /// Opening a card is the ONE route out of the desk this adapter carries.
-    /// The desk reaches no conversation and no gateway: it is an inert surface,
-    /// so a handler for either would be a door with nothing behind it.
+    /// Opening a card and sharing one are the ONLY routes out of the desk this
+    /// adapter carries, and both end at the person's own device. The desk
+    /// reaches no conversation and no gateway: it is an inert surface, so a
+    /// handler for either would be a door with nothing behind it.
     init(
         store: ConversationStore = .shared,
         captureInbox: WorkCaptureInbox = .shared,
-        openMaterial: @escaping @MainActor (WorkboardMaterialSnapshot) -> Void
+        openMaterial: @escaping @MainActor (WorkboardMaterialSnapshot) -> Void,
+        shareMaterial: @escaping @MainActor (WorkboardMaterialSnapshot) -> Void = { _ in }
     ) {
         self.store = store
         self.captureDrainer = WorkCaptureDrainer(
@@ -52,6 +55,7 @@ final class WorkboardLiveRepository {
             sourceDevice: SourceDevice.current
         )
         self.openMaterialHandler = openMaterial
+        self.shareMaterialHandler = shareMaterial
     }
 
     func makeDependencies() -> WorkboardViewModel.Dependencies {
@@ -76,6 +80,7 @@ final class WorkboardLiveRepository {
                 )
             },
             openMaterial: { [self] material in openMaterialHandler(material) },
+            shareMaterial: { [self] material in shareMaterialHandler(material) },
             reorderMaterials: { [self] orderedMaterialIDs, expectedRevision in
                 try await reorderMaterials(
                     orderedMaterialIDs,
@@ -227,6 +232,36 @@ final class WorkboardLiveRepository {
                 .map { materialSnapshot($0, transientThumbnail: localThumbnails[$0.id]) },
             revision: revision(for: record.updatedAt)
         )
+    }
+
+    /// One card as the STORE holds it at this instant, projected through the
+    /// SAME mapping the board uses.
+    ///
+    /// This is what a share consults, before preparing and again before
+    /// presenting. It deliberately does not read the board: `WorkboardViewModel`
+    /// refreshes behind a 180 ms debounce, so a card that was deleted or
+    /// replaced moments ago still passes a board-level check — while the byte
+    /// read resolves the id against the store and returns the NEW bytes. The
+    /// pairing that produces is the failure worth preventing: a replacement
+    /// leaving the device under the previous revision's name and type.
+    ///
+    /// Metadata only: no payload is read, so this stays cheap enough to run
+    /// twice per share regardless of how large the card is.
+    static func currentMaterialSnapshot(
+        id: UUID,
+        store: ConversationStore = .shared
+    ) async throws -> WorkboardMaterialSnapshot? {
+        guard let record = try await store.fetchWorkMaterial(id: id) else { return nil }
+        return materialSnapshot(record)
+    }
+
+    /// The record→snapshot projection, for a test that already holds records.
+    /// Named for what it is so nothing in the app reaches for it: the app asks
+    /// `currentMaterialSnapshot`, which is the store read AND this projection.
+    static func presentationSnapshotForTesting(
+        _ record: WorkMaterialRecord
+    ) -> WorkboardMaterialSnapshot {
+        materialSnapshot(record)
     }
 
     private static func materialSnapshot(

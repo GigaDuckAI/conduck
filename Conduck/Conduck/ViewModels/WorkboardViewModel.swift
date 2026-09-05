@@ -375,6 +375,12 @@ final class WorkboardViewModel {
             @escaping @Sendable (Double) -> Void
         ) async throws -> WorkboardItemSnapshot
         var openMaterial: @MainActor (WorkboardMaterialSnapshot) -> Void
+        /// Hand one card to the system's share UI. Defaulted to a no-op so a
+        /// test board that never shares does not have to state one, and kept
+        /// SEPARATE from `openMaterial` because the two verbs resolve a card
+        /// differently: opening presents inside the app, sharing copies bytes
+        /// out of it.
+        var shareMaterial: @MainActor (WorkboardMaterialSnapshot) -> Void = { _ in }
         /// `(orderedMaterialIDs, expectedDeskRevision) -> refreshed desk`.
         /// Rewriting sequence is board content, so it advances the desk
         /// revision and is refused when the drag was built on an order the
@@ -874,6 +880,10 @@ final class WorkboardViewModel {
 
     func openMaterial(_ material: WorkboardMaterialSnapshot) {
         dependencies.openMaterial(material)
+    }
+
+    func shareMaterial(_ material: WorkboardMaterialSnapshot) {
+        dependencies.shareMaterial(material)
     }
 
     /// Adopts a desk returned by one operation without letting it undo a newer

@@ -65,6 +65,51 @@ extension AttachmentGalleryPage {
     }
 }
 
+extension AttachmentGalleryPage {
+    /// The page a selection index names, clamped to the gallery, or nil when
+    /// there are no pages.
+    ///
+    /// A named function rather than a line inside the view because it IS the
+    /// actions slot's contract: what the slot is handed is the page CURRENTLY
+    /// on screen, not the one the presentation opened on, and a swipe changes
+    /// it. Clamped for the same reason `startIndex` is — the caller's index
+    /// describes a list that may have changed underneath it.
+    nonisolated static func id(
+        atSelection selection: Int,
+        in pages: [AttachmentGalleryPage]
+    ) -> UUID? {
+        guard !pages.isEmpty else { return nil }
+        return pages[min(max(0, selection), pages.count - 1)].id
+    }
+}
+
+/// The page the gallery is on.
+///
+/// A small reference type rather than a bare `@State Int` because THREE things
+/// read it — the pager, the residency window, and the actions slot — and the
+/// slot's contract is the one that cannot be checked by looking at the screen:
+/// what a Share tap acts on must follow the swipe, not the index the gallery
+/// opened at. Both look identical on the first page. Owning the cursor in one
+/// object is what lets that chain be driven and asserted without a rendered
+/// pager, so the contract is held by a test rather than by review.
+@MainActor
+@Observable
+final class AttachmentGallerySelection {
+    /// The current page's index. Clamped on read rather than on write, because
+    /// the pages can change under a cursor that was valid when it was set.
+    var index: Int
+
+    init(startIndex: Int, pageCount: Int) {
+        index = pageCount > 0 ? min(max(0, startIndex), pageCount - 1) : 0
+    }
+
+    /// The page id everything keyed by page — the loader, the actions slot —
+    /// resolves against.
+    func pageID(in pages: [AttachmentGalleryPage]) -> UUID? {
+        AttachmentGalleryPage.id(atSelection: index, in: pages)
+    }
+}
+
 /// Which pages may hold a decoded full-size image. Pure arithmetic, split out
 /// so the window is provable without a running gallery.
 enum AttachmentGalleryResidency {
@@ -83,7 +128,11 @@ enum AttachmentGalleryResidency {
     }
 }
 
-struct AttachmentFullScreenView: View {
+/// - Parameter PageActions: the caller's own controls for the page currently on
+///   screen. `EmptyView` — Chat's case — adds nothing to the chrome at all: the
+///   slot is a generic parameter rather than an optional closure so a gallery
+///   with no actions builds no view for them.
+struct AttachmentFullScreenView<PageActions: View>: View {
     /// The pages, in display order.
     let pages: [AttachmentGalleryPage]
     /// Initial page (the tapped thumbnail's index into `pages`).
@@ -99,10 +148,23 @@ struct AttachmentFullScreenView: View {
     /// `Image.decoded(from:maxPixel:)` would defeat the bound on exactly the
     /// payloads a bound exists for (a camera original the desk stores verbatim).
     let fullDecodeMaxPixel: Int?
+    /// Controls for the page on screen, built from ITS id.
+    ///
+    /// By page id and not by index: the caller resolves the picture from the
+    /// same key the loader does, so an action fired here can never act on a
+    /// neighbour. It is re-evaluated on every swipe, which is what makes the
+    /// action belong to the picture rather than to the presentation.
+    ///
+    /// The gallery decides nothing about what goes in here and reads nothing
+    /// back — pages stay plain `Sendable` data with no UI closures on them.
+    let pageActions: (UUID) -> PageActions
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var selection: Int
+    /// The cursor the pager binds to. `@State` of a reference the view owns, so
+    /// it survives redraws; injectable so a test can move it exactly as a swipe
+    /// does.
+    @State private var selection: AttachmentGallerySelection
     /// How far from the current page a decoded full image survives. Drops to 0
     /// under system memory pressure and STAYS there for the life of this
     /// presentation:
@@ -114,39 +176,52 @@ struct AttachmentFullScreenView: View {
         pages: [AttachmentGalleryPage],
         startIndex: Int,
         loadFullBytes: @escaping @Sendable (UUID) async throws -> Data,
-        fullDecodeMaxPixel: Int? = nil
+        fullDecodeMaxPixel: Int? = nil,
+        selection: AttachmentGallerySelection? = nil,
+        @ViewBuilder pageActions: @escaping (UUID) -> PageActions
     ) {
         self.pages = pages
         self.startIndex = startIndex
         self.loadFullBytes = loadFullBytes
         self.fullDecodeMaxPixel = fullDecodeMaxPixel
-        _selection = State(initialValue: min(max(0, startIndex), max(0, pages.count - 1)))
+        self.pageActions = pageActions
+        _selection = State(
+            initialValue: selection
+                ?? AttachmentGallerySelection(startIndex: startIndex, pageCount: pages.count)
+        )
     }
 
-    /// Chat's call site: the message's IMAGE attachments (already filtered to
-    /// `isImage && !isServerFile`) plus the tapped index.
-    ///
-    /// The loader is keyed by ATTACHMENT ID, not by position: the store drops
-    /// rows whose image bytes are empty, so an index-aligned lookup would show
-    /// the wrong picture on every page after such a row. A page whose bytes are
-    /// missing gets the failure state instead.
-    init(imageAttachments: [AttachmentRecord], messageID: UUID, startIndex: Int) {
-        let loader = MessageAttachmentBytesLoader(messageID: messageID)
-        self.init(
-            pages: AttachmentGalleryPage.pages(forImageAttachments: imageAttachments),
-            startIndex: startIndex,
-            loadFullBytes: { attachmentID in try await loader.bytes(for: attachmentID) },
-            // Nil: this is the ZOOM surface for bytes the user already sent, so
-            // Chat keeps decoding them at full resolution.
-            fullDecodeMaxPixel: nil
-        )
+    /// The page the person is looking at. Derived from the CURSOR — never from
+    /// `startIndex`, which describes only where the presentation opened.
+    var currentPageID: UUID? {
+        selection.pageID(in: pages)
+    }
+
+    /// The caller's controls for the page on screen, exactly as the chrome
+    /// draws them. Building this value invokes the caller's closure with the
+    /// current page's id, which is the whole chain a Share tap runs through —
+    /// so moving the cursor and building this again is what a swipe does.
+    @ViewBuilder
+    var currentPageActions: some View {
+        if let currentPageID {
+            pageActions(currentPageID)
+        }
     }
 
     private var residentIndices: Set<Int> {
         AttachmentGalleryResidency.residentIndices(
-            current: selection,
+            current: selection.index,
             count: pages.count,
             radius: residencyRadius
+        )
+    }
+
+    /// The pager writes the cursor the actions slot reads, so a swipe and a
+    /// Share tap can never disagree about which picture is on screen.
+    private var pagerSelection: Binding<Int> {
+        Binding(
+            get: { selection.index },
+            set: { selection.index = $0 }
         )
     }
 
@@ -154,7 +229,7 @@ struct AttachmentFullScreenView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            TabView(selection: $selection) {
+            TabView(selection: pagerSelection) {
                 ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
                     ZoomableImagePage(
                         thumbnailData: page.thumbnailData,
@@ -171,7 +246,7 @@ struct AttachmentFullScreenView: View {
             #endif
             .ignoresSafeArea()
 
-            doneButton
+            topControls
         }
         #if os(iOS)
         // The neighbours are the discretionary half of the window — under
@@ -201,9 +276,13 @@ struct AttachmentFullScreenView: View {
         #endif
     }
 
-    private var doneButton: some View {
+    /// The chrome over the picture: the caller's own actions on the leading
+    /// side, Done on the trailing one. Both sit in the SAME row so a gallery
+    /// that supplies actions cannot push Done off its corner.
+    private var topControls: some View {
         VStack {
             HStack {
+                currentPageActions
                 Spacer()
                 Button {
                     dismiss()
@@ -227,6 +306,47 @@ struct AttachmentFullScreenView: View {
             }
             Spacer()
         }
+    }
+}
+
+/// The galleries that add no chrome of their own. Written as a constrained
+/// extension because Swift cannot default a generic parameter: this is what
+/// makes `pageActions` genuinely optional at the call site, and it is why
+/// Chat's two call sites are untouched by the slot's existence.
+extension AttachmentFullScreenView where PageActions == EmptyView {
+    init(
+        pages: [AttachmentGalleryPage],
+        startIndex: Int,
+        loadFullBytes: @escaping @Sendable (UUID) async throws -> Data,
+        fullDecodeMaxPixel: Int? = nil
+    ) {
+        self.init(
+            pages: pages,
+            startIndex: startIndex,
+            loadFullBytes: loadFullBytes,
+            fullDecodeMaxPixel: fullDecodeMaxPixel,
+            selection: nil,
+            pageActions: { _ in EmptyView() }
+        )
+    }
+
+    /// Chat's call site: the message's IMAGE attachments (already filtered to
+    /// `isImage && !isServerFile`) plus the tapped index.
+    ///
+    /// The loader is keyed by ATTACHMENT ID, not by position: the store drops
+    /// rows whose image bytes are empty, so an index-aligned lookup would show
+    /// the wrong picture on every page after such a row. A page whose bytes are
+    /// missing gets the failure state instead.
+    init(imageAttachments: [AttachmentRecord], messageID: UUID, startIndex: Int) {
+        let loader = MessageAttachmentBytesLoader(messageID: messageID)
+        self.init(
+            pages: AttachmentGalleryPage.pages(forImageAttachments: imageAttachments),
+            startIndex: startIndex,
+            loadFullBytes: { attachmentID in try await loader.bytes(for: attachmentID) },
+            // Nil: this is the ZOOM surface for bytes the user already sent, so
+            // Chat keeps decoding them at full resolution.
+            fullDecodeMaxPixel: nil
+        )
     }
 }
 

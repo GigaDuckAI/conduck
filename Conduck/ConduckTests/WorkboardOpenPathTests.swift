@@ -298,10 +298,14 @@ final class WorkboardOpenPathTests: XCTestCase {
 
     /// A card's name is a TITLE — a recording's is "Voice note" — while Quick
     /// Look, the share sheet and every receiving app decide what a file is from
-    /// its extension alone. A disposable preview copy must therefore be named
-    /// for the bytes it holds, not for the card it came from.
+    /// its extension alone. A disposable copy must therefore be named for the
+    /// bytes it holds, not for the card it came from.
+    ///
+    /// The naming lives on `WorkMaterialExportSnapshot`, which is what BOTH the
+    /// preview lane and the share lane copy through — the parity these rows pin
+    /// only means something because there is one implementation to pin.
     func testAPreviewCopyIsNamedWithAnExtensionItsBytesActuallyClaim() throws {
-        let recording = PersonalWorkbenchRouter.previewFilename(
+        let recording = WorkMaterialExportSnapshot.filename(
             displayName: "Voice note",
             mimeType: "audio/mp4"
         )
@@ -324,13 +328,13 @@ final class WorkboardOpenPathTests: XCTestCase {
 
         // A name that already states its type keeps it, extension and all.
         XCTAssertEqual(
-            PersonalWorkbenchRouter.previewFilename(displayName: "rows.csv", mimeType: "text/csv"),
+            WorkMaterialExportSnapshot.filename(displayName: "rows.csv", mimeType: "text/csv"),
             "rows.csv"
         )
         // A title that merely ENDS like a filename states nothing, so the bytes
         // still get to name themselves.
         XCTAssertEqual(
-            PersonalWorkbenchRouter.previewFilename(
+            WorkMaterialExportSnapshot.filename(
                 displayName: "Meeting v1.2",
                 mimeType: "application/pdf"
             ),
@@ -338,7 +342,7 @@ final class WorkboardOpenPathTests: XCTestCase {
         )
         // Nothing to derive from is still better than a guess.
         XCTAssertEqual(
-            PersonalWorkbenchRouter.previewFilename(displayName: "Voice note", mimeType: nil),
+            WorkMaterialExportSnapshot.filename(displayName: "Voice note", mimeType: nil),
             "Voice note"
         )
     }

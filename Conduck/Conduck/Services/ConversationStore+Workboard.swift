@@ -208,6 +208,270 @@ private let workThumbnailRepairPassLimit = 96
 /// ceiling-sized payload while it runs, so the width is also the memory bound.
 private let workThumbnailRepairDecodeWidth = 4
 
+/// The preview bytes a row carries, digested ONCE and only if anything ever
+/// asks.
+///
+/// Lazy because the ordering value is built for every material on every board
+/// load, while the digest is consulted only when two physical rows of the SAME
+/// card tie on every key before it — which is to say almost never. Hashing at
+/// construction put a SHA-256 per card on the board's read path to answer a
+/// question nobody was asking.
+private final class WorkMaterialThumbnailDigest: @unchecked Sendable {
+    private let lock = NSLock()
+    private let data: Data?
+    /// Outer nil means "not computed yet"; the inner optional is the answer.
+    private var computed: String??
+
+    init(data: Data?) {
+        self.data = data
+    }
+
+    /// How much of a preview this row has, WITHOUT hashing anything: 0 for no
+    /// column at all, 1 for a column that is present but empty, 2 for one with
+    /// bytes in it.
+    ///
+    /// The ordering asks this BEFORE the digest, and that is not an
+    /// optimisation. A digest is a hex string and orders lexicographically, so
+    /// the hash of empty data — `e3b0c442…` — outranks plenty of real ones
+    /// (`"one"` hashes to `7692…`). Ranking by digest alone therefore put an
+    /// EMPTY preview above a real one, the exact opposite of what absence and
+    /// emptiness are supposed to mean here. Emptiness is a tier, not a value.
+    var presence: Int {
+        guard let data else { return 0 }
+        return data.isEmpty ? 1 : 2
+    }
+
+    /// `nil` for a row carrying no preview column at all. A column that is
+    /// PRESENT but empty still has a digest — it is a real state of a row — but
+    /// the ordering never compares it against a non-empty one, because
+    /// `presence` has already separated them.
+    var value: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let computed { return computed }
+        let answer: String? = data.map { bytes in
+            #if CONDUCK_TESTING
+            WorkMaterialCanonicalOrder.recordDigestForTesting()
+            #endif
+            return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        }
+        computed = answer
+        return answer
+    }
+
+    /// Whether anything has asked yet. Test-facing: a board of singletons must
+    /// never reach the hash.
+    var hasComputed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return computed != nil
+    }
+}
+
+/// The ONE total ordering of the physical rows behind one logical material.
+///
+/// TOTAL is the operative word. CloudKit cannot enforce Core Data uniqueness, so
+/// one logical material can exist as several physical rows, and every reader has
+/// to pick the same one — the board describing one duplicate while the payload,
+/// the vault URL and the share gate answer from another is a card that shows one
+/// thing and does another.
+///
+/// A tuple that can TIE does not achieve that on its own. Two readers reaching
+/// for "the first of the equals" resolve a tie differently whenever their
+/// candidate lists are ordered differently, and they are: the board sorts
+/// materials by `(sequence, createdAt)` while a single-row read starts from a
+/// timestamp-ordered fetch. Same rule, same rows, different answer — and a fully
+/// tied fetch is not even stable against itself.
+///
+/// WHAT THE KEYS ARE. `revision` and `createdAt` first, then everything the
+/// repository projects onto a card, then the row itself. The first four keys and
+/// their order are fixed: changing them would change which duplicate an
+/// already-decided card resolves to. Everything after exists to make ties
+/// impossible, and each is a column two rows can genuinely differ on while
+/// looking identical in the keys above it — the device-local lane names no blob,
+/// so `contentHash` ties for two vault rows holding DIFFERENT bytes and
+/// `localVaultKey` is what separates them; the lane, size, kind, text, address,
+/// filename, mime type, caption, card size and preview each drive availability
+/// or what the card draws.
+///
+/// SYNCED VERSUS LOCAL. Every key except the last is a mirrored column, so two
+/// devices compute the same value and agree on the winner without talking.
+/// `rowKey` is the ONE device-local key and it is deliberately last: it can only
+/// decide between rows that agree on every synced column, which no reader can
+/// tell apart anyway.
+///
+/// EVERY COLUMN IS OPTIONAL IN THE MODEL, so every key carries presence rather
+/// than a substituted default: absence sorts BELOW every present value,
+/// including the empty string and zero, which are legitimate column values that
+/// must not collide with "no column at all". `revision` is the one exception and
+/// deliberately so — it IS the substituted value every reader compares
+/// (`materialRevisionDate`), and giving it presence here would order rows
+/// differently from the projection that reports them.
+nonisolated struct WorkMaterialCanonicalOrder: Comparable, Sendable {
+    /// `materialRevisionDate` — the substituted value, never the raw column.
+    let revision: Date
+    let createdAt: Date?
+    let title: String?
+    let contentHash: String?
+    let localVaultKey: String?
+    let storageMode: String?
+    let byteSize: Int64?
+    let kind: String?
+    let textContent: String?
+    let urlString: String?
+    let filename: String?
+    let mimeType: String?
+    let caption: String?
+    let cardSize: String?
+    /// The physical row, as a value. Unique by construction, which is what makes
+    /// this ordering total — and DEVICE-LOCAL, which is why it is last.
+    let rowKey: String
+
+    private let thumbnail: WorkMaterialThumbnailDigest
+
+    init(
+        revision: Date,
+        createdAt: Date?,
+        title: String?,
+        contentHash: String?,
+        localVaultKey: String?,
+        storageMode: String?,
+        byteSize: Int64?,
+        kind: String?,
+        textContent: String?,
+        urlString: String?,
+        filename: String?,
+        mimeType: String?,
+        caption: String?,
+        cardSize: String?,
+        thumbnailData: Data?,
+        rowKey: String
+    ) {
+        self.revision = Self.ordered(revision) ?? .distantPast
+        self.createdAt = Self.ordered(createdAt)
+        self.title = title
+        self.contentHash = contentHash
+        self.localVaultKey = localVaultKey
+        self.storageMode = storageMode
+        self.byteSize = byteSize
+        self.kind = kind
+        self.textContent = textContent
+        self.urlString = urlString
+        self.filename = filename
+        self.mimeType = mimeType
+        self.caption = caption
+        self.cardSize = cardSize
+        self.rowKey = rowKey
+        thumbnail = WorkMaterialThumbnailDigest(data: thumbnailData)
+    }
+
+    /// SHA-256 of the preview bytes, computed on first ask and kept. Reading it
+    /// is what the digest exists for; nothing else should.
+    var thumbnailDigest: String? { thumbnail.value }
+
+    /// The preview tier — see `WorkMaterialThumbnailDigest.presence`. Free to
+    /// read, and read before the digest.
+    var previewPresence: Int { thumbnail.presence }
+
+    /// The tier that has real bytes behind it, and therefore a digest worth
+    /// comparing.
+    static let previewPresent = 2
+
+    /// Test-facing: whether this value has been asked for its digest yet.
+    var hasComputedThumbnailDigest: Bool { thumbnail.hasComputed }
+
+    static func < (lhs: WorkMaterialCanonicalOrder, rhs: WorkMaterialCanonicalOrder) -> Bool {
+        if let decided = decide(lhs.revision, rhs.revision) { return decided }
+        if let decided = decide(lhs.createdAt, rhs.createdAt) { return decided }
+        if let decided = decide(lhs.title, rhs.title) { return decided }
+        if let decided = decide(lhs.contentHash, rhs.contentHash) { return decided }
+        if let decided = decide(lhs.localVaultKey, rhs.localVaultKey) { return decided }
+        if let decided = decide(lhs.storageMode, rhs.storageMode) { return decided }
+        if let decided = decide(lhs.byteSize, rhs.byteSize) { return decided }
+        if let decided = decide(lhs.kind, rhs.kind) { return decided }
+        if let decided = decide(lhs.textContent, rhs.textContent) { return decided }
+        if let decided = decide(lhs.urlString, rhs.urlString) { return decided }
+        if let decided = decide(lhs.filename, rhs.filename) { return decided }
+        if let decided = decide(lhs.mimeType, rhs.mimeType) { return decided }
+        if let decided = decide(lhs.caption, rhs.caption) { return decided }
+        if let decided = decide(lhs.cardSize, rhs.cardSize) { return decided }
+        // LAST of the synced keys, and the only one that costs anything to read
+        // — which is why every cheap key is asked first, and why even this key
+        // is asked in two steps.
+        //
+        // The TIER first: no preview, an empty one, a real one. Comparing
+        // digests alone got this backwards, because a digest is a hex string and
+        // the hash of empty data outranks plenty of real ones.
+        if let decided = decide(lhs.previewPresence, rhs.previewPresence) { return decided }
+        // Only two rows that BOTH carry real preview bytes reach the hash.
+        if lhs.previewPresence == WorkMaterialCanonicalOrder.previewPresent,
+           let decided = decide(lhs.thumbnailDigest, rhs.thumbnailDigest) {
+            return decided
+        }
+        return lhs.rowKey < rhs.rowKey
+    }
+
+    /// Derived from `<` rather than synthesised, for two reasons: the digest
+    /// stays lazy (equality on the keys before it never reaches the hash), and
+    /// the two operators cannot drift apart as keys are added.
+    static func == (lhs: WorkMaterialCanonicalOrder, rhs: WorkMaterialCanonicalOrder) -> Bool {
+        !(lhs < rhs) && !(rhs < lhs)
+    }
+
+    /// One key's verdict: `nil` when the two agree on it, otherwise the answer.
+    /// Absence sorts BELOW every present value.
+    private static func decide<Value: Comparable>(_ lhs: Value?, _ rhs: Value?) -> Bool? {
+        switch (lhs, rhs) {
+        case (nil, nil): return nil
+        case (nil, _): return true
+        case (_, nil): return false
+        case (let left?, let right?): return left == right ? nil : left < right
+        }
+    }
+
+    /// A date that can take part in a total order.
+    ///
+    /// `Date` comparison is `Double` comparison, and NaN is not ordered against
+    /// anything — one NaN stamp would make the whole ordering intransitive and
+    /// the "canonical" row would depend on comparison order again. A NaN is
+    /// therefore treated as ABSENT, which is a position this ordering does
+    /// define. It cannot arise from Core Data; it is guarded because the cost of
+    /// being wrong is silent and the check is free.
+    private static func ordered(_ date: Date?) -> Date? {
+        guard let date else { return nil }
+        guard !date.timeIntervalSinceReferenceDate.isNaN else {
+            assertionFailure("a NaN date cannot take part in a total order")
+            return nil
+        }
+        return date
+    }
+
+    #if CONDUCK_TESTING
+    private static let digestCountLock = NSLock()
+    nonisolated(unsafe) private static var digestCount = 0
+
+    static func recordDigestForTesting() {
+        digestCountLock.lock()
+        defer { digestCountLock.unlock() }
+        digestCount += 1
+    }
+
+    /// How many preview digests have been computed since the last reset. A
+    /// board of cards with no duplicates must not move it.
+    static var digestCountForTesting: Int {
+        digestCountLock.lock()
+        defer { digestCountLock.unlock() }
+        return digestCount
+    }
+
+    static func resetDigestCountForTesting() {
+        digestCountLock.lock()
+        defer { digestCountLock.unlock() }
+        digestCount = 0
+    }
+    #endif
+}
+
 extension ConversationStore {
 
     // MARK: - Work items
@@ -2316,6 +2580,18 @@ extension ConversationStore {
     /// as it stood, and the exact blob rows the card was taken off.
     private nonisolated struct WorkMaterialReattachSwap: Sendable {
         let oldVaultKeys: Set<String>
+        /// The physical rows as they stood, each carrying its own prior
+        /// `updatedAt` AND the `createdAt` a reader substitutes when that is
+        /// absent.
+        ///
+        /// The rollback derives every restored stamp from the row's own
+        /// EFFECTIVE revision (`restoredRevisionStamps`), so canonical order is
+        /// preserved by the VALUES rather than by this array's order:
+        /// re-sorting it changes nothing, and no row can be promoted past where
+        /// it already stood. Carrying `createdAt` is what makes that true for an
+        /// undated row as well — without it the rollback could only advance the
+        /// raw column, and a row readers compare by `createdAt` would come out
+        /// of the round trip at the revision it went in with.
         let priorRows: [WorkMaterialRowSnapshot]
         let replacedBlobRowIDs: [NSManagedObjectID]
     }
@@ -2334,11 +2610,21 @@ extension ConversationStore {
         let textContent: String?
         let thumbnailData: Data?
         let updatedAt: Date?
+        /// Carried ONLY so the rollback can advance the revision a reader
+        /// actually sees. It is never written back — `createdAt` is not a
+        /// payload column and a restore has no business moving it.
+        let createdAt: Date?
 
         /// The blob this row named, so a restore puts the card back on the
         /// payload it had rather than on whatever blob carries its id.
         var pairing: WorkMaterialBlobPairing {
             WorkMaterialBlobPairing(contentHash: contentHash, byteSize: byteSize ?? 0)
+        }
+
+        /// What every projection reports as this row's revision, substitutions
+        /// included. The rollback advances THIS, not the raw column.
+        var effectiveRevision: Date {
+            ConversationStore.materialRevisionDate(updatedAt: updatedAt, createdAt: createdAt)
         }
 
         init(row: NSManagedObject) {
@@ -2353,6 +2639,7 @@ extension ConversationStore {
             textContent = row.value(forKey: "textContent") as? String
             thumbnailData = row.value(forKey: "thumbnailData") as? Data
             updatedAt = row.value(forKey: "updatedAt") as? Date
+            createdAt = row.value(forKey: "createdAt") as? Date
         }
     }
 
@@ -2375,6 +2662,33 @@ extension ConversationStore {
     /// pointer with the failure reported as committed-but-unavailable: pointing
     /// it back at a payload nothing holds would be strictly worse than the
     /// unreadable leaf it names, which a reattach can at least replace.
+    ///
+    /// THE PAYLOAD GOES BACK; THE REVISION DOES NOT. Every column describing the
+    /// bytes is restored verbatim — that is the guarantee — but `updatedAt` is
+    /// stamped FRESH rather than put back, because it is the only thing any
+    /// reader has to tell that these bytes moved. Restoring it makes the whole
+    /// round trip invisible: a card read at revision A, replaced with B, then
+    /// rolled back, reads as A again, so anything holding A believes nothing
+    /// happened. That is not hypothetical for a reader that resolves BYTES by
+    /// id separately from metadata — a share prepared against A can pick up B's
+    /// bytes mid-flight and then pass a revision check against a restored A.
+    ///
+    /// FRESH PER ROW, NEVER LIFTED TO A SHARED CEILING. `updatedAt` is also the
+    /// FIRST key that decides which physical row of a CloudKit-duplicated
+    /// material is canonical (`workMaterialRows`), and two duplicates can
+    /// legitimately name different blobs. Each row is therefore advanced beyond
+    /// ITS OWN prior stamp and nothing else's, by `restoredRevisionStamps`.
+    ///
+    /// Both halves of that sentence fix a real defect. Putting the prior stamp
+    /// back makes the round trip invisible. But giving every row one shared
+    /// FRESH stamp is wrong in the other direction: it drags the LOSING
+    /// duplicates up to the winner's level, and a later legitimate update of
+    /// the winner row — a peer whose clock has since corrected, writing an
+    /// ordinary `Date()` — then loses to a loser that was promoted for no
+    /// reason, so the card serves bytes nobody wrote last. Advancing each row
+    /// past its own stamp leaves the losers where they were, so any later write
+    /// to the winner that clears the losers' own stamps still wins.
+    ///
     private func restoreReplacedPayload(
         id: UUID,
         to priorRows: [WorkMaterialRowSnapshot],
@@ -2415,9 +2729,16 @@ extension ConversationStore {
             }
         }
 
+        // Each row advanced past its OWN effective revision — the value a
+        // reader compares, substitutions included. See the revision paragraphs
+        // above for why nothing here is lifted to a shared ceiling, and why an
+        // undated row is not left alone.
+        let restoredStamps = Self.restoredRevisionStamps(
+            advancing: priorRows.map(\.effectiveRevision)
+        )
         let context = newWriteContext()
         let restored = await context.perform { [context] () -> Bool in
-            for prior in priorRows {
+            for (position, prior) in priorRows.enumerated() {
                 guard let row = try? context.existingObject(with: prior.rowID) else {
                     return false
                 }
@@ -2430,7 +2751,11 @@ extension ConversationStore {
                 row.setValue(prior.sourceDevice, forKey: "sourceDevice")
                 row.setValue(prior.textContent, forKey: "textContent")
                 row.setValue(prior.thumbnailData, forKey: "thumbnailData")
-                row.setValue(prior.updatedAt, forKey: "updatedAt")
+                // NOT `prior.updatedAt`. The bytes are the card's again; the
+                // revision has to say they moved — advanced past THIS row's own
+                // effective revision, so no duplicate is promoted past where it
+                // already stood and no undated row keeps the revision it had.
+                row.setValue(restoredStamps[position], forKey: "updatedAt")
             }
             do {
                 try context.save()
@@ -2446,6 +2771,70 @@ extension ConversationStore {
             await deleteBlobRow(rowID)
         }
         return restored
+    }
+
+    /// The revision a READER sees for one material row.
+    ///
+    /// `updatedAt` is nullable, and a row that carries none is NOT revisionless:
+    /// every projection substitutes `createdAt`, and the floor below that.
+    /// ONE definition, shared by the projection readers consume
+    /// (`StoredWorkMaterial`) and by the rollback that has to advance it —
+    /// because a rollback that advanced the raw column while readers compared a
+    /// substituted one would leave an undated row reading the SAME revision
+    /// before and after, which is the whole thing that revision exists to deny.
+    nonisolated static func materialRevisionDate(updatedAt: Date?, createdAt: Date?) -> Date {
+        updatedAt ?? createdAt ?? .distantPast
+    }
+
+    /// The stamps a rollback writes: each row's OWN effective revision,
+    /// advanced by one step.
+    ///
+    /// EFFECTIVE, not the raw column. `updatedAt` is nullable and every reader
+    /// substitutes `createdAt` for a row that has none
+    /// (`materialRevisionDate`), so leaving such a row alone would leave its
+    /// revision unchanged across the whole round trip — and a share prepared
+    /// before the replace would pass its equality check against bytes that had
+    /// been swapped underneath. An undated row therefore comes out of a
+    /// rollback carrying `createdAt + step` in `updatedAt`, which moves its
+    /// revision and, as a bonus, makes the raw fetch ordering agree with the
+    /// substituted ordering the projection uses.
+    ///
+    /// PER ROW, never relative to a shared ceiling — that is the rest of the
+    /// rule, and together they buy three properties:
+    ///
+    ///   (a) THE CANONICAL WINNER IS UNCHANGED. Adding one step to every
+    ///       effective revision is monotone, so rows that differed still differ
+    ///       the same way — including a dated row against an undated one, which
+    ///       are compared in that same substituted space. Rows that were EQUAL
+    ///       stay equal, which is also correct: that tie was already settled by
+    ///       `createdAt`/`title` and those are untouched.
+    ///   (b) EVERY ROW'S REVISION MOVES, which is what a reader holding the
+    ///       pre-replace revision needs in order to notice that these bytes
+    ///       moved and came back.
+    ///   (c) A LATER LEGITIMATE UPDATE OF THE WINNER STILL WINS. Each loser is
+    ///       only one step above where it already was, so a subsequent write to
+    ///       the winning row outranks every loser — including a peer's ordinary
+    ///       `Date()` after its clock corrected, which can land far BELOW the
+    ///       winner's own prior stamp.
+    ///
+    /// The residual on (c), stated because it is real: when two effective
+    /// revisions were EQUAL, both rise by one step together, so an update
+    /// landing inside that one step of the shared value is outranked. The
+    /// window is `step` wide, it needs a write within a millisecond of the
+    /// previous one, and the next write to either row clears it.
+    ///
+    /// `step` is a millisecond rather than the smallest representable increment
+    /// on purpose. Property (b) is the one whose failure is SILENT — it
+    /// re-opens the stale-share defect — and a millisecond survives any date
+    /// rounding a CloudKit round trip could apply, where a single-ULP bump
+    /// might not.
+    ///
+    /// Static and pure so all three properties are provable without a rollback.
+    nonisolated static func restoredRevisionStamps(
+        advancing priorRevisions: [Date],
+        step: TimeInterval = 0.001
+    ) -> [Date] {
+        priorRevisions.map { $0.addingTimeInterval(step) }
     }
 
     func deleteWorkMaterial(
@@ -2835,7 +3224,15 @@ extension ConversationStore {
     /// One row, one availability pass. This sits on the material
     /// import/read-back hot path and is called once per image on every board
     /// load, so it must never project the whole board to answer a single id.
-    private func fetchWorkMaterial(id: UUID) async throws -> WorkMaterialRecord? {
+    ///
+    /// Internal rather than private because it is also the STORE TRUTH a
+    /// surface has to consult before it hands a card's bytes outside the app.
+    /// A board snapshot cannot answer that question: the desk reloads behind a
+    /// debounce, so a card the store has already replaced or deleted is still
+    /// on the board — and the bytes are then resolved from the store by id,
+    /// which is how replacement bytes end up leaving under the previous
+    /// revision's filename and type.
+    func fetchWorkMaterial(id: UUID) async throws -> WorkMaterialRecord? {
         try await ensureLoaded()
         let context = newReadContext()
         let stored = try await context.perform { [context] () -> StoredWorkMaterial? in
@@ -3000,8 +3397,12 @@ extension ConversationStore {
                 order.append(identity)
                 continue
             }
-            if (material.updatedAt, material.createdAt, material.title)
-                > (current.updatedAt, current.createdAt, current.title) {
+            // The SAME total ordering the single-row read uses. Comparing only
+            // the three human-meaningful keys let a tie fall through to "keep
+            // whichever arrived first", and this candidate list is ordered by
+            // `(sequence, createdAt)` while that read's is ordered by timestamp
+            // — so the two disagreed on exactly the rows where it mattered.
+            if material.canonicalOrder > current.canonicalOrder {
                 selected[identity] = material
             }
         }
@@ -3072,19 +3473,78 @@ extension ConversationStore {
         return try context.fetch(request)
     }
 
+    /// The one physical row of a material every single-row read answers from.
+    ///
+    /// The newest-wins rule is applied HERE rather than by the fetch, and that
+    /// is the whole point of the function. `updatedAt` is nullable and every
+    /// projection substitutes `createdAt` for a row that carries none
+    /// (`materialRevisionDate`) — which no `NSSortDescriptor` can express. A
+    /// descriptor on the raw column sorts NULL last, so an undated duplicate
+    /// that the BOARD reads as the canonical row was the one row this read
+    /// could never return: the desk described one duplicate while the payload,
+    /// the vault URL and the share gate answered from the other. Comparing the
+    /// substituted value closes that, and it is the same tuple
+    /// `deduplicatedWorkMaterials` compares.
+    ///
+    /// There is no "first of the equals" rule here, because
+    /// `WorkMaterialCanonicalOrder` is TOTAL: whatever order the fetch returns,
+    /// the maximum is the same row, and it is the same row the projection
+    /// selects from its own differently-ordered candidate list.
     private static func workMaterialRow(id: UUID, in context: NSManagedObjectContext) throws -> NSManagedObject? {
-        let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
-        request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
-        // Same newest-wins ordering `deduplicatedWorkMaterials` applies, so a
-        // single-row read and the full projection agree on which physical row of
-        // a CloudKit-duplicated material is canonical.
-        request.sortDescriptors = [
-            NSSortDescriptor(key: "updatedAt", ascending: false),
-            NSSortDescriptor(key: "createdAt", ascending: false),
-            NSSortDescriptor(key: "title", ascending: false),
-        ]
-        request.fetchLimit = 1
-        return try context.fetch(request).first
+        canonicalRow(among: try workMaterialRows(id: id, in: context))
+    }
+
+    /// The selection itself, split from the fetch so both orders of the same
+    /// candidate set are reachable from a test.
+    nonisolated static func canonicalRow(among rows: [NSManagedObject]) -> NSManagedObject? {
+        rows.max { canonicalOrder(of: $0) < canonicalOrder(of: $1) }
+    }
+
+    /// One physical row's place in `WorkMaterialCanonicalOrder`.
+    ///
+    /// Read straight off a managed object, from the RAW columns, and it is the
+    /// only place an ordering is built: the projection routes through it too,
+    /// so the two selectors cannot drift into computing a key differently. The
+    /// raw columns matter — an enum that maps an unrecognised lane or kind onto
+    /// a default would erase exactly the difference this ordering is trying to
+    /// see.
+    nonisolated static func canonicalOrder(of row: NSManagedObject) -> WorkMaterialCanonicalOrder {
+        // Every row these selectors compare comes from a fetch on a fresh read
+        // or write context, and the one caller that inserts (`upsertDeskMaterial`)
+        // selects BEFORE it inserts — so no temporary id reaches a comparison.
+        // A fetch CAN return pending inserts, which is why this is an assertion
+        // about the callers rather than about fetches in general, and why it is
+        // checked rather than asserted in prose.
+        assert(
+            !row.objectID.isTemporaryID,
+            "a temporary object id is not stable, so it cannot decide a canonical row"
+        )
+        // The RAW columns, every one of them optional in the model — so the
+        // ordering carries presence and never a substituted default. `revision`
+        // is the exception and takes the substitution deliberately: it is the
+        // value every reader compares.
+        let createdAt = row.value(forKey: "createdAt") as? Date
+        return WorkMaterialCanonicalOrder(
+            revision: materialRevisionDate(
+                updatedAt: row.value(forKey: "updatedAt") as? Date,
+                createdAt: createdAt
+            ),
+            createdAt: createdAt,
+            title: row.value(forKey: "title") as? String,
+            contentHash: row.value(forKey: "contentHash") as? String,
+            localVaultKey: row.value(forKey: "localVaultKey") as? String,
+            storageMode: row.value(forKey: "storageMode") as? String,
+            byteSize: (row.value(forKey: "byteSize") as? NSNumber)?.int64Value,
+            kind: row.value(forKey: "kind") as? String,
+            textContent: row.value(forKey: "textContent") as? String,
+            urlString: row.value(forKey: "urlString") as? String,
+            filename: row.value(forKey: "filename") as? String,
+            mimeType: row.value(forKey: "mimeType") as? String,
+            caption: row.value(forKey: "caption") as? String,
+            cardSize: row.value(forKey: "cardSize") as? String,
+            thumbnailData: row.value(forKey: "thumbnailData") as? Data,
+            rowKey: row.objectID.uriRepresentation().absoluteString
+        )
     }
 
     /// The single sequence-rewrite the Workboard has. Both the editor's autosave
@@ -3331,6 +3791,11 @@ extension ConversationStore {
         let cardSize: WorkMaterialCardSize
         let createdAt: Date
         let updatedAt: Date
+        /// Where this row sits in the one ordering both selectors use, built by
+        /// `ConversationStore.canonicalOrder(of:)` from the row this was
+        /// projected from — the SAME call the single-row read makes, so the two
+        /// cannot compute a key differently. Nothing displays or persists it.
+        let canonicalOrder: WorkMaterialCanonicalOrder
 
         init(_ row: NSManagedObject) {
             id = row.value(forKey: "id") as? UUID ?? UUID()
@@ -3361,7 +3826,11 @@ extension ConversationStore {
             sequence = (row.value(forKey: "sequence") as? NSNumber)?.intValue ?? 0
             cardSize = WorkMaterialCardSize(stored: row.value(forKey: "cardSize") as? String)
             createdAt = row.value(forKey: "createdAt") as? Date ?? .distantPast
-            updatedAt = row.value(forKey: "updatedAt") as? Date ?? createdAt
+            updatedAt = ConversationStore.materialRevisionDate(
+                updatedAt: row.value(forKey: "updatedAt") as? Date,
+                createdAt: createdAt
+            )
+            canonicalOrder = ConversationStore.canonicalOrder(of: row)
         }
 
         /// Both sets are resolved once per fetch by `workMaterialRecords(for:)`
@@ -3475,11 +3944,20 @@ extension ConversationStore {
     ///   public API can, because every repair writes every row together. Both
     ///   default to the source's value; neither can CLEAR a column, because the
     ///   states worth staging all name some blob.
+    /// - Parameter localVaultKey: the leaf the copy names. Two DEVICE-LOCAL rows
+    ///   name no blob at all, so they tie on `contentHash` while holding
+    ///   different bytes — this is the only way to build that pair.
+    /// - Parameter sequence: the rank the copy carries. Two devices can rank one
+    ///   card differently before their orders converge, and rank is what decides
+    ///   the BOARD's candidate order, so it is how a test makes the two
+    ///   selectors see the same rows in different sequences.
     func _duplicateWorkMaterialRowForTesting(
         id: UUID,
         updatedAt: Date? = nil,
         contentHash: String? = nil,
-        byteSize: Int64? = nil
+        byteSize: Int64? = nil,
+        localVaultKey: String? = nil,
+        sequence: Int? = nil
     ) async {
         do { try await ensureLoaded() } catch { return }
         let context = newWriteContext()
@@ -3498,6 +3976,100 @@ extension ConversationStore {
             if let updatedAt { copy.setValue(updatedAt, forKey: "updatedAt") }
             if let contentHash { copy.setValue(contentHash, forKey: "contentHash") }
             if let byteSize { copy.setValue(NSNumber(value: byteSize), forKey: "byteSize") }
+            if let localVaultKey { copy.setValue(localVaultKey, forKey: "localVaultKey") }
+            if let sequence {
+                copy.setValue(NSNumber(value: Int32(clamping: sequence)), forKey: "sequence")
+            }
+            try? context.save()
+        }
+    }
+
+    /// TEST SEAM — what each selector picks for one material, from the SAME
+    /// candidate set, handed to it in both directions.
+    ///
+    /// WHY IT HAS TO EXIST. The property under test is that the projection and
+    /// the single-row read return the SAME physical row, and neither is
+    /// reachable from outside: one is a private static over a private
+    /// projection type, the other a private fetch helper. Asserting it through
+    /// the public API instead — compare the board's card to what the payload
+    /// read serves — proves the two agree on THIS store's fetch order and says
+    /// nothing about the other one, which is exactly the case that used to
+    /// break. Reversing the candidate list is the only way to see it.
+    ///
+    /// - Returns: four row keys — the projection's winner and the single-row
+    ///   read's, each from the candidate list forward and reversed. They must
+    ///   all be the same string.
+    func _canonicalRowKeysForTesting(id: UUID) async -> [String] {
+        do { try await ensureLoaded() } catch { return [] }
+        let context = newWriteContext()
+        return await context.perform { [context] () -> [String] in
+            guard Self.isInMemory(context) else { return [] }
+            // The BOARD's candidate order: how `loadWorkboard` sorts materials
+            // before projecting them.
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+            request.sortDescriptors = [
+                NSSortDescriptor(key: "sequence", ascending: true),
+                NSSortDescriptor(key: "createdAt", ascending: true),
+            ]
+            let rows = (try? context.fetch(request)) ?? []
+            guard !rows.isEmpty else { return [] }
+            let projected = rows.map(StoredWorkMaterial.init)
+
+            func projectionWinner(_ candidates: [StoredWorkMaterial]) -> String? {
+                Self.deduplicatedWorkMaterials(candidates)
+                    .first { $0.id == id }?
+                    .canonicalOrder.rowKey
+            }
+            func rowWinner(_ candidates: [NSManagedObject]) -> String? {
+                Self.canonicalRow(among: candidates)?.objectID.uriRepresentation().absoluteString
+            }
+
+            return [
+                projectionWinner(projected),
+                projectionWinner(projected.reversed()),
+                rowWinner(rows),
+                rowWinner(rows.reversed()),
+            ].compactMap { $0 }
+        }
+    }
+
+    /// TEST SEAM — restamp the ONE physical row naming a given payload.
+    ///
+    /// WHY IT HAS TO EXIST. A peer updating its own mirrored row is the ordinary
+    /// way `updatedAt` moves on ONE duplicate and not the others: CloudKit
+    /// delivers that row's record and nothing else. No public API here can
+    /// produce it, because every local write deliberately touches every physical
+    /// row of a material — that is the invariant the duplicate-tolerant writes
+    /// exist to hold. Without a seam, the whole question of whether a rollback
+    /// leaves a later peer update able to win is unreachable, and it is exactly
+    /// the question `restoredRevisionStamps` answers. Same in-memory gate as
+    /// every other seam.
+    ///
+    /// - Parameter contentHash: names WHICH duplicate to restamp. It is what
+    ///   distinguishes rows that carry different bytes, and therefore the only
+    ///   handle on "the row the peer owns" that does not depend on fetch order.
+    /// - Parameter updatedAt: `nil` CLEARS the column, which is the other state
+    ///   no public API reaches: a row written before the column existed, or a
+    ///   peer record that carries none. Readers substitute `createdAt` for it,
+    ///   so it is the shape that makes "revisionless" rows testable.
+    func _setWorkMaterialRowUpdatedAtForTesting(
+        id: UUID,
+        contentHash: String,
+        updatedAt: Date?
+    ) async {
+        do { try await ensureLoaded() } catch { return }
+        let context = newWriteContext()
+        await context.perform { [context] in
+            guard Self.isInMemory(context) else { return }
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(format: "id == %@", id as CVarArg),
+                NSPredicate(format: "contentHash == %@", contentHash),
+            ])
+            for row in (try? context.fetch(request)) ?? [] {
+                row.setValue(updatedAt, forKey: "updatedAt")
+            }
             try? context.save()
         }
     }

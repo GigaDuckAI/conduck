@@ -640,6 +640,10 @@ struct WorkboardAudioCardView: View {
     /// only for bytes this device can read, and only when the board gave the
     /// card somewhere to open them.
     var onOpen: (() -> Void)? = nil
+    /// Hand the recording to the system's share UI. Offered under the SAME
+    /// permission as Open — both read the card's bytes — so a recording this
+    /// device cannot play is never shareable from it either.
+    var onShare: (() -> Void)? = nil
     /// Repair a recording whose local bytes are gone. When it is absent the
     /// availability corner states the fact instead of naming an action the card
     /// cannot perform.
@@ -989,6 +993,10 @@ struct WorkboardAudioCardView: View {
         WorkboardCardActionPolicy.allows(.play, when: material.availability)
     }
 
+    private var shareAction: (() -> Void)? {
+        WorkboardCardActionPolicy.allows(.open, when: material.availability) ? onShare : nil
+    }
+
     // MARK: Actions
 
     private func toggle() {
@@ -1037,6 +1045,14 @@ struct WorkboardAudioCardView: View {
                 Label(
                     LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
                     systemImage: "arrow.up.forward.app"
+                )
+            }
+        }
+        if let shareAction {
+            Button(action: shareAction) {
+                Label(
+                    LocalizedStringResource("workboard.material.share", defaultValue: "Share"),
+                    systemImage: "square.and.arrow.up"
                 )
             }
         }
@@ -1102,6 +1118,14 @@ struct WorkboardAudioCardView: View {
             Button(
                 LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
                 action: onOpen
+            )
+        }
+        // The ellipsis menu is hidden from VoiceOver, so Share reaches the
+        // person here or not at all.
+        if let shareAction {
+            Button(
+                LocalizedStringResource("workboard.material.share", defaultValue: "Share"),
+                action: shareAction
             )
         }
         // The chip is drawn inside an element whose children are ignored, so
