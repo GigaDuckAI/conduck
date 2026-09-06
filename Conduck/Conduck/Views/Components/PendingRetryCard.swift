@@ -21,16 +21,19 @@ struct PendingRetryCard: View {
     let retryErrorMessage: String?
     let onRetry: () -> Void
     /// Whether Retry is offered at all. Rides `AppError.isRetryable` for the
-    /// failure the card is currently reporting — the arming error at first, then
-    /// whatever the last Retry attempt hit.
+    /// failure the LAST attempt in this session hit — never the stored arming
+    /// code, which describes one capture (the newest) while this card speaks for
+    /// the queue behind it, and which cannot know what the person changed since
+    /// it was written.
     ///
     /// The button is WITHHELD on a terminal verdict rather than disabled: the
     /// same preserved bytes go to the same configuration, so a certificate this
     /// device refuses, a rejected key or an endpoint that isn't an AI endpoint
     /// reaches the identical answer every time. A live Retry there re-fires into
     /// the refusal it just reported, and its spinner covers the one sentence the
-    /// user needed to read. The host resets this from the store on every
-    /// refresh, so fixing the server brings the button back.
+    /// user needed to read. The host RESTORES it on every refresh, so fixing the
+    /// server brings the button back — and so a capture waiting behind a
+    /// terminal one is never withheld for a verdict that was not about it.
     var errorIsRetryable: Bool = true
     /// Troubleshoot affordance for the failure that armed this card — non-nil
     /// only when the preserved recording's error carries a code Diagnostics can

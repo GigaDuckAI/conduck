@@ -73,8 +73,26 @@ class AudioRecorder: NSObject, ObservableObject {
         // somebody else.
         guard session == sessionGeneration, !isRecording else { return false }
 
+        #if os(iOS)
+        // THE CAR, RE-ASKED ON THE FAR SIDE OF THE PROMPT, and for the same
+        // reason the reservation above is: the callers' own busy refusal
+        // (`InAppAudioRecorder.startRecording()`) is read BEFORE the permission
+        // sheet, so a session the driver started while it stood was invisible to
+        // it. The skip below then took the only consequence away — no session
+        // reconfiguration — and built a second capture on the car's input
+        // anyway, which is the admission this gate exists to refuse. Typed,
+        // because the callers map it onto `audioMicBusy`: a live car capture is
+        // sacred exactly as a live macOS one is, so the SECOND start is refused.
+        guard !CarPlayRecordingService.anySessionActive else {
+            throw AudioRecorderError.microphoneBusy
+        }
+        #endif
+
         // Configure audio session (iOS only - macOS doesn't need this), UNLESS
-        // CarPlay owns it — see `deactivateSessionUnlessCarPlayOwnsIt()`.
+        // CarPlay owns it — see `deactivateSessionUnlessCarPlayOwnsIt()`. Kept
+        // even though the refusal above now stands in front of it: this is the
+        // ACTIVATE half of the gate the deactivate sites belong to, and the pair
+        // is what protects a capture that began before the car connected.
         #if os(iOS)
         if !CarPlayRecordingService.anySessionActive {
             let audioSession = AVAudioSession.sharedInstance()
@@ -271,6 +289,10 @@ extension AudioRecorder: AVAudioRecorderDelegate {
 enum AudioRecorderError: LocalizedError {
     case permissionDenied
     case recordingFailed
+    /// Another surface holds the microphone. Raised only on iOS, and only for
+    /// the one holder this primitive cannot see through the speech bus: a live
+    /// CarPlay voice session, which registers nothing on it by construction.
+    case microphoneBusy
 
     var errorDescription: String? {
         switch self {
@@ -278,6 +300,11 @@ enum AudioRecorderError: LocalizedError {
             return String(localized: "Microphone permission denied. Enable in Settings → Privacy → Microphone.")
         case .recordingFailed:
             return String(localized: "Failed to start audio recording.")
+        case .microphoneBusy:
+            // The taxonomy's own sentence for this state, so the primitive and
+            // every surface above it say the same thing and no second row is
+            // written for one meaning.
+            return AppError.audioMicBusy.errorDescription
         }
     }
 }

@@ -421,11 +421,12 @@ final class PendingRetryOwnershipHandoffTests: XCTestCase {
         )
         XCTAssertTrue(
             host.contains(
-                "guard !isRetrying, !confirmingPendingRetryDiscard else { return } "
+                "guard !isRetrying, !confirmingPendingRetryDiscard else { "
+                + "pendingRetryQueueChangeMissed = true return } "
                 + "Task { await refreshPendingRetryState() }"
             ),
             """
-            The notification-driven refresh no longer steps aside while this surface owns the             queue. A retry in flight writes the card's verdict itself on every exit, and a             discard confirmation is an alert attached to the card this refresh can remove.
+            The notification-driven refresh no longer steps aside while this surface owns the             queue — or it steps aside and forgets. A retry in flight writes the card's verdict             itself on every exit, and a discard confirmation is an alert attached to the card this             refresh can remove; the announcement comes once, so a skip that remembers nothing is a             capture this screen never learns about.
             """
         )
 

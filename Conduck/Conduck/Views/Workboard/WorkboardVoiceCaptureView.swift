@@ -33,7 +33,11 @@ struct WorkboardVoiceCaptureView: View {
     /// in. Without a second reading the two are indistinguishable, so a stopped
     /// transcription rendered as "Starting the microphone…" beside no controls
     /// at all: a dead end over a capture that still had a Try Again in it.
-    /// Cleared by every start, so it describes only the hop that was stopped.
+    ///
+    /// Cleared by the sheet's own start and by a capture that FINISHED, and by
+    /// nothing else — least of all by the press that offers to finish it: that
+    /// press can be refused, and a refusal leaves the recorder `.idle` with the
+    /// stopped state as the only thing standing between it and the dead end.
     @State private var transcriptionStopped = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -123,12 +127,34 @@ struct WorkboardVoiceCaptureView: View {
                         defaultValue: "Transcription stopped"
                     ))
                     .font(.title3.weight(.semibold))
-                    Text(LocalizedStringResource(
-                        "workboard.voice.stopped.body",
-                        defaultValue: "The recording is on your desk. Try Again adds the words to that same card."
-                    ))
+                    // THE DESK'S OWN ANSWER, not the capture's. A capture still
+                    // in hand proves only that something is left to finish — the
+                    // card it published can have been deleted on another device
+                    // while recognition ran, and the recorder's last refresh is
+                    // where that is discovered. Told from the retention alone,
+                    // this receipt promised a card that a synced deletion had
+                    // already taken away.
+                    Text(recorder.workCaptureFacts.recordingOnDesk
+                         ? LocalizedStringResource(
+                            "workboard.voice.stopped.body",
+                            defaultValue: "The recording is on your desk. Try Again adds the words to that same card.")
+                         : LocalizedStringResource(
+                            "workboard.voice.stopped.body.noCard",
+                            defaultValue: "That recording isn’t on your desk any more. Try Again brings its words back."))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
+                    // The refusal changes no state, so without this the only
+                    // thing a Try Again another surface is already serving would
+                    // change is nothing at all — the same reason the `.error`
+                    // arm carries the sentence.
+                    if recorder.retryRefusedBusy {
+                        Text(LocalizedStringResource(
+                            "pendingRetry.card.busy",
+                            defaultValue: "This recording is already being finished. Try again in a moment."
+                        ))
+                        .font(.footnote)
+                        .foregroundStyle(AppColors.warning)
+                    }
                 } else {
                     Text(LocalizedStringResource(
                         "workboard.voice.starting",
@@ -299,7 +325,15 @@ struct WorkboardVoiceCaptureView: View {
             // dismisses instead whenever there is nothing left to finish.
             if transcriptionStopped, recorder.canRetryWorkCapture {
                 Button {
-                    transcriptionStopped = false
+                    // The stopped state is NOT cleared here. `retryWorkCapture`
+                    // can refuse before it starts — another surface holds this
+                    // capture's reservation — and a refusal deliberately leaves
+                    // the recorder exactly as it was, `.idle`. Cleared first,
+                    // that returned the sheet to "Starting the microphone…" over
+                    // no controls at all: a dead end raised by a press that
+                    // changed nothing. A retry that DOES start moves the state
+                    // to `.processing`, which this flag has no say over, and a
+                    // finished one dismisses the sheet from `handle`.
                     Task { handle(await recorder.retryWorkCapture()) }
                 } label: {
                     Label(
@@ -415,6 +449,9 @@ struct WorkboardVoiceCaptureView: View {
     private func handle(_ result: Result<String, AppError>) {
         switch result {
         case .success(let transcript):
+            // Nothing is stopped any more, and this sheet renders for as long as
+            // its dismissal takes.
+            transcriptionStopped = false
             // The recording is already a card on the desk and the transcript is
             // already written onto it, so handing the same words to the
             // composer would put one utterance on the board twice. `onCancel`

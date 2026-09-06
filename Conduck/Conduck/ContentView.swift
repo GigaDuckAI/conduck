@@ -69,11 +69,13 @@ struct ContentView: View {
     /// or nothing pending) → no button.
     @State private var pendingRetryErrorCode: Int? = nil
     /// Whether the failure the retry card is currently reporting can be retried
-    /// at all (`AppError.isRetryable`). Seeded from the store's arming code and
-    /// re-keyed by every failed Retry, so a terminal verdict — a certificate
-    /// this device refuses, a rejected key — withdraws the button instead of
-    /// leaving one that can only reach the same refusal again. Reset on every
-    /// `refreshPendingRetryState()`, so a server-side fix restores it.
+    /// at all (`AppError.isRetryable`). Written by every failed Retry MADE HERE,
+    /// so a terminal verdict — a certificate this device refuses, a rejected key
+    /// — withdraws the button instead of leaving one that can only reach the
+    /// same refusal again. Restored on every `refreshPendingRetryState()`, so a
+    /// server-side fix brings it back. Never seeded from the store's arming
+    /// code: that code answers for the newest capture alone, and gating on it
+    /// withheld Retry from every recording queued behind a terminal one.
     @State private var pendingRetryIsRetryable: Bool = true
     /// The reservation the Discard confirmation is about, taken when the button
     /// is tapped and held until the question is answered.
@@ -86,6 +88,15 @@ struct ContentView: View {
     @State private var pendingRetryDiscard: PendingRetryClaim? = nil
     /// Raised only once `pendingRetryDiscard` holds a reservation.
     @State private var confirmingPendingRetryDiscard: Bool = false
+    /// A queue change that arrived while this surface owned the queue.
+    ///
+    /// `handlePendingRetryQueueChange` steps aside for two states, and the
+    /// announcement is a one-shot: nothing re-posts it when the state that
+    /// skipped it ends. So the change is REMEMBERED here and consumed on the way
+    /// out — otherwise a recording CarPlay parked while a discard confirmation
+    /// stood was invisible until the next lifecycle hop, which is the exact
+    /// blindness the observer was added to close.
+    @State private var pendingRetryQueueChangeMissed: Bool = false
 
     /// True when minting the first conversation failed at send time (rare
     /// Core Data write error) — drives the explanatory alert; the draft text
@@ -1195,23 +1206,35 @@ struct ContentView: View {
     /// every lifecycle / foreground / dictation-result path. Both are cheap
     /// metadata-only reads (no audio load).
     ///
-    /// The retryability flag is DERIVED from the same code rather than assumed
-    /// true: it is the store's arming verdict, and re-deriving it here is what
-    /// lets a terminal Retry failure withdraw the button for this session and
-    /// hand it back on the next foreground, once the user has had a chance to
-    /// act on the remedy.
+    /// The retryability flag is RESTORED here rather than re-derived from the
+    /// stored code. That code is the card's DIAGNOSIS and never its verdict: it
+    /// describes one capture — the newest — while this card speaks for the whole
+    /// queue behind it, and it is a memory of a failure that already happened,
+    /// which no re-read can tell apart from one the person has since fixed. A
+    /// terminal verdict withdraws Retry for the session it was earned in, where
+    /// `attemptPendingRetry` writes it; this refresh is the hand-back, once the
+    /// user has had a chance to act on the remedy.
     private func refreshPendingRetryState() async {
+        // A full re-read IS the consumption of a skipped announcement, so no
+        // exit that runs one leaves the flag standing for a second refresh.
+        pendingRetryQueueChangeMissed = false
         // The COUNT rather than a boolean, because the card has to say how many
         // are waiting and both readings come from one metadata-only scan.
         pendingRetryCount = await PendingRetryStore.shared.pendingCount()
         hasPendingRetry = pendingRetryCount > 0
         pendingRetryErrorCode = await PendingRetryStore.shared.pendingErrorCode()
-        pendingRetryIsRetryable = pendingRetryErrorCode
-            .map { AppError.from(errorCode: $0, message: nil).isRetryable } ?? true
-        // A sticky terminal line belongs to the verdict that produced it, and
-        // that verdict is what just got re-read. Dropping it with the flag keeps
-        // the card from showing "trying again would reach the same answer" beside
-        // a Retry button this refresh has restored.
+        // Deriving this from the code above withheld Retry from every recording
+        // BEHIND a newest one whose stored verdict was terminal — and the relay
+        // parks exactly that entry, a published Work recording whose words a
+        // missing key refused, over a Chat capture that a reconnect would have
+        // sent. It never gave the button back either, because the same persisted
+        // code reads terminal again however the key was restored. The menu bar's
+        // popover has always gated its Retry on the count alone; this is the
+        // same rule on the phone.
+        pendingRetryIsRetryable = true
+        // A sticky terminal line belongs to the verdict that withdrew the
+        // button, so it goes when the button comes back. Left standing it would
+        // read "trying again would reach the same answer" beside a live Retry.
         retryErrorMessage = nil
     }
 
@@ -1232,11 +1255,43 @@ struct ContentView: View {
     /// itself. A retry in flight writes the card's verdict on every exit of its
     /// own (including the sticky terminal line this refresh clears), and a
     /// discard confirmation is an alert attached to the card a refresh could
-    /// take off screen mid-question. Neither leaves anything stale: `runPendingRetry`
-    /// and `discardPendingRetry` both end by re-reading the queue.
+    /// take off screen mid-question.
+    ///
+    /// A skip is REMEMBERED, because the announcement comes once and nothing
+    /// re-posts it: the exits re-read the queue for the capture they were
+    /// working on, not for one another surface parked meanwhile, so a change
+    /// stepped aside for was simply lost until the next lifecycle hop.
     private func handlePendingRetryQueueChange() {
-        guard !isRetrying, !confirmingPendingRetryDiscard else { return }
+        guard !isRetrying, !confirmingPendingRetryDiscard else {
+            pendingRetryQueueChangeMissed = true
+            return
+        }
         Task { await refreshPendingRetryState() }
+    }
+
+    /// Consume a queue change this surface stepped aside for, without
+    /// overwriting the verdict the run that stepped aside just wrote.
+    ///
+    /// The COUNT and the card's presence only. A retry writes its own diagnosis
+    /// and its own sticky line on every exit — that line is the whole remedy
+    /// once Retry is withheld — so a full refresh here would clear the sentence
+    /// the person is reading in order to re-state a code about somebody else's
+    /// capture. The count is read from the STORE rather than adjusted, because
+    /// what arrived while this surface was busy is unknown to it: an arm, a
+    /// retirement, or several.
+    ///
+    /// `keepingVerdict: false` is the exit that decided nothing — a cancelled
+    /// discard confirmation — and there the full refresh is the right answer.
+    @MainActor
+    private func consumePendingRetryQueueChange(keepingVerdict: Bool) async {
+        guard pendingRetryQueueChangeMissed else { return }
+        pendingRetryQueueChangeMissed = false
+        guard keepingVerdict else {
+            await refreshPendingRetryState()
+            return
+        }
+        pendingRetryCount = await PendingRetryStore.shared.pendingCount()
+        withAnimation { hasPendingRetry = pendingRetryCount > 0 }
     }
 
     private func refreshConfiguredFlag() async {
@@ -1684,6 +1739,11 @@ struct ContentView: View {
         if await attemptPendingRetry(claim) == false {
             await PendingRetryStore.shared.release(claim)
         }
+        // ONE exit for every arm above, which is why the consumption sits here:
+        // the run's own re-reads are about the capture it took, and a change
+        // another surface announced while `isRetrying` stood was skipped and
+        // never re-posted. The verdict this run wrote is kept.
+        await consumePendingRetryQueueChange(keepingVerdict: true)
     }
 
     /// Everything one Retry tap does with the capture it reserved.
@@ -2035,7 +2095,13 @@ struct ContentView: View {
     private func discardPendingRetry() async {
         guard let claim = pendingRetryDiscard else { return }
         pendingRetryDiscard = nil
-        guard await finishPendingRetry(claim) else {
+        let retired = await finishPendingRetry(claim)
+        // The confirmation is answered either way, so a change stepped aside
+        // while it stood is consumed either way. `finishPendingRetry` re-read
+        // the queue for the capture it retired; this re-reads it for whatever
+        // arrived meanwhile, and sits ABOVE the busy line so nothing clears it.
+        await consumePendingRetryQueueChange(keepingVerdict: true)
+        guard retired else {
             presentRetryError(pendingRetryBusyMessage)
             return
         }
@@ -2048,6 +2114,10 @@ struct ContentView: View {
         guard let claim = pendingRetryDiscard else { return }
         pendingRetryDiscard = nil
         await PendingRetryStore.shared.release(claim)
+        // The confirmation is gone, so the state that stepped a queue change
+        // aside is over. Nothing here wrote a verdict — a cancelled question
+        // decided nothing — so this consumption is the full re-read.
+        await consumePendingRetryQueueChange(keepingVerdict: false)
     }
 
     /// Show the retry card's secondary error line.

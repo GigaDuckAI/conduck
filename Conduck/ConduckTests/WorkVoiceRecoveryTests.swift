@@ -1236,6 +1236,111 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         XCTAssertEqual(card.textContent, "the words this run bought")
     }
 
+    /// A refused claim may not PARK the capture it was refused.
+    ///
+    /// The surface that overtook this retry can have finished the recording and
+    /// RETIRED its queue entry while this run's provider call was suspended —
+    /// that is the ordinary shape of being overtaken, not an unlucky one. Routing
+    /// the refusal through the same preservation a failed desk write uses wrote
+    /// that entry back: same id, this run's stale words, a capture the person
+    /// has already been told is done. It then offers a Try Again for a recording
+    /// that is finished, and a recovery replays words the card already carries.
+    ///
+    /// The refusal keeps everything else it always did — the capture in hand,
+    /// the retryable error, `retryRefusedBusy` — because none of that is a write.
+    func testARefusedClaimDoesNotResurrectTheEntryTheOtherSurfaceRetired() async throws {
+        let store = ConversationStore(inMemory: true)
+        let lane = RecordingRetryLane()
+        let recorder = Self.workRecorder(store: store, lane: lane)
+
+        var hops = 0
+        recorder.transcriptionHopForTesting = { _ in
+            hops += 1
+            return hops == 1
+                ? .failure(.sttProviderUnreachable)
+                : .success("the words this run bought")
+        }
+        _ = await recorder._finishCaptureForTesting()
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let armed = await lane.entry(id: captureID)
+        XCTAssertNotNil(armed, "control: the first failure parked the capture")
+
+        // The other surface does not merely hold the capture — it FINISHES it,
+        // which retires the entry. That is what this run must not undo.
+        recorder.transcriptAttachPauseForTesting = {
+            await lane.finishFromAnotherSurface(id: captureID)
+        }
+
+        let refused = await recorder.retryWorkCapture()
+
+        guard case .failure = refused else {
+            return XCTFail("a write this retry was not allowed to make must not report a transcript")
+        }
+        XCTAssertTrue(recorder.retryRefusedBusy, "the sentence that says who has it")
+        let resurrected = await lane.entry(id: captureID)
+        XCTAssertNil(
+            resurrected,
+            """
+            MEASURED: the refusal re-saved a capture another surface had already finished and \
+            retired. The person is offered a Try Again for a recording that is done, and the \
+            entry replays this run's stale words onto the card that already carries them.
+            """
+        )
+        let saveIDs = await lane.saves.map(\.id)
+        XCTAssertEqual(
+            saveIDs.filter { $0 == captureID }.count, 1,
+            "exactly the ONE save the first failure made; the refusal writes nothing"
+        )
+        let released = await lane.releases
+        XCTAssertFalse(
+            released.contains(captureID),
+            "there is nothing to hand back — the lapsed claim was dropped before the refusal"
+        )
+    }
+
+    /// A capture still in hand does not prove its card is standing.
+    ///
+    /// Cancelling the transcription keeps the capture — that is what its Try
+    /// Again is for — while the card it published can have been deleted on
+    /// another device in the same window. The recorder's own refresh answers
+    /// that question, and this is the pair a receipt must be told from: retained
+    /// AND confirmed gone. `WorkboardVoiceCaptureView`'s stopped state reads the
+    /// fact, never the retention.
+    func testACancelledTranscriptionKeepsACaptureWhoseCardTheDeskSaysIsGone() async throws {
+        let store = ConversationStore(inMemory: true)
+        let lane = RecordingRetryLane()
+        let recorder = Self.workRecorder(store: store, lane: lane)
+
+        recorder.transcriptionHopForTesting = { [weak recorder] _ in
+            // Deleted while the words are being bought — the synced deletion the
+            // person made on another device.
+            let desk = try? await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+            if let card = desk?.materials.first {
+                try? await store.deleteWorkMaterial(id: card.id)
+            }
+            // …and "Cancel transcription" pressed on this one.
+            recorder?.cancelProcessing()
+            return .success("words nobody is waiting for any more")
+        }
+
+        let outcome = await recorder._finishCaptureForTesting()
+        guard case .failure(.unknown(let underlying)) = outcome, underlying is CancellationError else {
+            return XCTFail("a cancelled transcription answers as a cancellation, with no banner")
+        }
+        XCTAssertTrue(
+            recorder.canRetryWorkCapture,
+            "control: the capture is retained, which is the only thing a receipt used to read"
+        )
+        XCTAssertFalse(
+            recorder.workCaptureFacts.recordingOnDesk,
+            """
+            MEASURED: the desk's own answer and the capture's retention disagree, and only the \
+            first is about the card. A stopped-state receipt told from the retention promises a \
+            recording the person deleted.
+            """
+        )
+    }
+
     private static func workRecorder(
         store: ConversationStore,
         lane: RecordingRetryLane
@@ -1448,6 +1553,16 @@ private actor RecordingRetryLane: PendingRetryLaneReserving {
         let token = UUID()
         leases[id] = (token, Date().addingTimeInterval(duration), duration)
         return token
+    }
+
+    /// FINISH a capture on somebody else's behalf: the entry is retired and its
+    /// reservation goes with it, which is what the queue looks like after
+    /// another surface completed the recording this one is still working on.
+    /// Distinct from `reserveForAnotherSurface` — a held capture is still
+    /// queued, and a finished one is not there at all.
+    func finishFromAnotherSurface(id: UUID) {
+        entries.removeAll { $0.metadata.id == id }
+        leases[id] = nil
     }
 
     /// Whether a reservation is live over this capture right now.

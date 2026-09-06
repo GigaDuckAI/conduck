@@ -285,8 +285,15 @@ rows with no production reference.
 iOS (`Conduck/Localizable.xcstrings`): add `workboard.menuBar.savedQueued`
 ("On its way to Work. Nothing was sent."), `settings.mac.general.shortcuts.header`
 ("Keyboard Shortcuts", retiring the singular key — three recorder rows sat under
-a singular header), and the four `quitGuard.unsaved.*.v2` rows whose wording is
-capture-neutral. CarPlay adds none: `carplay.picker.addToWork.title`,
+a singular header), the four `quitGuard.unsaved.*.v2` rows whose wording is
+capture-neutral, and `workboard.voice.stopped.body.noCard` ("That recording
+isn’t on your desk any more. Try Again brings its words back.") for the
+stopped state whose card the desk no longer holds — a different sentence takes a
+different key, so `workboard.voice.stopped.body` keeps the card-is-standing arm.
+The close-out adds nothing else: `AudioRecorderError.microphoneBusy` is worded
+from `audio.error.micBusy` through `AppError`, the STT testers reuse
+`settings.voice.{apple,cloud}.test.error.micBusy`, and the sheet's busy line
+reuses `pendingRetry.card.busy`. CarPlay adds none: `carplay.picker.addToWork.title`,
 `carplay.hint.captureStartFailed.detail{,.work}` and the two saved lines all
 already existed.
 
@@ -325,7 +332,14 @@ wordless acknowledgement) · `Services/Workboard/WorkVoiceCaptureCoordinator.swi
 ## Tests
 
 The iOS suite goes 5,433 → 5,485 and the watch suite 269 → 302; both green, one
-known environment skip. Two new files, `ConduckTests/MenuBarEscCancellationContractTests.swift`
+known environment skip. The close-out fixes add seven more iOS cases with no new
+file (`PendingRetrySurfaceHandoffTests`, `WorkVoiceRecoveryTests`,
+`MenuBarWorkCaptureStateTests` +2 each, `AudioExclusivityCrossSurfaceTests` +1),
+tighten `WatchWorkRelayPhoneTests`' phase-two guard in place, re-pin
+`PendingRetryOwnershipHandoffTests`' queue-change needle to the remembering
+shape, and give `RecordingRetryLane` a `finishFromAnotherSurface(id:)` — the
+other surface FINISHING a capture, which `reserveForAnotherSurface` cannot
+model. Two new files, `ConduckTests/MenuBarEscCancellationContractTests.swift`
 and `ConduckTests/WatchWorkRelayRecoveryTests.swift` (the watch target's own
 files needed no `pbxproj` edit because everything was appended to existing
 classes — `ConduckWatchTests` has no synchronized group).
@@ -375,9 +389,14 @@ CP-R4-08, the four CP-R4-10 out-of-lane guard rows and MAC-R4-P2-M's production
 arms are closed; CP-R4-02 and CP-R4-03 are closed on their normal paths with one
 residual each. The CarPlay chooser's Work row passes with no product finding, and
 the founder's three options are met on all five surfaces with no destination
-crossover. Seven items are open, every one of them induced by a round-4 or
+crossover. Seven items are raised, every one of them induced by a round-4 or
 cross-lane fix rather than by a lane: four P2 (U-57 – U-60) and three P3
-(U-61 – U-63).
+(U-61 – U-63), and all seven are fixed.
+
+| Close-out round | Reads | Raised | Left standing |
+|---|---|---|---|
+| R5 | all three lanes and the cross-lane fixes in one pass (`verify/codex-r5-work-destination-closeout.md`) | 7, every one fix-induced: four P2 (U-57 – U-60), three P3 (U-61 – U-63) | all seven, each fixed below |
+| R6 | the seven close-out fixes themselves, read-only over the working diff against the tip (`verify/codex-r6-work-destination-p2-pass.md`) | **clean — no P1, no P2**; two P3 residuals, both inside a fix rather than beside it | the busy-sentence assertion's breadth (U-59) and a queue arrival landing inside the consume read's own await (U-63) |
 
 Three findings recurred in every round. The first is the only P1 among them:
 **automated entry points reach Work with no foreground press** — the background
@@ -401,6 +420,63 @@ its wrong entitlement key, the QA fixtures that prescribed outcomes their own
 setup could not produce (a dead STT endpoint is retryable, not settled; a
 zero-gateway headless press refuses; the empty-roster line cannot render under a
 maximum roster), and the watch catalog's stale rows.
+
+### Close-out fixes (R5-1 … R5-7)
+
+- **R5-1 — the card's stored code is a DIAGNOSIS, not a verdict.**
+  `refreshPendingRetryState` restores `pendingRetryIsRetryable` instead of
+  deriving it from `PendingRetryStore.pendingErrorCode()`. That code answers for
+  the NEWEST entry while the card speaks for the whole queue, so a terminal one —
+  the relay's own parked `.work` / `.published` entry, code 23 — took Retry off an
+  older Chat recording, and a re-read of the same persisted code never handed the
+  button back however the key was restored. The withdrawal now belongs to the
+  attempt that earned it, which `attemptPendingRetry` writes; the menu-bar
+  popover already gated its Retry on the count alone, so the two hosts follow one
+  rule. Both relay arms still park their words.
+- **R5-2 — a refused CLAIM preserves nothing.** The last ownership question
+  before the transcript write returns through `refuseOvertakenWorkCapture` rather
+  than `failPendingWorkCapture`: the surface that overtook this run may have
+  finished the recording and retired its entry, and preserving wrote that entry
+  back under the same id with this run's stale words. The capture stays in hand
+  with its retryable error and `retryRefusedBusy`; the durability reading still
+  runs (a read, not a write); there is nothing to hand back, because the lapsed
+  claim is dropped above the call.
+- **R5-3 — the stopped state outlives a Try Again that never started.** The press
+  no longer clears `transcriptionStopped`. A reservation refusal leaves the
+  recorder `.idle` and returns an error `handle(_:)` prints nothing for, so
+  clearing first put the sheet back on "Starting the microphone…" over no
+  controls. It is cleared by the sheet's own start and by a capture that
+  finished, and the stopped state now carries `pendingRetry.card.busy` while
+  `retryRefusedBusy` stands.
+- **R5-4 — the stopped-state receipt is the desk's answer.** It reads
+  `WorkCaptureFacts.recordingOnDesk`, which the cancellation path's
+  `refreshDeskFacts` has just re-read, instead of asserting a card from the
+  retained capture. A card deleted on another device while recognition ran leaves
+  the capture retained and the receipt false; the second sentence
+  (`workboard.voice.stopped.body.noCard`) says what a retry can still do there.
+- **R5-5 — the phase-two switch guard is bounded by its own braces.**
+  `WatchWorkRelayPhoneTests` brace-matches the switch and pins each non-attached
+  arm's COMPLETE body ending in `return`. The old extraction searched the rest of
+  the file for the next `case `, so a catch arm's `return` far below satisfied it
+  — measured: with the production `return` deleted the old guard passed and the
+  new one fails.
+- **R5-6 — the iOS microphone gate is asked on both sides of the permission
+  prompt.** `AudioRecorder.startRecording()` re-reads
+  `CarPlayRecordingService.anySessionActive` after the prompt and above the first
+  line that takes the input, throwing the new typed
+  `AudioRecorderError.microphoneBusy` (mapped to `.audioMicBusy` by
+  `InAppAudioRecorder`, to `micBusyMessage` by both STT testers, and worded from
+  the existing `audio.error.micBusy` row). The caller's own refusal is read BEFORE
+  the sheet, so a drive that began while it stood was invisible to it. The
+  activate-half skip below stays.
+- **R5-7 — a skipped queue change is remembered.**
+  `handlePendingRetryQueueChange` still steps aside for exactly `isRetrying` and
+  `confirmingPendingRetryDiscard`, and now records
+  `pendingRetryQueueChangeMissed`. `consumePendingRetryQueueChange(keepingVerdict:)`
+  spends it at `runPendingRetry`'s single exit and in `discardPendingRetry` (count
+  and presence only — the run wrote the verdict and the sticky line is the whole
+  remedy) and in `releasePendingRetryDiscard` (full refresh — a cancelled question
+  decided nothing). Any full `refreshPendingRetryState()` consumes it too.
 
 ## Nobody undo
 
@@ -501,6 +577,36 @@ one and another stops meaning what it says.
   exit) and `confirmingPendingRetryDiscard` (the alert is attached to the card a
   refresh can remove). Any wider condition puts the observer back to sleep on the
   case it exists for.
+- **A queue change the phone root steps aside for is REMEMBERED and consumed when
+  the state that skipped it ends.** The announcement comes once; the exits re-read
+  the queue for the capture they were working on, not for one another surface
+  parked meanwhile. This extends the two-state rule above — the two states
+  themselves are unchanged.
+- **The retry card's stored error code is a DIAGNOSIS and never a verdict on the
+  next tap.** It answers for the newest entry while the card speaks for the queue
+  behind it, and it cannot tell a failure from one the person has since fixed.
+  Retry is offered while anything is waiting; the withdrawal belongs to an attempt
+  made in this session, and `refreshPendingRetryState` is the hand-back.
+- **A refused CLAIM preserves nothing; only a refused WRITE does.**
+  `failPendingWorkCapture` parks, `refuseOvertakenWorkCapture` does not — a
+  capture another surface finished has a retired entry, and parking recreates it
+  with stale words.
+- **`transcriptionStopped` is cleared by a start and by a finish, never by the
+  press that offers to finish.** That press can be refused, and a refusal leaves
+  the recorder `.idle` with the stopped state as the only thing between it and a
+  dead end.
+- **The stopped state's receipt reads `WorkCaptureFacts.recordingOnDesk`.** A
+  retained capture proves only that something is left to finish, never that its
+  card is standing.
+- **The iOS microphone gate is asked on BOTH sides of the permission prompt.** The
+  caller's pre-prompt refusal answers for a moment that has passed; the
+  primitive's own re-read is what refuses a session the car took while the sheet
+  stood. This does not replace the two halves above: the start half is asked
+  twice, and the activate-half skip with both deactivate sites stays, because
+  that pair covers the capture that began before the car connected.
+- **A switch-arm source guard is bounded by the switch's own braces and pins each
+  arm's WHOLE body ending in `return`.** An unbounded search for the next `case `
+  reads past the switch and is satisfied by an unrelated arm.
 
 ## Known limits
 
@@ -521,8 +627,10 @@ one and another stops meaning what it says.
 - **U-48 through U-65** in the handoff. Closed there: the unattended-trigger
   boundary (founder decision), the phone's queue observer, the lapsed
   reservation, the partial retry save, the phone desk sheet after a cancelled
-  transcription, and the test that pinned a helper rather than the reply it
-  feeds. Still open: the CarPlay half of the microphone gate, a republished
-  deleted card, the legacy deferred entry, the seven close-out residuals
-  (U-57 – U-63), the chooser's title (U-64) and 140 pre-existing orphan catalog
-  rows (U-65).
+  transcription, the test that pinned a helper rather than the reply it feeds,
+  and all seven close-out items (U-57 – U-63). Still open: the CarPlay half of
+  the microphone gate (U-49), a republished deleted card (U-53), the legacy
+  deferred entry (U-54), the chooser's title (U-64), 140 pre-existing orphan
+  catalog rows (U-65), and the two P3 residuals the sixth round left inside their
+  own fixes — the busy-sentence assertion's breadth (U-59) and a queue arrival
+  landing inside the consume read's await (U-63).

@@ -1171,6 +1171,13 @@ actor PendingRetryStore: PendingRetryQueueWriting {
     /// offers first. Mirrors `hasPending()`'s expiry behavior so the card and
     /// its Troubleshoot button never disagree; nil when nothing is pending or
     /// the original failure carried no code.
+    ///
+    /// DIAGNOSIS, never a verdict on the next attempt. It answers for ONE entry
+    /// while the card it feeds speaks for the queue behind that entry, and it is
+    /// a memory of a failure that already happened — indistinguishable, on a
+    /// re-read, from one whose remedy the person has since carried out. A
+    /// surface that gated its Retry on it withheld the button from every older
+    /// capture and never handed it back.
     func pendingErrorCode() async -> Int? {
         guard let container = containerURL else { return nil }
         let defaults = defaults

@@ -584,24 +584,60 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
             deletes its clip on reading it.
             """
         )
+        // BOUNDED TO THE SWITCH, brace-matched from its own `{`. Searching the
+        // rest of the FILE for the next `case ` ran each arm's body past the
+        // switch's close and into the catch arms below it, where an unrelated
+        // `return` satisfied the assertion — so the guard accepted exactly the
+        // deletion it exists to refuse.
+        let switchBody = try XCTUnwrap(
+            Self.bracedBody(after: "switch await Self.attachRelayedWorkTranscript(", in: code),
+            "the phase-two switch has moved or been renamed; re-anchor this guard"
+        )
         for arm in [".settledWithoutWords:", ".retryable:"] {
             let start = try XCTUnwrap(
-                code.range(of: "case \(arm)")?.upperBound,
+                switchBody.range(of: "case \(arm)")?.upperBound,
                 "the `\(arm)` arm has been renamed; re-anchor this guard"
             )
-            let next = try XCTUnwrap(
-                code.range(of: "case ", range: start..<code.endIndex)?.lowerBound
-                    ?? code.range(of: "} }", range: start..<code.endIndex)?.lowerBound,
-                "the switch's shape has changed; re-anchor this guard"
-            )
+            // The next arm INSIDE this switch, or the switch's own end — never a
+            // `case` belonging to something else.
+            let next = switchBody.range(
+                of: "case ", range: start..<switchBody.endIndex
+            )?.lowerBound ?? switchBody.endIndex
+            let body = switchBody[start..<next]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             XCTAssertTrue(
-                code[start..<next].contains("return"),
+                body.hasSuffix("return"),
                 """
-                The `\(arm)` arm no longer ENDS the request, so it falls into the stamped success \
-                reply below it — the exact shape a wrist reads as "saved" for a refusal.
+                The `\(arm)` arm does not END the request unconditionally, so it falls into the \
+                stamped success reply below it — the exact shape a wrist reads as "saved" for a \
+                refusal. A `return` reached only under a condition is the same defect: what this \
+                asserts is the LAST statement of the whole arm.
                 """
             )
         }
+    }
+
+    /// The brace-matched body opened by the first `{` after `token`, without the
+    /// braces themselves. Nil when the token is absent or the braces do not
+    /// close, both of which mean this guard is anchored to code that has moved.
+    ///
+    /// Scoping to one construct is the whole point: an assertion about a
+    /// switch's arms that is allowed to read past the switch is satisfied by any
+    /// statement anywhere after it.
+    private static func bracedBody(after token: String, in source: String) -> String? {
+        guard let anchor = source.range(of: token),
+              let opening = source.range(of: "{", range: anchor.upperBound..<source.endIndex)
+        else { return nil }
+        var index = opening.upperBound
+        let start = index
+        var depth = 1
+        while index < source.endIndex, depth > 0 {
+            if source[index] == "{" { depth += 1 }
+            if source[index] == "}" { depth -= 1 }
+            index = source.index(after: index)
+        }
+        guard depth == 0 else { return nil }
+        return String(source[start..<source.index(before: index)])
     }
 
     /// Call text with every run of whitespace collapsed to one space and the

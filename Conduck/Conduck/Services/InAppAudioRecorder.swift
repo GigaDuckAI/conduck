@@ -967,6 +967,11 @@ final class InAppAudioRecorder {
                 state = .error(.audioInvalid)
             case .recordingFailed:
                 state = .error(.audioMissingData)
+            case .microphoneBusy:
+                // The same verdict the pre-prompt gate above raises, because it
+                // is the same fact discovered one suspension later: the car took
+                // the session while the permission sheet stood.
+                state = .error(.audioMicBusy)
             }
             return
         } catch {
@@ -1783,7 +1788,7 @@ final class InAppAudioRecorder {
                 stopRenewingRetryLease()
                 heldRetryClaim = nil
                 retryRefusedBusy = true
-                return await failPendingWorkCapture(capture)
+                return refuseOvertakenWorkCapture(capture)
             }
             do {
                 switch try await WorkVoiceCaptureCoordinator.attachTranscript(
@@ -1993,6 +1998,11 @@ final class InAppAudioRecorder {
     /// successful with no card behind it is how a recording silently becomes
     /// composer text nobody asked for. An owed PICTURE is a different debt with
     /// its own code, settled by `settleOwedScreenshot` above every exit.
+    ///
+    /// For a WRITE that was refused, never for a claim that was: a capture
+    /// another surface took over takes `refuseOvertakenWorkCapture` below,
+    /// because parking a capture somebody else has already finished writes its
+    /// retired entry back.
     private func failPendingWorkCapture(
         _ capture: VoiceCapture
     ) async -> Result<String, AppError> {
@@ -2006,6 +2016,33 @@ final class InAppAudioRecorder {
             capture: capture,
             preferredLanguage: nil
         )
+        state = .error(surfaced)
+        return .failure(surfaced)
+    }
+
+    /// The last ownership question answered NO: another surface holds this
+    /// capture and is finishing it.
+    ///
+    /// It PRESERVES NOTHING, and that is the whole difference from
+    /// `failPendingWorkCapture` above. A refusal is not a failure of the
+    /// capture — nothing was refused by the desk and nothing was lost — and the
+    /// surface that overtook this one may already have finished the recording
+    /// and RETIRED its queue entry. Parking here would write that entry back:
+    /// the same id, this run's stale cached words, a capture the person has
+    /// already been told is done. There is nothing to hand back either — the
+    /// caller dropped the lapsed claim before it got here — so the only marks
+    /// this leaves are the error state the sheet renders and
+    /// `retryRefusedBusy`, which is the sentence that says who has it.
+    ///
+    /// The durability reading is still taken, because it is a reading and not a
+    /// write: the recording is on the desk (phase one published it before the
+    /// words were ever bought), so a quit has nothing to hold for.
+    private func refuseOvertakenWorkCapture(
+        _ capture: VoiceCapture
+    ) -> Result<String, AppError> {
+        pendingWorkCapture = capture
+        noteWorkDurability(capture)
+        let surfaced = AppError.workDeskWriteFailed
         state = .error(surfaced)
         return .failure(surfaced)
     }

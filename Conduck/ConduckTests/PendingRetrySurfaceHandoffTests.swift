@@ -394,6 +394,147 @@ final class PendingRetrySurfaceHandoffTests: XCTestCase {
                           "The entry must be retired BEFORE the capture is reported finished.")
     }
 
+    /// One capture's verdict may not withhold Retry from the queue behind it.
+    ///
+    /// The store answers with ONE code — the newest entry's — and the card that
+    /// reads it speaks for every capture waiting. The relay parks exactly the
+    /// entry that makes the difference visible: a published Work recording whose
+    /// words a missing key refused, which is terminal (23), arriving on top of a
+    /// Chat capture a reconnect would send. Deriving the button from that code
+    /// took Retry off the whole card — and never gave it back, because the
+    /// persisted code reads terminal again however the key was restored.
+    ///
+    /// BEHAVIOURAL for the premise (the store really does answer for the newest
+    /// alone, and that answer really is terminal) and SOURCE for the rule, since
+    /// the surface is a SwiftUI root nothing here can mount.
+    func testTheCardsRetryIsNotWithheldByAVerdictAboutAnotherCapture() async throws {
+        let older = Self.metadata(
+            at: Date().addingTimeInterval(-120),
+            destination: .chat,
+            lastErrorCode: AppError.noInternetConnection.errorCode
+        )
+        let newer = Self.metadata(
+            at: Date(),
+            destination: .work,
+            lastErrorCode: AppError.sttMissingAPIKey.errorCode,
+            publicationState: .published
+        )
+        try await store.save(audioData: Data("older".utf8), metadata: older, workImageData: nil)
+        try await store.save(audioData: Data("newer".utf8), metadata: newer, workImageData: nil)
+
+        let waiting = await store.pendingCount()
+        XCTAssertEqual(waiting, 2, "both captures are waiting")
+        let armingCode = await store.pendingErrorCode()
+        XCTAssertEqual(
+            armingCode, AppError.sttMissingAPIKey.errorCode,
+            "the store answers with the NEWEST entry's code and says nothing about the rest"
+        )
+        XCTAssertFalse(
+            AppError.sttMissingAPIKey.isRetryable,
+            "control: the newest entry's verdict is the terminal one this is about"
+        )
+        XCTAssertTrue(
+            AppError.noInternetConnection.isRetryable,
+            "control: the capture behind it is one a retry could still send"
+        )
+
+        let path = "Conduck/ContentView.swift"
+        let source = try RefusalLaneSource.source(at: path)
+        let refresh = try RefusalLaneSource.body(
+            ofFunction: "refreshPendingRetryState", in: source, path: path
+        )
+        XCTAssertTrue(
+            Self.callText(refresh).contains("pendingRetryIsRetryable = true"),
+            """
+            The refresh no longer RESTORES the retry affordance. Without it the card keeps \
+            whatever verdict a previous attempt left, and a terminal one never comes back — the \
+            person fixes the key and the button they need is still gone.
+            """
+        )
+        XCTAssertFalse(
+            Self.callText(refresh).contains("pendingRetryIsRetryable = pendingRetryErrorCode"),
+            """
+            The button is derived from the STORED code again. That code answers for the newest \
+            capture alone, so a terminal one withholds Retry from every recording queued behind \
+            it, and a re-read of the same code cannot tell a fixed configuration from the \
+            failure it was written for.
+            """
+        )
+        XCTAssertTrue(
+            refresh.contains("pendingRetryErrorCode = await PendingRetryStore.shared.pendingErrorCode()"),
+            "The stored code is still read — it is the card's Troubleshoot diagnosis, and only that."
+        )
+    }
+
+    /// A queue change stepped aside for is REMEMBERED, and consumed when the
+    /// state that stepped aside ends.
+    ///
+    /// The observer skips two states it can read for itself, and the store
+    /// announces once: nothing re-posts the change. The exits re-read the queue
+    /// for the capture they were working on, not for one CarPlay or the Watch
+    /// relay parked meanwhile — so a recording arriving while a discard
+    /// confirmation stood was invisible until the next lifecycle hop, which is
+    /// the blindness the observer exists to close.
+    func testAQueueChangeSteppedAsideForIsRememberedAndConsumed() throws {
+        let path = "Conduck/ContentView.swift"
+        let source = try RefusalLaneSource.source(at: path)
+
+        let skip = try RefusalLaneSource.body(
+            ofFunction: "handlePendingRetryQueueChange", in: source, path: path
+        )
+        XCTAssertTrue(
+            Self.callText(skip).contains(Self.callText("""
+            guard !isRetrying, !confirmingPendingRetryDiscard else {
+                pendingRetryQueueChangeMissed = true
+                return
+            }
+            """)),
+            """
+            The skip steps aside for other states than the two this surface owns, or it drops the \
+            change on the floor. Both readings are the same defect: an announcement that comes \
+            once and is not remembered is a capture nobody on this screen ever learns about.
+            """
+        )
+
+        let run = try RefusalLaneSource.body(ofFunction: "runPendingRetry", in: source, path: path)
+        XCTAssertTrue(
+            run.contains("consumePendingRetryQueueChange(keepingVerdict: true)"),
+            """
+            A retry that stepped a change aside never consumes it, so the count on the card is \
+            the one from before another surface parked a recording.
+            """
+        )
+
+        let release = try RefusalLaneSource.body(
+            ofFunction: "releasePendingRetryDiscard", in: source, path: path
+        )
+        XCTAssertTrue(
+            release.contains("consumePendingRetryQueueChange(keepingVerdict: false)"),
+            """
+            Cancelling the confirmation ends the state that stepped the change aside and decides \
+            nothing, so the full re-read belongs here — the card is otherwise stale until the \
+            next foreground.
+            """
+        )
+
+        let consume = try RefusalLaneSource.body(
+            ofFunction: "consumePendingRetryQueueChange", in: source, path: path
+        )
+        XCTAssertTrue(
+            consume.contains("guard pendingRetryQueueChangeMissed else { return }"),
+            "The consumption fires whether or not anything was missed, so an ordinary exit "
+            + "re-reads the queue for nothing."
+        )
+        XCTAssertTrue(
+            consume.contains("pendingRetryQueueChangeMissed = false"),
+            "A change consumed but not cleared is consumed again at the next exit."
+        )
+        XCTAssertTrue(
+            consume.contains("PendingRetryStore.shared.pendingCount()"),
+            "The consumption reads nothing from the queue, so the count it is for stays stale."
+        )
+    }
+
     /// The macOS window's backlog state — r5a#4's other half.
     ///
     /// `.error` is the only state `DictationPopoverView` draws an audio Retry
@@ -525,7 +666,9 @@ final class PendingRetrySurfaceHandoffTests: XCTestCase {
 
     private static func metadata(
         at createdAt: Date = Date(),
-        destination: PendingRetryDestination = .chat
+        destination: PendingRetryDestination = .chat,
+        lastErrorCode: Int? = nil,
+        publicationState: PendingRetryPublicationState? = nil
     ) -> PendingRetryMetadata {
         PendingRetryMetadata(
             id: UUID(),
@@ -533,10 +676,10 @@ final class PendingRetrySurfaceHandoffTests: XCTestCase {
             audioFileURL: URL(fileURLWithPath: "/dev/null"),
             preferredLanguage: nil,
             attemptCount: 1,
-            lastErrorCode: nil,
+            lastErrorCode: lastErrorCode,
             destination: destination,
             transcript: nil,
-            publicationState: nil
+            publicationState: publicationState
         )
     }
 }

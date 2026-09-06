@@ -285,6 +285,88 @@ final class MenuBarWorkCaptureStateTests: XCTestCase {
         )
     }
 
+    /// The stopped state survives a Try Again that never started.
+    ///
+    /// `retryWorkCapture()` refuses before it does anything when another surface
+    /// holds this capture's reservation, and a refusal deliberately changes no
+    /// state: the recorder stays `.idle`, and the error it returns is not a
+    /// cancellation, so `handle(_:)` prints nothing. Clearing the flag on the
+    /// press therefore turned the sheet back into "Starting the microphone…"
+    /// over `EmptyView()` — the same dead end the stopped state was cut to
+    /// close, reached this time by pressing the button that was supposed to
+    /// finish the capture. The flag is cleared by a retry that SUCCEEDS, which
+    /// is dismissing the sheet anyway, and by nothing else.
+    func testTheStoppedStateSurvivesATryAgainThatWasRefused() throws {
+        let sheet = try Self.squeezedSource(at: "Conduck/Views/Workboard/WorkboardVoiceCaptureView.swift")
+
+        XCTAssertTrue(
+            sheet.contains(Self.squeezedLiteral("""
+            if transcriptionStopped, recorder.canRetryWorkCapture {
+                Button {
+                    Task { handle(await recorder.retryWorkCapture()) }
+                } label: {
+            """)),
+            """
+            The stopped state's Try Again writes state of its own before the reservation has \
+            answered. A refusal leaves the recorder idle, so the sheet falls back to the startup \
+            line with no controls — a dead end raised by a press that changed nothing.
+            """
+        )
+        // NEGATIVE CONTROL: the shape this replaced must fail the assertion
+        // above, so what it pins is the ORDER and not the presence of a button.
+        XCTAssertFalse(
+            Self.squeezedLiteral("""
+            Button {
+                transcriptionStopped = false
+                Task { handle(await recorder.retryWorkCapture()) }
+            } label: {
+            """).contains(Self.squeezedLiteral("Button { Task { handle(await recorder.retryWorkCapture()) }")),
+            "Control: the press that cleared the state first must FAIL this guard."
+        )
+        XCTAssertTrue(
+            sheet.contains(Self.squeezedLiteral("""
+            if recorder.retryRefusedBusy {
+                Text(LocalizedStringResource(
+                    "pendingRetry.card.busy",
+            """)),
+            """
+            The stopped state does not say who has the recording. A refusal changes nothing else \
+            on this screen, so without the sentence the press reads as a button that does nothing.
+            """
+        )
+    }
+
+    /// The stopped state's receipt is the DESK's answer, not the capture's.
+    ///
+    /// A capture still in hand proves only that something is left to finish. Its
+    /// card can have been deleted on another device while recognition ran — the
+    /// recorder's own refresh confirms exactly that on the cancellation path —
+    /// and `canRetryWorkCapture` stays true through it. Told from the retention
+    /// alone, the receipt promised a card the person had already thrown away and
+    /// said Try Again would add words to it, when what a retry can do there is
+    /// bring the words back.
+    func testTheStoppedStateReadsTheDesksAnswerAndNotTheRetention() throws {
+        let sheet = try Self.squeezedSource(at: "Conduck/Views/Workboard/WorkboardVoiceCaptureView.swift")
+
+        XCTAssertTrue(
+            sheet.contains(Self.squeezedLiteral("""
+            Text(recorder.workCaptureFacts.recordingOnDesk
+                 ? LocalizedStringResource(
+                    "workboard.voice.stopped.body",
+            """)),
+            """
+            The receipt asserts the card from the retained capture again. `workCaptureFacts` is \
+            the recorder's own read of the desk and the only thing that may be described to a \
+            person as standing on it.
+            """
+        )
+        XCTAssertTrue(
+            sheet.contains(Self.squeezedLiteral("\"workboard.voice.stopped.body.noCard\"")),
+            "There is one sentence for both answers again, so a deleted card is described as "
+            + "waiting for its words."
+        )
+    }
+
     // MARK: - Wiring (source shape — the popover cannot be mounted here)
 
     private static let popoverPath = "Conduck/MenuBar/DictationPopoverView.swift"

@@ -368,5 +368,65 @@ final class AudioExclusivityCrossSurfaceTests: XCTestCase {
         }
         recorder.cancelRecording()
     }
+
+    /// The primitive re-asks the same question on the far side of the prompt.
+    ///
+    /// The refusal the two cases above measure is read BEFORE the microphone
+    /// permission sheet, and that sheet is a suspension long enough to start a
+    /// drive in: a car session that began while it stood was invisible to it.
+    /// The primitive's own session-configuration skip then took away the only
+    /// consequence it had — it declined to reconfigure — and built a second
+    /// recorder on the car's input regardless, which is precisely the admission
+    /// the refusal exists to prevent. So the mirror is read again after the
+    /// answer and before the first line that takes the input, exactly where the
+    /// start's own reservation is re-checked.
+    ///
+    /// SOURCE, because `AudioRecorder.startRecording()` suspends on a real TCC
+    /// prompt and opens a real input device: nothing in this bundle can drive it.
+    func testThePrimitiveReAsksTheCarPlayGateAfterThePermissionPrompt() throws {
+        let path = "Conduck/Services/AudioRecorder.swift"
+        let source = try RefusalLaneSource.source(at: path)
+        let start = try RefusalLaneSource.body(ofFunction: "startRecording", in: source, path: path)
+
+        let prompt = try XCTUnwrap(
+            start.range(of: "await AVAudioApplication.requestRecordPermission()"),
+            "the permission hop has moved; re-anchor this guard"
+        )
+        let gate = try XCTUnwrap(
+            start.range(of: "guard !CarPlayRecordingService.anySessionActive else {"),
+            """
+            The primitive never re-asks whether the car took the session. Its caller's refusal is \
+            read before the permission prompt, so a drive that began while the sheet stood passes \
+            straight through into a second capture on the car's input.
+            """
+        )
+        let build = try XCTUnwrap(
+            start.range(of: "AVAudioRecorder(url: fileURL"),
+            "the recorder construction has moved; re-anchor this guard"
+        )
+        XCTAssertLessThan(
+            prompt.upperBound, gate.lowerBound,
+            "A gate read BEFORE the prompt is the reading that already exists upstream, and it "
+            + "answers for a moment that has passed."
+        )
+        XCTAssertLessThan(
+            gate.upperBound, build.lowerBound,
+            "The gate sits below the line that takes the input, so the refusal arrives after the "
+            + "capture it was meant to refuse."
+        )
+        XCTAssertTrue(
+            start.contains("throw AudioRecorderError.microphoneBusy"),
+            "The refusal is untyped, so the surfaces above cannot tell a busy microphone from a "
+            + "HAL failure and say the wrong thing about the car."
+        )
+        XCTAssertTrue(
+            start.contains("if !CarPlayRecordingService.anySessionActive {"),
+            """
+            The ACTIVATE half of the session gate is gone. It is one of a pair with both \
+            deactivate sites, and the pair is what protects a capture that began BEFORE the car \
+            connected — a capture the refusal above can no longer be asked about.
+            """
+        )
+    }
     #endif
 }

@@ -23952,6 +23952,17 @@
         }
       }
     },
+    "workboard.voice.stopped.body.noCard" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "That recording isn’t on your desk any more. Try Again brings its words back."
+          }
+        }
+      }
+    },
     "workboard.voice.stopped.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
