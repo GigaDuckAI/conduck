@@ -64,9 +64,11 @@ enum WorkVoiceScreenshotCoordinator {
     /// the same stance the note-shaped publication takes: a picture that will not
     /// decode may not cost the words that came with it.
     ///
-    /// A THROW means the queue itself refused the bytes, which is the one state
-    /// a caller must not consume its pending retry through: the retry record
-    /// holds the only remaining copy of this screenshot.
+    /// A THROW means the queue itself refused the bytes — or the caller was
+    /// cancelled before they were enqueued — and it is the one state a caller
+    /// must not consume its pending retry through: the retry record holds the
+    /// only remaining copy of this screenshot. Nothing durable exists on that
+    /// path, so retrying it publishes rather than duplicates.
     /// `sourceDevice` and `normalize` default through nil rather than through
     /// their production values: a default-argument expression is evaluated in
     /// the CALLER's isolation, and the headless intent lane that calls this is
@@ -85,6 +87,14 @@ enum WorkVoiceScreenshotCoordinator {
         guard !rawImageData.isEmpty, let jpegData = await normalizer(rawImageData) else {
             return nil
         }
+        // Cancellation is checked HERE, between the pipeline and the queue,
+        // because this is the last instant at which nothing durable exists. The
+        // normalize step is the long one and a person can press ✕ across it;
+        // past the line below the envelope is accepted and the capture owes
+        // nothing more, so a cancel arriving then would have to be reported as
+        // a picture that was saved after all. The caller keeps the bytes and
+        // publishes them on the next attempt.
+        try Task.checkCancellation()
         let materialID = materialID(forCapture: captureID)
         _ = try await inbox.publishAppCapture(
             note: "",

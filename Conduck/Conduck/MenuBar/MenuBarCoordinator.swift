@@ -219,6 +219,21 @@ final class MenuBarCoordinator {
     /// iCloud entitlement; same seam `SharedInboxRouting` already exposes).
     @ObservationIgnored private let conversationStore: ConversationStore
 
+    /// Observation seam over the attachments a quick-lane turn carries, fired
+    /// with the array the send is about to be handed. Nil in production.
+    ///
+    /// It exists because the send itself cannot be driven here: `sendUserTurn`
+    /// writes its optimistic bubble to `ConversationStore.shared`, and the
+    /// unsigned test host crashes on that container's first touch — the same
+    /// constraint the store seam above answers. That leaves the strongest rule
+    /// on this path unwatched, and it is a NEGATIVE one: a ⌃⌘W screenshot never
+    /// rides a gateway turn. A negative is only worth asserting where the
+    /// forbidden value was actually available to be taken, so it cannot be
+    /// checked after the turn instead — the exit path nils both image slots
+    /// whatever happened, and would read the same for an image that was copied
+    /// onto the wire as for one that was never touched.
+    @ObservationIgnored var onQuickTurnAttachments: (([PendingAttachment]) -> Void)?
+
     // MARK: - VM registry + lanes
 
     /// Every live thread VM, keyed by conversation id. A REGISTRY (not a single
@@ -818,7 +833,7 @@ final class MenuBarCoordinator {
     /// survives a dismissal: the Work lane has no destination to pin, so a Work
     /// composition must not keep an unrelated gateway choice alive.
     var hasWorkComposeState: Bool {
-        pendingCaptureImage != nil
+        pendingWorkCaptureImage != nil
             || !quickWorkDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -866,6 +881,23 @@ final class MenuBarCoordinator {
     /// empty/failed STT RETAINS it so the popover's recovery UI can offer
     /// Retry-Voice / Type-Instead / Discard.
     private(set) var pendingCaptureImage: Data?
+
+    /// The PNG screenshot a "Capture to Work" (⌃⌘W) press dragged — the desk's
+    /// own slot, and deliberately NOT `pendingCaptureImage`.
+    ///
+    /// That slot rides the next chat turn as a `PendingAttachment.image`, so a
+    /// Work screenshot parked there would be handed to a gateway by an Ask made
+    /// minutes later — the exact leak the whole two-composition design exists to
+    /// prevent, and worse than the word-level version because a picture of
+    /// somebody's screen carries far more than they typed.
+    ///
+    /// Two readers, one at a time. In TEXT mode it is the compose surface's
+    /// thumbnail and `saveQuickDraftToWork` publishes it beside the note; in
+    /// VOICE mode it is the HUD's thumbnail, while the RECORDER owns the bytes
+    /// that actually get published (see `beginWorkVoiceCapture(screenshot:)`) so
+    /// the picture and the words are one durable act rather than two. Nothing
+    /// here ever reaches a gateway.
+    private(set) var pendingWorkCaptureImage: Data?
 
     /// One-shot "Type Instead" bridge: when the user bails out of a pending
     /// capture's voice turn into the typed composer, the captured screenshot is
@@ -1035,8 +1067,14 @@ final class MenuBarCoordinator {
                 // The DRAFT deliberately survives the flip: it is inert in
                 // voice mode (the compose surface is its only sender) and
                 // reappears intact when the user flips back.
+                // The Work slot goes with it, and for the sharper version of the
+                // same reason: in voice mode that slot is the HUD's thumbnail,
+                // so a picture left over from a text-mode composition would
+                // caption the next ⌃⌘W recording — including one that
+                // deliberately skipped its screenshot.
                 if previous == .text, self.menuBarInputMode == .voice {
                     self.clearPendingCaptureImage()
+                    self.clearPendingWorkCaptureImage()
                 }
                 self.scheduleRemoteSettingsRefresh()
             }
@@ -1723,6 +1761,22 @@ final class MenuBarCoordinator {
         pendingCaptureImage = nil
     }
 
+    // MARK: - Pending capture image (Capture to Work)
+
+    /// Stage the region screenshot a ⌃⌘W press dragged. `nil` is a first-class
+    /// value — the Work overlay's Return SKIPS the picture — and it is written
+    /// through rather than ignored, because a start that inherited the previous
+    /// capture's image would illustrate the wrong words.
+    func setPendingWorkCaptureImage(_ data: Data?) {
+        pendingWorkCaptureImage = data
+    }
+
+    /// Drop the staged Work screenshot: the capture that owned it finished, was
+    /// cancelled, or was thrown away with its composition.
+    func clearPendingWorkCaptureImage() {
+        pendingWorkCaptureImage = nil
+    }
+
     /// Universal explicit-bail teardown — Esc, the popover's recording Cancel-X,
     /// its working-view X, the capture-recovery Discard, and the error-footer
     /// Dismiss ALL route here. Mode- AND state-independent: cancels an in-flight
@@ -1737,7 +1791,10 @@ final class MenuBarCoordinator {
         dictationService.cancelRecording()
         // The Work lane bails on the same press. Its recorder is invisible to
         // `dictationService`, so an Esc that skipped it would close the popover
-        // over a live microphone with no surface left to stop it.
+        // over a live microphone with no surface left to stop it. A RUNNING
+        // capture's screenshot goes with it; a parked Work composition's does
+        // not, which is the picture half of the rule the two branches below
+        // apply to the words.
         cancelWorkVoiceCapture()
         clearPendingCaptureImage()
         // Discard the composition ON SCREEN. A parked Work draft is not
@@ -1859,14 +1916,23 @@ final class MenuBarCoordinator {
     /// Kept separate from the discard below because the two are opposite
     /// promises: this one is a navigation, and losing words to a navigation is
     /// the failure mode the whole aim-with-the-words design exists to prevent.
+    ///
+    /// The Work SCREENSHOT is parked with the words for the same reason, and it
+    /// travels nowhere: the two lanes hold their pictures in separate slots, so
+    /// re-aiming at Chat cannot hand a ⌃⌘W screenshot to the Ask that follows.
     func closeWorkOnlyCompose() {
         compose.returnToChat()
     }
 
     /// Throw the Work composition away — the explicit bail (Esc, the surface's
     /// own Cancel). The Chat draft underneath is untouched.
+    ///
+    /// The staged screenshot goes with it: it is half of the composition being
+    /// discarded, and a picture that outlived the words it was dragged for would
+    /// silently attach itself to the next Work capture.
     func discardWorkOnlyCompose() {
         compose.discardActive()
+        clearPendingWorkCaptureImage()
         quickWorkCaptureFeedback = nil
     }
 
@@ -1874,27 +1940,45 @@ final class MenuBarCoordinator {
 
     /// True from the moment ⌃⌘W is pressed until the capture is finished or let
     /// go: the start, the recording, the transcription that follows the stop,
-    /// and an unfinished capture's error.
+    /// and a failure the person has not dismissed.
     ///
-    /// The error arm is gated on `canRetryWorkCapture` rather than on the error
-    /// alone, and the distinction is the difference between two states that look
-    /// alike. A capture that was REFUSED — a busy microphone, a denied
-    /// permission — never reached the desk and owns nothing, so it is not a
-    /// capture in progress and the popover shows it as a banner. A capture that
-    /// published a card and then could not get its words IS unfinished: its
-    /// recording is on the desk waiting for a transcript, and the HUD that owns
-    /// the Try Again which finishes it must outrank everything else the popover
-    /// could show.
+    /// EVERY error counts, whether or not anything is left to retry. What the
+    /// HUD owes a failed capture is not a Try Again — it is an account of what
+    /// happened to the words and the picture — and a capture can fail with
+    /// nothing to retry and plenty to report: a recording that never had audio
+    /// still publishes its screenshot, so "the picture is on your desk, the
+    /// recording was empty" is exactly the sentence the person needs and
+    /// exactly the one that goes missing when the surface stands down. Gating
+    /// on retry debt made the truthfulness of the receipt depend on whether it
+    /// happened to be actionable.
+    ///
+    /// The error therefore holds the surface until the ✕ takes it down, and
+    /// that ✕ is `cancelWorkVoiceCapture`, whose `.error` arm calls
+    /// `discardPendingWorkCapture()` — dropping the capture and returning the
+    /// recorder to `.idle`, with the durable retry entry left as the recovery.
     var workCaptureIsActive: Bool {
         if isSummoningWorkVoiceCapture || isStartingWorkVoiceCapture { return true }
         switch workVoiceRecorder.state {
-        case .recording, .processing, .preparingVoice:
+        case .recording, .processing, .preparingVoice, .error:
             return true
-        case .error:
-            return workVoiceRecorder.canRetryWorkCapture
         case .idle:
             return false
         }
+    }
+
+    /// True while the HUD is showing a Work failure that nothing can finish.
+    ///
+    /// The distinction the retry debt still makes, moved to where it belongs.
+    /// An unfinished capture owns a card waiting for its transcript, so a second
+    /// ⌃⌘W means "finish it". A capture with no debt owns nothing: its surface
+    /// is a receipt waiting to be read, so a second ⌃⌘W means "I have read it,
+    /// now take the capture I actually asked for" — and swallowing that press
+    /// would leave the hotkey inert until the person hunted down the ✕.
+    var workCaptureErrorIsTerminal: Bool {
+        if case .error = workVoiceRecorder.state {
+            return !workVoiceRecorder.canRetryWorkCapture
+        }
+        return false
     }
 
     /// True across `beginWorkVoiceCapture`'s own suspension. `state` stays
@@ -1940,6 +2024,20 @@ final class MenuBarCoordinator {
     /// by a live microphone with no surface anywhere to stop it.
     private var workVoiceStartToken = 0
 
+    /// Bumped by every explicit bail on the Work lane, and readable by the
+    /// caller that has not started a capture yet.
+    ///
+    /// `workVoiceStartToken` protects a start that is already suspended. This
+    /// protects the stretch BEFORE any start exists: the ⌃⌘W region overlay and
+    /// the ScreenCaptureKit acquisition behind it, which together are the
+    /// longest await in the flow and the one during which the lane owns nothing.
+    /// No recorder state and no flag changes there, so an Esc pressed while the
+    /// screenshot is being acquired would land, do nothing observable, and be
+    /// followed seconds later by a microphone coming up behind the popover that
+    /// same Esc had just closed. `MenuBarController` therefore reserves this
+    /// value at the press and compares it once the picture is in hand.
+    private(set) var workCaptureCancellationGeneration = 0
+
     /// Start a Work capture. Returns whether the microphone actually came up.
     ///
     /// A refusal is surfaced HERE rather than left to the caller, because the
@@ -1952,8 +2050,16 @@ final class MenuBarCoordinator {
     /// is held by whichever recorder actually has the input — including the main
     /// window's composer mic, which that state knows nothing about — so a second
     /// opinion derived from it could only ever disagree with the truth.
+    ///
+    /// `screenshot` is the region the ⌃⌘W overlay dragged, or `nil` when the
+    /// person skipped it. It is staged in TWO places on purpose: here, where the
+    /// HUD reads it to show a thumbnail while the microphone is still coming up,
+    /// and on the RECORDER, which publishes it beside the recording at the stop
+    /// and drops it on a cancel. The recorder owns the durable copy because the
+    /// picture and the words are one act — a capture that published an image and
+    /// then lost its audio, or the reverse, is two orphans on the desk.
     @discardableResult
-    func beginWorkVoiceCapture() async -> Bool {
+    func beginWorkVoiceCapture(screenshot: Data? = nil) async -> Bool {
         // The summon hands its claim over to the start here, so the re-entrancy
         // guard below reads the capture itself rather than the press that asked
         // for one. Clearing it unconditionally also means a claim can never
@@ -1961,6 +2067,11 @@ final class MenuBarCoordinator {
         isSummoningWorkVoiceCapture = false
         guard !workCaptureIsActive else { return false }
         quickWorkCaptureFeedback = nil
+        // AFTER the re-entrancy guard: a refused second press owns nothing, and
+        // staging its picture would repaint the running capture's thumbnail with
+        // a region belonging to words nobody is recording.
+        pendingWorkCaptureImage = screenshot
+        workVoiceRecorder.stageWorkScreenshot(screenshot)
         workVoiceRecorder.onAutoStopResult = { [weak self] result in
             self?.noteWorkCaptureFinished(result)
         }
@@ -2011,6 +2122,11 @@ final class MenuBarCoordinator {
     /// on the desk. The recorder releases the capture it replaces only once the
     /// replacement microphone is live, so a refused start leaves the first
     /// capture — and the Try Again that finishes it — exactly where it was.
+    ///
+    /// No screenshot: a restart raises no overlay, so there is no new region to
+    /// carry, and re-using the previous capture's picture would caption fresh
+    /// words with an old screen. The default `nil` clears the slot for exactly
+    /// that reason.
     func restartWorkVoiceCapture() async {
         workVoiceRecorder.dismissError()
         _ = await beginWorkVoiceCapture()
@@ -2021,6 +2137,18 @@ final class MenuBarCoordinator {
     /// none of which touches a card already on the desk or the queued recording
     /// behind an unfinished capture, both of which outlive this popover.
     func cancelWorkVoiceCapture() {
+        // Bumped FIRST and unconditionally, because the press this bail has to
+        // reach may own nothing yet: a ⌃⌘W whose screenshot is still being
+        // acquired has no recorder state, no flag and no capture for any of the
+        // work below to act on. The generation is the only thing an Esc pressed
+        // during that window can leave behind.
+        workCaptureCancellationGeneration &+= 1
+        // The staged picture belongs to the capture being torn down and ONLY to
+        // it. `cancelActiveCapture` bails both lanes on one press, so an Esc
+        // typed over the Chat surface arrives here too — and a parked Work
+        // composition's screenshot has to survive that exactly as its words do.
+        // Gating on an actually-running capture is what keeps the two apart.
+        if workCaptureIsActive { clearPendingWorkCaptureImage() }
         // Invalidate a start still in its suspension. The recorder reads `.idle`
         // throughout it, so the switch below has nothing to cancel — the token
         // is what makes this press reach the microphone that comes up after it.
@@ -2031,7 +2159,15 @@ final class MenuBarCoordinator {
         case .processing, .preparingVoice:
             workVoiceRecorder.cancelProcessing()
         case .error:
-            workVoiceRecorder.dismissError()
+            // The ✕ on a failure DROPS the capture, rather than merely clearing
+            // the error off it. The person read the receipt and dismissed it, so
+            // leaving the capture in memory would offer its Try Again to the
+            // next ⌃⌘W as if it were that capture's own. Nothing is lost by it:
+            // the durable retry entry is the recovery, and it outlives this
+            // popover. `restartWorkVoiceCapture` deliberately keeps
+            // `dismissError()` instead — it needs the capture held until the
+            // replacement microphone is actually live.
+            workVoiceRecorder.discardPendingWorkCapture()
         case .idle:
             break
         }
@@ -2047,6 +2183,10 @@ final class MenuBarCoordinator {
     /// the error state and the retry lane, and the HUD renders both.
     private func noteWorkCaptureFinished(_ result: Result<String, AppError>) {
         guard case .success = result else { return }
+        // The capture is over, so the HUD's thumbnail is too. A FAILURE
+        // deliberately keeps it: an unfinished capture still owns its card and
+        // its Try Again, and the picture is what says which one.
+        clearPendingWorkCaptureImage()
         guard workVoiceRecorder.workRecordingMaterialID != nil else {
             quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(
                 kind: .failed,
@@ -2089,6 +2229,10 @@ final class MenuBarCoordinator {
             message = AppError.audioMissingData.localizedDescription
         }
         workVoiceRecorder.dismissError()
+        // Nothing came up, so nothing owns the picture. Left staged it would be
+        // the thumbnail above the NEXT capture's timer, whatever that capture
+        // was actually pointed at.
+        clearPendingWorkCaptureImage()
         quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(kind: .failed, message: message)
     }
 
@@ -2109,7 +2253,15 @@ final class MenuBarCoordinator {
         let aimAtCommit = compose.target
         let draftAtCommit = compose.activeText
         let thought = WorkboardWorkspaceCaptureLogic.normalizedThought(draftAtCommit)
-        let screenshotAtCommit = pendingCaptureImage
+        // The PICTURE is snapshotted from the slot the aim owns, for the same
+        // reason the words are. This one method serves both doors: the ⌃⌘W
+        // surface, whose screenshot lives in the Work-only slot no gateway path
+        // reads, and the Chat surface's "Add to Work" button, which files
+        // whatever ⌘⇧2 staged for a turn the person decided not to send. Reading
+        // one fixed slot would publish one composition's image under the other
+        // one's words — or, on the Chat door, silently drop the screenshot that
+        // is the entire reason the button was pressed.
+        let screenshotAtCommit = aimAtCommit == .work ? pendingWorkCaptureImage : pendingCaptureImage
         guard !isSavingQuickDraftToWork, !thought.isEmpty || screenshotAtCommit != nil else { return }
 
         isSavingQuickDraftToWork = true
@@ -2138,7 +2290,15 @@ final class MenuBarCoordinator {
                 // during the await belongs to the next capture and must survive —
                 // and a composition that kept its words keeps its aim with them.
                 compose.clearCommitted(draftAtCommit, aimedAt: aimAtCommit)
-                if pendingCaptureImage == screenshotAtCommit { clearPendingCaptureImage() }
+                // Consume the picture from the slot it was published FROM, and
+                // only when it is still the one that was published: a second
+                // ⌃⌘W drag during the await belongs to the next capture.
+                switch aimAtCommit {
+                case .work:
+                    if pendingWorkCaptureImage == screenshotAtCommit { clearPendingWorkCaptureImage() }
+                case .chat:
+                    if pendingCaptureImage == screenshotAtCommit { clearPendingCaptureImage() }
+                }
                 if quickDraft.isEmpty, pendingCaptureImage == nil {
                     resetQuickDestinationAfterTurn()
                 }
@@ -2328,6 +2488,20 @@ final class MenuBarCoordinator {
             resolvedID = fresh.id
         }
 
+        // Thread a pending "Screenshot & Ask" screenshot onto the turn as an
+        // inline image attachment (empty when this is a plain ⌘⇧1 capture).
+        // The `defer` above clears it on the way out.
+        //
+        // Assembled HERE, with the words and the modality, rather than at the
+        // dispatch below: the turn's CONTENT comes from the capture, and the
+        // destination ladder that follows has nothing to say about it. Keeping
+        // the two apart is also what makes the one rule that matters on this
+        // path assertable — the desk's screenshot never rides a gateway turn —
+        // because a negative is only worth checking where the forbidden value
+        // was available to be taken. Read the doc on `onQuickTurnAttachments`.
+        let attachments: [PendingAttachment] = pendingCaptureImage.map { [.image($0)] } ?? []
+        onQuickTurnAttachments?(attachments)
+
         // Busy target: the VM's atomic in-flight claim would silently swallow
         // this turn (its guard returns before the optimistic bubble is ever
         // written — the words would just vanish). Upgrade to a VISIBLE error +
@@ -2351,10 +2525,6 @@ final class MenuBarCoordinator {
         // never gates the send.
         requestNotificationPermissionIfNeeded()
         bindQuickViewModel(to: resolvedID)
-        // Thread a pending "Screenshot & Ask" screenshot onto the turn as an
-        // inline image attachment (empty when this is a plain ⌘⇧1 capture).
-        // The `defer` above clears it on the way out.
-        let attachments: [PendingAttachment] = pendingCaptureImage.map { [.image($0)] } ?? []
         await vm.sendUserTurn(
             trimmed,
             modality: modality,

@@ -144,6 +144,11 @@ final class AppErrorCodeContractTests: XCTestCase {
         // refused Work desk write reaches the retry surfaces as its own case
         // instead of riding `.unknown`, whose copy names no action.
         ("workDeskWriteFailed",           .workDeskWriteFailed,              78),
+        // 79 carries nothing either, and it exists because 78's sentence is
+        // about the RECORDING: a Work capture whose recording and words landed
+        // and whose picture did not needs a code whose copy names the artifact
+        // that is actually missing.
+        ("workScreenshotWriteFailed",     .workScreenshotWriteFailed,        79),
         ("unknown",                       .unknown(NSError(domain: "test", code: 0)), 99),
     ]
 
@@ -218,29 +223,30 @@ final class AppErrorCodeContractTests: XCTestCase {
     // MARK: - Completeness guard
 
     func testForwardTableIsExhaustiveOverEmittedCodes() {
-        // The getter emits codes 1...78 with 27 omitted (reserved gap), plus
-        // the catch-all 99 — that is 77 + 1 = 78 distinct codes. If a NEW case
+        // The getter emits codes 1...79 with 27 omitted (reserved gap), plus
+        // the catch-all 99 — that is 78 + 1 = 79 distinct codes. If a NEW case
         // is added to AppError without a row in `forwardTable`, this count
         // diverges and forces a test update. (Computed independently of the
         // table to avoid the table validating itself.)
         //
         // The range grows by one every time a case claims the next free slot:
         // `.remoteAgentDefaultNeedsSetup` took 74, `.sttKeyUnreadable` 75,
-        // `.turnStoppedBeforeSend` 76, `.insecureConnectionBlocked` 77 and
-        // `.workDeskWriteFailed` 78. This guard is written for exactly that
+        // `.turnStoppedBeforeSend` 76, `.insecureConnectionBlocked` 77,
+        // `.workDeskWriteFailed` 78 and `.workScreenshotWriteFailed` 79. This
+        // guard is written for exactly that
         // event — a new case landing with no wire row — so the fix is to RECORD
         // the new code here, never to loosen the assertion.
-        let expectedDistinctCodes = Set((1...78).filter { $0 != 27 }).union([99])
-        XCTAssertEqual(expectedDistinctCodes.count, 78,
-                       "Sanity: 1...78 minus the 27 gap plus 99 = 78 distinct codes.")
+        let expectedDistinctCodes = Set((1...79).filter { $0 != 27 }).union([99])
+        XCTAssertEqual(expectedDistinctCodes.count, 79,
+                       "Sanity: 1...79 minus the 27 gap plus 99 = 79 distinct codes.")
 
         let tableCodes = Self.forwardTable.map(\.code)
         XCTAssertEqual(Set(tableCodes).count, tableCodes.count,
                        "Forward table must have no duplicate codes (each case owns a unique slot).")
         XCTAssertEqual(Set(tableCodes), expectedDistinctCodes,
-                       "Forward table must cover EXACTLY the codes the getter emits (1...78 except 27, plus 99). A diff here means a new/renamed/removed case is untested.")
-        XCTAssertEqual(Self.forwardTable.count, 78,
-                       "Forward table must enumerate all 78 emittable codes — a new AppError case without a row here is a wire-contract gap.")
+                       "Forward table must cover EXACTLY the codes the getter emits (1...79 except 27, plus 99). A diff here means a new/renamed/removed case is untested.")
+        XCTAssertEqual(Self.forwardTable.count, 79,
+                       "Forward table must enumerate all 79 emittable codes — a new AppError case without a row here is a wire-contract gap.")
     }
 
     // MARK: - Locked isRetryable flags (load-bearing)

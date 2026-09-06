@@ -33,6 +33,7 @@ final class AppErrorTroubleshootableTests: XCTestCase {
             ("settingsLoadFailed",          .settingsLoadFailed),
             ("turnStoppedBeforeSend",       .turnStoppedBeforeSend),
             ("workDeskWriteFailed",         .workDeskWriteFailed),
+            ("workScreenshotWriteFailed",   .workScreenshotWriteFailed),
             ("noSpeechDetected",            .noSpeechDetected),
             ("audioTooLarge",               .audioTooLarge),
             ("audioProcessingFailed",       .audioProcessingFailed),

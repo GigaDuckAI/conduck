@@ -1878,11 +1878,28 @@ struct ContentView: View {
             // by the recording and silently dropped. Both halves are
             // idempotent, so a capture recovered twice still has one picture.
             if let screenshot = pending.workImageData {
-                _ = try await WorkVoiceScreenshotCoordinator.publish(
+                // NOTHING is disposed of on the strength of a call that
+                // returned: publication answers nil when the image pipeline
+                // could make nothing of these bytes, having enqueued nothing at
+                // all. Discarding there deletes the only copy of the picture
+                // and hands the person a recovery that quietly dropped it.
+                guard try await WorkVoiceScreenshotCoordinator.publish(
                     screenshot,
                     forCapture: pending.metadata.id,
                     createdAt: pending.metadata.createdAt
-                )
+                ) != nil else {
+                    presentRetryError(
+                        AppError.workScreenshotWriteFailed.localizedDescription
+                    )
+                    return false
+                }
+                // The parked copy goes the moment the queue has TAKEN the
+                // picture, under the reservation this surface already holds.
+                // Left behind it is the only thing on disk still claiming this
+                // entry shelters an irreplaceable image, and the expiry sweep
+                // reads exactly that — so a recovery that throws below would
+                // leave the capture exempt from the clock for ever.
+                await PendingRetryStore.shared.discardWorkImage(claim)
             }
             let outcome = try await WorkVoiceCaptureCoordinator.recover(
                 claim,

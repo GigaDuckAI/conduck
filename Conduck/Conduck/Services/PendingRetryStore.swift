@@ -74,7 +74,11 @@
 // the desk. It does not govern a Work capture whose recording the desk never
 // took — `.phaseOneFailed`, and the UNKNOWN verdict an older record carries:
 // those bytes are the only copy of what somebody said, and they leave only when
-// publication succeeds or the person discards them.
+// publication succeeds or the person discards them. A parked SCREENSHOT earns
+// the same exemption for the same reason, and it is read off the file rather
+// than off the record: the publication verdict describes the recording, and a
+// Work capture publishes its picture separately, so an entry can hold a card on
+// the desk and the only copy of a picture at the same time.
 //
 // THE CLAIM API is how a surface takes one capture. Two retry surfaces can be
 // on screen at once (the menu bar and the desk's voice sheet), and a queue read
@@ -576,6 +580,23 @@ nonisolated protocol PendingRetryQueueWriting: Sendable {
 actor PendingRetryStore: PendingRetryQueueWriting {
     static let shared = PendingRetryStore()
 
+    /// Posted after a capture is ARMED, so a surface rendering the queue's size
+    /// learns about one it did not park itself.
+    ///
+    /// Every surface refreshes its own count after its own save, which is why
+    /// this was not needed before: the lane that wrote the entry was the lane
+    /// that displayed it. The composer's recorder broke that — it parks a Work
+    /// capture the MENU BAR's retry row has to offer — and a count read before
+    /// that save is a row that says nothing is waiting while a recording is.
+    ///
+    /// Posted on ARM and on RETIREMENT, which are the two things that change
+    /// the number a surface renders. The sweep's own deletions are not
+    /// announced: nobody asked about them, and the next read applies the clock
+    /// again anyway.
+    nonisolated static let queueDidChangeNotification = Notification.Name(
+        "ai.gigaduck.pendingRetryQueueDidChange"
+    )
+
     /// How long one `claimNext` reserves a capture. Long enough that a slow
     /// provider round trip on a bad connection never loses the reservation
     /// mid-transcription, and short enough that a process killed while holding
@@ -707,6 +728,11 @@ actor PendingRetryStore: PendingRetryQueueWriting {
             // App Intent hosts.
             try persist(PendingRetryQueue.upserting(metadata, into: existing), to: defaults)
         }
+        // Announced only once the write has COMMITTED, and outside the lock: a
+        // surface that refreshed on a throw would count an entry that is not
+        // there, and one that refreshed inside the lock would read the queue
+        // through a lock this call still holds.
+        NotificationCenter.default.post(name: Self.queueDidChangeNotification, object: nil)
     }
 
     // MARK: - The claim API
@@ -895,11 +921,44 @@ actor PendingRetryStore: PendingRetryQueueWriting {
     func clear(_ claim: PendingRetryClaim) async -> Bool {
         guard let container = containerURL else { return false }
         let defaults = defaults
-        return (try? withExclusiveLock(in: container) { () -> Bool in
+        let retired = (try? withExclusiveLock(in: container) { () -> Bool in
             let entries = queueLocked(from: defaults, in: container)
             guard holdsLease(claim, in: container) else { return false }
             guard let removed = entries.first(where: { $0.id == claim.id }) else { return false }
             return !finishLocked([removed], from: entries, defaults: defaults, in: container).isEmpty
+        }) ?? false
+        // A retirement is news for the same reason an arm is: the surface whose
+        // row says how many captures are waiting is not always the one that
+        // finished this one. A stale positive offers a Retry against an empty
+        // queue, which answers "No saved recording to retry." Announced outside
+        // the lock and only on a clear that actually happened.
+        if retired {
+            NotificationCenter.default.post(name: Self.queueDidChangeNotification, object: nil)
+        }
+        return retired
+    }
+
+    /// Retire just the parked SCREENSHOT of the capture this holder is
+    /// finishing, now that a card owns the picture.
+    ///
+    /// Payload-only, and deliberately narrow: the entry, its recording, its
+    /// verdict and its words are untouched, because the words may still be
+    /// owed. What has to go is the image file, and it has to go THE MOMENT the
+    /// picture publishes rather than at the next arm — a later `save` carrying
+    /// `workImageData: nil` writes no file and deletes none, so a stale one
+    /// survives every subsequent failure of that capture and goes on telling
+    /// the expiry sweep this entry shelters the only copy of a picture.
+    ///
+    /// Under the lease like every other write here: a capture another surface
+    /// took over is that surface's to finish, and its picture is not this
+    /// one's to delete.
+    @discardableResult
+    func discardWorkImage(_ claim: PendingRetryClaim) async -> Bool {
+        guard let container = containerURL else { return false }
+        return (try? withExclusiveLock(in: container) { () -> Bool in
+            guard holdsLease(claim, in: container) else { return false }
+            remove(container.appendingPathComponent(PendingRetryFiles.workImage(claim.id)))
+            return true
         }) ?? false
     }
 
@@ -1276,6 +1335,14 @@ actor PendingRetryStore: PendingRetryQueueWriting {
     /// from under the surface transcribing it is the one thing the clock must
     /// never do. The reservation lapses when its holder stops renewing, and the
     /// next read applies the clock as normal.
+    ///
+    /// Nor does the clock reach a capture whose SCREENSHOT is still parked
+    /// here. `publicationState` answers for the recording alone — `.published`
+    /// says the desk holds it, which is what makes the entry a budget for a
+    /// transcription — and a Work capture's picture is published separately, so
+    /// the two verdicts can disagree. Until the picture is a card, this
+    /// container holds the only copy of it, and a clock is no more a reason to
+    /// delete that than it is to delete an unpublished recording.
     private func liveQueueLocked(
         from defaults: any DefaultsStore,
         in container: URL
@@ -1284,6 +1351,7 @@ actor PendingRetryStore: PendingRetryQueueWriting {
         let now = Date()
         let expired = PendingRetryQueue.partitioningExpired(entries, at: now).expired
             .filter { !isReserved($0.id, in: container, at: now) }
+            .filter { !holdsWorkImage($0.id, in: container) }
         guard !expired.isEmpty else { return entries }
         let finished = finishLocked(
             expired, from: entries, defaults: defaults, in: container
@@ -1385,6 +1453,21 @@ actor PendingRetryStore: PendingRetryQueueWriting {
         guard let sidecar = readSidecar(for: id, in: container) else { return true }
         guard let lease = sidecar.lease else { return false }
         return lease.isLive(at: now)
+    }
+
+    /// Is this capture's screenshot still parked here?
+    ///
+    /// The FILE is the question, not the record: the file is written when the
+    /// picture is parked and retired by `discardWorkImage` the moment a card
+    /// owns it, so its presence is exactly "no card holds this picture yet".
+    /// The record cannot answer — its publication verdict describes the
+    /// recording, and the two artifacts publish separately.
+    private func holdsWorkImage(_ id: UUID, in container: URL) -> Bool {
+        FileManager.default.fileExists(
+            atPath: container.appendingPathComponent(
+                PendingRetryFiles.workImage(id)
+            ).path
+        )
     }
 
     /// Take the reservation and hand the capture over. The single place a claim

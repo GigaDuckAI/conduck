@@ -107,6 +107,12 @@ final class DictationService: RecordingExclusivityAuthority {
     /// failed in this process.
     private(set) var pendingRetryCount: Int = 0
 
+    /// Keeps `pendingRetryCount` honest about captures this service did not
+    /// park. Every lane refreshes after its own save, so the count was only
+    /// ever stale for one parked somewhere else — and the composer's recorder
+    /// parks Work captures whose Try Again this popover is the surface for.
+    private var queueObserver: (any NSObjectProtocol)?
+
     private let recorder = AudioRecorder()
     private var recordingStartTime: Date?
     private var displayTimer: Timer?
@@ -119,6 +125,22 @@ final class DictationService: RecordingExclusivityAuthority {
         // registered authority), and with SwiftUI's throwaway `@State` default
         // re-evaluations; the bus reports any-live-instance-recording.
         SpeechExclusivity.shared.register(recordingAuthority: self)
+        // Whatever survived the last launch. `canRecoverPendingQueue` is read
+        // while this service is idle, which is exactly the state nothing else
+        // refreshes the count from — a capture parked before a relaunch would
+        // otherwise be unreachable until an unrelated failure asked.
+        Task { await refreshPendingRetryCount() }
+        // Somebody else parked a capture. This popover is the surface that
+        // offers a Try Again for it, and its count is read once per finish
+        // rather than per render — so without this the row says nothing is
+        // waiting while a recording is.
+        queueObserver = NotificationCenter.default.addObserver(
+            forName: PendingRetryStore.queueDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.refreshPendingRetryCount() }
+        }
         recorder.onRecordingFinished = { [weak self] wasAutoStopped in
             Task { @MainActor in
                 guard let self else { return }
@@ -203,13 +225,40 @@ final class DictationService: RecordingExclusivityAuthority {
         return true
     }
 
+    /// True when the durable queue holds a capture and this service is not in
+    /// the middle of anything — the state in which `retryLast()` is the ONLY
+    /// way back to it.
+    ///
+    /// A parked capture used to be reachable solely from a standing error,
+    /// which is fine while the error that parked it is the one on screen. It
+    /// stopped being fine when a Work capture began parking its own debt: the
+    /// ✕ that dismisses that error leaves the recorder idle and the capture in
+    /// the queue, and this popover is the surface its Try Again lives on. Made
+    /// reachable from idle, the recovery is the same one the error path runs.
+    var canRecoverPendingQueue: Bool {
+        state == .idle && pendingRetryCount > 0
+    }
+
+    /// Whether a Retry may run at all. An error is the ordinary way in; a
+    /// queue that still holds something is the other, and there is no third.
+    private var isRetryPermitted: Bool {
+        if case .error = state { return true }
+        return canRecoverPendingQueue
+    }
+
     /// Retry the last failed transcription from PendingRetryStore.
     /// Reads the audio file path, language, and terminal destination from the
     /// retry record; resolves the API key fresh at retry time so a rotated key
     /// takes effect.
+    ///
+    /// The capture it recovers decides where the words land, and that decision
+    /// is the record's own: a `.work` entry is finished onto the DESK through
+    /// `finishWorkRetry`, a `.chat` entry into a turn, whichever state this
+    /// service was in when the tap arrived. Reaching the queue from idle
+    /// changes who may ask, never what the answer does.
     func retryLast() {
         Task {
-            guard case .error = state else { return }
+            guard isRetryPermitted else { return }
             lastError = nil
             state = .processing
 
@@ -466,11 +515,30 @@ final class DictationService: RecordingExclusivityAuthority {
             // by the recording and silently dropped. Both halves are
             // idempotent, so a capture recovered twice still has one picture.
             if let screenshot = pending.workImageData {
-                _ = try await WorkVoiceScreenshotCoordinator.publish(
+                // NOTHING is disposed of on the strength of a call that
+                // returned: publication answers nil when the image pipeline
+                // could make nothing of these bytes, having enqueued nothing at
+                // all. Discarding there deletes the only copy of the picture
+                // and hands the person a recovery that quietly dropped it.
+                guard try await WorkVoiceScreenshotCoordinator.publish(
                     screenshot,
                     forCapture: pending.metadata.id,
                     createdAt: pending.metadata.createdAt
-                )
+                ) != nil else {
+                    lastError = nil
+                    state = .error(
+                        message: AppError.workScreenshotWriteFailed.localizedDescription,
+                        isRetryable: true
+                    )
+                    return false
+                }
+                // The parked copy goes the moment the queue has TAKEN the
+                // picture, under the reservation this surface already holds.
+                // Left behind it is the only thing on disk still claiming this
+                // entry shelters an irreplaceable image, and the expiry sweep
+                // reads exactly that — so a recovery that throws below would
+                // leave the capture exempt from the clock for ever.
+                await PendingRetryStore.shared.discardWorkImage(claim)
             }
             let outcome = try await WorkVoiceCaptureCoordinator.recover(
                 claim,

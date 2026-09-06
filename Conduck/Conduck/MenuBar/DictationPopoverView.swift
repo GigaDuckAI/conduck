@@ -20,13 +20,16 @@
 // preserves a staged composition.
 //
 // The `content` router resolves state in this PRIORITY:
-//   0. `workCaptureIsActive` → `workCaptureView` — the ⌃⌘W Work HUD (status +
-//                              timer + Stop, or the failure with the Try Again
-//                              that finishes the capture). It outranks even a
-//                              live chat recording, because the two lanes
-//                              cannot both hold the microphone and this popover
-//                              is the ONLY surface a ⌃⌘W capture has.
-//   1. service `.recording`  → `recordingStatusView` (timer + a compact Cancel X)
+//   0. `workCaptureIsActive` → `workCaptureView` — the ⌃⌘W Work HUD, which is
+//                              arm 1's layout bound to the Work lane
+//                              (`captureHUD`: thumbnail + indicator + one X),
+//                              or the failure with the Try Again that finishes
+//                              the capture. It outranks even a live chat
+//                              recording, because the two lanes cannot both
+//                              hold the microphone and this popover is the ONLY
+//                              surface a ⌃⌘W capture has.
+//   1. service `.recording`  → `recordingStatusView` (`captureHUD`: the staged
+//                              screenshot if any, timer, one compact Cancel X)
 //   2. `isWorking`           → `workingView` — ONE view for the WHOLE turn,
 //                              with `workingPhase` choosing the copy: STT
 //                              (`.processing` → "Transcribing…"), the local
@@ -426,45 +429,69 @@ struct DictationPopoverView: View {
         return .sending
     }
 
-    // MARK: - Recording view (clean — no stale reply, no mascot)
+    // MARK: - Capture HUD (one layout for every lane)
 
-    /// ONE recording HUD for both capture modes — plain ⌘⇧1 voice and ⌘⇧2
-    /// Screenshot & Ask render the SAME restrained layout: the shared dot+timer
-    /// indicator and a compact Cancel (X). The ONLY divergence is the
-    /// staged-screenshot thumbnail on top (⌘⇧2), showing what rides the turn. No
-    /// send button and no hint text in either mode — sending is hotkey-first (a
-    /// second ⌘⇧1/⌘⇧2 press or the menu-bar icon click stops-and-sends), so the
-    /// two modes look and feel identical.
-    private var recordingStatusView: some View {
+    /// THE capture HUD, and the only one: ⌘⇧1 voice, ⌘⇧2 Screenshot & Ask and
+    /// ⌃⌘W Capture to Work all render these three rows and nothing else — the
+    /// staged screenshot if the capture has one, one indicator, one compact ✕.
+    /// The lanes differ ONLY in what the indicator counts and what the ✕
+    /// cancels, which is the whole point: a person who has learned to read one
+    /// capture has learned to read all three. No headline (the indicator says
+    /// what is happening), no stop button (stopping is hotkey-first — a second
+    /// press of the same hotkey, or a click on the status item), and no privacy
+    /// paragraph (a boundary is a thing to state once, not on every capture).
+    ///
+    /// Kept as ONE function rather than three near-identical `VStack`s so the
+    /// arms cannot drift apart: geometry, spacing and padding live here.
+    private func captureHUD<Indicator: View>(
+        screenshot: Data?,
+        cancelLabel: LocalizedStringResource = Self.cancelLabel,
+        cancel: @escaping () -> Void,
+        @ViewBuilder indicator: () -> Indicator
+    ) -> some View {
         VStack(spacing: 16) {
-            // Staged region screenshot (⌘⇧2) — renders nothing for plain voice.
-            captureThumbnail
+            // Renders nothing when the capture staged no image (plain voice).
+            captureThumbnail(screenshot)
 
-            RecordingStatusIndicator(
-                elapsed: service.recordingTime,
-                nearMaxDuration: service.nearMaxDuration
-            )
+            indicator()
 
             // Compact cancel, grouped right under the indicator (NOT a heavy
-            // bottom-footer button). Cancel routes through the coordinator
-            // chokepoint (discards audio AND any staged screenshot, no STT,
-            // releases the armed destination), then dismisses — identical to Esc.
-            cancelButton(action: {
-                coordinator.cancelActiveCapture()
-                dismiss()
-            })
+            // bottom-footer button).
+            cancelButton(label: cancelLabel, action: cancel)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 20)
         .padding(.vertical, 18)
     }
 
-    /// Thumbnail of the staged region screenshot (≤240×120, rounded + stroked).
-    /// Reads the pending PNG bytes from the coordinator; an `NSImage(data:)`
+    /// The chat lane's live recording — plain ⌘⇧1 voice and ⌘⇧2 Screenshot &
+    /// Ask are the same HUD, differing only in whether an image rides the turn.
+    /// Cancel routes through the coordinator chokepoint (discards audio AND any
+    /// staged screenshot, no STT, releases the armed destination), then
+    /// dismisses — identical to Esc.
+    private var recordingStatusView: some View {
+        captureHUD(
+            screenshot: coordinator.pendingCaptureImage,
+            cancel: {
+                coordinator.cancelActiveCapture()
+                dismiss()
+            }
+        ) {
+            RecordingStatusIndicator(
+                elapsed: service.recordingTime,
+                nearMaxDuration: service.nearMaxDuration
+            )
+        }
+    }
+
+    /// Thumbnail of a staged region screenshot (≤240×120, rounded + stroked).
+    /// Takes the bytes rather than reading one lane's slot, because the two
+    /// lanes stage into SEPARATE slots (a Work screenshot must never ride a
+    /// later Ask turn) and both draw the same thumbnail. An `NSImage(data:)`
     /// failure renders nothing rather than crashing.
     @ViewBuilder
-    private var captureThumbnail: some View {
-        if let data = coordinator.pendingCaptureImage, let nsImage = NSImage(data: data) {
+    private func captureThumbnail(_ data: Data?) -> some View {
+        if let data, let nsImage = NSImage(data: data) {
             Image(nsImage: nsImage)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -745,16 +772,30 @@ struct DictationPopoverView: View {
         }
     }
 
-    /// Staged ⌘⇧2 screenshot above the field, with a hover-revealed remove-✕.
+    /// The staged screenshot above the field, with a hover-revealed remove-✕.
     /// Text mode keeps the image across an IMPLICIT click-away dismissal; Esc and
     /// the explicit Cancel/Dismiss controls discard it (together with the draft).
     /// This hover-✕ drops ONLY the image while keeping the popover open + draft.
+    ///
+    /// It follows the surface's AIM, exactly as the text field does: aimed at
+    /// Work it shows the ⌃⌘W screenshot and its ✕ clears that slot, aimed at
+    /// Chat it shows the ⌘⇧2 one. Reading a single slot would put a private
+    /// screenshot above a field whose Return sends to a gateway — the image
+    /// half of the leak the two-slot composition exists to prevent.
     @ViewBuilder
     private var composeThumbnail: some View {
-        if coordinator.pendingCaptureImage != nil {
+        let isWorkOnly = coordinator.composeTarget == .work
+        let staged = isWorkOnly ? coordinator.pendingWorkCaptureImage : coordinator.pendingCaptureImage
+        if staged != nil {
             ZStack(alignment: .topTrailing) {
-                captureThumbnail
-                Button(action: { coordinator.clearPendingCaptureImage() }) {
+                captureThumbnail(staged)
+                Button(action: {
+                    if isWorkOnly {
+                        coordinator.clearPendingWorkCaptureImage()
+                    } else {
+                        coordinator.clearPendingCaptureImage()
+                    }
+                }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 14))
                         .foregroundStyle(AppColors.textPrimary, AppColors.cardBackgroundElevated)
@@ -779,16 +820,24 @@ struct DictationPopoverView: View {
 
     // MARK: - Work capture HUD (⌃⌘W)
     //
-    // The compact twin of the desk's `WorkboardVoiceCaptureView`, at the
-    // recording HUD's geometry. It DUPLICATES that sheet's copy rather than
-    // sharing a view, which is the popover's standing convention for small
-    // presentation — but not its state→sentence mapping, which goes through
-    // `MenuBarWorkVoiceStatus` so the two surfaces cannot describe one recorder
-    // state with two different words.
+    // The Ask HUD, bound to the Work lane. It renders `captureHUD` — the same
+    // three rows, the same geometry — and diverges only in what its indicator
+    // counts and what its ✕ cancels. That sameness is the design: ⌃⌘W is a
+    // capture like the other two, and a person who has read one of these
+    // surfaces has read all of them.
+    //
+    // What the desk's `WorkboardVoiceCaptureView` shows and this does NOT: the
+    // status headline (the indicator already says which of the four things is
+    // happening), the "Stop and Save" capsule (stopping is hotkey-first —
+    // a second ⌃⌘W or a click on the status item), and the privacy paragraph
+    // (the sheet is where somebody chose to start a recording and is reading;
+    // a HUD that repeats a boundary on every capture is noise, not consent).
+    // The state→sentence mapping is still shared through
+    // `MenuBarWorkVoiceStatus`, because it is now what VoiceOver announces —
+    // the two surfaces may not describe one recorder state with two words.
     //
     // Everything a gateway needs is absent by construction: no destination
-    // picker, no Ask, no "send". The controls are the two the capture actually
-    // has — stop it, or finish the one that stopped itself.
+    // picker, no Ask, no "send".
 
     private var workRecorder: InAppAudioRecorder { coordinator.workVoiceRecorder }
 
@@ -829,126 +878,119 @@ struct DictationPopoverView: View {
         }
     }
 
-    private var workCaptureView: some View {
-        VStack(spacing: 14) {
-            Text(workStatusText(workCaptureStatus))
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(AppColors.textPrimary)
-                .multilineTextAlignment(.center)
-
-            workCaptureDetail
-            workCaptureControls
-
-            // The same boundary the desk's sheet draws, in the same words: the
-            // audio reaches the speech provider the person configured and
-            // nothing else, and this surface may not imply otherwise just
-            // because it is small.
-            Text(String(localized: LocalizedStringResource(
-                "workboard.voice.privacy",
-                defaultValue: "Keeps the recording on your private desk and adds the words when they’re ready. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation, and never through a server of ours."
-            )))
-            .font(.caption2)
-            .foregroundStyle(AppColors.textTertiary)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 18)
-    }
-
-    /// The per-state second line: the shared dot+timer while the microphone is
-    /// live, the install progress while a voice model is coming down, and the
-    /// recorder's own typed error once it stopped.
+    /// The whole ⌃⌘W surface, one arm per recorder state. Every arm is
+    /// `captureHUD`; only the middle row and the ✕'s target change.
     @ViewBuilder
-    private var workCaptureDetail: some View {
+    private var workCaptureView: some View {
         switch workRecorder.state {
         case .recording(let startedAt):
-            TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                let elapsed = max(0, min(
-                    context.date.timeIntervalSince(startedAt),
-                    Constants.maxAudioDuration
-                ))
-                RecordingStatusIndicator(
-                    elapsed: elapsed,
-                    nearMaxDuration: elapsed
-                        >= Constants.maxAudioDuration - Constants.maxAudioDurationWarningOffset
-                )
+            // The one arm with a timer, and it starts at the instant the
+            // microphone actually went live — `LiveRecordingStatusIndicator`
+            // owns its own per-second tick, so the recorder's observed state
+            // stays stable for the length of the capture.
+            captureHUD(
+                screenshot: coordinator.pendingWorkCaptureImage,
+                cancel: cancelWorkCapture
+            ) {
+                LiveRecordingStatusIndicator(startedAt: startedAt)
             }
-        case .preparingVoice(let progress):
-            if let progress {
-                ProgressView(value: progress)
-                    .frame(maxWidth: 200)
-                    .tint(AppColors.brandAmber)
-            } else {
+
+        case .idle:
+            // The start's own suspension: the popover is up because
+            // `workCaptureIsActive` counts the summon, but the microphone is
+            // not live yet. A timer here would count seconds of a recording
+            // that does not exist, so this arm says only "something is
+            // happening" — the one claim that is true.
+            captureHUD(
+                screenshot: coordinator.pendingWorkCaptureImage,
+                cancel: cancelWorkCapture
+            ) {
                 ProgressView().controlSize(.small)
             }
-        case .processing, .idle:
-            ProgressView().controlSize(.small)
-        case .error(let error):
-            VStack(spacing: 6) {
-                Text(verbatim: error.localizedDescription)
-                    .font(.caption)
-                    .foregroundStyle(AppColors.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                // A Try Again another surface is already serving changes
-                // nothing at all, so it says what is true rather than raising an
-                // error the recorder never produced. Same sentence the desk's
-                // retry card shows for the same state.
-                if workRecorder.retryRefusedBusy {
-                    Text(String(localized: LocalizedStringResource(
-                        "pendingRetry.card.busy",
-                        defaultValue: "This recording is already being finished. Try again in a moment."
-                    )))
-                    .font(.caption2)
-                    .foregroundStyle(AppColors.warning)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
+
+        case .processing, .preparingVoice:
+            // The recording is over and the words are being fetched. The ✕
+            // STAYS — unlike the chat lane's working view, this phase owns a
+            // real cancellable task (`cancelProcessing`) — and it says what it
+            // cancels, because cancelling a transcription is not cancelling the
+            // recording: the card the recording became stays on the desk.
+            captureHUD(
+                screenshot: coordinator.pendingWorkCaptureImage,
+                cancelLabel: LocalizedStringResource(
+                    "popover.cancelTranscription",
+                    defaultValue: "Cancel transcription"
+                ),
+                cancel: cancelWorkCapture
+            ) {
+                workTranscriptionIndicator
             }
+
+        case .error(let error):
+            workCaptureErrorView(error)
         }
     }
 
+    /// The transcription phase's middle row. A determinate bar when the Apple
+    /// on-device model is coming down and the installer reports a fraction —
+    /// that download runs for minutes, and a bare spinner would claim to know
+    /// less than the recorder does. Everything else spins.
     @ViewBuilder
-    private var workCaptureControls: some View {
-        switch workRecorder.state {
-        case .recording:
-            HStack(spacing: 10) {
-                Button {
-                    Task { await coordinator.finishWorkVoiceCapture() }
-                } label: {
-                    Label(
-                        String(localized: LocalizedStringResource(
-                            "workboard.voice.stop",
-                            defaultValue: "Stop and Save"
-                        )),
-                        systemImage: "stop.fill"
-                    )
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(Color.black)
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 34)
-                    .background(Capsule(style: .continuous).fill(AppColors.brandAmber))
-                }
-                .primaryCTAButton()
+    private var workTranscriptionIndicator: some View {
+        if case .preparingVoice(let progress) = workRecorder.state, let progress {
+            ProgressView(value: progress)
+                .frame(maxWidth: 200)
+                .tint(AppColors.brandAmber)
+        } else {
+            ProgressView().controlSize(.small)
+        }
+    }
 
-                // Esc does the same thing. Both discard the recording outright:
-                // nothing has reached the desk yet at this point, so there is no
-                // card to contradict.
-                cancelButton(action: {
-                    coordinator.cancelActiveCapture()
-                    dismiss()
-                })
+    /// The failure, in one sentence and at most two controls.
+    ///
+    /// The sentence is the recorder's own typed verdict rendered WITH its
+    /// remedy: the buttons this HUD used to carry are gone, so the copy is the
+    /// only guidance left and a cause-only line would delete the actionable
+    /// half of a certificate or credential refusal.
+    ///
+    /// Above it sits the one fact the verdict cannot state, because it is about
+    /// the desk rather than the failure: whether the recording landed. "The
+    /// transcription failed" over a recording that is safely on the desk and
+    /// over one that never reached it are two different pieces of news, and the
+    /// person's next move differs (wait and retry vs. say it again).
+    @ViewBuilder
+    private func workCaptureErrorView(_ error: AppError) -> some View {
+        VStack(spacing: 16) {
+            // The picture stays through a failure, unlike every success path:
+            // an unfinished capture still owns a card and a Try Again, and this
+            // is what says WHICH capture the sentence below is about.
+            captureThumbnail(coordinator.pendingWorkCaptureImage)
+
+            VStack(spacing: 6) {
+                if let outcome = workCaptureOutcomeText {
+                    Text(outcome)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(AppColors.textPrimary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Text(workCaptureFailureText(error))
+                    .font(.caption)
+                    .foregroundStyle(
+                        workRecorder.retryRefusedBusy ? AppColors.warning : AppColors.textSecondary
+                    )
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-        case .error(let error):
-            if error.isRetryable, workRecorder.canRetryWorkCapture {
-                VStack(spacing: 8) {
-                    // Try Again FINISHES this capture — the card it already
-                    // published, or the words it already recognized. Recording
-                    // again is the separate, separately labelled action,
-                    // because it leaves the first card wordless on the desk and
-                    // puts a second one beside it.
+
+            HStack(spacing: 10) {
+                // Try Again FINISHES this capture — the card it already
+                // published, or the words it already recognized — never a
+                // second recording beside the first. Withheld on a terminal
+                // verdict (`isRetryable`), because the identical request
+                // reaches the identical answer and the spinner buries the
+                // sentence the person needed to read.
+                if error.isRetryable, workRecorder.canRetryWorkCapture {
                     Button {
                         Task { await coordinator.finishWorkVoiceCapture() }
                     } label: {
@@ -966,63 +1008,153 @@ struct DictationPopoverView: View {
                         .background(Capsule(style: .continuous).fill(AppColors.brandAmber))
                     }
                     .primaryCTAButton()
-
-                    HStack(spacing: 12) {
-                        Button(String(localized: LocalizedStringResource(
-                            "workboard.voice.recordAgain",
-                            defaultValue: "Record Again"
-                        ))) {
-                            Task { await coordinator.restartWorkVoiceCapture() }
-                        }
-                        .buttonStyle(.plain)
-                        .font(.callout)
-                        .foregroundStyle(AppColors.textSecondary)
-                        .pointerIconButton(shape: .capsule)
-
-                        Button(String(localized: LocalizedStringResource(
-                            "common.close",
-                            defaultValue: "Close"
-                        ))) {
-                            coordinator.cancelWorkVoiceCapture()
-                        }
-                        .buttonStyle(.plain)
-                        .font(.callout)
-                        .foregroundStyle(AppColors.textSecondary)
-                        .pointerIconButton(shape: .capsule)
-                    }
                 }
-            } else {
-                Button(String(localized: LocalizedStringResource(
-                    "common.close",
-                    defaultValue: "Close"
-                ))) {
-                    coordinator.cancelWorkVoiceCapture()
-                }
-                .buttonStyle(.plain)
-                .font(.callout)
-                .foregroundStyle(AppColors.textSecondary)
-                .pointerIconButton(shape: .capsule)
+
+                // The ✕ is the same control it is in every other state, and it
+                // is destructive to nothing: clearing the error releases the
+                // popover, and the capture the recorder is still holding stays
+                // in the retry queue the desk offers.
+                cancelButton(action: cancelWorkCapture)
             }
-        case .processing, .preparingVoice:
-            Button(String(localized: LocalizedStringResource(
-                "workboard.voice.cancelTranscription",
-                defaultValue: "Cancel Transcription"
-            ))) {
-                coordinator.cancelWorkVoiceCapture()
-            }
-            .buttonStyle(.plain)
-            .font(.callout)
-            .foregroundStyle(AppColors.textSecondary)
-            .pointerIconButton(shape: .capsule)
-        case .idle:
-            EmptyView()
         }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+    }
+
+    /// What the desk got, said before the reason it got no more.
+    ///
+    /// READ FROM THE RECORDER'S FACTS, never inferred from the error's identity.
+    /// A Work capture publishes up to three things — a picture, a recording,
+    /// the words — on three independent terms, and any of them can land while
+    /// the next one is refused. A sentence derived from the failure alone
+    /// therefore lies in both directions: it says nothing arrived when the
+    /// screenshot did, and it says only the words are missing when the picture
+    /// went with them. `workCaptureFacts` is what actually happened.
+    ///
+    /// `nil` when there is nothing to add: everything the capture carried is on
+    /// the desk. Unreachable today (a capture with all three landed is a
+    /// success, not an error) — and the right answer if it ever is reachable,
+    /// because inventing a fourth claim about the desk is what this exists to
+    /// stop. The failure's own sentence still renders below.
+    private var workCaptureOutcomeText: String? {
+        let facts = workRecorder.workCaptureFacts
+        // A picture is MISSING only when it is nowhere: not taken is not
+        // missing (a voice note started with Return carries none, and telling
+        // that person one is missing invents an artifact they never took), and
+        // neither is an import still PENDING — that envelope is durable and its
+        // card is coming, so the only honest word for it is "on its way".
+        //
+        // The pending flag, not the raw `screenshotQueued`: acceptance is
+        // HISTORICAL and never taken back, so a picture whose card arrived and
+        // was then deleted still reads as queued forever. Nothing is on its way
+        // there; the person deleted the thing, and a surface still promising
+        // its arrival is arguing with what they just did.
+        let screenshotMissing = facts.screenshotStaged
+            && !facts.screenshotOnDesk
+            && !facts.screenshotImportPending
+
+        guard facts.recordingOnDesk else {
+            // The words are not mentioned on this branch at all: with no card
+            // there is nothing for a transcript to attach to, so the recording's
+            // absence is the whole of the news.
+            if facts.screenshotOnDesk {
+                return String(localized: LocalizedStringResource(
+                    "workboard.voice.error.recordingMissing",
+                    defaultValue: "Your screenshot is on your desk. The recording is not."
+                ))
+            }
+            // Accepted, not arrived. Publication hands back an id before the
+            // desk has imported the envelope, so the two states are one
+            // question apart and the sentence has to keep them apart: a
+            // picture claimed as filed that no card holds is the same false
+            // receipt in a smaller font.
+            if facts.screenshotImportPending {
+                return String(localized: LocalizedStringResource(
+                    "workboard.voice.error.recordingMissingScreenshotQueued",
+                    defaultValue: "Your screenshot is on its way to your desk. The recording is not."
+                ))
+            }
+            // Present tense, and scoped to THIS CAPTURE. "Nothing reached your
+            // desk" is a claim about history, and it is false for a capture
+            // whose cards were confirmed and then deleted — the state this
+            // branch is reached in once presence is re-read rather than
+            // remembered. "Nothing is on your desk" fixes the tense and breaks
+            // the scope instead: the facts behind this sentence describe one
+            // capture's three artifacts and say nothing whatever about the
+            // cards already on the board, which a person looking at a full desk
+            // can see it contradicting.
+            return String(localized: LocalizedStringResource(
+                "workboard.voice.error.captureAbsent",
+                defaultValue: "Nothing from this capture is on your desk."
+            ))
+        }
+
+        guard facts.wordsOnDesk else {
+            if screenshotMissing {
+                return String(localized: LocalizedStringResource(
+                    "workboard.voice.error.wordsAndScreenshotMissing",
+                    defaultValue: "Your recording is on your desk. The words and screenshot are missing."
+                ))
+            }
+            return String(localized: LocalizedStringResource(
+                "workboard.voice.error.recordingKept",
+                defaultValue: "Your recording is on your desk. Only the words are missing."
+            ))
+        }
+
+        // Recording and words both landed, so the only thing that can have put
+        // this arm on screen is a refused picture — and the Try Again below
+        // republishes exactly that.
+        guard screenshotMissing else { return nil }
+        return String(localized: LocalizedStringResource(
+            "workboard.voice.error.screenshotMissing",
+            defaultValue: "Your recording and words are on your desk. The screenshot is not."
+        ))
+    }
+
+    /// The reason, in the recorder's own words — except while a Try Again was
+    /// refused because ANOTHER surface (the retry card, a Shortcut host) is
+    /// already finishing this recording. Nothing failed there and nothing was
+    /// deleted, so the busy sentence is both truer and more useful than
+    /// reprinting a verdict the person just acted on.
+    private func workCaptureFailureText(_ error: AppError) -> String {
+        if workRecorder.retryRefusedBusy {
+            return String(localized: LocalizedStringResource(
+                "pendingRetry.card.busy",
+                defaultValue: "This recording is already being finished. Try again in a moment."
+            ))
+        }
+        return error.descriptionWithRecovery()
+    }
+
+    /// The ✕'s action in every Work arm. Narrower than `cancelActiveCapture`
+    /// on purpose: this button belongs to the Work capture, and a chat turn
+    /// that happens to be in flight underneath the HUD is not the thing the
+    /// person is cancelling. Discards the recording (nothing has reached the
+    /// desk yet at that point), abandons a transcription in flight, or clears a
+    /// standing error — and drops the staged screenshot with it — then dismisses,
+    /// because ✕ and Esc are one press out everywhere else in this popover.
+    private func cancelWorkCapture() {
+        coordinator.cancelWorkVoiceCapture()
+        dismiss()
     }
 
     // MARK: - Work acknowledgement
 
     /// The standalone "Added to Work" band, for the states with no compose
-    /// surface to carry the row.
+    /// surface to carry the row — a ⌃⌘W VOICE capture, whose whole surface is
+    /// the HUD. Transient: it stays until the popover is dismissed, with no
+    /// auto-dismiss timer, because a receipt that erases itself while somebody
+    /// is reading it is a receipt they cannot check.
+    /// It renders the feedback VALUE and nothing else. A partial capture never
+    /// reaches this band: a refused picture leaves the recorder in a retryable
+    /// error whose Try Again republishes it, so the HUD owns that outcome and
+    /// this row only ever reports a whole success. Reading any recorder state
+    /// here would also outlive the capture it described — the flags reset on
+    /// the NEXT capture, not when a receipt is consumed, so a typed note saved
+    /// in between would inherit a warning about a recording it has nothing to
+    /// do with.
     private var workFeedbackBand: some View {
         Group {
             if let feedback = coordinator.quickWorkCaptureFeedback {
@@ -1342,10 +1474,15 @@ struct DictationPopoverView: View {
             // The second hotkey, rendered from the user's ACTUAL binding for the
             // same reason the line above is: both are user-configurable, and a
             // hint naming the default is wrong on any machine that changed it.
+            // "Capture" is the one word for this action everywhere it is named
+            // — the status-item menu, the Settings shortcut row and this hint —
+            // and it is the accurate one: the press takes a screenshot, a
+            // recording or a typed note, and "a private note" describes only
+            // the last of the three.
             if let workShortcut = KeyboardShortcuts.getShortcut(for: .captureToWork) {
                 Text(String(localized: LocalizedStringResource(
-                    "popover.start.workShortcut",
-                    defaultValue: "Press \(workShortcut.description) to keep a private note"
+                    "popover.start.captureToWork",
+                    defaultValue: "Press \(workShortcut.description) to capture to Work"
                 )))
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
@@ -1431,10 +1568,24 @@ struct DictationPopoverView: View {
                 if activeSendError != nil, let vm = coordinator.displayedPopoverViewModel {
                     sendErrorActions(vm: vm)
                         .transition(.opacity)
-                } else if let reply = lastAgentReply, let vm = coordinator.displayedPopoverViewModel {
-                    // Copy + Speak on the retained reply (idle after a finished turn).
-                    replyActions(reply: reply, vm: vm)
+                } else {
+                    // The queue's recovery sits BESIDE the reply's controls
+                    // rather than instead of them. An `else if` would have been
+                    // tidier and wrong: the popover retains its last answer
+                    // indefinitely, so "there is a reply on screen" is the
+                    // ordinary state, and a recovery ranked below it would be
+                    // invisible almost always — which is the defect, not a
+                    // narrower version of it. It is kept out of the
+                    // send-error arm above for the opposite reason: that arm
+                    // draws a Retry of its own, and two controls wearing one
+                    // word in one row is worse than a missing one.
+                    savedRecordingRecoveryAction
                         .transition(.opacity)
+                    if let reply = lastAgentReply, let vm = coordinator.displayedPopoverViewModel {
+                        // Copy + Speak on the retained reply (idle after a finished turn).
+                        replyActions(reply: reply, vm: vm)
+                            .transition(.opacity)
+                    }
                 }
             case .recording, .processing:
                 // Footer is hidden in these states (`hasFooterControls`).
@@ -1448,6 +1599,57 @@ struct DictationPopoverView: View {
             reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.82),
             value: footerPhase
         )
+    }
+
+    /// The durable queue's own recovery, for the IDLE surface.
+    ///
+    /// The same control the error footer draws — same key, same `retryLast()`
+    /// — because it is the same action: transcribe the bytes the store parked.
+    /// It needs a second home only because a person can dismiss the error that
+    /// parked them (the Work HUD's ✕ does), after which the recording has no
+    /// affordance anywhere in the menu bar while the queue still holds it.
+    /// Nothing accompanies it: it appears only while there is something to
+    /// recover, so its presence is the message.
+    ///
+    /// THE GATE IS `canRecoverPendingQueue`, NOT `AppError.isRetryable`, and
+    /// deliberately so. Bytes reach the queue only through
+    /// `AppError.shouldPreserveForRetry`, which asks the sharper question: do
+    /// these SAME bytes succeed on a second attempt. It answers yes for two
+    /// verdicts `isRetryable` calls terminal — a default that needs setting up,
+    /// and a locked key — precisely because the recording is bit-for-bit valid
+    /// and the fix is one tap. Gating on retryability instead would strand a
+    /// recording over a verdict the taxonomy already says is recoverable, and
+    /// the count being non-zero is the only thing that makes `retryLast()`
+    /// reach any bytes at all. Registered as a gate token in
+    /// `ErrorSurfaceDriftGuardTests`.
+    @ViewBuilder
+    private var savedRecordingRecoveryAction: some View {
+        // The gate lives HERE, not at the call site: a control whose condition
+        // is one scope up can be drawn without it by the next edit, and this
+        // one dead-ends in "No saved recording to retry" the moment it is.
+        if service.canRecoverPendingQueue {
+            HStack(spacing: 12) {
+                Button(action: { service.retryLast() }) {
+                    Text(String(localized: LocalizedStringResource(
+                        "popover.retry",
+                        defaultValue: "Retry"
+                    )))
+                    .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppColors.brandAmber)
+                .controlSize(.small)
+                // The word alone is ambiguous beside a retained reply's
+                // controls, and this is the one place to say what it acts on
+                // without adding a line of chrome to a footer that has none.
+                .help(String(localized: LocalizedStringResource(
+                    "popover.retry.savedRecording.help",
+                    defaultValue: "Try the saved recording again"
+                )))
+
+                Spacer(minLength: 0)
+            }
+        }
     }
 
     /// The agent reply the popover shows (drives the Copy + Speak control row +
@@ -1501,7 +1703,13 @@ struct DictationPopoverView: View {
         if coordinator.showsQuickCaptureUnavailableNotice { return false }
         switch service.state {
         case .error: return true
-        case .idle: return lastAgentReply != nil || activeSendError != nil
+        // The queue joins the two reasons an idle footer already had. A parked
+        // recording is reachable ONLY from here: the error that parked it can
+        // be dismissed (the Work HUD's ✕ does exactly that), and dismissing an
+        // error must not be what decides whether somebody's words survive.
+        case .idle:
+            return lastAgentReply != nil || activeSendError != nil
+                || service.canRecoverPendingQueue
         case .recording, .processing: return false  // covered above
         }
     }
@@ -1518,10 +1726,24 @@ struct DictationPopoverView: View {
         }
     }
 
-    /// Compact cancel control, shared by the recording view and the in-flight
+    /// The ✕'s default reading. Declared once so the four surfaces that draw a
+    /// plain cancel cannot pick up four wordings of it.
+    private static let cancelLabel = LocalizedStringResource("popover.cancel", defaultValue: "Cancel")
+
+    /// Compact cancel control, shared by every capture HUD and the in-flight
     /// wait. `xmark.circle.fill` at 24pt — a lot lighter than a 40pt footer
-    /// button; Esc does the same thing in both states.
-    private func cancelButton(action: @escaping () -> Void) -> some View {
+    /// button; Esc does the same thing in every state.
+    ///
+    /// The LABEL is a parameter because the glyph is not always cancelling the
+    /// same thing: on a Work transcription it abandons the words while the
+    /// recording stays on the desk, and a VoiceOver user who heard only
+    /// "Cancel" would have no way to know which of the two they were about to
+    /// lose. Sighted users read that from the surface around it; this is the
+    /// only place the distinction can be said out loud.
+    private func cancelButton(
+        label: LocalizedStringResource = Self.cancelLabel,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 24))
@@ -1532,10 +1754,7 @@ struct DictationPopoverView: View {
         // The 24pt filled circle fills most of the 32pt live square, so the wash
         // follows it — a rounded square would tint the corners around it.
         .pointerIconButton(size: 32, shape: .circle)
-        .accessibilityLabel(Text(String(localized: LocalizedStringResource(
-            "popover.cancel",
-            defaultValue: "Cancel"
-        ))))
+        .accessibilityLabel(Text(String(localized: label)))
     }
 
     // MARK: - Reply actions (Copy + Speak)

@@ -7070,24 +7070,24 @@
         }
       }
     },
-    "menu.openWork" : {
+    "menu.captureToWork" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Open Work…"
+            "value" : "Capture to Work…"
           }
         }
       }
     },
-    "menu.recordToWork" : {
+    "menu.openWorkDesk" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Record to Work…"
+            "value" : "Open Work"
           }
         }
       }
@@ -7705,6 +7705,17 @@
         }
       }
     },
+    "popover.cancelTranscription" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancel transcription"
+          }
+        }
+      }
+    },
     "popover.capture.discard" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -7837,6 +7848,28 @@
         }
       }
     },
+    "popover.retry.savedRecording.help" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try the saved recording again"
+          }
+        }
+      }
+    },
+    "popover.start.captureToWork" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Press %@ to capture to Work"
+          }
+        }
+      }
+    },
     "popover.start.noShortcut" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7855,17 +7888,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Press %@ or tap the mic to start"
-          }
-        }
-      }
-    },
-    "popover.start.workShortcut" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Press %@ to keep a private note"
           }
         }
       }
@@ -8108,6 +8130,28 @@
         }
       }
     },
+    "regionCapture.overlay.hint.work" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Drag to capture · Return to skip · Esc to cancel"
+          }
+        }
+      }
+    },
+    "regionCapture.overlay.skipAction" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Skip screenshot"
+          }
+        }
+      }
+    },
     "regionCapture.permission.cancel" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -8152,6 +8196,17 @@
         }
       }
     },
+    "regionCapture.permission.mic.work.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Capture to Work saves a spoken note on your desk. To record it, Conduck needs microphone access."
+          }
+        }
+      }
+    },
     "regionCapture.permission.openSettings" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -8192,6 +8247,50 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Conduck needs Screen Recording access"
+          }
+        }
+      }
+    },
+    "regionCapture.permission.screen.work.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Capture to Work can save a picture of part of your screen next to your note. To take that picture, Conduck needs Screen Recording access."
+          }
+        }
+      }
+    },
+    "regionCapture.permission.screen.work.deniedBody" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck does not have Screen Recording access yet, so it cannot add a picture. Turn it on in System Settings, or keep going without one."
+          }
+        }
+      }
+    },
+    "regionCapture.permission.screen.work.relaunchBody" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Screen Recording is now allowed, but macOS only applies it after a restart. Quit and reopen Conduck to include pictures, or keep going without one."
+          }
+        }
+      }
+    },
+    "regionCapture.permission.skipScreenshot" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Continue Without Screenshot"
           }
         }
       }
@@ -23611,6 +23710,17 @@
         }
       }
     },
+    "workboard.voice.error.captureAbsent" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing from this capture is on your desk."
+          }
+        }
+      }
+    },
     "workboard.voice.error.deskWrite" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23618,6 +23728,72 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Work couldn’t save this recording just now."
+          }
+        }
+      }
+    },
+    "workboard.voice.error.recordingKept" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your recording is on your desk. Only the words are missing."
+          }
+        }
+      }
+    },
+    "workboard.voice.error.recordingMissing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your screenshot is on your desk. The recording is not."
+          }
+        }
+      }
+    },
+    "workboard.voice.error.recordingMissingScreenshotQueued" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your screenshot is on its way to your desk. The recording is not."
+          }
+        }
+      }
+    },
+    "workboard.voice.error.screenshotMissing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your recording and words are on your desk. The screenshot is not."
+          }
+        }
+      }
+    },
+    "workboard.voice.error.screenshotWrite" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Work couldn’t save the screenshot just now."
+          }
+        }
+      }
+    },
+    "workboard.voice.error.wordsAndScreenshotMissing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your recording is on your desk. The words and screenshot are missing."
           }
         }
       }

@@ -27,6 +27,23 @@
 // that same card afterwards. So a refused key, an offline device or an
 // abandoned request costs the words and never the recording.
 //
+// A Work capture may also carry a SCREENSHOT — the region dragged before the
+// microphone came up — and it is a card of its own, published through
+// `WorkVoiceScreenshotCoordinator` ahead of the recording. The bytes are STAGED
+// until Stop rather than published at the drag, so one Esc still gets out of an
+// accidental capture with nothing on the desk; and once there is a capture id
+// they go out first, because a picture held only in memory is the one artifact
+// a crash between Stop and the desk can destroy.
+//
+// The two artifacts answer separately. Either may be owed while the other is
+// finished, each retries on its own terms, and a refused picture never costs
+// the recording or the words. What it does cost is the CAPTURE: a picture still
+// owed leaves the capture unfinished and retryable at EVERY exit — silence and
+// a missing key included, which are terminal for the words and say nothing
+// about the picture — answering with `.workScreenshotWriteFailed`, keeping its
+// queue entry as the only place those bytes survive this process, and letting
+// `workCaptureFacts` say artifact by artifact what actually landed.
+//
 // The other direction is not symmetrical: a desk write that FAILS is a
 // retryable error, never a quiet fall back to text. The capture stays pending
 // with whatever it achieved — its bytes, its card, its words — and finishes
@@ -91,6 +108,27 @@ nonisolated protocol PendingRetryLaneReserving: PendingRetryQueueWriting {
     /// Finish exactly the capture this claim holds, and nothing else.
     @discardableResult
     func clear(_ claim: PendingRetryClaim) async -> Bool
+
+    /// Retire just the parked SCREENSHOT of the capture this claim holds, now
+    /// that a card owns the picture. The entry, its recording and its verdict
+    /// stay: the words may still be owed.
+    ///
+    /// It is a separate operation from `clear` because the image file is not
+    /// merely a copy — it is the EVIDENCE the expiry sweep reads to decide the
+    /// entry still shelters the only picture of something. Left behind after
+    /// publication it exempts that capture from the clock for ever, so the one
+    /// surface that knows the picture landed has to say so.
+    @discardableResult
+    func discardWorkImage(_ claim: PendingRetryClaim) async -> Bool
+}
+
+extension PendingRetryLaneReserving {
+    /// A lane that parks no screenshot has none to retire, and answering
+    /// "nothing was retired" is the honest reply. The store overrides it; this
+    /// default is what lets a lane double that never stores image bytes conform
+    /// without pretending to delete any.
+    @discardableResult
+    func discardWorkImage(_ claim: PendingRetryClaim) async -> Bool { false }
 }
 
 extension PendingRetryStore: PendingRetryLaneReserving {}
@@ -208,6 +246,69 @@ final class InAppAudioRecorder {
     /// leaves a published card owing words that the same tap cannot get.
     var canRetryWorkCapture: Bool { pendingWorkCapture != nil }
 
+    #if !os(watchOS)
+    /// What a Work capture actually achieved, artifact by artifact.
+    ///
+    /// A capture can produce up to three things and publish them in three
+    /// separate writes, so "it worked" and "it failed" are not the states this
+    /// lane has — every combination is reachable, and a surface that renders
+    /// one sentence for a `Result` will sooner or later say something untrue
+    /// about the rest. A picture on the desk beside a recording the store
+    /// refused, and a recording with words beside a picture that never landed,
+    /// are both ordinary outcomes here.
+    ///
+    /// So the recorder states the facts and the surface composes the sentence.
+    struct WorkCaptureFacts: Sendable, Equatable {
+        /// A card owns the audio: phase one published it and nothing has since
+        /// reported that card gone.
+        var recordingOnDesk: Bool
+        /// The transcript is written onto that card.
+        var wordsOnDesk: Bool
+        /// This capture carried a picture at all. False for every capture from
+        /// a surface that stages none, which is what keeps a receipt from
+        /// naming a missing screenshot nobody took.
+        var screenshotStaged: Bool
+        /// The picture's envelope was accepted by the durable inbox. That is
+        /// the point past which it is no longer this process's to lose — and
+        /// it is NOT the point at which it is a card: the drain that imports it
+        /// runs afterwards and is best-effort, so a queued picture may still be
+        /// waiting for the foreground observer.
+        var screenshotQueued: Bool
+        /// A card carrying the picture is standing on the desk, confirmed by
+        /// reading it back. Only this may be described to a person as saved.
+        var screenshotOnDesk: Bool
+        /// A lookup confirmed that card at least once. It is what separates a
+        /// picture the drain has NOT imported yet from one a person imported
+        /// and then deleted: both are queued-and-not-on-the-desk, and only the
+        /// first is still coming.
+        var screenshotEverOnDesk: Bool
+
+        /// The picture is durable and its card has not appeared yet. The only
+        /// state in which anything may be said to be on its way — a picture
+        /// that arrived and was deleted is not coming back, and saying so
+        /// promises a card that will never appear.
+        var screenshotImportPending: Bool {
+            screenshotQueued && !screenshotOnDesk && !screenshotEverOnDesk
+        }
+
+        static let none = WorkCaptureFacts(
+            recordingOnDesk: false,
+            wordsOnDesk: false,
+            screenshotStaged: false,
+            screenshotQueued: false,
+            screenshotOnDesk: false,
+            screenshotEverOnDesk: false
+        )
+    }
+
+    /// The Work capture in hand, or the last one this recorder finished. Reset
+    /// to `.none` at every mint, on `cancelRecording()`, and when a replacement
+    /// recording takes the microphone; updated at each publication step, so a
+    /// surface reading it mid-capture sees what has landed so far rather than a
+    /// prediction.
+    private(set) var workCaptureFacts: WorkCaptureFacts = .none
+    #endif
+
     /// One capture in flight, and what it has already achieved. Both phases key
     /// off `id`, and both are idempotent under it, so re-running either after a
     /// failure repairs the capture instead of duplicating it.
@@ -227,17 +328,67 @@ final class InAppAudioRecorder {
         /// hands the retry lane one URL for one capture; the file itself exists
         /// only for the length of the speech hop.
         let transcriptionFileURL: URL
+        /// When this capture came into being. Stable, and stored rather than
+        /// read at the moment of use, because the screenshot's card is
+        /// published from it and a capture may publish that card more than once
+        /// — here, on an in-process retry, and from the durable record in
+        /// another process. A `Date()` at each of those sites would date one
+        /// picture three ways.
+        let createdAt: Date
+        /// The picture that was dragged before this capture started, moved in
+        /// at the moment the capture was minted. It stays here until it is a
+        /// card of its own: a Work capture's two artifacts are published
+        /// separately, and this one exists nowhere else until it lands.
+        var screenshot: Data?
+        /// True once those bytes have been ACCEPTED by the durable inbox, which
+        /// is the moment they stop being this process's only copy — not the
+        /// moment a card exists, which the desk read alone can answer. Debt is
+        /// measured against this rather than against the card, because a queued
+        /// envelope the drain has not imported yet is nobody's to publish
+        /// again: the foreground observer finishes it.
+        ///
+        /// The screenshot's own verdict, and it says nothing about the
+        /// recording — the two publish independently, so either may be owed
+        /// while the other is finished.
+        var screenshotQueued = false
         /// The desk card this capture published, once it has one.
         var materialID: UUID?
+        /// True once phase two has ANSWERED for these words — attached them, or
+        /// reported that the card they belong to is gone. Both are final, so a
+        /// resumed capture must not ask again: the question is a throwing store
+        /// read, and its failure would report a desk error for a capture whose
+        /// words were settled minutes ago. Named for the settlement rather than
+        /// for attachment because the second answer settles the words just as
+        /// finally as the first, without putting them on any card.
+        var transcriptSettled = false
+        /// The desk has ANSWERED that this capture's card is gone — the attach
+        /// step's own `.recordingMissing`. It is remembered on the capture
+        /// because `materialID` is only a memory of a write, and a resumed
+        /// capture that re-derived presence from it would report a card the
+        /// desk has already denied.
+        var recordingConfirmedGone = false
         /// The words, once speech recognition has produced them. Retained so a
         /// retry that owes only the attachment does not spend a second round
         /// trip on the same bytes for the same answer.
         var transcript: String?
 
-        init(id: UUID, audio: Data, format: AudioFormat) {
+        /// True while this capture still carries a picture no card holds. What
+        /// the retry republishes, what the durable record has to carry, and
+        /// what keeps a capture whose words already landed from being retired.
+        var owesScreenshot: Bool { screenshot != nil && !screenshotQueued }
+
+        init(
+            id: UUID,
+            audio: Data,
+            format: AudioFormat,
+            screenshot: Data? = nil,
+            createdAt: Date = Date()
+        ) {
             self.id = id
             self.audio = audio
             self.format = format
+            self.screenshot = screenshot
+            self.createdAt = createdAt
             self.transcriptionFileURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("conduck-inapp-\(id.uuidString).\(format.fileExtension)")
         }
@@ -264,6 +415,28 @@ final class InAppAudioRecorder {
     /// The desk store the Work lane publishes into.
     var workStoreForTesting: ConversationStore?
 
+    #if !os(watchOS)
+    /// Stands in for the App-Group capture queue the screenshot rides through.
+    /// `WorkCaptureInbox.shared` is one directory in the founder's own
+    /// container that every capture surface in the process publishes into, and
+    /// what these cases assert is what THIS recorder publishes and in which
+    /// order — a property of this class, not of that directory.
+    var workInboxForTesting: WorkCaptureInbox?
+
+    /// Stands in for the image pipeline the screenshot is normalized by.
+    /// `ImageProcessor` answers nil for bytes it cannot decode, which is every
+    /// fixture a unit test can invent, so without this seam the publication
+    /// under test would return "nothing publishable" before it ever reached the
+    /// queue. It also stands exactly where the picture's publication BEGINS,
+    /// which is the one place a test can read the desk back and see that the
+    /// recording is not on it yet.
+    ///
+    /// `@MainActor` like the speech-hop seam beside it, and for the same
+    /// reason: a stub asserts against the state this class is mutating, and the
+    /// nonisolated shape the coordinator takes cannot reach it.
+    var workScreenshotNormalizeForTesting: (@MainActor (Data) async -> Data?)?
+    #endif
+
     /// Stands in for the App-Group retry queue. `PendingRetryStore.shared` is a
     /// process-global singleton over one file every capture test in the bundle
     /// shares, and the claims here are about WHICH capture this class arms and
@@ -288,6 +461,14 @@ final class InAppAudioRecorder {
     /// up, exactly as `AudioRecorder.startRecording()` does.
     var microphoneStartForTesting: (@MainActor () async -> Bool)?
 
+    /// Stands in for the audio delegate's `successfully: false` callback, which
+    /// no simulator can produce — there is no input device for a HAL abort to
+    /// happen to. It runs exactly the handler the callback is wired to, and the
+    /// wiring itself is what the source guard beside these cases asserts.
+    func _failRecordingForTesting() async {
+        await handleUnexpectedRecordingFailure()
+    }
+
     /// Runs the capture the seams above describe. `stopAndUpload()` refuses
     /// unless the microphone is live, which no simulator run can arrange, and
     /// driving the orchestration is the whole point of the three seams.
@@ -305,6 +486,40 @@ final class InAppAudioRecorder {
         return .shared
         #endif
     }
+
+    #if !os(watchOS)
+    /// The durable capture queue this recorder's screenshots ride through.
+    private var workInbox: WorkCaptureInbox {
+        #if CONDUCK_TESTING
+        return workInboxForTesting ?? .shared
+        #else
+        return .shared
+        #endif
+    }
+
+    /// The image pipeline the screenshot is normalized by. Nil means "the
+    /// coordinator's own", which is the production answer — passing nil is
+    /// exactly the default the coordinator declares, and it declares it as a
+    /// nil-defaulted parameter because a default-argument expression would be
+    /// evaluated in the caller's isolation.
+    private var workScreenshotNormalize: (@Sendable (Data) async -> Data?)? {
+        #if CONDUCK_TESTING
+        guard let stub = workScreenshotNormalizeForTesting else { return nil }
+        // A global-actor-isolated closure IS Sendable, so hopping to it is all
+        // this adapter is — the coordinator's parameter is nonisolated because
+        // a headless intent lane also calls it.
+        return { data in await stub(data) }
+        #else
+        return nil
+        #endif
+    }
+
+    /// Bytes of the screenshot that belongs to the NEXT Work capture. Held
+    /// until Stop mints the capture id: the picture cannot be published before
+    /// there is an id to derive its card's identity from, and minting one at
+    /// the start would name a capture that Esc may still cancel.
+    private var stagedWorkScreenshot: Data?
+    #endif
 
     /// The retry queue this recorder arms and releases its own entry in.
     private var retryLane: any PendingRetryLaneReserving {
@@ -399,18 +614,61 @@ final class InAppAudioRecorder {
             // User-initiated stops are driven through `stopAndUpload()` —
             // that path handles its own state transitions.
         }
-        // A HAL-aborted capture (delegate `successfully: false`) with no user
-        // stop must not strand us in `.recording` — surface it as an error so
-        // the composer leaves the recording UI instead of hanging.
         recorder.onRecordingFailed = { [weak self] in
-            guard let self else { return }
-            if case .recording = self.state {
-                self.state = .error(.audioMissingData)
-            }
+            Task { @MainActor in await self?.handleUnexpectedRecordingFailure() }
         }
     }
 
+    /// A HAL-aborted capture (delegate `successfully: false`) with no user stop.
+    /// It must not strand this recorder in `.recording` — the composer would
+    /// hang on a recording UI over a dead microphone.
+    ///
+    /// A Work capture carrying a staged PICTURE goes the long way round instead
+    /// of ending here. The region was dragged before the microphone was asked
+    /// for anything, an abort does not un-drag it, and it exists nowhere but
+    /// this process — while ending here leaves it staged with no capture to
+    /// hold it: Stop refuses because the recording is over, and Try Again has
+    /// nothing to finish. The empty-audio path already mints a capture that
+    /// owes no recording and settles the picture onto the desk, so the failure
+    /// is routed through it. The answer is still `.audioMissingData`; what
+    /// changes is that the picture survives and the facts say what landed.
+    private func handleUnexpectedRecordingFailure() async {
+        guard case .recording = state else { return }
+        #if !os(watchOS)
+        if retryDestination == .work, stagedWorkScreenshot != nil {
+            _ = await runProcessingTask { await self.finishAndUpload() }
+            return
+        }
+        #endif
+        state = .error(.audioMissingData)
+    }
+
     // MARK: - Public API
+
+    #if !os(watchOS)
+    /// Bytes of the screenshot that belongs to the NEXT Work capture. Held
+    /// until Stop mints the capture id; dropped by `cancelRecording()`.
+    ///
+    /// Staging rather than publishing is what lets one Esc get out of an
+    /// accidental capture: nothing durable exists between the drag and the
+    /// stop, so a cancelled recording leaves the desk exactly as it was. The
+    /// bytes move INTO the capture the moment one is minted, so both the
+    /// in-process retry and the durable retry record carry them from there.
+    ///
+    /// A Chat recorder has no card to put a picture on, so a Work-only surface
+    /// is the only caller; anything staged on a Chat recorder is dropped when
+    /// its capture is minted rather than held for a publication that will never
+    /// come.
+    ///
+    /// Empty bytes are not a picture, and they are normalized to "none" here
+    /// rather than refused downstream: a capture that staged nothing publishable
+    /// must not report an omitted screenshot, because a receipt that names a
+    /// missing picture for a capture that never had one is as untrue as one
+    /// that hides a real loss.
+    func stageWorkScreenshot(_ data: Data?) {
+        stagedWorkScreenshot = (data?.isEmpty ?? true) ? nil : data
+    }
+    #endif
 
     /// Begin recording. Transitions `state` to `.recording(startedAt:)` on
     /// success, `.error(...)` on permission / engine / mic-busy failure.
@@ -427,6 +685,24 @@ final class InAppAudioRecorder {
         // the gap before `.recording` is set. Reset on EVERY exit path.
         isStarting = true
         defer { isStarting = false }
+
+        #if !os(watchOS)
+        // A refused start is not a capture, and the picture staged for it may
+        // not ride the NEXT one: a region dragged at one moment, published
+        // beside words spoken at another, is worse than no picture at all. The
+        // stage therefore survives exactly one thing — a start that actually
+        // took the microphone, which is the only exit that leaves `.recording`.
+        // Below the re-entrancy guard by design: a press that arrives while a
+        // capture is already live changes nothing and must not take that
+        // capture's picture away from it.
+        defer {
+            if case .recording = state {
+                // The microphone came up, so this capture owns the picture.
+            } else {
+                stagedWorkScreenshot = nil
+            }
+        }
+        #endif
 
         // Mic wins: a new capture invalidates any staged read-aloud one-shot
         // (a notification-tap request still pending when the user starts the
@@ -540,8 +816,20 @@ final class InAppAudioRecorder {
     }
 
     /// Finish the Work capture this recorder is still holding, from wherever it
-    /// stopped: publish the card if none landed, recognize the words if none
-    /// were recovered, and write them onto that same card.
+    /// stopped: publish the picture if no card holds it, publish the recording
+    /// if none landed, recognize the words if none were recovered, and write
+    /// them onto that same card.
+    ///
+    /// The picture goes first and answers only for itself. A capture can owe
+    /// the screenshot, the recording, the words, or any combination, and each
+    /// step asks its own question — so a retry after a refused picture does not
+    /// re-transcribe, and a retry after a refused transcription does not
+    /// republish a picture that already landed.
+    ///
+    /// The picture-only case therefore costs nothing but the publication: every
+    /// other step finds its work already done and skips it, so ONE tap turns a
+    /// capture whose words are already on the desk into a finished one, with no
+    /// provider round trip and no second card anywhere.
     ///
     /// This is what a retry offered beside a failed Work capture must do. The
     /// alternative — starting a new recording — leaves the first card on the
@@ -589,8 +877,44 @@ final class InAppAudioRecorder {
 
     /// Cancel an in-flight recording without uploading. Used by a future
     /// "trash" button or scenePhase-leaving guard.
+    ///
+    /// The staged screenshot goes with it. A live-recording cancel promises
+    /// that nothing has landed on the desk, and the picture is the one artifact
+    /// that could have — which is exactly why it is published at Stop and not
+    /// at the drag. A capture already PAST that point keeps whatever reached
+    /// the desk; abandoning a transcription is `cancelProcessing()`, and it
+    /// unpublishes nothing.
     func cancelRecording() {
         recorder.cancelRecording()
+        #if !os(watchOS)
+        stagedWorkScreenshot = nil
+        workCaptureFacts = .none
+        #endif
+        state = .idle
+    }
+
+    /// The ✕ on a standing Work error: let go of the capture in hand.
+    ///
+    /// Distinct from `dismissError()`, which clears the banner for a surface
+    /// that is about to record AGAIN — there the capture must survive, because
+    /// a refused microphone replaces nothing and its Try Again has to be
+    /// exactly where it was. This is the other press: the person is done with
+    /// this capture.
+    ///
+    /// The durable entry is deliberately NOT retired. It was written at the
+    /// first failure and is the recovery for everything this capture still
+    /// owes, so dismissing the surface hands the capture to the retry lane
+    /// rather than deleting it. A picture that never reached the queue and a
+    /// capture that was never parked (one with no recording of its own) are the
+    /// two things this press really does end, and both are already the state
+    /// the person is looking at.
+    func discardPendingWorkCapture() {
+        #if !os(watchOS)
+        pendingWorkCapture = nil
+        workRecordingMaterialID = nil
+        workCaptureFacts = .none
+        #endif
+        retryRefusedBusy = false
         state = .idle
     }
 
@@ -640,6 +964,157 @@ final class InAppAudioRecorder {
     private func finishAndUpload(
         resuming resumed: VoiceCapture? = nil
     ) async -> Result<String, AppError> {
+        let outcome = await runCaptureToCompletion(resuming: resumed)
+        #if !os(watchOS)
+        return await settleOwedScreenshot(after: outcome)
+        #else
+        return outcome
+        #endif
+    }
+
+    #if !os(watchOS)
+    /// THE DEBT CHECK, and it sits ABOVE the pipeline because a capture can end
+    /// in a dozen places and the picture is owed at every one of them.
+    ///
+    /// Silence is the case that named this: `.noSpeechDetected` is terminal and
+    /// NOT retryable, so a capture that ended there offered no Try Again at all
+    /// — and the picture it was still holding had nowhere to go. Every other
+    /// terminal exit has the same shape: a missing key, an unreadable one, a
+    /// model that would not install, a card deleted mid-recognition. None of
+    /// them is about the picture, and all of them were ending the capture.
+    ///
+    /// So the answer is rewritten. Whatever the speech hop did, a capture still
+    /// owing its picture stays pending and reports the one retryable error whose
+    /// copy names the artifact that is actually missing — the facts carry what
+    /// else went wrong, which is what the surface renders. One Try Again then
+    /// publishes the picture and lets the remaining speech outcome decide the
+    /// final answer exactly as it would have.
+    ///
+    /// It cannot loop: each call answers once and waits for the next tap.
+    private func settleOwedScreenshot(
+        after outcome: Result<String, AppError>
+    ) async -> Result<String, AppError> {
+        guard retryDestination == .work else { return outcome }
+
+        // THE REFRESH SITS ABOVE THE DEBT QUESTION, because both of its answers
+        // print facts. A failure renders them beside its own sentence whether
+        // or not a picture is owed, and a capture that DOES owe one is about to
+        // become a failure here. `materialID` and a publication id are memories
+        // of writes: a card deleted while recognition was in flight makes both
+        // stale, and no exit before the attach step asks the desk. Gated on the
+        // debt instead, an emptied desk still reported a recording and a
+        // picture sitting on it — the exact untruth this refresh exists to
+        // stop. The durable `.published` verdict stays as it is, because it
+        // answers a different question: whether a recovery would be
+        // republishing a recording or resurrecting a card somebody deleted.
+        if let pending = pendingWorkCapture {
+            var ended = false
+            if case .failure = outcome { ended = true }
+            if ended || pending.owesScreenshot {
+                await refreshDeskFacts(for: pending)
+            }
+        }
+
+        // NOTHING OWED. The capture is finished — and if the person cancelled
+        // on the way, that is the answer they get: everything durable landed,
+        // it is retired, and the silence is deliberate. A `.success` returned
+        // here prints "Added to Work." over a ✕ somebody had just pressed,
+        // which is the one sentence a withdrawn request may not produce.
+        guard let owed = pendingWorkCapture, owed.owesScreenshot else {
+            guard Task.isCancelled else { return outcome }
+            state = .idle
+            return .failure(.unknown(CancellationError()))
+        }
+
+        // A refused DESK WRITE keeps its own answer. It is already retryable,
+        // the same Try Again republishes the picture on its way through, and
+        // "the recording is not saved" is the bigger news of the two.
+        if case .failure(let existing) = outcome,
+           existing.errorCode == AppError.workDeskWriteFailed.errorCode {
+            return outcome
+        }
+
+        let surfaced = AppError.workScreenshotWriteFailed
+        pendingWorkCapture = owed
+        await preserveForRetry(error: surfaced, capture: owed, preferredLanguage: nil)
+        // The state is the SAME whether this attempt ran to a verdict or the
+        // person stopped it: the debt is unchanged either way, and the surface
+        // that was offering Try Again goes on offering it. A cancelled attempt
+        // returning to `.idle` instead took the capture off every affordance
+        // there is — the popover draws no Work HUD over an idle recorder, the
+        // hotkey's finish arm refuses an idle capture, and the next ⌃⌘W
+        // replaces it. Two ✕ presses still leave: this one abandons the
+        // attempt, and the one on the error surface dismisses the capture.
+        state = .error(surfaced)
+        // A cancelled attempt is not a verdict, so it answers as a cancel. The
+        // caller prints nothing for it, which is what makes the return to the
+        // error surface silent.
+        if Task.isCancelled { return .failure(.unknown(CancellationError())) }
+        return .failure(surfaced)
+    }
+
+    /// Re-read what the desk actually holds for this capture — BOTH cards.
+    ///
+    /// `materialID` and a publication id are memories of writes, not
+    /// observations: a card is deleted while recognition is in flight often
+    /// enough that the attach step has a whole outcome for it, and every exit
+    /// that returns BEFORE that step never asks. A person who cleared their
+    /// desk mid-capture must not be told either artifact is waiting on it.
+    ///
+    /// Words cannot be on a card that is gone, so they fall with the recording.
+    /// `screenshotQueued` does NOT fall with the picture: it records that the
+    /// inbox accepted the envelope, which stays true however the card that came
+    /// of it is disposed of afterwards, and it is what says this capture owes
+    /// nothing more.
+    /// Writes the latch straight onto `pendingWorkCapture` rather than back
+    /// through its argument: the capture passed in was read from it a moment
+    /// ago on this actor, and every caller re-reads it afterwards.
+    private func refreshDeskFacts(for capture: VoiceCapture) async {
+        if let materialID = capture.materialID {
+            // Only a DEFINITE answer moves a fact. A store that could not be
+            // read says nothing about what is on the desk.
+            if let present = await deskHoldsMaterial(materialID) {
+                workCaptureFacts.recordingOnDesk = present
+                if !present {
+                    workCaptureFacts.wordsOnDesk = false
+                    // LATCHED onto the capture in hand, exactly as the attach
+                    // step's own `.recordingMissing` is. A later pass cannot ask
+                    // again when the store has stopped answering, and without
+                    // this memory the historical id would be all it had to go
+                    // on — which is how a cleared desk came to be described as
+                    // holding a recording.
+                    pendingWorkCapture?.recordingConfirmedGone = true
+                }
+            }
+        } else {
+            workCaptureFacts.recordingOnDesk = false
+            workCaptureFacts.wordsOnDesk = false
+        }
+
+        guard workCaptureFacts.screenshotStaged else { return }
+        let pictureID = WorkVoiceScreenshotCoordinator.materialID(forCapture: capture.id)
+        if let present = await deskHoldsMaterial(pictureID) {
+            noteScreenshotPresence(present)
+        }
+    }
+
+    /// Record what a lookup found, and never forget a card it once found.
+    ///
+    /// The memory is the whole point: "queued but not on the desk" is two
+    /// different states, and only one of them is still coming. A card that
+    /// arrived and was deleted must not be described as on its way.
+    private func noteScreenshotPresence(_ present: Bool) {
+        workCaptureFacts.screenshotOnDesk = present
+        if present { workCaptureFacts.screenshotEverOnDesk = true }
+    }
+    #endif
+
+    /// The pipeline itself. Every terminal answer it produces passes through
+    /// `finishAndUpload` above, which is where a capture that still owes an
+    /// artifact is turned into one that says so.
+    private func runCaptureToCompletion(
+        resuming resumed: VoiceCapture? = nil
+    ) async -> Result<String, AppError> {
         var capture: VoiceCapture
         if let resumed {
             capture = resumed
@@ -651,19 +1126,51 @@ final class InAppAudioRecorder {
             #else
             let recorded = recorder.stopRecording()
             #endif
-            guard let audioData = recorded, !audioData.isEmpty else {
+
+            #if !os(watchOS)
+            // The staged picture MOVES into the capture here, at the one moment
+            // there is an identity to publish it under. Everything downstream —
+            // the in-process retry and the durable retry record alike — carries
+            // it from the capture, so there is exactly one copy and one owner.
+            // A Chat recorder has no card to put a picture on, so anything
+            // staged on one is dropped rather than held for ever.
+            //
+            // It is taken ABOVE the audio guard on purpose. A microphone that
+            // gave nothing does not un-drag the region, and the picture exists
+            // nowhere but this process — so it must not be dropped with the
+            // silence, which is what a `guard` above this line did.
+            let staged = retryDestination == .work ? stagedWorkScreenshot : nil
+            stagedWorkScreenshot = nil
+            // A new capture has achieved nothing yet, and the only fact known
+            // at the mint is whether there is a picture to lose.
+            workCaptureFacts = .none
+            workCaptureFacts.screenshotStaged = staged != nil
+            #else
+            let staged: Data? = nil
+            #endif
+
+            if let audioData = recorded, !audioData.isEmpty {
+                // Compress to M4A (16kHz mono AAC). Falls back to original on
+                // failure — STTClient's pre-flight size guard still catches >15MB.
+                let compressionResult = await AudioCompressor.compress(audioData)
+                capture = VoiceCapture(
+                    id: UUID(),
+                    audio: compressionResult.data,
+                    format: compressionResult.format,
+                    screenshot: staged
+                )
+            } else if staged != nil {
+                // A capture that owes NO recording. It exists only to carry the
+                // picture to the desk and to be retryable while it does; the
+                // audio guard's own answer is still what this run reports. The
+                // format labels a temporary file this capture never writes.
+                capture = VoiceCapture(
+                    id: UUID(), audio: Data(), format: .aac, screenshot: staged
+                )
+            } else {
                 state = .error(.audioMissingData)
                 return .failure(.audioMissingData)
             }
-
-            // Compress to M4A (16kHz mono AAC). Falls back to original on
-            // failure — STTClient's pre-flight size guard still catches >15MB.
-            let compressionResult = await AudioCompressor.compress(audioData)
-            capture = VoiceCapture(
-                id: UUID(),
-                audio: compressionResult.data,
-                format: compressionResult.format
-            )
 
             #if !os(watchOS)
             // The Work lane holds its capture until a card owns the words, so a
@@ -673,6 +1180,76 @@ final class InAppAudioRecorder {
         }
 
         #if !os(watchOS)
+        // PHASE 0, and it runs BEFORE the recording's own publication: the
+        // picture is the artifact that exists nowhere but this process, so the
+        // window where the audio lands and an in-memory image is lost to a
+        // crash is closed by publishing the image first.
+        //
+        // It is deliberately NOT nested under the recording's phase-one
+        // condition. The two artifacts are published independently and either
+        // may be owed while the other is finished, so a resumed capture asks
+        // this question again on its own terms — which is what makes the
+        // screenshot's retry independent of the audio's.
+        //
+        // A refusal here does not fail the RECORDING: the audio, the words and
+        // the desk writes below carry on exactly as they would with no
+        // screenshot at all, and the bytes stay on the capture so a retry
+        // republishes them. It does leave the capture unfinished — see the debt
+        // check in `finishAndUpload` — and it arms a durable record at once, so
+        // a process death between here and the end does not take the picture.
+        if retryDestination == .work, capture.owesScreenshot,
+           let screenshot = capture.screenshot {
+            if let materialID = await publishWorkScreenshot(screenshot, for: capture) {
+                // QUEUED, which is a weaker claim than SAVED and the only one
+                // this return licenses: the envelope was accepted, and the
+                // drain that turns it into a card runs afterwards and is
+                // best-effort. The debt is settled here all the same — a queued
+                // envelope is nobody's to publish twice, and the foreground
+                // observer imports it.
+                capture.screenshotQueued = true
+                workCaptureFacts.screenshotQueued = true
+                // …so whether it is ON THE DESK is a separate question with a
+                // separate answer, and it is asked of the desk rather than
+                // inferred. Only a card read back may be described to a person
+                // as saved.
+                noteScreenshotPresence(await deskHoldsMaterial(materialID) == true)
+                // The picture is durable now, so the parked copy is no longer
+                // the only one — and a parked copy left behind would go on
+                // telling the expiry sweep this entry shelters an irreplaceable
+                // image, exempting it from the clock for ever.
+                await discardParkedWorkImage(for: capture.id)
+            } else {
+                // The only shelter left for these bytes. The verdict written
+                // here is the conservative one — phase one has not run, so the
+                // record says the desk holds no recording — and it is corrected
+                // the moment the recording lands, because a stale
+                // `.phaseOneFailed` is licence for a later recovery to
+                // resurrect a card the person deleted.
+                await preserveForRetry(
+                    error: .workScreenshotWriteFailed,
+                    capture: capture,
+                    preferredLanguage: nil
+                )
+            }
+            pendingWorkCapture = capture
+        }
+
+        // A capture with no recording of its own has done everything it can the
+        // moment its picture is settled: the phases below would publish empty
+        // bytes as a voice note and buy a transcription of silence. The audio
+        // guard's answer is what it reports, and the debt check above turns an
+        // owed picture into the retryable one instead.
+        if capture.audio.isEmpty {
+            if capture.owesScreenshot {
+                pendingWorkCapture = capture
+            } else {
+                pendingWorkCapture = nil
+                await releaseDurableRetry(for: capture.id)
+            }
+            state = .error(.audioMissingData)
+            return .failure(.audioMissingData)
+        }
+
         // PHASE 1 of the Work voice capture: the recording reaches the desk
         // before transcription is attempted, so a failure below costs the words
         // and never the recording. The coordinator COPIES these bytes into the
@@ -689,6 +1266,27 @@ final class InAppAudioRecorder {
                 capture.materialID = card.id
                 pendingWorkCapture = capture
                 workRecordingMaterialID = card.id
+                // The ONE place presence is ASSERTED rather than observed, and
+                // what it asserts is the line above it. A resumed capture never
+                // comes through here, which is the point: re-deriving presence
+                // from `materialID` on a resume undoes an absence the desk has
+                // already answered for, because the id outlives the card. Every
+                // other writer is a lookup.
+                workCaptureFacts.recordingOnDesk = true
+                // A refused screenshot may already have armed this capture's
+                // entry, and it did so with the only verdict true at the time:
+                // the desk held no recording. It holds one NOW, and the record
+                // has to say so before anything else can end this capture —
+                // silence, a missing key, a cancelled hop. `.phaseOneFailed`
+                // left standing tells a recovery hours later to republish a
+                // recording, which resurrects a card the person has deleted.
+                if armedDurableRetryID == capture.id {
+                    await preserveForRetry(
+                        error: .workDeskWriteFailed,
+                        capture: capture,
+                        preferredLanguage: nil
+                    )
+                }
             } catch {
                 // The recording exists only in this process. Transcribing on
                 // and handing the words to a composer would report a Work
@@ -924,7 +1522,12 @@ final class InAppAudioRecorder {
 
         #if !os(watchOS)
         // PHASE 2: the words join the recording they came from.
-        if let materialID = capture.materialID {
+        //
+        // Asked ONCE per capture. A resumed capture that owed only its picture
+        // has words the desk answered for minutes ago, and asking again is a
+        // throwing store read whose failure would report a refused recording
+        // for a capture whose recording was never in question.
+        if let materialID = capture.materialID, !capture.transcriptSettled {
             do {
                 switch try await WorkVoiceCaptureCoordinator.attachTranscript(
                     transcript,
@@ -932,7 +1535,9 @@ final class InAppAudioRecorder {
                     store: workStore
                 ) {
                 case .attached:
+                    capture.transcriptSettled = true
                     pendingWorkCapture = nil
+                    workCaptureFacts.wordsOnDesk = true
                 case .recordingMissing, .notAudio:
                     // This capture owns no recording any more — deleted while
                     // recognition was in flight, or an id that names somebody
@@ -940,8 +1545,15 @@ final class InAppAudioRecorder {
                     // the words must not be lost, so the claim is dropped and
                     // the host routes them the way it did before there were
                     // cards.
+                    capture.transcriptSettled = true
+                    capture.recordingConfirmedGone = true
                     workRecordingMaterialID = nil
                     pendingWorkCapture = nil
+                    // The card this capture published is gone, so neither it
+                    // nor its words are on the desk any more, whatever phase
+                    // one observed a moment ago.
+                    workCaptureFacts.recordingOnDesk = false
+                    workCaptureFacts.wordsOnDesk = false
                 }
             } catch {
                 // The card is on the desk and the words are held for it. A
@@ -951,16 +1563,33 @@ final class InAppAudioRecorder {
             }
         }
 
-        // The capture is finished: the words are on its card, or it owns no
-        // card and the host has them. Its queue entry is released here, because
-        // a resolved capture left queued is one the retry card goes on offering
-        // to re-transcribe.
-        if retryDestination == .work, pendingWorkCapture == nil {
+        // A capture is its artifacts, so words landing cannot finish one that
+        // still owes a picture. The capture is put back in hand for the debt
+        // check above to find — it is the ONE place that decides what an owed
+        // picture answers — and its queue entry, which holds the only copy of
+        // that picture, is not retired.
+        let owesPicture = retryDestination == .work && capture.owesScreenshot
+        if owesPicture {
+            pendingWorkCapture = capture
+        } else if retryDestination == .work {
+            // The capture is finished: the words are settled and the picture is
+            // durable, or there was never one. It is let go HERE rather than in
+            // whichever step happened to answer last — a picture-only retry
+            // reaches this line having skipped phase two entirely, and a
+            // release conditioned on that step having run left the capture in
+            // hand for ever, still offering a Try Again with nothing to do.
+            pendingWorkCapture = nil
             await releaseDurableRetry(for: capture.id)
         }
+        #else
+        let owesPicture = false
         #endif
 
-        CompletionFeedbackPlayer.play(mode: "sound")
+        // The completion chime says "that is dealt with", so it is withheld
+        // from a capture the debt check is about to hand back as unfinished —
+        // and from one the person cancelled, whose answer is a cancellation
+        // however far the pipeline had already got.
+        if !owesPicture, !Task.isCancelled { CompletionFeedbackPlayer.play(mode: "sound") }
         state = .idle
         return .success(transcript)
     }
@@ -1012,12 +1641,77 @@ final class InAppAudioRecorder {
     }
 
     #if !os(watchOS)
+    /// Hand this capture's screenshot to the durable queue, ahead of the
+    /// recording. Answers with the id its card will carry, or nil.
+    ///
+    /// NIL covers both ways the picture can fail to become durable, and they
+    /// are one answer to every caller: the queue REFUSED the bytes (a throw),
+    /// and the image pipeline could not make anything publishable of them.
+    /// Neither is an error this capture reports — a picture that will not decode
+    /// may not cost the words that came with it — and both leave the bytes
+    /// exactly where they were, which is what the retry runs on.
+    ///
+    /// An id is not a card. The coordinator's own drain runs after the envelope
+    /// is accepted and is deliberately best-effort, so the id is a promise the
+    /// queue made, and only a desk read can turn it into a fact.
+    ///
+    /// The capture's own `createdAt` dates the card rather than the moment of
+    /// this call, so a capture published here and again from its durable record
+    /// produces one picture with one date.
+    private func publishWorkScreenshot(
+        _ imageData: Data,
+        for capture: VoiceCapture
+    ) async -> UUID? {
+        do {
+            return try await WorkVoiceScreenshotCoordinator.publish(
+                imageData,
+                forCapture: capture.id,
+                createdAt: capture.createdAt,
+                inbox: workInbox,
+                store: workStore,
+                normalize: workScreenshotNormalize
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    /// Is a card with this id standing on the desk right now?
+    ///
+    /// NIL means the desk could not be read, which is not the same as "no", and
+    /// the difference is load-bearing: a transient store failure answered as
+    /// "no" would tell a person their recording had vanished. Callers downgrade
+    /// a fact only on a definite answer.
+    private func deskHoldsMaterial(_ materialID: UUID) async -> Bool? {
+        do {
+            let desk = try await workStore.fetchWorkItem(id: Constants.workboardDeskItemID)
+            return desk?.materials.contains { $0.id == materialID } ?? false
+        } catch {
+            return nil
+        }
+    }
+
+    /// Retire the parked copy of this capture's screenshot, now that a card
+    /// owns the picture.
+    ///
+    /// Gated on the entry this recorder ARMED and on the reservation it holds,
+    /// like every other write against the queue: an entry another surface took
+    /// over is that surface's to finish. Both are true exactly on the path this
+    /// matters — a retry reserves before it republishes, and a first Stop has
+    /// nothing parked yet.
+    private func discardParkedWorkImage(for id: UUID) async {
+        guard armedDurableRetryID == id else { return }
+        guard let claim = heldRetryClaim, claim.id == id else { return }
+        await retryLane.discardWorkImage(claim)
+    }
+
     /// A Work capture whose card, or whose transcript, the desk refused to
     /// hold. The capture stays pending with everything it has achieved, its
     /// bytes go somewhere that survives this process, and the failure is
     /// surfaced as retryable rather than completed: a capture reported
     /// successful with no card behind it is how a recording silently becomes
-    /// composer text nobody asked for.
+    /// composer text nobody asked for. An owed PICTURE is a different debt with
+    /// its own code, settled by `settleOwedScreenshot` above every exit.
     private func failPendingWorkCapture(
         _ capture: VoiceCapture
     ) async -> Result<String, AppError> {
@@ -1044,6 +1738,11 @@ final class InAppAudioRecorder {
     /// a recording the person has already replaced.
     private func abandonPendingWorkCapture() async {
         workRecordingMaterialID = nil
+        #if !os(watchOS)
+        // The facts belong to the capture being replaced, so they go with it: a
+        // receipt for the NEW capture must not report the old one's artifacts.
+        workCaptureFacts = .none
+        #endif
         guard let abandoned = pendingWorkCapture else { return }
         pendingWorkCapture = nil
         await releaseDurableRetry(for: abandoned.id)
@@ -1163,6 +1862,13 @@ final class InAppAudioRecorder {
         preferredLanguage: String?
     ) async {
         guard error.shouldPreserveForRetry else { return }
+        // A capture with NO recording of its own is not this lane's to park.
+        // Every surface that recovers a queued capture begins by transcribing
+        // it, so an entry holding no audio is one none of them can finish — it
+        // would sit in the queue for ever offering a retry that cannot work.
+        // Such a capture is held in memory only, and its picture is retried
+        // from the surface that is looking at it.
+        guard !capture.audio.isEmpty else { return }
         let publicationState: PendingRetryPublicationState? = retryDestination == .work
             ? (capture.materialID == nil ? .phaseOneFailed : .published)
             : nil
@@ -1182,10 +1888,15 @@ final class InAppAudioRecorder {
         // nothing another surface could be holding — and claiming otherwise
         // would have the next Try Again ask the queue for a capture that was
         // never queued and read the refusal as somebody else's hold.
+        // The screenshot rides along only while no card holds it. Once it is
+        // published the record must not carry a second copy: a recovery would
+        // republish it (harmlessly, under the same derived id) while the bytes
+        // sat in the App-Group container for as long as the entry did. A Chat
+        // capture never carries one at all — the mint drops what was staged.
         guard (try? await retryLane.save(
             audioData: capture.audio,
             metadata: metadata,
-            workImageData: nil
+            workImageData: capture.screenshotQueued ? nil : capture.screenshot
         )) != nil else { return }
         armedDurableRetryID = capture.id
     }

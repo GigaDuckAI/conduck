@@ -231,6 +231,13 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         // the bytes to `PendingRetryStore`.
         Lane(path: "Conduck/Services/InAppAudioRecorder.swift",
              function: "finishAndUpload",
+             // Same split, same reason as the two retry lanes above.
+             // `finishAndUpload` is now a two-statement wrapper: the pipeline
+             // that reads the key runs in `runCaptureToCompletion`, and the
+             // Work screenshot debt is settled ABOVE it, so a capture that ends
+             // anywhere in that pipeline still answers for the picture it is
+             // holding. The key verdict moved with the pipeline.
+             delegatesTo: "runCaptureToCompletion",
              typedRead: "STTKeyReadiness.resolve",
              absenceArm: ".sttMissingAPIKey",
              blackoutArm: ".sttKeyUnreadable",

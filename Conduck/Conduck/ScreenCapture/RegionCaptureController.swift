@@ -4,17 +4,28 @@
 // Conduck
 // RegionCaptureController.swift
 //
-// macOS region-screenshot capture for the ⌘⇧2 menu-bar hotkey ("capture a
-// screen region, then ask about it"). This file owns ONLY the CAPTURE half:
+// macOS region-screenshot capture, shared by the TWO menu-bar lanes that start
+// with a drag:
+//   • ⌘⇧2 "Screenshot & Ask"  (`.ask`)  — the screenshot IS the request, so
+//     anything short of pixels aborts the flow.
+//   • ⌃⌘W "Capture to Work"   (`.work`) — the screenshot is optional decoration
+//     on a private note, so every stop offers a way to continue without one.
+// This file owns ONLY the CAPTURE half:
 //   1. preflight BOTH permissions (mic + Screen Recording) BEFORE any overlay,
 //   2. a dimmed crosshair overlay window the user drags a region on,
 //   3. a ScreenCaptureKit screenshot of that region → lossless PNG `Data`.
-// The caller owns the recording + send half (its `ImageProcessor` normalises
-// the PNG to a JPEG data-URI at send time).
+// The caller owns the recording + send/save half (Ask's `ImageProcessor`
+// normalises the PNG to a JPEG data-URI at send time).
 //
-// Single public entry: `captureRegion() async -> Data?`. Returns `nil` on
-// cancel / permission-denied / empty selection. Never writes the screenshot to
-// disk and never logs image bytes (in-memory PNG only).
+// Single public entry:
+//   `captureRegion(purpose:requiresMicrophone:) async -> RegionCaptureOutcome`.
+// The answer is an ENUM rather than `Data?` because Work must distinguish "the
+// person chose no screenshot" (`.skipped` — start the microphone anyway) from
+// "we could not take one" (`.cancelled` / `.unavailable` — start nothing). One
+// `nil` cannot carry that split, and guessing either way is a real failure: a
+// wrong `.skipped` starts a microphone nobody asked for, a wrong `.cancelled`
+// drops the note the user did ask for. Never writes the screenshot to disk and
+// never logs image bytes (in-memory PNG only).
 //
 // Permission preflight is deliberately UP FRONT so the user is never allowed to
 // drag-select and only THEN hit a permission wall. Screen Recording consent is
@@ -29,6 +40,12 @@
 // recorded but not adopted by this process (macOS frequently applies it only
 // at the next launch) is treated as "relaunch needed", with a one-click Quit.
 //
+// Alert COPY is parameterized by purpose, not shared: Ask's wording promises
+// that the screenshot and the spoken words go to the configured AI gateway,
+// which is simply false on the Work lane (the desk is local and nothing there
+// reaches a gateway). A permission prompt that misstates where data goes is the
+// worst possible place for reused copy.
+//
 // Overlay design mirrors `MenuBarController.showPopover()`'s activation
 // rationale: a borderless background-app window can't become key (no keyDown
 // for Esc) unless we `NSApp.activate(ignoringOtherApps:)` + override
@@ -39,39 +56,98 @@ import ScreenCaptureKit
 import CoreGraphics
 import AVFoundation
 
-/// Drives the ⌘⇧2 region-capture flow: permission preflight → crosshair overlay
-/// → ScreenCaptureKit screenshot. Main-actor isolated (all overlay UI) with an
-/// async public method (the SCK capture hop is async).
+/// Which lane asked for the capture. Drives the overlay hint, whether Return
+/// skips the screenshot, and the permission-alert copy and buttons.
+enum RegionCapturePurpose: Sendable {
+    /// ⌘⇧2 — the screenshot is the question. No skip anywhere.
+    case ask
+    /// ⌃⌘W — the screenshot is optional; every stop can continue without it.
+    case work
+}
+
+/// How a capture attempt ended. Four outcomes rather than `Data?` because the
+/// Work lane acts differently on three of them (see the file header).
+enum RegionCaptureOutcome: Sendable {
+    /// Lossless PNG bytes for the dragged region.
+    case captured(Data)
+    /// Work only: the person deliberately chose to continue WITHOUT a
+    /// screenshot (Return, the overlay's skip action, or a permission alert's
+    /// "Continue Without Screenshot"). The caller proceeds with the rest of the
+    /// capture.
+    case skipped
+    /// The person backed out of the whole capture: Esc, a sub-4pt drag
+    /// (mis-click), Cancel in a permission alert, an outside dismiss. The
+    /// caller starts nothing.
+    case cancelled
+    /// Conduck could not take a screenshot: a re-entrant call, a permission
+    /// denied with no skip chosen, a ScreenCaptureKit failure, an empty shot.
+    /// Distinct from `.cancelled` only for the caller's own logging/telemetry —
+    /// both mean "start nothing" on the Ask lane.
+    case unavailable
+}
+
+/// Drives the region-capture flow for both lanes: permission preflight →
+/// crosshair overlay → ScreenCaptureKit screenshot. Main-actor isolated (all
+/// overlay UI) with an async public method (the SCK capture hop is async).
 @MainActor
 final class RegionCaptureController {
 
-    /// Full flow: preflight permissions → dimmed crosshair overlay → user drags a
-    /// region → capture that region via ScreenCaptureKit. Returns PNG `Data`
-    /// (lossless; the caller's `ImageProcessor` normalizes to JPEG at send time)
-    /// or `nil` on cancel / permission-denied / empty.
+    /// Full flow: preflight permissions → dimmed crosshair overlay → user drags
+    /// a region → capture that region via ScreenCaptureKit.
+    /// `purpose` (default `.ask`) selects the hint text, whether Return skips,
+    /// and the alert copy/buttons; only `.work` can ever produce `.skipped`.
     /// `requiresMicrophone` (default true — the voice flow) gates the mic half
-    /// of the preflight: a TEXT-mode "Screenshot & Ask" types its question, so
-    /// demanding mic access there would block a feature that never records.
-    func captureRegion(requiresMicrophone: Bool = true) async -> Data? {
+    /// of the preflight: a TEXT-mode capture types its words, so demanding mic
+    /// access there would block a feature that never records.
+    func captureRegion(
+        purpose: RegionCapturePurpose = .ask,
+        requiresMicrophone: Bool = true
+    ) async -> RegionCaptureOutcome {
         // Re-entrancy guard: the preflight's `runModal` alerts pump a nested
-        // run loop that still delivers the global hotkey, so a second ⌘⇧2
+        // run loop that still delivers the global hotkey, so a second press
         // mid-flow would stack a second alert (or overlay) on the first.
         // MainActor isolation makes the check-and-set race-free.
-        guard !captureFlowActive else { return nil }
+        // `.unavailable`, never `.skipped`: a dropped duplicate press is not a
+        // decision to go without a screenshot, and treating it as one would
+        // start a microphone off a stray keystroke.
+        guard !captureFlowActive else { return .unavailable }
         captureFlowActive = true
         defer { captureFlowActive = false }
 
         // 1. Preflight permissions before showing any overlay. Never let the
         //    user drag-then-fail.
-        guard await preflightPermissions(requiresMicrophone: requiresMicrophone) else { return nil }
+        switch await preflightPermissions(purpose: purpose, requiresMicrophone: requiresMicrophone) {
+        case .proceed:
+            break
+        case .skipScreenshot:
+            return .skipped
+        case .cancelled:
+            return .cancelled
+        case .unavailable:
+            return .unavailable
+        }
 
-        // 2. Crosshair overlay → user drags a region (or cancels with Esc / a
-        //    too-small drag / an outside dismiss).
-        guard let selection = await presentOverlay() else { return nil }
+        // 2. Crosshair overlay → user drags a region (or, on Work, skips it) or
+        //    cancels with Esc / a too-small drag / an outside dismiss.
+        let selection: RegionSelection
+        switch await presentOverlay(purpose: purpose) {
+        case .selected(let region):
+            selection = region
+        case .skipped:
+            return .skipped
+        case .cancelled:
+            return .cancelled
+        case .unavailable:
+            return .unavailable
+        }
 
         // 3. Capture the resolved rect via ScreenCaptureKit (overlay already
         //    torn down inside `presentOverlay`, so the dim chrome is never shot).
-        return await captureSelection(selection)
+        //    A failed capture is `.unavailable`, NOT `.skipped`: nobody chose to
+        //    go without the image, so Work must not silently save a note that
+        //    was supposed to carry one.
+        guard let data = await captureSelection(selection) else { return .unavailable }
+        return .captured(data)
     }
 
     /// `true` while a capture flow (preflight alert, overlay, or SCK hop) is
@@ -80,14 +156,27 @@ final class RegionCaptureController {
 
     // MARK: - 1. Permission preflight
 
-    /// `true` only when the needed permissions are usable RIGHT NOW (mic checked
-    /// only when `requiresMicrophone` — the text-mode flow never records).
-    /// Mic uses the same authorization primitive as the voice-capture pipeline
-    /// (`AudioRecorder.startRecording()` → `AVAudioApplication.requestRecordPermission()`).
-    /// Screen Recording uses the `CGPreflight…`/`CGRequest…` pair behind a
-    /// rationale-first alert (see header). A missing permission → `false`
-    /// (caller returns nil WITHOUT showing the overlay).
-    private func preflightPermissions(requiresMicrophone: Bool) async -> Bool {
+    /// How the preflight ended. `.skipScreenshot` is reachable only on the Work
+    /// lane, where a permission wall is a reason to drop the picture rather than
+    /// the whole note.
+    private enum PreflightOutcome {
+        case proceed
+        case skipScreenshot
+        case cancelled
+        case unavailable
+    }
+
+    /// `.proceed` only when the needed permissions are usable RIGHT NOW (mic
+    /// checked only when `requiresMicrophone` — the text-mode flow never
+    /// records). Mic uses the same authorization primitive as the voice-capture
+    /// pipeline (`AudioRecorder.startRecording()` →
+    /// `AVAudioApplication.requestRecordPermission()`). Screen Recording uses
+    /// the `CGPreflight…`/`CGRequest…` pair behind a rationale-first alert (see
+    /// header). Anything else → the overlay is never shown.
+    private func preflightPermissions(
+        purpose: RegionCapturePurpose,
+        requiresMicrophone: Bool
+    ) async -> PreflightOutcome {
         // --- Microphone (mirrors AudioRecorder.swift:32) ---
         // A non-prompting status read first, so an already-decided "denied" goes
         // straight to the alert rather than re-prompting. `.notDetermined` falls
@@ -107,8 +196,18 @@ final class RegionCaptureController {
             }
 
             guard micGranted else {
-                showMicrophonePermissionAlert()
-                return false
+                // No skip offered here even on Work: a missing microphone stops
+                // the RECORDING, not the screenshot, so "continue without a
+                // screenshot" would offer to continue with nothing at all.
+                switch showMicrophonePermissionAlert(purpose: purpose) {
+                case .primary:
+                    return .unavailable
+                case .skip, .cancel:
+                    // `.skip` is unreachable (this alert never offers one) and
+                    // folds into cancel so the switch stays total without a
+                    // trap in a permission path.
+                    return .cancelled
+                }
             }
         }
 
@@ -118,13 +217,20 @@ final class RegionCaptureController {
             // surface the (green) Screen Recording capability row.
             SettingsDependencies.processDefault.defaults
                 .set(true, forKey: Constants.screenRecordingCaptureAttemptedKey)
-            return true
+            return .proceed
         }
 
         // Rationale-first (see header): our alert always precedes the system
         // ask, so the two dialogs are strictly sequential in every TCC state —
         // never simultaneous.
-        guard showScreenRecordingRationale() else { return false }
+        switch showScreenRecordingRationale(purpose: purpose) {
+        case .primary:
+            break
+        case .skip:
+            return .skipScreenshot
+        case .cancel:
+            return .cancelled
+        }
 
         // The request call itself registers Conduck in the Screen & System
         // Audio Recording pane — only from this point may the Diagnostics row
@@ -140,61 +246,112 @@ final class RegionCaptureController {
             // frequently applies it only at the next launch, so proceeding
             // would silently capture desktop-wallpaper-only pixels. Tell
             // the user to relaunch instead. (No system dialog in this state.)
-            showGrantNeedsRelaunchAlert()
-        } else {
-            // Either the system consent dialog is now up (first request for
-            // this TCC identity) or the system stayed silent (prior denial,
-            // or a grant recorded under a previous code signature). Open the
-            // exact Settings pane unconditionally: for a denial it IS the
-            // repair; for a fresh ask it merely pre-opens the pane the
-            // system dialog's own button leads to.
-            openPrivacyPane("Privacy_ScreenCapture")
+            switch showGrantNeedsRelaunchAlert(purpose: purpose) {
+            case .primary:
+                return .unavailable
+            case .skip:
+                return .skipScreenshot
+            case .cancel:
+                return .cancelled
+            }
         }
-        return false
+
+        // Either the system consent dialog is now up (first request for this
+        // TCC identity) or the system stayed silent (prior denial, or a grant
+        // recorded under a previous code signature).
+        switch purpose {
+        case .ask:
+            // Open the exact Settings pane unconditionally: for a denial it IS
+            // the repair; for a fresh ask it merely pre-opens the pane the
+            // system dialog's own button leads to. Ask has no alert here
+            // because it has no third choice — without pixels there is no
+            // question to send.
+            openPrivacyPane("Privacy_ScreenCapture")
+            return .unavailable
+        case .work:
+            // Work DOES have a third choice, so it needs a surface to offer it
+            // on; the deep link moves behind that alert's primary button.
+            switch showScreenRecordingDeniedAlert() {
+            case .primary:
+                return .unavailable
+            case .skip:
+                return .skipScreenshot
+            case .cancel:
+                return .cancelled
+            }
+        }
     }
 
-    /// Mic missing (voice-mode ⌘⇧2 only). Single-purpose, friendly alert:
-    /// explains WHY, states the data flow (screenshot + your words → YOUR
-    /// configured gateway), deep-links the Microphone privacy pane.
-    private func showMicrophonePermissionAlert() {
-        let openSettings = runPermissionAlert(
+    /// Mic missing (voice-mode capture only). Single-purpose, friendly alert:
+    /// explains WHY and deep-links the Microphone privacy pane. Ask states the
+    /// data flow (screenshot + your words → YOUR configured gateway); Work says
+    /// nothing of the sort because nothing on the desk leaves the Mac.
+    private func showMicrophonePermissionAlert(purpose: RegionCapturePurpose) -> PermissionAlertChoice {
+        let choice = runPermissionAlert(
             title: String(localized: LocalizedStringResource(
                 "regionCapture.permission.mic.title",
                 defaultValue: "Conduck needs microphone access"
             )),
-            body: String(localized: LocalizedStringResource(
-                "regionCapture.permission.mic.body",
-                defaultValue: "Region Capture lets you select part of your screen and ask about it by voice. To record your question, Conduck needs microphone access.\n\nYour screenshot and your words are sent only to the AI gateway you configured — nowhere else."
-            )),
+            body: microphoneBody(for: purpose),
             primaryButton: String(localized: LocalizedStringResource(
                 "regionCapture.permission.openSettings",
                 defaultValue: "Open System Settings"
-            ))
+            )),
+            offersSkip: false
         )
-        if openSettings {
+        if choice == .primary {
             openPrivacyPane("Privacy_Microphone")
+        }
+        return choice
+    }
+
+    private func microphoneBody(for purpose: RegionCapturePurpose) -> String {
+        switch purpose {
+        case .ask:
+            return String(localized: LocalizedStringResource(
+                "regionCapture.permission.mic.body",
+                defaultValue: "Region Capture lets you select part of your screen and ask about it by voice. To record your question, Conduck needs microphone access.\n\nYour screenshot and your words are sent only to the AI gateway you configured — nowhere else."
+            ))
+        case .work:
+            return String(localized: LocalizedStringResource(
+                "regionCapture.permission.mic.work.body",
+                defaultValue: "Capture to Work saves a spoken note on your desk. To record it, Conduck needs microphone access."
+            ))
         }
     }
 
     /// Rationale-first pre-prompt for Screen Recording: ALWAYS shown before
     /// `CGRequestScreenCaptureAccess()`, so Conduck's alert and the system
     /// consent dialog are strictly sequential in every TCC state (see header).
-    /// `true` = the user chose Continue (consented to the system ask).
-    private func showScreenRecordingRationale() -> Bool {
+    /// `.primary` = the user chose Continue (consented to the system ask).
+    private func showScreenRecordingRationale(purpose: RegionCapturePurpose) -> PermissionAlertChoice {
         runPermissionAlert(
             title: String(localized: LocalizedStringResource(
                 "regionCapture.permission.screen.title",
                 defaultValue: "Conduck needs Screen Recording access"
             )),
-            body: String(localized: LocalizedStringResource(
-                "regionCapture.permission.screen.body",
-                defaultValue: "Region Capture lets you select part of your screen and ask about it. To take that screenshot, Conduck needs Screen Recording access.\n\nIf System Settings already shows Conduck as on, turn it off and on again, then quit and reopen Conduck.\n\nYour screenshot and your words are sent only to the AI gateway you configured — nowhere else."
-            )),
+            body: screenRationaleBody(for: purpose),
             primaryButton: String(localized: LocalizedStringResource(
                 "regionCapture.permission.continue",
                 defaultValue: "Continue"
-            ))
+            )),
+            offersSkip: purpose == .work
         )
+    }
+
+    private func screenRationaleBody(for purpose: RegionCapturePurpose) -> String {
+        switch purpose {
+        case .ask:
+            return String(localized: LocalizedStringResource(
+                "regionCapture.permission.screen.body",
+                defaultValue: "Region Capture lets you select part of your screen and ask about it. To take that screenshot, Conduck needs Screen Recording access.\n\nIf System Settings already shows Conduck as on, turn it off and on again, then quit and reopen Conduck.\n\nYour screenshot and your words are sent only to the AI gateway you configured — nowhere else."
+            ))
+        case .work:
+            return String(localized: LocalizedStringResource(
+                "regionCapture.permission.screen.work.body",
+                defaultValue: "Capture to Work can save a picture of part of your screen next to your note. To take that picture, Conduck needs Screen Recording access."
+            ))
+        }
     }
 
     /// The grant IS recorded in TCC but this process can't use it — macOS
@@ -203,28 +360,85 @@ final class RegionCaptureController {
     /// relaunch, so the primary action is a one-click quit (manual reopen —
     /// an auto-relaunch helper is sandbox-hostile). "Quit Conduck" reuses the
     /// status-menu item's existing catalog key.
-    private func showGrantNeedsRelaunchAlert() {
-        let quit = runPermissionAlert(
+    private func showGrantNeedsRelaunchAlert(purpose: RegionCapturePurpose) -> PermissionAlertChoice {
+        let choice = runPermissionAlert(
+            title: String(localized: LocalizedStringResource(
+                "regionCapture.permission.screen.title",
+                defaultValue: "Conduck needs Screen Recording access"
+            )),
+            body: relaunchBody(for: purpose),
+            primaryButton: String(localized: "Quit Conduck"),
+            offersSkip: purpose == .work
+        )
+        if choice == .primary {
+            NSApp.terminate(nil)
+        }
+        return choice
+    }
+
+    private func relaunchBody(for purpose: RegionCapturePurpose) -> String {
+        switch purpose {
+        case .ask:
+            return String(localized: LocalizedStringResource(
+                "regionCapture.permission.screen.relaunchBody",
+                defaultValue: "Thanks — Screen Recording is now allowed. macOS only applies this after a restart, so please quit and reopen Conduck, then try Region Capture again.\n\nYour screenshot and your words are sent only to the AI gateway you configured — nowhere else."
+            ))
+        case .work:
+            return String(localized: LocalizedStringResource(
+                "regionCapture.permission.screen.work.relaunchBody",
+                defaultValue: "Screen Recording is now allowed, but macOS only applies it after a restart. Quit and reopen Conduck to include pictures, or keep going without one."
+            ))
+        }
+    }
+
+    /// Work-only stop: Screen Recording is denied (or the system's own consent
+    /// dialog has just come up). Ask deep-links the pane and ends there; Work
+    /// needs a surface on which to offer the third choice, so the deep link
+    /// becomes this alert's primary button.
+    private func showScreenRecordingDeniedAlert() -> PermissionAlertChoice {
+        let choice = runPermissionAlert(
             title: String(localized: LocalizedStringResource(
                 "regionCapture.permission.screen.title",
                 defaultValue: "Conduck needs Screen Recording access"
             )),
             body: String(localized: LocalizedStringResource(
-                "regionCapture.permission.screen.relaunchBody",
-                defaultValue: "Thanks — Screen Recording is now allowed. macOS only applies this after a restart, so please quit and reopen Conduck, then try Region Capture again.\n\nYour screenshot and your words are sent only to the AI gateway you configured — nowhere else."
+                "regionCapture.permission.screen.work.deniedBody",
+                defaultValue: "Conduck does not have Screen Recording access yet, so it cannot add a picture. Turn it on in System Settings, or keep going without one."
             )),
-            primaryButton: String(localized: "Quit Conduck")
+            primaryButton: String(localized: LocalizedStringResource(
+                "regionCapture.permission.openSettings",
+                defaultValue: "Open System Settings"
+            )),
+            offersSkip: true
         )
-        if quit {
-            NSApp.terminate(nil)
+        if choice == .primary {
+            openPrivacyPane("Privacy_ScreenCapture")
         }
+        return choice
+    }
+
+    /// What the user chose in a permission alert. `.skip` exists only where
+    /// `offersSkip` put a button there — i.e. only on the Work lane, where a
+    /// screenshot is optional decoration on a note rather than the request.
+    private enum PermissionAlertChoice {
+        case primary
+        case skip
+        case cancel
     }
 
     /// Shared scaffold for the permission alerts: activates the app first (a
     /// modal alert from a menu-bar/background app can't reliably take focus
     /// otherwise — same rationale as `showPopover`), presents an informational
-    /// alert with one primary button + Cancel. `true` = primary chosen.
-    private func runPermissionAlert(title: String, body: String, primaryButton: String) -> Bool {
+    /// alert with one primary button, an optional "Continue Without Screenshot",
+    /// and Cancel LAST. Conventional NSAlert order: the primary leads and the
+    /// escape hatch trails, so Return never lands on the choice that abandons
+    /// the capture.
+    private func runPermissionAlert(
+        title: String,
+        body: String,
+        primaryButton: String,
+        offersSkip: Bool
+    ) -> PermissionAlertChoice {
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
@@ -232,11 +446,31 @@ final class RegionCaptureController {
         alert.messageText = title
         alert.informativeText = body
         alert.addButton(withTitle: primaryButton)
+        if offersSkip {
+            alert.addButton(withTitle: String(localized: LocalizedStringResource(
+                "regionCapture.permission.skipScreenshot",
+                defaultValue: "Continue Without Screenshot"
+            )))
+        }
         alert.addButton(withTitle: String(localized: LocalizedStringResource(
             "regionCapture.permission.cancel",
             defaultValue: "Cancel"
         )))
-        return alert.runModal() == .alertFirstButtonReturn
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return .primary
+        case .alertSecondButtonReturn:
+            // Index 1 is the skip button only when one was added; otherwise it
+            // is Cancel, and reading it as a skip would start a microphone the
+            // user just declined.
+            return offersSkip ? .skip : .cancel
+        default:
+            // The third button (Cancel, when a skip was added) and any other
+            // dismissal. Defaulting to `.cancel` is the safe direction: an
+            // unexpected return code must never be read as consent.
+            return .cancel
+        }
     }
 
     /// Deep-link to a System Settings → Privacy & Security pane by anchor
@@ -257,26 +491,44 @@ final class RegionCaptureController {
         let screen: NSScreen
     }
 
-    /// Present the crosshair overlay on the screen under the cursor; resolve with
-    /// the dragged region, or `nil` on cancel. The overlay window is torn down
-    /// BEFORE this returns so the dim/selection chrome is never in the shot.
-    private func presentOverlay() async -> RegionSelection? {
+    /// `presentOverlay`'s answer. Differs from `RegionOverlayResult` (the
+    /// window's raw report) only in that the rect has been paired with the
+    /// screen it was drawn on, and in carrying `.unavailable` for the one
+    /// failure the window never sees: no screen to put an overlay on.
+    private enum SelectionOutcome {
+        case selected(RegionSelection)
+        case skipped
+        case cancelled
+        case unavailable
+    }
+
+    /// Present the crosshair overlay on the screen under the cursor; resolve
+    /// with the dragged region, a skip (Work only), or a cancel. The overlay
+    /// window is torn down BEFORE this returns so the dim/selection chrome is
+    /// never in the shot.
+    private func presentOverlay(purpose: RegionCapturePurpose) async -> SelectionOutcome {
         // Single-display v1: the overlay lives on the screen under the current
         // mouse location; the drag is confined to it.
         let mouse = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) })
             ?? NSScreen.main
-        else { return nil }
+        else { return .unavailable }
 
-        let result: NSRect? = await withCheckedContinuation { continuation in
-            let overlay = RegionOverlayWindow(screen: screen) { rect in
-                continuation.resume(returning: rect)
+        let result: RegionOverlayResult = await withCheckedContinuation { continuation in
+            let overlay = RegionOverlayWindow(screen: screen, purpose: purpose) { result in
+                continuation.resume(returning: result)
             }
             overlay.present()
         }
 
-        guard let rect = result else { return nil }
-        return RegionSelection(globalRect: rect, screen: screen)
+        switch result {
+        case .region(let rect):
+            return .selected(RegionSelection(globalRect: rect, screen: screen))
+        case .skipped:
+            return .skipped
+        case .cancelled:
+            return .cancelled
+        }
     }
 
     // MARK: - 3. ScreenCaptureKit capture
@@ -403,19 +655,32 @@ final class RegionCaptureController {
 
 // MARK: - Overlay window
 
+/// The overlay's raw report. `.skipped` is produced only under
+/// `RegionCapturePurpose.work`; on `.ask` the overlay has no key or action that
+/// can emit it.
+private enum RegionOverlayResult: Sendable {
+    case region(NSRect)
+    case skipped
+    case cancelled
+}
+
 /// Borderless full-screen-on-one-display crosshair overlay. Dims the display,
-/// "spotlights" the live selection, and reports the final region (or cancel) via
-/// `onFinish`. `canBecomeKey`/`canBecomeMain` are overridden so a borderless
-/// window can receive keyDown for Esc (default borderless windows refuse key).
+/// "spotlights" the live selection, and reports the outcome via `onFinish`.
+/// `canBecomeKey`/`canBecomeMain` are overridden so a borderless window can
+/// receive keyDown for Esc (default borderless windows refuse key).
 @MainActor
 private final class RegionOverlayWindow: NSWindow {
 
-    /// `nil` = cancelled (Esc / too-small drag / dismissed). Called exactly once.
-    private let onFinish: (NSRect?) -> Void
+    /// Called exactly once, with the drag, a skip, or a cancel.
+    private let onFinish: (RegionOverlayResult) -> Void
     private var didFinish = false
     private let captureScreen: NSScreen
 
-    init(screen: NSScreen, onFinish: @escaping (NSRect?) -> Void) {
+    init(
+        screen: NSScreen,
+        purpose: RegionCapturePurpose,
+        onFinish: @escaping (RegionOverlayResult) -> Void
+    ) {
         self.onFinish = onFinish
         self.captureScreen = screen
         super.init(
@@ -433,9 +698,13 @@ private final class RegionOverlayWindow: NSWindow {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         ignoresMouseEvents = false
 
-        let view = RegionOverlayView(frame: NSRect(origin: .zero, size: screen.frame.size))
-        view.onComplete = { [weak self] rect in self?.finish(with: rect) }
-        view.onCancel = { [weak self] in self?.finish(with: nil) }
+        let view = RegionOverlayView(
+            frame: NSRect(origin: .zero, size: screen.frame.size),
+            purpose: purpose
+        )
+        view.onComplete = { [weak self] rect in self?.finish(with: .region(rect)) }
+        view.onSkip = { [weak self] in self?.finish(with: .skipped) }
+        view.onCancel = { [weak self] in self?.finish(with: .cancelled) }
         contentView = view
     }
 
@@ -456,35 +725,83 @@ private final class RegionOverlayWindow: NSWindow {
 
     /// Resolve exactly once: tear down the window FIRST (so the dim/selection
     /// chrome is never in the screenshot), then deliver the result.
-    private func finish(with rect: NSRect?) {
+    private func finish(with result: RegionOverlayResult) {
         guard !didFinish else { return }
         didFinish = true
         NSCursor.arrow.set()
         orderOut(nil)
         close()
-        onFinish(rect)
+        onFinish(result)
     }
 }
 
 /// The overlay's content view: owns the dim + spotlight drawing, the drag
-/// gesture, and the Esc key. Reports the selected rect (in this view's
-/// coordinates, then converted to global by the view) via `onComplete`, or
-/// `onCancel`. Mouse handling is on the VIEW itself — NO `CGEventTap` (sandbox
-/// hostile).
+/// gesture, and the keyboard. Reports the selected rect (in this view's
+/// coordinates, then converted to global by the view) via `onComplete`, the
+/// Work lane's skip via `onSkip`, or `onCancel`. Mouse handling is on the VIEW
+/// itself — NO `CGEventTap` (sandbox hostile).
 @MainActor
 private final class RegionOverlayView: NSView {
 
     /// Called with the selected rect in AppKit GLOBAL (bottom-left) coordinates.
     var onComplete: ((NSRect) -> Void)?
+    /// Called when the user skips the screenshot (Work lane only: Return/Enter
+    /// or the "Skip screenshot" accessibility action).
+    var onSkip: (() -> Void)?
     /// Called when the user cancels (Esc / too-small drag).
     var onCancel: (() -> Void)?
+
+    /// Which lane this overlay serves. Immutable and injected, so the hint, the
+    /// Return key and the skip action can never disagree about it.
+    private let purpose: RegionCapturePurpose
 
     /// Drag anchor + current point in this view's (bottom-left) coordinates.
     private var dragStart: NSPoint?
     private var dragCurrent: NSPoint?
 
     /// Below this size (points) a drag is treated as a mis-click → cancel.
+    /// Cancel, not skip, on BOTH lanes: a stray click must never be read as
+    /// "start recording without a screenshot".
     private static let minDragSize: CGFloat = 4
+
+    init(frame: NSRect, purpose: RegionCapturePurpose) {
+        self.purpose = purpose
+        super.init(frame: frame)
+
+        // VoiceOver reach: a borderless overlay carries no controls, so without
+        // an explicit element + label there is nothing for a custom action to
+        // hang on. The label is the same sentence the hint draws, so both
+        // audiences are told about the same affordances.
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(hintText)
+
+        // The skip action exists ONLY on Work. Offering it on Ask would name an
+        // outcome that lane has no code path for (no pixels, no question), and
+        // keyboard-free VoiceOver users would be the only ones who could reach
+        // it.
+        if purpose == .work {
+            setAccessibilityCustomActions([
+                NSAccessibilityCustomAction(
+                    name: String(localized: LocalizedStringResource(
+                        "regionCapture.overlay.skipAction",
+                        defaultValue: "Skip screenshot"
+                    ))
+                ) { [weak self] in
+                    // AppKit is main-actor annotated wholesale, so this handler
+                    // is already `@MainActor` — no hop, and the skip resolves
+                    // inside this event rather than a turn later. `true` tells
+                    // the accessibility client the action ran.
+                    self?.onSkip?()
+                    return true
+                }
+            ])
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("RegionOverlayView is code-only; it has no nib representation.")
+    }
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { false } // AppKit bottom-left, matches NSScreen.
@@ -521,13 +838,29 @@ private final class RegionOverlayView: NSView {
         drawHintLabel()
     }
 
+    /// The overlay's one-line instruction, and the view's accessibility label.
+    /// Each lane gets its OWN catalog key rather than a runtime-assembled
+    /// string: the sentences differ in more than one clause, and a translator
+    /// handed a half-string cannot punctuate a list they can't see.
+    private var hintText: String {
+        switch purpose {
+        case .ask:
+            return String(localized: LocalizedStringResource(
+                "regionCapture.overlay.hint",
+                defaultValue: "Drag to capture · Esc to cancel"
+            ))
+        case .work:
+            return String(localized: LocalizedStringResource(
+                "regionCapture.overlay.hint.work",
+                defaultValue: "Drag to capture · Return to skip · Esc to cancel"
+            ))
+        }
+    }
+
     /// Centered single-line hint. Drawn via `NSAttributedString` so it needs no
     /// subview lifecycle.
     private func drawHintLabel() {
-        let text = String(localized: LocalizedStringResource(
-            "regionCapture.overlay.hint",
-            defaultValue: "Drag to capture · Esc to cancel"
-        ))
+        let text = hintText
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         let attrs: [NSAttributedString.Key: Any] = [
@@ -607,9 +940,19 @@ private final class RegionOverlayView: NSView {
 
     // MARK: Key
 
+    /// Esc cancels on BOTH lanes — one press always gets out of an accidental
+    /// hotkey. Return/Enter skips the screenshot on WORK ONLY: Ask has nothing
+    /// to fall back to (the pixels are the question), so a Return there stays an
+    /// unhandled key rather than a silent send with no image.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { // Escape
             onCancel?()
+            return
+        }
+        // 36 = Return, 76 = keypad Enter. Both, because a keypad Enter that did
+        // nothing would read as a frozen overlay.
+        if purpose == .work, event.keyCode == 36 || event.keyCode == 76 {
+            onSkip?()
             return
         }
         super.keyDown(with: event)

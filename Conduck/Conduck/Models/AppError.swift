@@ -375,6 +375,18 @@ enum AppError: LocalizedError {
     // certificates and keys, and has nothing to say about a Core Data write.
     case workDeskWriteFailed                                 // 78 — the Work desk refused a capture
 
+    // 79 is the SCREENSHOT's half of 78, and it is a separate code because the
+    // two failures call for different sentences about the same capture. A Work
+    // capture publishes its picture and its recording on independent terms, so
+    // "the recording is not saved" and "the picture is not saved" are both
+    // reachable while the other artifact is safely on the desk — and 78's copy,
+    // shown for a capture whose recording and words landed, contradicts the very
+    // receipt beside it. Retryable and preserved exactly like 78: what refused
+    // is a local write, the identical bytes written again normally land, and
+    // until they do this capture's queue entry holds the only copy of the
+    // picture. NOT troubleshootable, for 78's reason.
+    case workScreenshotWriteFailed                           // 79 — the Work desk refused a screenshot
+
     // Catch-all (99)
     case unknown(Error)
 
@@ -747,6 +759,12 @@ enum AppError: LocalizedError {
         // beside a Try Again that works.
         case .workDeskWriteFailed:
             return String(localized: "workboard.voice.error.deskWrite", defaultValue: "Work couldn’t save this recording just now.")
+
+        // Names the artifact that is actually missing. The recording and the
+        // words may both be on the desk when this is shown, and 78's sentence
+        // would deny what the receipt beside it just said.
+        case .workScreenshotWriteFailed:
+            return String(localized: "workboard.voice.error.screenshotWrite", defaultValue: "Work couldn’t save the screenshot just now.")
 
         case .unknown(let error):
             return String(localized: "api.error.unknown", defaultValue: "An unexpected error occurred: \(error.localizedDescription)")
@@ -1176,7 +1194,7 @@ enum AppError: LocalizedError {
              // written, so nothing was spent, and the same bytes written again
              // normally land. `maxAttempts` leaves it at 1 — the retry is the
              // person's tap, never a loop against a full disk.
-             .workDeskWriteFailed,
+             .workDeskWriteFailed, .workScreenshotWriteFailed,
              .ttsProviderUnreachable, .ttsEmptyAudio, .ttsRateLimited,
              .fileTransferUploadFailed, .fileTransferUnreachable,
              .fileTransferServerError:
@@ -1299,7 +1317,7 @@ enum AppError: LocalizedError {
         // Work lane a refused publication means these bytes are the ONLY copy
         // of the recording. Not preserving them is how a voice note ceases to
         // exist because a write failed once.
-        case .workDeskWriteFailed:
+        case .workDeskWriteFailed, .workScreenshotWriteFailed:
             return true
         default:
             return false
@@ -1331,7 +1349,7 @@ enum AppError: LocalizedError {
              // local storage faults, and Diagnostics reasons about connections,
              // gateways, certificates and keys. It would report a healthy
              // network about a write that never left the device.
-             .workDeskWriteFailed,
+             .workDeskWriteFailed, .workScreenshotWriteFailed,
              .remoteAgentContextTooLong, .ttsContentBlocked:
             return false
         default:
@@ -1441,6 +1459,7 @@ enum AppError: LocalizedError {
         case 76: return .turnStoppedBeforeSend
         case 77: return .insecureConnectionBlocked
         case 78: return .workDeskWriteFailed
+        case 79: return .workScreenshotWriteFailed
         case 99: return .apiFailure(message: message ?? "")       // unknown(Error) — Error not reconstructible
         default:
             return .apiFailure(message: message ?? "")
@@ -1542,6 +1561,7 @@ extension AppError: CustomNSError {
         case .turnStoppedBeforeSend: return 76
         case .insecureConnectionBlocked: return 77
         case .workDeskWriteFailed: return 78
+        case .workScreenshotWriteFailed: return 79
         case .unknown: return 99
         }
     }

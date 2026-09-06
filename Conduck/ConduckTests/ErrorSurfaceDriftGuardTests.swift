@@ -369,11 +369,27 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
             """
         ),
         "Conduck/MenuBar/DictationPopoverView.swift": .gated(
-            tokens: ["isRetryable"],
+            tokens: ["isRetryable", "canRecoverPendingQueue"],
             decidedIn: nil,
             reason: """
-            THREE Retry controls across TWO declarations, which is more than the \
-            token match proves — read this before trusting it.
+            FOUR Retry controls across THREE declarations, which is more than \
+            the token match proves — read this before trusting it.
+            `savedRecordingRecoveryAction` draws the fourth, on the IDLE \
+            surface, gated on `canRecoverPendingQueue` — the SECOND token, and \
+            the only control it covers. That gate is a PRESERVATION verdict \
+            rather than `AppError.isRetryable`, which is why it needed adding \
+            rather than borrowing: bytes reach the pending queue only through \
+            `AppError.shouldPreserveForRetry`, which asks whether the SAME \
+            bytes succeed on a second attempt and answers yes for two verdicts \
+            `isRetryable` calls terminal (`remoteAgentDefaultNeedsSetup`, \
+            `sttKeyUnreadable`) — both bit-for-bit valid recordings behind a \
+            one-tap fix, both documented as such in the taxonomy. Gating that \
+            control on retryability would strand a recording over a verdict \
+            the taxonomy already calls recoverable, and a non-zero count is \
+            the only thing that lets `retryLast()` reach any bytes. A future \
+            control that names ONLY this token is therefore claiming the same \
+            preservation gate; one replaying a live request still owes \
+            `isRetryable`.
             `sendErrorActions` draws one, gated on `sendErrorIsRetryable(vm)`, \
             which rebuilds the verdict via `AppError.from(errorCode:).isRetryable`: \
             the popover is the macOS twin of the window's failed-turn row and \
