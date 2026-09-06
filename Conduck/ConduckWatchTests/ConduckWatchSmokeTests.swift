@@ -254,7 +254,7 @@ final class OfficialIdentityWatchLockTests: XCTestCase {
 
 // MARK: - Work capture UI
 //
-// The wrist's "Save to Work" lane: the route it pushes and the sentence each
+// The wrist's Add to Work lane: the route it pushes and the sentence each
 // terminal outcome renders. Both are pure values, so they are testable without
 // a recorder, a relay or a watch face — and both are exactly where a silent
 // mis-wire would be invisible on screen.
@@ -392,6 +392,77 @@ final class WatchWorkCaptureUITests: XCTestCase {
         XCTAssertNil(WatchCaptureDestination(rawValue: "Work"))
     }
 
+    /// Done closes what the person just read, and a recorder error is not this
+    /// screen's line to close: it is the SERVICE's state, so clearing only the
+    /// outcome pops back to a launchpad that re-presents the identical failure.
+    /// A failure with the words still on the wrist is neither of those: the
+    /// recovery is offered HERE, because dismissing would delete the recording
+    /// behind it and the launchpad's second showing is one failure read twice.
+    func testTheEndOfCaptureButtonMatchesWhatIsActuallyLeftToDo() {
+        XCTAssertEqual(
+            WatchWorkCaptureView.messageAction(showingRecorderError: true, canRetry: false),
+            .dismissErrorThenDone,
+            "A dead-end failure must not be shown twice for one capture."
+        )
+        XCTAssertEqual(
+            WatchWorkCaptureView.messageAction(showingRecorderError: true, canRetry: true),
+            .retry,
+            "Preserved audio is a real second chance, and it belongs on the failure the person is reading."
+        )
+        XCTAssertEqual(
+            WatchWorkCaptureView.messageAction(showingRecorderError: false, canRetry: false),
+            .done,
+            "A terminal OUTCOME is this screen's own line; there is no error state under it to clear."
+        )
+        XCTAssertEqual(
+            WatchWorkCaptureView.messageAction(showingRecorderError: false, canRetry: true),
+            .done
+        )
+        // The label rides the action, or a button says Try Again and deletes the
+        // recording it offered to re-send.
+        XCTAssertEqual(
+            WatchWorkCaptureView.buttonLabel(showingRecorderError: true, canRetry: true),
+            "Try Again"
+        )
+        XCTAssertEqual(
+            WatchWorkCaptureView.buttonLabel(showingRecorderError: true, canRetry: false),
+            "Done"
+        )
+        XCTAssertEqual(
+            WatchWorkCaptureView.buttonLabel(showingRecorderError: false, canRetry: true),
+            "Done",
+            "A terminal outcome is not a failure, and preserved audio is not an offer to make over it."
+        )
+    }
+
+    /// NEGATIVE CONTROL for the truth table above, which only says what the
+    /// button MEANS. This drives the production effect against a real service,
+    /// so deleting the `dismissError()` call — the whole of the fix — fails
+    /// here rather than passing on a helper nobody consults.
+    @MainActor
+    func testTheDeadEndFailureIsActuallyEndedAndTheRetryableOneIsKept() {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+
+        // Dead end: no audio behind the error, so Done must land the machine on
+        // `.idle`. Left standing, the launchpad re-presents this same sentence.
+        service.state = .error(message: "nothing left to retry")
+        XCTAssertFalse(service.canRetry, "Control: there is genuinely nothing to retry.")
+        let leavesDeadEnd = WatchWorkCaptureView.perform(.dismissErrorThenDone, on: service)
+        XCTAssertTrue(leavesDeadEnd, "A read dead end closes the screen.")
+        XCTAssertEqual(service.state, .idle,
+                       "Done left `.error` standing — the launchpad shows the identical failure on the pop.")
+        XCTAssertNil(service.workCaptureOutcome)
+
+        // Retryable: the screen STAYS, so the recording is never dismissed out
+        // from under the offer. `retry()` with no file would reset to idle, so
+        // the assertion is the dismissal verdict, which is what strands a
+        // capture when it is wrong.
+        service.state = .error(message: "prepare failed")
+        XCTAssertFalse(WatchWorkCaptureView.perform(.retry, on: service),
+                       "Try Again must not pop the screen — the retry it started renders here.")
+    }
+
     /// The fourth line, and the one that is easiest to get wrong by reusing
     /// another: the iPhone kept the RECORDING and had no words for it — the
     /// exact mirror of `savedWordsOnly`. Saying "Saved to Work." here hides the
@@ -436,4 +507,250 @@ final class WatchWorkCaptureUITests: XCTestCase {
     private static let durableOutcomes: [WatchWorkCaptureOutcome] = [
         .saved, .deferredToPhone, .savedWordsOnly, .savedWithoutWords
     ]
+}
+
+// MARK: - Ask destination rows
+//
+// The Ask chooser's truth table, as a pure value. The wiring above it — Ask
+// opens the chooser on every press — is two lines of view code and is pinned by
+// founder QA; the row set is what can drift silently, and the row that must
+// never go missing is Work: with no gateway configured at all it is the only
+// destination that works, and with a full roster it is still the last one
+// rather than a private-looking row somewhere in the middle of the AI ones.
+
+final class WatchAskDestinationRowsTests: XCTestCase {
+
+    /// Every roster shape the wrist can be in, including the empty one.
+    func testWorkIsAlwaysOfferedAndAlwaysLast() {
+        let rosters: [[String]] = [
+            [],
+            ["hermes"],
+            ["hermes", "openclaw"],
+            ["hermes", RemoteAgentRef.custom(UUID()).rawString]
+        ]
+        for roster in rosters {
+            let rows = WatchAskDestinationRows.rows(configured: roster)
+            XCTAssertEqual(rows.last, WatchAskDestinationRows.Row.work,
+                           "Add to Work must be the LAST row for roster \(roster).")
+            XCTAssertEqual(rows.filter { $0 == .work }.count, 1,
+                           "Add to Work must appear exactly once for roster \(roster).")
+            XCTAssertEqual(rows.count, roster.count + 1,
+                           "Every configured gateway keeps a row of its own for roster \(roster).")
+        }
+    }
+
+    /// Roster order is the iPhone's order, neither sorted nor reordered here:
+    /// a gateway that silently changes position between presses is a chooser
+    /// that trains the wrong muscle memory.
+    func testGatewaysKeepRosterOrderAheadOfWork() {
+        XCTAssertEqual(
+            WatchAskDestinationRows.rows(configured: ["b", "a"]),
+            [.gateway("b"), .gateway("a"), .work]
+        )
+    }
+
+    /// The line belongs above a chooser with nothing but Work in it. Shown
+    /// beside a working gateway row it would be false, and false in the one
+    /// direction that matters — it would read as "your AI is gone".
+    func testTheNoAILineShowsOnlyForAnEmptyRoster() {
+        XCTAssertTrue(WatchAskDestinationRows.showsNoAILine(configured: []))
+        XCTAssertFalse(WatchAskDestinationRows.showsNoAILine(configured: ["hermes"]))
+        XCTAssertFalse(WatchAskDestinationRows.showsNoAILine(configured: ["hermes", "openclaw"]))
+    }
+}
+
+// MARK: - Ask destination labels
+//
+// The chooser is a decision, and a label that cannot be told from the one
+// above it is not one. The shared shortener is a head cut at 16 characters —
+// right for the error banner and the sentence read aloud in the car, wrong on
+// its own for a wrist surface where two gateways are compared side by side —
+// so the wrist disambiguates locally and hands VoiceOver the untruncated name.
+
+@MainActor
+final class WatchGatewayLabelTests: XCTestCase {
+
+    private func gateway(_ name: String) -> CustomGateway {
+        CustomGateway(id: UUID(), name: name)
+    }
+
+    /// The failure this exists for: two customs the user named after the same
+    /// machine. Under the shared shortener alone both rows read "Frankfurt
+    /// produ…" and the chooser is a coin flip.
+    func testCollidingCustomNamesGetLabelsThatCanBeToldApart() {
+        let alpha = gateway("Frankfurt production alpha")
+        let beta = gateway("Frankfurt production beta")
+        let customs = [alpha, beta]
+
+        let sharedShortForm = RemoteAgentRefMetadata.shortDisplayName(for: alpha.ref, customs: customs)
+        XCTAssertEqual(
+            sharedShortForm,
+            RemoteAgentRefMetadata.shortDisplayName(for: beta.ref, customs: customs),
+            "Control: the shared shortener genuinely collapses these two names — without that, this case proves nothing."
+        )
+
+        let alphaLabel = WatchGatewayLabel.visible(for: alpha.ref, customs: customs)
+        let betaLabel = WatchGatewayLabel.visible(for: beta.ref, customs: customs)
+
+        XCTAssertNotEqual(alphaLabel, betaLabel,
+                          "Two rows that read identically are one row as far as the person tapping is concerned.")
+        XCTAssertTrue(alphaLabel.hasSuffix("alpha"), "The label must show the part that differs, not the part they share.")
+        XCTAssertTrue(betaLabel.hasSuffix("beta"))
+    }
+
+    /// Three names, two of which agree for longer than the group does: each
+    /// still opens at a character that tells it from every name it collides
+    /// with.
+    func testEveryRowOfALongerCollidingGroupIsDistinct() {
+        let customs = [
+            gateway("Frankfurt production alpha one"),
+            gateway("Frankfurt production alpha two"),
+            gateway("Frankfurt production beta")
+        ]
+        let labels = customs.map { WatchGatewayLabel.visible(for: $0.ref, customs: customs) }
+
+        XCTAssertEqual(Set(labels).count, customs.count,
+                       "Every colliding row needs its own label, not just the first two: \(labels)")
+        for label in labels {
+            XCTAssertLessThanOrEqual(label.count, RemoteAgentRefMetadata.shortDisplayNameLimit + 1,
+                                     "A disambiguated label stays inside the shared budget plus its leading ellipsis: \(label)")
+        }
+    }
+
+    /// The case a per-name answer gets wrong. Two of these three agree far past
+    /// the point the group does, so a label anchored on the name it agrees with
+    /// LONGEST throws away the half that carries the difference — and lands on
+    /// the third name's label. The group has to be resolved as a set.
+    func testTwoNamesThatDivergeLateStillDoNotBorrowAThirdNamesLabel() {
+        let customs = [
+            gateway("Frankfurt production alpha one"),
+            gateway("Frankfurt production alpha two"),
+            gateway("Frankfurt production one")
+        ]
+
+        let sharedShortForm = RemoteAgentRefMetadata.shortDisplayName(for: customs[0].ref, customs: customs)
+        for custom in customs {
+            XCTAssertEqual(
+                RemoteAgentRefMetadata.shortDisplayName(for: custom.ref, customs: customs),
+                sharedShortForm,
+                "Control: all three genuinely collapse to one string under the shared shortener."
+            )
+        }
+
+        let labels = customs.map { WatchGatewayLabel.visible(for: $0.ref, customs: customs) }
+
+        XCTAssertEqual(Set(labels).count, customs.count,
+                       "Two gateways reading the same label are one row to the person tapping: \(labels)")
+        for label in labels.prefix(2) {
+            XCTAssertTrue(
+                label.contains("alpha"),
+                """
+                A label anchored on the name it agrees with LONGEST throws away "alpha", which is \
+                the half that tells these two from the third name. Unique is not enough — the \
+                label has to carry the difference: \(labels)
+                """
+            )
+        }
+        for label in labels {
+            XCTAssertLessThanOrEqual(label.count, RemoteAgentRefMetadata.shortDisplayNameLimit + 1,
+                                     "A disambiguated label stays inside the shared budget plus its leading ellipsis: \(label)")
+        }
+    }
+
+    /// The collision a group-only answer cannot see: a gateway whose name is
+    /// SHORT enough to be left alone, and which already reads exactly like the
+    /// label the colliding pair beside it resolves to. Its short form is not a
+    /// truncation, so it never enters that pair's group — and the roster ends up
+    /// with two rows saying "…alpha" anyway. Uniqueness has to be checked over
+    /// the whole roster, untouched labels included.
+    func testAShortNameThatAlreadyReadsLikeADisambiguatedLabelStillGetsItsOwnRow() {
+        let customs = [
+            gateway("Frankfurt production alpha"),
+            gateway("Frankfurt production beta"),
+            gateway("…alpha")
+        ]
+
+        let sharedShortForm = RemoteAgentRefMetadata.shortDisplayName(for: customs[0].ref, customs: customs)
+        XCTAssertEqual(
+            RemoteAgentRefMetadata.shortDisplayName(for: customs[1].ref, customs: customs),
+            sharedShortForm,
+            "Control: the first two genuinely collapse to one string under the shared shortener."
+        )
+        XCTAssertEqual(
+            RemoteAgentRefMetadata.shortDisplayName(for: customs[2].ref, customs: customs),
+            customs[2].name,
+            "Control: the third name is short enough that the shortener leaves it exactly as typed — which is "
+            + "why a group-only pass never looks at it."
+        )
+
+        let labels = customs.map { WatchGatewayLabel.visible(for: $0.ref, customs: customs) }
+
+        XCTAssertEqual(Set(labels).count, customs.count,
+                       "Three gateways, three rows the person can tell apart: \(labels)")
+        for label in labels {
+            XCTAssertLessThanOrEqual(label.count, RemoteAgentRefMetadata.shortDisplayNameLimit + 1,
+                                     "A disambiguated label stays inside the shared budget plus its leading ellipsis: \(label)")
+        }
+    }
+
+    /// The residual case the ordinal exists for: nothing in the names can tell
+    /// them apart, so the label says WHICH of them this row is rather than
+    /// pretending they differ.
+    func testIdenticallyNamedGatewaysStillGetOneLabelEach() {
+        let customs = [
+            gateway("Frankfurt production alpha"),
+            gateway("Frankfurt production alpha")
+        ]
+
+        let labels = customs.map { WatchGatewayLabel.visible(for: $0.ref, customs: customs) }
+
+        XCTAssertEqual(Set(labels).count, customs.count, "Same name, still two rows: \(labels)")
+        for label in labels {
+            XCTAssertLessThanOrEqual(label.count, RemoteAgentRefMetadata.shortDisplayNameLimit + 1, label)
+        }
+    }
+
+    /// The shared policy is untouched for everyone else — this is a local
+    /// answer to a local problem, not a new app-wide naming rule.
+    func testANameThatCollidesWithNothingKeepsTheSharedShortForm() {
+        let customs = [gateway("Frankfurt production alpha"), gateway("Reykjavik box")]
+        for custom in customs {
+            XCTAssertEqual(
+                WatchGatewayLabel.visible(for: custom.ref, customs: customs),
+                RemoteAgentRefMetadata.shortDisplayName(for: custom.ref, customs: customs),
+                "\(custom.name) shares its short form with nothing, so it must read exactly as it does everywhere else."
+            )
+        }
+        for backend in RemoteAgentBackend.allCases {
+            XCTAssertEqual(
+                WatchGatewayLabel.visible(for: .builtin(backend), customs: customs),
+                RemoteAgentRefMetadata.shortDisplayName(for: .builtin(backend), customs: customs),
+                "A built-in's name is compiled in and short; nothing here may reshape it."
+            )
+        }
+    }
+
+    /// A custom with no usable name resolves to its monogram / the generic
+    /// label, which is not a truncation of anything — reshaping THAT would
+    /// invent a name for a gateway that has none.
+    func testAnUnnamedCustomIsLeftOnItsFallbackLabel() {
+        let unnamed = CustomGateway(id: UUID(), name: "   ", monogram: "FR")
+        let customs = [unnamed, gateway("Frankfurt production alpha")]
+
+        XCTAssertEqual(WatchGatewayLabel.visible(for: unnamed.ref, customs: customs),
+                       RemoteAgentRefMetadata.shortDisplayName(for: unnamed.ref, customs: customs))
+    }
+
+    /// VoiceOver gets the name whole. A watch face runs out of width; the ear
+    /// does not.
+    func testTheSpokenLabelIsNeverCut() {
+        let long = gateway("Frankfurt production alpha")
+        let customs = [long, gateway("Frankfurt production beta")]
+
+        XCTAssertEqual(WatchGatewayLabel.spoken(for: long.ref, customs: customs), long.name)
+        XCTAssertGreaterThan(long.name.count, RemoteAgentRefMetadata.shortDisplayNameLimit,
+                             "Control: the name must be long enough that the visible label really is cut.")
+        XCTAssertNotEqual(WatchGatewayLabel.spoken(for: long.ref, customs: customs),
+                          WatchGatewayLabel.visible(for: long.ref, customs: customs))
+    }
 }

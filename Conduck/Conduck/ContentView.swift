@@ -328,6 +328,11 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
                 consumeGatewayFixRoute()
             }
+            .onReceive(
+                NotificationCenter.default.publisher(for: PendingRetryStore.queueDidChangeNotification)
+            ) { _ in
+                handlePendingRetryQueueChange()
+            }
             .onAppear { consumeGatewayFixRoute() }
         } else {
             phoneLayout
@@ -792,6 +797,11 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
                 consumeGatewayFixRoute()
             }
+            .onReceive(
+                NotificationCenter.default.publisher(for: PendingRetryStore.queueDidChangeNotification)
+            ) { _ in
+                handlePendingRetryQueueChange()
+            }
             .onAppear { consumeGatewayFixRoute() }
             #if os(iOS)
             .onChange(of: detailVM?.isAwaitingReply) { old, new in
@@ -1203,6 +1213,30 @@ struct ContentView: View {
         // the card from showing "trying again would reach the same answer" beside
         // a Retry button this refresh has restored.
         retryErrorMessage = nil
+    }
+
+    /// The queue changed under a surface that is ALREADY on screen.
+    ///
+    /// Every other refresh above hangs off a lifecycle hop — launch, foreground,
+    /// Settings dismissal — and the phone root gets none of them while it sits
+    /// foregrounded. A capture parked by another surface in that window is
+    /// therefore invisible here until the next background/foreground round trip:
+    /// CarPlay queues a failed transcription and speaks "Add the words on your
+    /// iPhone", the Watch relay parks a published Work recording and its wrist
+    /// receipt says the same, and the phone this sentence names shows no card at
+    /// all. `PendingRetryStore` announces both the arm and the retirement for
+    /// exactly this reason; the menu bar's `DictationService` was its only
+    /// listener.
+    ///
+    /// SKIPPED while this surface owns the queue, on two states it can read for
+    /// itself. A retry in flight writes the card's verdict on every exit of its
+    /// own (including the sticky terminal line this refresh clears), and a
+    /// discard confirmation is an alert attached to the card a refresh could
+    /// take off screen mid-question. Neither leaves anything stale: `runPendingRetry`
+    /// and `discardPendingRetry` both end by re-reading the queue.
+    private func handlePendingRetryQueueChange() {
+        guard !isRetrying, !confirmingPendingRetryDiscard else { return }
+        Task { await refreshPendingRetryState() }
     }
 
     private func refreshConfiguredFlag() async {

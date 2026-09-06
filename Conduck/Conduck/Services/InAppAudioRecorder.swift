@@ -89,11 +89,36 @@ import Speech
 /// file every capture test in the bundle shares, and what these surfaces assert
 /// is WHICH capture they reserve, hold and release — a property of the surface,
 /// not of the wire format.
+/// The three answers a reservation request can have, kept apart because two of
+/// them demand opposite behavior and `claim(id:duration:)` returns nil for both.
+///
+/// A capture that was never queued leaves the bytes in hand as the only copy of
+/// what somebody said, so its retry must go ahead. One another surface is
+/// holding must be refused, or two surfaces transcribe one recording and attach
+/// different words to the same card. Collapsing them is how a PARTIAL save —
+/// the sidecar and the audio written, the screenshot's write throwing — became
+/// an entry the queue adopts, that nobody's local bookkeeping knows about, and
+/// that every surface therefore believes is theirs alone.
+nonisolated enum PendingRetryReservation: Sendable {
+    /// Reserved, with the claim to renew and release.
+    case claimed(PendingRetryClaim)
+    /// Nothing is queued under this id — or its recording is unreadable, which
+    /// the store finishes exactly as `claimNext` does.
+    case absent
+    /// Queued, and somebody else's reservation is live over it.
+    case heldElsewhere
+}
+
 nonisolated protocol PendingRetryLaneReserving: PendingRetryQueueWriting {
     /// Reserve exactly the capture named, for the surface that ARMED it.
     /// Nil when it is not queued, when another reservation is live over it, or
     /// when its recording cannot be read.
     func claim(id: UUID, duration: TimeInterval) async -> PendingRetryClaim?
+
+    /// The same reservation, with a refusal that says WHY — in one pass under
+    /// the store's own lock, so the two answers cannot swap between a claim and
+    /// a follow-up question.
+    func reserve(id: UUID, duration: TimeInterval) async -> PendingRetryReservation
 
     /// Extend this holder's reservation by the horizon it was granted.
     @discardableResult
@@ -123,6 +148,17 @@ nonisolated protocol PendingRetryLaneReserving: PendingRetryQueueWriting {
 }
 
 extension PendingRetryLaneReserving {
+    /// A lane that cannot tell the two refusals apart says so by answering
+    /// `absent` for both — the shape a double that never queues anything is
+    /// right about, and the shape the real store OVERRIDES. Only a store that
+    /// reads the queue and the lease under one lock can distinguish them, and
+    /// only it is on the path where the distinction decides whether a second
+    /// surface may transcribe somebody else's recording.
+    func reserve(id: UUID, duration: TimeInterval) async -> PendingRetryReservation {
+        if let claim = await claim(id: id, duration: duration) { return .claimed(claim) }
+        return .absent
+    }
+
     /// A lane that parks no screenshot has none to retire, and answering
     /// "nothing was retired" is the honest reply. The store overrides it; this
     /// default is what lets a lane double that never stores image bytes conform
@@ -415,6 +451,17 @@ final class InAppAudioRecorder {
     /// The desk store the Work lane publishes into.
     var workStoreForTesting: ConversationStore?
 
+    /// Stands in the gap between a SUCCESSFUL recognition and the write that
+    /// puts its words on the card — the window "Cancel transcription" covers
+    /// last and the one no other seam can reach.
+    ///
+    /// The hop seam above ends where the provider does, and the cancel checked
+    /// there is the one this lane already had. What it cannot express is a press
+    /// that lands after the answer is in hand: the attachment suspends (the
+    /// store's first-use load, then its own queued write), and a check taken
+    /// only before that suspension answers about a moment that has passed.
+    var transcriptAttachPauseForTesting: (@MainActor () async -> Void)?
+
     #if !os(watchOS)
     /// Stands in for the App-Group capture queue the screenshot rides through.
     /// `WorkCaptureInbox.shared` is one directory in the founder's own
@@ -452,6 +499,14 @@ final class InAppAudioRecorder {
     /// failure about the machine. Pinning the verdict makes those cases say
     /// what they are about.
     var speechAuthorizationForTesting: SFSpeechRecognizerAuthorizationStatus?
+
+    /// Stands in for CarPlay's process-wide session mirror.
+    /// `CarPlayRecordingService.anySessionActive` is `private(set)` and is
+    /// written only by a real car connection, so the refusal it arms is
+    /// otherwise unreachable from a headless run — which is exactly how it went
+    /// unbuilt: the one gate iOS has for this is a founder-QA item nobody can
+    /// execute.
+    var carPlaySessionActiveForTesting: Bool?
 
     /// Stands in for the microphone coming up. There is no input device on a
     /// simulator, and the claim this seam exists for is an ORDERING one: the
@@ -521,6 +576,94 @@ final class InAppAudioRecorder {
     private var stagedWorkScreenshot: Data?
     #endif
 
+    #if os(macOS)
+    /// How many Work captures in this process have STOPPED and have not yet put
+    /// their recording anywhere durable.
+    ///
+    /// The window is real and it is invisible: `AudioRecorder.stopRecording()`
+    /// hands back the bytes and deletes the file, so from that line until the
+    /// desk write copies them (or a retry record parks them) the recording
+    /// exists nowhere but memory. Nothing else can see it — no gateway turn is
+    /// involved, so the in-flight turn registry the quit guard reads is empty —
+    /// and a ⌘Q pressed there takes the recording with no card and no Try Again
+    /// left behind. `AppDelegate.applicationShouldTerminate` waits on this.
+    ///
+    /// A count rather than a flag: the menu bar's recorder and the desk sheet's
+    /// are different instances and either may be mid-publication.
+    private(set) static var workPublicationsInFlight = 0
+
+    /// Give one declared window back. Floored, because the balance is a promise
+    /// about quitting: a count that went negative would let a later capture's
+    /// window read as already closed.
+    private static func releaseWorkPublication() {
+        workPublicationsInFlight = max(0, workPublicationsInFlight - 1)
+    }
+
+    /// Wait, bounded, for those publications to finish. Bounded because a quit
+    /// that a stuck disk write could block for ever is a worse failure than the
+    /// one this closes — and the recording is not lost by the wait ending, only
+    /// by the process ending, which the caller then allows.
+    static func waitForWorkPublications(timeout: Duration) async {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while workPublicationsInFlight > 0, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    /// How many Work captures have their only copy in this process's memory
+    /// after everything durable has been TRIED and refused.
+    ///
+    /// The quit guard needs this apart from the count above. A publication in
+    /// flight is answered by WAITING; this one has to be answered by the
+    /// person, because nothing is still running that could finish it — the only
+    /// ways out are the Try Again and the ✕ the capture's own surface is already
+    /// showing.
+    ///
+    /// A count for the same reason the in-flight one is: the menu bar's
+    /// recorder and the desk sheet's are different instances, and either may be
+    /// holding bytes nothing durable would take.
+    ///
+    /// It is DERIVED from the recorders still alive to answer for it, never a
+    /// number that has to be decremented by somebody. A declaration is a claim
+    /// about bytes held in one recorder's memory, so it can only be true while
+    /// that recorder exists: a desk sheet closed over a standing error released
+    /// nothing — its ✕ does nothing in `.error`, and so does its disappearance —
+    /// and every later ⌘Q then asked about a recording whose Try Again had gone
+    /// with the surface. A weak set answers that by construction, and it is also
+    /// the honest reading of "processing that finishes after the dismissal": a
+    /// recorder its own task still holds is still there to be asked.
+    static var unsavedWorkCaptureCount: Int {
+        unsavedWorkCaptureHolders.values.filter { $0.recorder != nil }.count
+    }
+
+    /// One weakly-held recorder, so the declaration dies with the object that
+    /// made it and with nothing else. The same shape `SpeechExclusivity` keeps
+    /// its authorities in, and for the same reason — a registry that owned its
+    /// members would keep alive exactly the objects it exists to forget.
+    private struct UnsavedWorkCaptureHolder {
+        weak var recorder: InAppAudioRecorder?
+    }
+
+    /// The recorders declaring one, keyed by identity so a second declaration
+    /// from the same recorder is the same fact said twice. Compacted on every
+    /// write: a dead entry costs a dictionary slot, and nothing else reads it.
+    private static var unsavedWorkCaptureHolders: [ObjectIdentifier: UnsavedWorkCaptureHolder] = [:]
+    #endif
+
+    /// True while CarPlay holds this process's microphone and its shared
+    /// `AVAudioSession`. False on every other platform, where there is no car
+    /// session and no session to share.
+    private var carPlayHoldsMicrophone: Bool {
+        #if os(iOS)
+        #if CONDUCK_TESTING
+        if let pinned = carPlaySessionActiveForTesting { return pinned }
+        #endif
+        return CarPlayRecordingService.anySessionActive
+        #else
+        return false
+        #endif
+    }
+
     /// The retry queue this recorder arms and releases its own entry in.
     private var retryLane: any PendingRetryLaneReserving {
         #if CONDUCK_TESTING
@@ -537,6 +680,20 @@ final class InAppAudioRecorder {
     /// all: in both cases there is no entry of this recorder's to reserve or
     /// clear, and the retry runs on the bytes still in hand.
     private var armedDurableRetryID: UUID?
+
+    /// Whether the entry named by `armedDurableRetryID` was armed WITHOUT this
+    /// capture's screenshot, because that one write failed after the recording
+    /// had already committed. The entry is real and the recording is safe; the
+    /// picture exists only in this process's memory, which is precisely the
+    /// question `noteWorkDurability` has to answer separately for each artifact.
+    private var armedRetryOmittedPicture = false
+
+    #if os(macOS)
+    /// The capture this recorder has declared unsaved, so the declaration is
+    /// given back exactly once and only for the capture that made it. See
+    /// `noteWorkDurability`.
+    private var unsavedWorkCaptureID: UUID?
+    #endif
 
     /// The reservation this recorder holds over that entry while it finishes
     /// the capture, so no other surface can transcribe or delete the recording
@@ -747,6 +904,32 @@ final class InAppAudioRecorder {
         }
         #endif
 
+        #if os(iOS)
+        // iOS DOES have an audio session, and that is the whole problem: there
+        // is ONE per process. This recorder's start moves it to `.record` and
+        // its stop deactivates it — under whoever else is holding it. The other
+        // holder is CarPlay, and it is the one surface that cannot see this one:
+        // a driver mid-sentence, on a route this start would reconfigure and
+        // this stop would tear down.
+        //
+        // CarPlay registers nothing on the speech bus BY CONSTRUCTION — its
+        // exactly-once activate / deactivate-once legs must not be preemptable —
+        // so ownership is read from its process-wide mirror, the same read
+        // `ThreadSpeaker` and the desk's card player already make before they
+        // touch the session. The lease side of that pair is
+        // `AudioRecorder.deactivateSessionUnlessCarPlayOwnsIt()`, which covers
+        // the capture that began BEFORE the car connected and can no longer be
+        // refused here.
+        //
+        // A live car capture is sacred for exactly the reason a live macOS one
+        // is: the SECOND start is refused, never the first. `audioMicBusy` is
+        // already the taxonomy's word for "another surface has the microphone".
+        guard !carPlayHoldsMicrophone else {
+            state = .error(.audioMicBusy)
+            return
+        }
+        #endif
+
         #if os(macOS) || os(iOS)
         // Silence every registered speaker before the mic comes up — a playing
         // reply or desk voice note would otherwise bleed into the capture, and
@@ -913,6 +1096,11 @@ final class InAppAudioRecorder {
         pendingWorkCapture = nil
         workRecordingMaterialID = nil
         workCaptureFacts = .none
+        #endif
+        #if os(macOS)
+        // THE EXPLICIT DISCARD. The ✕ is one of the two answers the quit guard
+        // is waiting for, and after it there is nothing left to lose.
+        releaseUnsavedWorkCapture()
         #endif
         retryRefusedBusy = false
         state = .idle
@@ -1116,10 +1304,27 @@ final class InAppAudioRecorder {
         resuming resumed: VoiceCapture? = nil
     ) async -> Result<String, AppError> {
         var capture: VoiceCapture
+        #if os(macOS)
+        // The recording leaves the file system at the stop below and reaches
+        // nothing durable until phase one publishes it. This declares that
+        // window, so a ⌘Q cannot land inside it and take the audio; it is
+        // released the moment the desk holds the recording, and by this `defer`
+        // on every path that ends before then — nothing recorded, a picture-only
+        // capture, a failure that parks the bytes for a retry.
+        var workPublicationDeclared = false
+        defer { if workPublicationDeclared { Self.releaseWorkPublication() } }
+        #endif
         if let resumed {
             capture = resumed
         } else {
             state = .processing
+
+            #if os(macOS)
+            if retryDestination == .work {
+                Self.workPublicationsInFlight += 1
+                workPublicationDeclared = true
+            }
+            #endif
 
             #if CONDUCK_TESTING
             let recorded = capturedAudioForTesting ?? recorder.stopRecording()
@@ -1213,6 +1418,13 @@ final class InAppAudioRecorder {
                 // inferred. Only a card read back may be described to a person
                 // as saved.
                 noteScreenshotPresence(await deskHoldsMaterial(materialID) == true)
+                // The picture is somewhere that survives this process now, so
+                // whatever it was owed of the quit window is settled. The
+                // recording's own declaration is separate and still standing,
+                // which is what `audioInFlight` says.
+                #if os(macOS)
+                noteWorkDurability(capture, audioInFlight: workPublicationDeclared)
+                #endif
                 // The picture is durable now, so the parked copy is no longer
                 // the only one — and a parked copy left behind would go on
                 // telling the expiry sweep this entry shelters an irreplaceable
@@ -1261,11 +1473,35 @@ final class InAppAudioRecorder {
                     audio: capture.audio,
                     fileExtension: capture.format.fileExtension,
                     mimeType: capture.format.mimeType,
+                    // Dated from the CAPTURE, exactly as the picture's card is.
+                    // One stop publishes two cards, and a `Date()` taken here
+                    // would date them a beat apart for no reason a reader could
+                    // explain. Scoped to this first publication: a capture
+                    // recovered after a relaunch is dated from its retry record,
+                    // whose `createdAt` is the queue's expiry clock.
+                    createdAt: capture.createdAt,
                     store: workStore
                 )
                 capture.materialID = card.id
                 pendingWorkCapture = capture
                 workRecordingMaterialID = card.id
+                #if os(macOS)
+                // The desk holds the recording: the bytes are no longer this
+                // process's only copy, so a quit may proceed. Released HERE
+                // rather than at the exit below, because everything after this
+                // line is the speech hop — the words are retryable, the
+                // recording is not, and a ⌘Q should not wait out a transcription
+                // to keep a promise that is already kept.
+                if workPublicationDeclared {
+                    Self.releaseWorkPublication()
+                    workPublicationDeclared = false
+                }
+                // …and with the recording durable, re-read what is left. A
+                // screenshot whose publication AND preservation both failed is
+                // still memory-only, and the window that covered it has just
+                // been given back.
+                noteWorkDurability(capture)
+                #endif
                 // The ONE place presence is ASSERTED rather than observed, and
                 // what it asserts is the line above it. A resumed capture never
                 // comes through here, which is the point: re-deriving presence
@@ -1528,6 +1764,27 @@ final class InAppAudioRecorder {
         // throwing store read whose failure would report a refused recording
         // for a capture whose recording was never in question.
         if let materialID = capture.materialID, !capture.transcriptSettled {
+            #if CONDUCK_TESTING
+            // Exactly where a press can land after the words are bought and
+            // before they are written. The production path has no statement
+            // here at all.
+            if let pause = transcriptAttachPauseForTesting { await pause() }
+            #endif
+            // THE LAST OWNERSHIP QUESTION BEFORE THE WORDS ARE WRITTEN. A
+            // reservation this recorder took can lapse while the speech hop runs
+            // (see `reserveDurableRetry`), and the surface that then claimed the
+            // capture is transcribing the SAME recording onto the SAME card. Two
+            // writers, one card: whichever finishes last wins, and this one has
+            // been suspended the longest. Refusing is not a failure of the
+            // capture — the recording is standing on the desk and somebody is
+            // finishing it — so the sheet's busy sentence is what says so.
+            if let held = heldRetryClaim, held.id == capture.id,
+               await retryLane.confirmOwnership(held) == false {
+                stopRenewingRetryLease()
+                heldRetryClaim = nil
+                retryRefusedBusy = true
+                return await failPendingWorkCapture(capture)
+            }
             do {
                 switch try await WorkVoiceCaptureCoordinator.attachTranscript(
                     transcript,
@@ -1556,6 +1813,18 @@ final class InAppAudioRecorder {
                     workCaptureFacts.wordsOnDesk = false
                 }
             } catch {
+                // "Cancel transcription" pressed while the words were on their
+                // way to the card. Nothing failed, so nothing is reported and
+                // nothing is parked: the recording stands on the desk, the
+                // capture keeps its debt and its Try Again, and the surface goes
+                // quiet. Same answer `settle` gives for a cancel it caught one
+                // step earlier — one press, one outcome, whichever hop it
+                // landed in.
+                if Task.isCancelled || error is CancellationError {
+                    pendingWorkCapture = capture
+                    state = .idle
+                    return .failure(.unknown(CancellationError()))
+                }
                 // The card is on the desk and the words are held for it. A
                 // capture reported complete here would strand an untranscribed
                 // recording while its own transcript went into a composer.
@@ -1579,6 +1848,11 @@ final class InAppAudioRecorder {
             // release conditioned on that step having run left the capture in
             // hand for ever, still offering a Try Again with nothing to do.
             pendingWorkCapture = nil
+            #if os(macOS)
+            // Everything this capture owned is durable — that is what "finished"
+            // means here — so any declaration it was holding is settled.
+            releaseUnsavedWorkCapture()
+            #endif
             await releaseDurableRetry(for: capture.id)
         }
         #else
@@ -1604,6 +1878,22 @@ final class InAppAudioRecorder {
         capture: VoiceCapture,
         preferredLanguage: String?
     ) async -> Result<String, AppError> {
+        // ASKED BEFORE THE OUTCOME, because "Cancel transcription" is a promise
+        // about the WRITE and not about the provider: the request cannot be
+        // recalled, so what the ✕ cancels is the result. A success that lands
+        // after it used to walk straight past this check into phase two and
+        // attach its words to the card the person had already stopped waiting
+        // for — the recording stays either way, so the visible damage was words
+        // arriving on a capture that had been let go.
+        //
+        // The transcribe layer maps cooperative cancellation to whatever the
+        // network taxonomy says, so the task flag is the only reading that
+        // covers both arms. Cancel is not a failure: back to idle, no banner,
+        // no retry save.
+        if Task.isCancelled {
+            state = .idle
+            return .failure(.unknown(CancellationError()))
+        }
         switch recognized {
         case .success(let text):
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -1618,15 +1908,6 @@ final class InAppAudioRecorder {
             return .success(text)
 
         case .failure(let error):
-            // User-initiated cancel (stall affordance): the transcribe layer may
-            // surface cooperative cancellation as a mapped AppError (URLError
-            // .cancelled → network taxonomy), so check the task flag, not the
-            // error type. Cancel is not a failure — return to idle with no
-            // banner and no retry save; the user chose to abandon the capture.
-            if Task.isCancelled {
-                state = .idle
-                return .failure(.unknown(CancellationError()))
-            }
             // Reactive save on retryable failures — mirrors macOS DictationService
             // pattern: no preempt guard, but preserve audio if the user will
             // realistically want to retry from the in-app retry card.
@@ -1743,6 +2024,11 @@ final class InAppAudioRecorder {
         // receipt for the NEW capture must not report the old one's artifacts.
         workCaptureFacts = .none
         #endif
+        #if os(macOS)
+        // A capture the person replaced by recording again is one they let go
+        // of, which is the other answer the quit guard accepts.
+        releaseUnsavedWorkCapture()
+        #endif
         guard let abandoned = pendingWorkCapture else { return }
         pendingWorkCapture = nil
         await releaseDurableRetry(for: abandoned.id)
@@ -1752,23 +2038,44 @@ final class InAppAudioRecorder {
     /// touches the recording behind it.
     ///
     /// True when this recorder holds the capture, and true when there is nothing
-    /// to hold — a capture whose durable write never landed, or one this process
-    /// never armed, has no entry any other surface could be finishing, and the
-    /// bytes in hand are the only copy either way. FALSE means exactly one
-    /// thing: the entry is queued and somebody else's reservation is live over
-    /// it, so this retry would be a second transcription of one recording.
+    /// to hold — a capture with no entry has none any other surface could be
+    /// finishing, and the bytes in hand are the only copy. FALSE means exactly
+    /// one thing: the entry is queued and somebody else's reservation is live
+    /// over it, so this retry would be a second transcription of one recording.
+    ///
+    /// THE QUEUE ANSWERS, not `armedDurableRetryID`. That flag records a save
+    /// this recorder watched LAND, and a save can leave an entry without
+    /// returning success: the sidecar and the audio commit, the screenshot's
+    /// write throws, and reconciliation adopts the record anyway. The flag is
+    /// then unset over an entry that is real and claimable, so a gate that
+    /// treated it as proof of absence let this surface and whoever claimed that
+    /// entry transcribe one recording and attach different words to one card.
     private func reserveDurableRetry(for id: UUID) async -> Bool {
-        guard armedDurableRetryID == id else { return true }
-        if let held = heldRetryClaim, held.id == id { return true }
-        guard let claim = await retryLane.claim(
+        // A cached hold is a MEMORY of a reservation, and reservations expire.
+        // The renewal loop deliberately never stops on a refusal — the store
+        // answers the same `false` for a cross-process lock it could not take as
+        // for a hold somebody overtook — so a long enough run of refused
+        // renewals leaves this recorder certain it still owns a capture another
+        // surface has since claimed. Ask the QUEUE rather than the memory; a
+        // lapsed hold is dropped and re-taken honestly, or refused.
+        if let held = heldRetryClaim, held.id == id {
+            if await retryLane.confirmOwnership(held) { return true }
+            stopRenewingRetryLease()
+            heldRetryClaim = nil
+        }
+        switch await retryLane.reserve(
             id: id,
             duration: PendingRetryStore.claimLeaseDuration
-        ) else {
+        ) {
+        case .claimed(let claim):
+            heldRetryClaim = claim.reservationOnly
+            startRenewingRetryLease()
+            return true
+        case .absent:
+            return true
+        case .heldElsewhere:
             return false
         }
-        heldRetryClaim = claim.reservationOnly
-        startRenewingRetryLease()
-        return true
     }
 
     /// Hand back a reservation this recorder is still holding after a retry that
@@ -1828,6 +2135,7 @@ final class InAppAudioRecorder {
         }
         guard let claim else { return }
         armedDurableRetryID = nil
+        armedRetryOmittedPicture = false
         _ = await retryLane.clear(claim)
     }
 
@@ -1861,6 +2169,10 @@ final class InAppAudioRecorder {
         capture: VoiceCapture,
         preferredLanguage: String?
     ) async {
+        // Every exit below is a verdict on where this capture's bytes now live,
+        // so the durability reading is taken on all of them — including the two
+        // that park nothing at all.
+        defer { noteWorkDurability(capture) }
         guard error.shouldPreserveForRetry else { return }
         // A capture with NO recording of its own is not this lane's to park.
         // Every surface that recovers a queued capture begins by transcribing
@@ -1893,13 +2205,98 @@ final class InAppAudioRecorder {
         // republish it (harmlessly, under the same derived id) while the bytes
         // sat in the App-Group container for as long as the entry did. A Chat
         // capture never carries one at all — the mint drops what was staged.
-        guard (try? await retryLane.save(
-            audioData: capture.audio,
-            metadata: metadata,
-            workImageData: capture.screenshotQueued ? nil : capture.screenshot
-        )) != nil else { return }
+        do {
+            try await retryLane.save(
+                audioData: capture.audio,
+                metadata: metadata,
+                workImageData: capture.screenshotQueued ? nil : capture.screenshot
+            )
+            armedRetryOmittedPicture = false
+        } catch PendingRetrySaveOutcome.recordingParkedWithoutPicture {
+            // The RECORDING is queued and only the picture is not. Read as a
+            // plain failure this armed nothing, so the entry the store had
+            // already made was one this recorder could neither reserve nor
+            // retire: the next Record Again left it behind for a recovery to
+            // re-transcribe a recording the person had replaced. It is armed,
+            // and the picture's absence travels with it so the quit guard still
+            // asks about the bytes only memory holds.
+            armedRetryOmittedPicture = true
+        } catch {
+            return
+        }
         armedDurableRetryID = capture.id
     }
+
+    /// Whether this capture is holding a quit window open, and open or close it
+    /// to match.
+    ///
+    /// Asked after every step that can change the answer: a publication that
+    /// landed, a preservation that landed, and — the case this exists for — a
+    /// preservation that did NOT. The declared window at the stop covers the few
+    /// hundred milliseconds between `AudioRecorder.stopRecording()` deleting the
+    /// file and the desk write copying the bytes; it is released by the function
+    /// scope on the way out, which is correct for every path that ended with the
+    /// bytes somewhere durable and wrong for the one that ended with them
+    /// nowhere. There the audio, the picture, or both existed only in
+    /// `pendingWorkCapture` while ⌘Q read an empty gateway registry and quit.
+    ///
+    /// BOTH artifacts, because either can be the orphan: a screenshot whose
+    /// publication and preservation both failed is memory-only even while the
+    /// recording is safely on the desk.
+    ///
+    /// A capture the queue holds is safe whatever the desk did — that is what
+    /// the queue is for — so `parked` answers for both halves at once.
+    ///
+    /// `audioInFlight` is the declared publication window at the stop: while it
+    /// is up the recording is not unsaved, it is BEING saved, and ⌘Q answers
+    /// that by waiting rather than by asking. The two states must not be
+    /// confused — a wait cannot resolve bytes nothing will take, and a question
+    /// has no business interrupting a write that is about to land.
+    private func noteWorkDurability(_ capture: VoiceCapture, audioInFlight: Bool = false) {
+        #if os(macOS)
+        guard retryDestination == .work else { return }
+        let parked = armedDurableRetryID == capture.id
+        let audioSafe = audioInFlight || capture.audio.isEmpty
+            || capture.materialID != nil || parked
+        // The queue answers for the two artifacts SEPARATELY, because one arm
+        // can hold the recording and not the picture: the screenshot write is
+        // the only one that can fail with the recording already committed, and
+        // an entry that shelters no picture is not a place the picture is safe.
+        let pictureSafe = capture.screenshot == nil || capture.screenshotQueued
+            || (parked && !armedRetryOmittedPicture)
+        if audioSafe, pictureSafe {
+            releaseUnsavedWorkCapture()
+        } else {
+            holdUnsavedWorkCapture(capture.id)
+        }
+        #endif
+    }
+
+    #if os(macOS)
+    /// Declare that this recorder is holding bytes nothing durable would take.
+    /// One per recorder, because one recorder holds one pending capture; a
+    /// second declaration for the same capture is the same fact said twice.
+    private func holdUnsavedWorkCapture(_ id: UUID) {
+        guard unsavedWorkCaptureID != id else { return }
+        releaseUnsavedWorkCapture()
+        Self.unsavedWorkCaptureHolders = Self.unsavedWorkCaptureHolders
+            .filter { $0.value.recorder != nil }
+        Self.unsavedWorkCaptureHolders[ObjectIdentifier(self)] =
+            UnsavedWorkCaptureHolder(recorder: self)
+        unsavedWorkCaptureID = id
+    }
+
+    /// Let it go: the bytes reached somewhere durable, or the person threw the
+    /// capture away. Those are the only two answers, and until one of them
+    /// arrives the quit guard has a question to ask.
+    private func releaseUnsavedWorkCapture() {
+        guard unsavedWorkCaptureID != nil else { return }
+        unsavedWorkCaptureID = nil
+        Self.unsavedWorkCaptureHolders.removeValue(forKey: ObjectIdentifier(self))
+        Self.unsavedWorkCaptureHolders = Self.unsavedWorkCaptureHolders
+            .filter { $0.value.recorder != nil }
+    }
+    #endif
 }
 
 #if os(macOS) || os(iOS)

@@ -87,6 +87,21 @@ final class DictationService: RecordingExclusivityAuthority {
     /// `.composer` transcript-destination latch is gone.
     var onTranscript: (String) -> Void = { _ in }
 
+    /// Terminal hook for a transcript RECOVERED from the durable queue — the
+    /// footer's Retry, never a live capture.
+    ///
+    /// Separate from `onTranscript` because the two carry different things. A
+    /// live capture owns the composition on screen: its ⌘⇧2 screenshot is part
+    /// of the same press, and the send consumes it. A Retry replays a recording
+    /// captured minutes — or launches — ago, and the picture staged in the
+    /// composition now belongs to whatever the person is doing at this moment.
+    /// Sending the two together attaches somebody else's screenshot to these
+    /// words and clears a slot the person is still composing with.
+    ///
+    /// Defaults to `onTranscript` so a host that wires only the live hook keeps
+    /// working; `MenuBarCoordinator` sets both.
+    var onRecoveredTranscript: ((String) -> Void)?
+
     /// Typed mirror of the last AppError, set when `state` transitions to
     /// `.error`. The popover may branch on this for retryability hints; for
     /// V1 it's primarily an inspection aid (no inline upgrade card).
@@ -116,6 +131,35 @@ final class DictationService: RecordingExclusivityAuthority {
     private let recorder = AudioRecorder()
     private var recordingStartTime: Date?
     private var displayTimer: Timer?
+
+    /// Which transcription the person is waiting for. Moved by every cancel that
+    /// lands in `.processing`, and carried by the run that was in flight when it
+    /// did.
+    ///
+    /// The provider hop cannot be recalled — it is a foreground `URLSession` this
+    /// service does not retain — so what a cancel takes is its RESULT: a run
+    /// whose token is stale hands nothing to `onTranscript` (which SENDS), keeps
+    /// no recording for a Retry the person did not ask for, and writes no error
+    /// over a popover they already dismissed. A generation rather than a flag,
+    /// because a cancel followed by a fresh capture must not hand the OLD run's
+    /// words to the new one's surface.
+    private var transcriptionGeneration = 0
+
+    /// Identifies the START that is currently in flight, so a bail pressed
+    /// DURING it is honored once the microphone finally comes up.
+    ///
+    /// An Ask start suspends twice before there is anything to cancel — the
+    /// Speech-Recognition preflight, and `AudioRecorder.startRecording()`'s own
+    /// permission hop — and for the first of them this service reads `.idle`,
+    /// which is the one state `cancelRecording()` has nothing to act on. So an
+    /// Esc pressed there invalidated no startup at all, and the microphone came
+    /// up moments later behind a popover that same Esc had just closed, live
+    /// until the duration cap with no surface anywhere to stop it.
+    ///
+    /// Same shape as the Work lane's `workVoiceStartToken`, for the same reason:
+    /// a token the start CARRIES is the only thing a press can leave behind
+    /// while the lane owns nothing.
+    private var recordingStartToken = 0
 
     init() {
         // Join the exclusivity bus as a mic authority: `claimForAutoSpeak`
@@ -191,12 +235,32 @@ final class DictationService: RecordingExclusivityAuthority {
         }
     }
 
-    /// Cancel an in-progress recording without processing, or dismiss an error state.
+    /// Cancel an in-progress recording without processing, cancel the
+    /// transcription that follows a stop, or dismiss an error state.
     func cancelRecording() {
+        // FIRST, and unconditionally: a start still suspended in its permission
+        // hops owns no state any arm below can reach, and `.idle` is exactly the
+        // state it reads while it waits. Without this the microphone that start
+        // asked for comes up AFTER the bail, behind a closed popover.
+        recordingStartToken &+= 1
         switch state {
         case .recording:
             recorder.cancelRecording()
             stopDisplayTimer()
+            state = .idle
+            lastError = nil
+        case .processing:
+            // Esc — and every ✕ that routes through the coordinator's teardown —
+            // pressed while the provider is working. The request itself is a
+            // foreground `URLSession` nobody holds a handle to, so it is the
+            // RESULT that is cancelled: the generation moves, and the run that
+            // comes back finds itself stale, sends nothing and surfaces nothing.
+            //
+            // Without this the words reach a gateway AFTER the cancel — the one
+            // thing the capture guide promises cannot happen ("Press Esc to
+            // cancel", step 3 under the two Ask shortcuts) — and an unwanted
+            // paid turn besides.
+            transcriptionGeneration &+= 1
             state = .idle
             lastError = nil
         case .error:
@@ -206,6 +270,11 @@ final class DictationService: RecordingExclusivityAuthority {
             break
         }
     }
+
+    /// Whether the run carrying this token is still the one the person is
+    /// waiting for. Every write a stale run would make is skipped on the way
+    /// out: the transcript hand-off, the preserved retry, the error surface.
+    private func stillCurrent(_ token: Int) -> Bool { token == transcriptionGeneration }
 
     /// Surface a post-STT hand-off failure on the SAME `.error` surface the
     /// popover renders for STT failures. Used by `MenuBarCoordinator` when the
@@ -261,6 +330,13 @@ final class DictationService: RecordingExclusivityAuthority {
             guard isRetryPermitted else { return }
             lastError = nil
             state = .processing
+            // A Retry is a run like any other, and Esc reaches `.processing`
+            // whether the words are being bought for the first time or the
+            // second. Without this token the promise the capture guide makes
+            // ("Press Esc to cancel") is true of a stop and false of a Retry:
+            // the cancelled run comes back, retires the entry and hands its
+            // words to a gateway.
+            let generation = transcriptionGeneration
 
             // ONE capture per Retry, RESERVED while this window works on it:
             // the queue is offered newest first, and the reservation is what
@@ -273,6 +349,10 @@ final class DictationService: RecordingExclusivityAuthority {
                 // true — "there is nothing to retry" retires the affordance and
                 // must not be said while a recording is parked.
                 await refreshPendingRetryCount()
+                // …and it is not said at all over a cancelled Retry: the
+                // reservation hop suspends, and a banner drawn after the Esc
+                // lands on whatever the person did next.
+                guard stillCurrent(generation) else { return }
                 let waiting = pendingRetryCount > 0
                 state = .error(
                     message: waiting
@@ -289,7 +369,7 @@ final class DictationService: RecordingExclusivityAuthority {
             // The reservation goes back on every outcome that leaves the
             // capture waiting, so the next tap can take it immediately instead
             // of waiting out the lease.
-            if await attemptRetry(claim) == false {
+            if await attemptRetry(claim, generation: generation) == false {
                 await PendingRetryStore.shared.release(claim)
             }
         }
@@ -301,7 +381,12 @@ final class DictationService: RecordingExclusivityAuthority {
     /// means it is still waiting and the caller hands the reservation back.
     /// Splitting the two keeps "who releases the reservation" one statement in
     /// `retryLast` rather than a duty every early return has to remember.
-    private func attemptRetry(_ claim: PendingRetryClaim) async -> Bool {
+    ///
+    /// `generation` is the run's cancellation identity, and every suspension
+    /// below is followed by a check on it. A cancelled Retry answers `false` —
+    /// which is exactly the right answer: nothing was finished, so the
+    /// reservation goes back and the capture stays queued for the next tap.
+    private func attemptRetry(_ claim: PendingRetryClaim, generation: Int) async -> Bool {
         let pending = claim.entry
 
         // A Work capture whose WORDS are already parked owes the desk a
@@ -315,7 +400,7 @@ final class DictationService: RecordingExclusivityAuthority {
            let parked = pending.metadata.transcript?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !parked.isEmpty {
-            return await finishWorkRetry(claim, transcript: parked)
+            return await finishWorkRetry(claim, transcript: parked, generation: generation)
         }
 
         // ATOMIC snapshot: (presetID, apiKey, provider)
@@ -333,13 +418,19 @@ final class DictationService: RecordingExclusivityAuthority {
         // reaches those words. `.unreadable` keeps the retry live because an
         // unlock makes the identical bytes succeed (I3, I6). Neither arm
         // clears the store.
-        let apiKey: String
-        switch await STTKeyReadiness.resolve(
+        let readiness = await STTKeyReadiness.resolve(
             presetID: snapshot.presetID,
             snapshotKey: snapshot.apiKey,
             provider: snapshot.provider,
             customConfig: snapshot.customConfig
-        ) {
+        )
+        // The settings and keychain hops above suspend, so the run asks whether
+        // it is still the one on screen before it draws anything. `false` is
+        // the honest answer for a cancelled Retry: nothing was finished, the
+        // caller hands the reservation back, and the capture stays queued.
+        guard stillCurrent(generation) else { return false }
+        let apiKey: String
+        switch readiness {
         case .ready(let key):
             apiKey = key
         case .notConfigured:
@@ -399,6 +490,13 @@ final class DictationService: RecordingExclusivityAuthority {
                     customConfig: snapshot.customConfig
                 )
             }
+            // THE LINE THE CANCEL IS FOR on this path. Everything below it is
+            // terminal — the entry is retired and the words go to a gateway (or
+            // onto a card) — so a Retry the person cancelled while the provider
+            // was working stops here, with the reservation handed back and the
+            // capture still queued for the next tap.
+            guard stillCurrent(generation) else { return false }
+
             let trimmed = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
                 state = .error(
@@ -415,7 +513,7 @@ final class DictationService: RecordingExclusivityAuthority {
             // happens only on an outcome that says a card now holds the
             // words.
             if pending.metadata.resolvedDestination == .work {
-                return await finishWorkRetry(claim, transcript: trimmed)
+                return await finishWorkRetry(claim, transcript: trimmed, generation: generation)
             }
             // The finish IS the ownership check, and it has to come FIRST. It
             // retires the entry only while this reservation still holds the
@@ -423,14 +521,30 @@ final class DictationService: RecordingExclusivityAuthority {
             // lapsed hold and is sending — or has already sent — these very
             // words. Handing them to the coordinator anyway is a duplicate turn
             // the person never dictated twice.
-            guard await settleAfterFinishing(claim) else {
+            guard await settleAfterFinishing(claim, generation: generation) else {
+                // Refused, so the capture is still queued — but the sentence
+                // about it belongs to this run, and a cancelled run draws no
+                // banner over what the person started next.
+                guard stillCurrent(generation) else { return false }
                 lastError = nil
                 state = .error(message: pendingRetryBusyMessage, isRetryable: true)
                 return false
             }
+            // THE LAST DOOR. The settlement above SUSPENDS — the queue clear and
+            // the count refresh are both actor hops — and an Esc that lands
+            // inside it leaves this run holding words nobody is waiting for. The
+            // hand-off is a gateway turn, which is the one thing "Press Esc to
+            // cancel" promises cannot happen after the press.
+            //
+            // `true` rather than `false`: the entry IS retired, so the capture
+            // is not still waiting and the caller must not hand a reservation
+            // back for it. What is dropped is the transcript, which is what the
+            // cancel was aimed at — the same rule a first-time capture already
+            // follows, where a cancelled run keeps nothing.
+            guard stillCurrent(generation) else { return true }
             // Legacy and explicit Chat records continue into the agent
             // round-trip.
-            onTranscript(trimmed)
+            (onRecoveredTranscript ?? onTranscript)(trimmed)
             return true
         } catch let error as AppError {
             if error.shouldPreserveForRetry {
@@ -444,6 +558,11 @@ final class DictationService: RecordingExclusivityAuthority {
                     lastErrorCode: error.errorCode
                 )
             }
+            // The diagnosis is written against the capture either way — it is
+            // true of the recording, not of the surface — but the BANNER is
+            // not: a cancelled Retry must not draw an error over whatever the
+            // person started next.
+            guard stillCurrent(generation) else { return false }
             lastError = error
             // Cause AND remedy. `localizedDescription` on a `LocalizedError`
             // is `errorDescription` alone, so the footer showed a certificate
@@ -461,6 +580,9 @@ final class DictationService: RecordingExclusivityAuthority {
                 isRetryable: error.isRetryable
             )
         } catch {
+            // Same rule as the taxonomy arm above: a cancelled Retry draws
+            // nothing.
+            guard stillCurrent(generation) else { return false }
             lastError = nil
             if pending.metadata.resolvedDestination == .work {
                 state = .error(
@@ -493,9 +615,15 @@ final class DictationService: RecordingExclusivityAuthority {
     /// survives to be recovered again — and a non-terminal outcome keeps it too.
     /// `true` only on the terminal outcome that retired the entry, so the caller
     /// knows whether the reservation still has to go back.
+    /// `generation` is the run's cancellation identity, exactly as in
+    /// `attemptRetry`. It gates the SURFACE only: the desk writes below stand
+    /// whatever happens, because a card half-written is worse than a card the
+    /// person stopped waiting for, but the banner and the error state that
+    /// describe them must not land on whatever was started after the bail.
     private func finishWorkRetry(
         _ claim: PendingRetryClaim,
-        transcript: String
+        transcript: String,
+        generation: Int
     ) async -> Bool {
         let pending = claim.entry
         // Nothing reaches the desk on behalf of a capture this window no longer
@@ -503,8 +631,7 @@ final class DictationService: RecordingExclusivityAuthority {
         // that outlived its horizon and was overtaken — and the surface that
         // took it over is publishing them itself.
         guard await PendingRetryStore.shared.confirmOwnership(claim) else {
-            lastError = nil
-            state = .error(message: pendingRetryBusyMessage, isRetryable: true)
+            presentRetryOutcome(pendingRetryBusyMessage, generation: generation)
             return false
         }
         do {
@@ -525,10 +652,9 @@ final class DictationService: RecordingExclusivityAuthority {
                     forCapture: pending.metadata.id,
                     createdAt: pending.metadata.createdAt
                 ) != nil else {
-                    lastError = nil
-                    state = .error(
-                        message: AppError.workScreenshotWriteFailed.localizedDescription,
-                        isRetryable: true
+                    presentRetryOutcome(
+                        AppError.workScreenshotWriteFailed.localizedDescription,
+                        generation: generation
                     )
                     return false
                 }
@@ -545,33 +671,45 @@ final class DictationService: RecordingExclusivityAuthority {
                 transcript: transcript
             )
             guard outcome.isTerminal else {
-                lastError = nil
-                state = .error(
-                    message: String(
-                        localized: "workboard.capture.retry.voice.message",
-                        defaultValue: "Couldn't add this recording to Work. Try again."
-                    ),
-                    isRetryable: true
-                )
+                presentRetryOutcome(Self.workRetryFailureMessage, generation: generation)
                 return false
             }
             // The card is on the desk either way, so a clear this reservation
             // can no longer make is not a failure to report — it means the
             // surface that overtook this one will retire the entry itself. The
             // count refresh inside is what the popover needs regardless.
-            _ = await settleAfterFinishing(claim)
+            _ = await settleAfterFinishing(claim, generation: generation)
             return true
         } catch {
-            lastError = nil
-            state = .error(
-                message: String(
-                    localized: "workboard.capture.retry.voice.message",
-                    defaultValue: "Couldn't add this recording to Work. Try again."
-                ),
-                isRetryable: true
-            )
+            presentRetryOutcome(Self.workRetryFailureMessage, generation: generation)
             return false
         }
+    }
+
+    /// The one sentence a Work retry prints when the desk refused it.
+    private static var workRetryFailureMessage: String {
+        String(
+            localized: "workboard.capture.retry.voice.message",
+            defaultValue: "Couldn't add this recording to Work. Try again."
+        )
+    }
+
+    /// Draw a Retry's own outcome — but only while it is still the outcome the
+    /// person is waiting for.
+    ///
+    /// Every write below this line follows an actor hop the person can press Esc
+    /// inside (the ownership check, the screenshot publication, the desk
+    /// recovery), and a banner drawn from a cancelled run lands on whatever they
+    /// started next. `lastError` goes with the sentence: the two are read as one
+    /// diagnosis by the popover's Troubleshoot affordance.
+    private func presentRetryOutcome(
+        _ message: String,
+        isRetryable: Bool = true,
+        generation: Int
+    ) {
+        guard stillCurrent(generation) else { return }
+        lastError = nil
+        state = .error(message: message, isRetryable: isRetryable)
     }
 
     /// Retire the entry this reservation holds, cancel the "Recording Saved"
@@ -591,13 +729,25 @@ final class DictationService: RecordingExclusivityAuthority {
     /// hands words to the coordinator. The deferred "Recording Saved" notice is
     /// cancelled only on a true clear: it belongs to whichever surface actually
     /// retires the capture.
+    ///
+    /// `generation` gates the SURFACE half only. The retirement, the deferred
+    /// notice and the count are facts about the queue and are settled whatever
+    /// the person pressed; the state this method leaves behind is a description
+    /// of a run, and both hops above it — the clear and the count refresh — are
+    /// suspensions an Esc can land inside. Written unconditionally, that
+    /// description reached a capture started after the bail: `.idle` over a live
+    /// recording, or a backlog banner over a working view.
     @discardableResult
-    private func settleAfterFinishing(_ claim: PendingRetryClaim) async -> Bool {
+    private func settleAfterFinishing(
+        _ claim: PendingRetryClaim,
+        generation: Int
+    ) async -> Bool {
         let retired = await PendingRetryStore.shared.clear(claim)
         if retired {
             PendingRetryGuard.cancelDeferredNotification(for: claim.id)
         }
         await refreshPendingRetryCount()
+        guard stillCurrent(generation) else { return retired }
         guard pendingRetryCount > 0 else {
             lastError = nil
             state = .idle
@@ -609,8 +759,11 @@ final class DictationService: RecordingExclusivityAuthority {
         // Retry button on `pendingRetryCount`, so a capture that recorded no
         // code — armed by the Shortcuts lane before anything failed — still
         // gets its button.
-        lastError = (await PendingRetryStore.shared.pendingErrorCode())
-            .map { AppError.from(errorCode: $0, message: nil) }
+        let backlogCode = await PendingRetryStore.shared.pendingErrorCode()
+        // One more hop, one more check: the read above suspends like the two
+        // before it, and this is the last statement that can write a surface.
+        guard stillCurrent(generation) else { return retired }
+        lastError = backlogCode.map { AppError.from(errorCode: $0, message: nil) }
         state = .error(
             message: String(
                 localized: "pendingRetry.card.count",
@@ -647,8 +800,15 @@ final class DictationService: RecordingExclusivityAuthority {
         // prompt now; a determined `.denied`/`.restricted` surfaces the existing
         // `speechPermissionDenied` error and does NOT record. Cloud providers
         // no-op. `.authorized` / just-granted continues into the session.
+        recordingStartToken &+= 1
+        let startToken = recordingStartToken
         Task {
             let speechStatus = await VoicePermissions.ensureSpeechRecognitionForActiveProvider()
+            // The bail lands HERE in the common case: the prompt is a system
+            // sheet and this service is `.idle` behind it, so Esc reaches
+            // nothing else. A withdrawn press asks for no microphone and draws
+            // no banner — the person already knows why nothing is recording.
+            guard startToken == recordingStartToken else { return }
             if speechStatus == .denied || speechStatus == .restricted {
                 lastError = .speechPermissionDenied
                 state = .error(
@@ -657,7 +817,7 @@ final class DictationService: RecordingExclusivityAuthority {
                 )
                 return
             }
-            beginRecordingSession()
+            beginRecordingSession(startToken: startToken)
         }
     }
 
@@ -666,7 +826,7 @@ final class DictationService: RecordingExclusivityAuthority {
     /// underlying `AudioRecorder`. Split out of `startRecording()` so the
     /// Speech-Recognition preflight can run (and bail) BEFORE any of this state
     /// is taken.
-    private func beginRecordingSession() {
+    private func beginRecordingSession(startToken: Int) {
         // macOS mic lease: refuse to start if the main-window composer mic (a
         // SEPARATE AVAudioRecorder instance) is already capturing — two concurrent
         // starts on the shared input produce the HAL "there already is a thread" /
@@ -702,6 +862,18 @@ final class DictationService: RecordingExclusivityAuthority {
         Task {
             do {
                 let started = try await recorder.startRecording()
+                // Cancelled while the microphone was coming up. The primitive
+                // has no handle to cancel — `AudioRecorder.cancelRecording()`
+                // returns immediately while `audioRecorder` is still nil — so
+                // the teardown has to happen HERE, on the far side of the hop
+                // that built it. Only when no live capture owns the recorder:
+                // a NEW Ask started after the bail is the rightful owner of the
+                // microphone this call brought up, and tearing it down would
+                // stop the capture the person is watching.
+                guard startToken == recordingStartToken else {
+                    if state != .recording { recorder.cancelRecording() }
+                    return
+                }
                 guard started else {
                     stopDisplayTimer()
                     state = .error(
@@ -711,12 +883,17 @@ final class DictationService: RecordingExclusivityAuthority {
                     return
                 }
             } catch AudioRecorderError.permissionDenied {
+                // A withdrawn press draws nothing, on this arm as on the
+                // success one: the banner would land on whatever the person
+                // started after the bail.
+                guard startToken == recordingStartToken else { return }
                 stopDisplayTimer()
                 state = .error(
                     message: String(localized: "Microphone access denied. Open System Settings → Privacy & Security → Microphone to enable."), // xcstrings
                     isRetryable: false
                 )
             } catch {
+                guard startToken == recordingStartToken else { return }
                 stopDisplayTimer()
                 state = .error(message: error.localizedDescription, isRetryable: false)
             }
@@ -726,6 +903,18 @@ final class DictationService: RecordingExclusivityAuthority {
     private func stopAndProcess() {
         guard state == .recording else { return }
         stopDisplayTimer()
+        // A stop ENDS the start, whichever way it goes. `.recording` is declared
+        // before the primitive's own permission hop completes, so a second press
+        // during it lands here while the microphone is still coming up: the
+        // recorder holds nothing, `stopRecording()` answers nil, and the error
+        // below is written over a startup that then finished and opened the
+        // microphone anyway — live behind a surface whose only key clears the
+        // banner. Moving the token is what that resumed start reads.
+        //
+        // A stop that DOES find audio moves it too: by then the start it
+        // invalidates has long since finished, so the bump reaches nothing and
+        // the rule stays one sentence instead of two.
+        recordingStartToken &+= 1
 
         guard let audioData = recorder.stopRecording() else {
             state = .error(
@@ -737,9 +926,13 @@ final class DictationService: RecordingExclusivityAuthority {
 
         state = .processing
         let startTime = recordingStartTime ?? Date()
+        // The run's identity, taken at the stop. A cancel while it is suspended
+        // moves the generation, and every terminal step below reads this token
+        // before it acts.
+        let generation = transcriptionGeneration
 
         Task {
-            await processAudio(audioData: audioData, startTime: startTime)
+            await processAudio(audioData: audioData, startTime: startTime, generation: generation)
         }
     }
 
@@ -749,12 +942,16 @@ final class DictationService: RecordingExclusivityAuthority {
     /// Conduck V1 has no audio compression and no per-mode/per-app personalization
     /// layers — the only request inputs are audio bytes, API key, and an optional
     /// language hint.
-    private func processAudio(audioData: Data, startTime: Date) async {
+    private func processAudio(audioData: Data, startTime: Date, generation: Int) async {
         // ATOMIC snapshot: (presetID, apiKey, provider) in
         // one actor hop. Passed through to processTranscription so the
         // provider resolved here is the SAME preset whose key we read.
         let preferredLanguage = await SettingsManager.shared.getPreferredLanguage()
         let snapshot = await SettingsManager.shared.activeSTTSnapshot()
+        // A cancel landed while the settings hops were suspended. Nothing has
+        // been spent yet, so the run simply stops here — no error surface over a
+        // popover the person already closed, and no upload they cancelled.
+        guard stillCurrent(generation) else { return }
         // The key question through `STTKeyReadiness` — in-process providers
         // (Apple on-device) and the keyless (`.none` auth) BYO endpoint need no
         // key, and both arms live inside its `requiresKey`.
@@ -782,6 +979,7 @@ final class DictationService: RecordingExclusivityAuthority {
         case .ready(let key):
             apiKey = key
         case .notConfigured:
+            guard stillCurrent(generation) else { return }
             lastError = .sttMissingAPIKey
             state = .error(
                 message: AppError.sttMissingAPIKey.localizedDescription,
@@ -789,11 +987,22 @@ final class DictationService: RecordingExclusivityAuthority {
             )
             return
         case .unreadable:
+            // The guard precedes the PRESERVATION as well as the banner: a
+            // capture the person cancelled must not come back as a Retry they
+            // never parked.
+            guard stillCurrent(generation) else { return }
             await preserveForRetry(
                 error: .sttKeyUnreadable,
                 audioData: audioData,
-                preferredLanguage: preferredLanguage
+                preferredLanguage: preferredLanguage,
+                generation: generation
             )
+            // ASKED AGAIN, because the preservation above suspends. An Esc plus
+            // a fresh recording inside that window leaves this run writing
+            // `.error` over a LIVE microphone: the HUD disappears behind a
+            // banner, the stop that follows has nothing to stop, and the
+            // recording the person cancelled is the one Retry offers back.
+            guard stillCurrent(generation) else { return }
             lastError = .sttKeyUnreadable
             // The CAUSE LINE ONLY, not `descriptionWithRecovery`. 75's cause
             // line already carries its own remedy ("unlock it and try again") —
@@ -810,6 +1019,10 @@ final class DictationService: RecordingExclusivityAuthority {
             )
             return
         }
+
+        // A cancel during the key resolve above. Checked HERE rather than only
+        // at the hand-off, so a cancelled capture never buys the round trip.
+        guard stillCurrent(generation) else { return }
 
         // Stage to a temp file URL — STTClient.transcribe owns lifecycle via
         // defer-remove, so this method does not need to clean up post-call.
@@ -833,7 +1046,8 @@ final class DictationService: RecordingExclusivityAuthority {
             customModel: snapshot.customModel,
             customConfig: snapshot.customConfig,
             preferredLanguage: preferredLanguage,
-            startTime: startTime
+            startTime: startTime,
+            generation: generation
         )
     }
 
@@ -850,7 +1064,8 @@ final class DictationService: RecordingExclusivityAuthority {
         customModel: String?,
         customConfig: CustomSTTConfig?,
         preferredLanguage: String?,
-        startTime: Date
+        startTime: Date,
+        generation: Int
     ) async {
         do {
             let response = try await STTClient.shared.transcribe(
@@ -861,6 +1076,12 @@ final class DictationService: RecordingExclusivityAuthority {
                 customModel: customModel,
                 customConfig: customConfig
             )
+
+            // THE LINE THE CANCEL IS FOR. `onTranscript` below is a send — the
+            // words go to a gateway the moment they are handed over — so a run
+            // the person cancelled while the provider was working stops here,
+            // with nothing sent and nothing drawn.
+            guard stillCurrent(generation) else { return }
 
             let trimmed = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
@@ -878,11 +1099,20 @@ final class DictationService: RecordingExclusivityAuthority {
             onTranscript(trimmed)
 
         } catch let error as AppError {
+            // Same rule on the failure side, and it covers the PRESERVATION
+            // too: a cancelled capture must not reappear as a Retry card for
+            // words the person threw away.
+            guard stillCurrent(generation) else { return }
             await preserveForRetry(
                 error: error,
                 audioData: audioData,
-                preferredLanguage: preferredLanguage
+                preferredLanguage: preferredLanguage,
+                generation: generation
             )
+            // ASKED AGAIN — the preservation suspends, and the twin above says
+            // why: a stale `.error` written after an Esc hides the microphone
+            // the person started next.
+            guard stillCurrent(generation) else { return }
             lastError = error
             // Cause AND remedy, for the reason the retry path above states —
             // this is the FIRST-attempt twin of that sink and the two must not
@@ -892,6 +1122,7 @@ final class DictationService: RecordingExclusivityAuthority {
                 isRetryable: error.isRetryable
             )
         } catch {
+            guard stillCurrent(generation) else { return }
             lastError = nil
             state = .error(message: error.localizedDescription, isRetryable: false)
         }
@@ -923,7 +1154,8 @@ final class DictationService: RecordingExclusivityAuthority {
     private func preserveForRetry(
         error: AppError,
         audioData: Data,
-        preferredLanguage: String?
+        preferredLanguage: String?,
+        generation: Int
     ) async {
         guard error.shouldPreserveForRetry else { return }
         let captureID = UUID()
@@ -943,6 +1175,17 @@ final class DictationService: RecordingExclusivityAuthority {
                 lastErrorCode: error.errorCode
             )
         )
+        // The disk write is a SUSPENSION, so the cancel can land inside it —
+        // and the rule the caller's guard states is only kept if it survives
+        // that: a capture the person threw away must not come back as a Retry
+        // they never parked. The entry is retired by the id this call just
+        // wrote and by no other, under the store's own lease, so a capture
+        // another surface has since taken over is left alone.
+        if !stillCurrent(generation) {
+            if let claim = await PendingRetryStore.shared.claim(id: captureID) {
+                _ = await PendingRetryStore.shared.clear(claim)
+            }
+        }
         // The popover's Retry is drawn from `lastError`; the COUNT is what says
         // whether more than this capture is waiting, and it is read once here
         // rather than on every render.

@@ -304,11 +304,11 @@ final class PendingRetryOwnershipHandoffTests: XCTestCase {
             "The provider round trip no longer extends the reservation."
         )
         let gate = try XCTUnwrap(
-            attempt.range(of: "guard await settleAfterFinishing(claim) else"),
+            attempt.range(of: "guard await settleAfterFinishing(claim, generation: generation) else"),
             "The Chat lane no longer gates on whether the finish was allowed."
         )
         let handOff = try XCTUnwrap(
-            attempt.range(of: "onTranscript(trimmed)"),
+            attempt.range(of: "(onRecoveredTranscript ?? onTranscript)(trimmed)"),
             "The Chat hand-off is gone from this lane — update this guard."
         )
         XCTAssertLessThan(gate.upperBound, handOff.lowerBound,
@@ -334,6 +334,25 @@ final class PendingRetryOwnershipHandoffTests: XCTestCase {
                 "if retired { PendingRetryGuard.cancelDeferredNotification(for: claim.id) }"
             ),
             "The deferred `Recording Saved` notice is cancelled on a clear that was refused."
+        )
+
+        // THE VERDICT ITSELF, at every exit. The ordering assertions above hold
+        // for a settlement that always answers `true`, and the one caller reads
+        // this answer as permission to hand the words to a gateway: a clear that
+        // was REFUSED — another surface overtook a lapsed hold and is sending
+        // these very words — would then dispatch them a second time. Every
+        // return in this body is the store's own answer, and none of them is a
+        // literal.
+        let verdicts = Self.collapsed(settle)
+            .components(separatedBy: "return ")
+            .dropFirst()
+            .map { String($0.prefix(while: { !$0.isWhitespace })) }
+        XCTAssertFalse(verdicts.isEmpty, "The settlement answers nothing at all: \(settle)")
+        XCTAssertEqual(
+            Set(verdicts), ["retired"],
+            """
+            A settlement exit answers with something other than the store's verdict             (\(verdicts.joined(separator: ", "))). `true` there lets a refused clear pass for a             successful one and the recovered words go out twice.
+            """
         )
     }
 
@@ -366,6 +385,61 @@ final class PendingRetryOwnershipHandoffTests: XCTestCase {
             + "publication verdict; any looser reading tells a Chat user their words are safe "
             + "somewhere they are not."
         )
+    }
+
+    /// The phone root has to hear about a capture ANOTHER surface parked.
+    ///
+    /// Every refresh on that screen hangs off a lifecycle hop — launch,
+    /// foreground, Settings dismissal — and a foregrounded phone gets none of
+    /// them. CarPlay queues a failed transcription and speaks "Add the words on
+    /// your iPhone"; the Watch relay parks a published Work recording and the
+    /// wrist says the same; and the phone those sentences name showed no card at
+    /// all until the next background/foreground round trip. The store announces
+    /// both the arm and the retirement for exactly this, and the menu bar's
+    /// `DictationService` was its only listener.
+    ///
+    /// Source on the host side (a SwiftUI body cannot be mounted here) and
+    /// BEHAVIOURAL on the store side: the announcement has to actually fire on
+    /// an arm, or the subscription is wired to nothing.
+    func testThePhoneRootRefreshesItsRetryCardWhenAnotherSurfaceParksACapture() async throws {
+        let host = Self.collapsed(try RefusalLaneSource.source(at: "Conduck/ContentView.swift"))
+
+        XCTAssertTrue(
+            host.contains(
+                "NotificationCenter.default.publisher(for: PendingRetryStore.queueDidChangeNotification)"
+            ),
+            "The phone root does not observe the queue's own announcement, so a capture parked by "
+            + "CarPlay, the Watch relay or a Shortcut host stays invisible until a lifecycle hop."
+        )
+        XCTAssertEqual(
+            Self.collapsed(host).components(
+                separatedBy: "handlePendingRetryQueueChange()"
+            ).count - 1,
+            3,
+            "Both layouts — the iPad split and the phone stack — must subscribe, beside the one "
+            + "declaration; a branch left out is a whole device class that never learns."
+        )
+        XCTAssertTrue(
+            host.contains(
+                "guard !isRetrying, !confirmingPendingRetryDiscard else { return } "
+                + "Task { await refreshPendingRetryState() }"
+            ),
+            """
+            The notification-driven refresh no longer steps aside while this surface owns the             queue. A retry in flight writes the card's verdict itself on every exit, and a             discard confirmation is an alert attached to the card this refresh can remove.
+            """
+        )
+
+        // The announcement itself, measured. A subscriber wired to a
+        // notification nothing posts is the same as no subscriber.
+        let expectation = XCTNSNotificationExpectation(
+            name: PendingRetryStore.queueDidChangeNotification
+        )
+        try await store.save(
+            audioData: Data(repeating: 0x5A, count: 128),
+            metadata: Self.metadata(),
+            workImageData: nil
+        )
+        await fulfillment(of: [expectation], timeout: 2)
     }
 
     // MARK: - Fixtures
@@ -401,6 +475,100 @@ final class PendingRetryOwnershipHandoffTests: XCTestCase {
             )
         )
         try JSONEncoder().encode(lapsed).write(to: sidecarURL(id), options: [.atomic])
+    }
+
+    // MARK: - Absent is not the same refusal as held
+
+    /// `claim(id:duration:)` answers nil for a capture nobody queued AND for one
+    /// somebody else is holding, and the two demand opposite behavior: the first
+    /// leaves the bytes in hand as the only copy, so the caller's own retry is
+    /// the only thing that can finish it; the second must be refused, or two
+    /// surfaces transcribe one recording and attach different words to one card.
+    ///
+    /// The case that makes the distinction load-bearing is a PARTIAL save: the
+    /// sidecar and the audio commit, the screenshot's write throws, and the
+    /// caller's local bookkeeping records nothing — while reconciliation adopts
+    /// the record and hands it to whoever asks. Asked through `claim` alone the
+    /// writer reads that refusal as "nothing was ever queued".
+    func testAReservationTellsAnAbsentCaptureApartFromOneSomebodyElseHolds() async throws {
+        let never = UUID()
+        guard case .absent = await store.reserve(id: never, duration: 600) else {
+            return XCTFail("a capture nobody queued must read as absent, not as somebody's hold")
+        }
+
+        let waiting = Self.metadata(destination: .work)
+        try await store.save(
+            audioData: Data("the only copy".utf8),
+            metadata: waiting,
+            workImageData: nil
+        )
+        guard case .claimed(let mine) = await store.reserve(id: waiting.id, duration: 600) else {
+            return XCTFail("a queued capture nobody holds is reservable")
+        }
+        XCTAssertEqual(mine.id, waiting.id)
+
+        guard case .heldElsewhere = await store.reserve(id: waiting.id, duration: 600) else {
+            return XCTFail(
+                """
+                MEASURED: a capture under a live reservation answered the same way an absent one \
+                does. Every caller that reads that refusal as absence goes on to transcribe a \
+                recording another surface is already finishing.
+                """
+            )
+        }
+
+        // …and the hold is what makes the difference, not the entry: give it
+        // back and the same id is reservable again.
+        await store.release(mine)
+        guard case .claimed = await store.reserve(id: waiting.id, duration: 600) else {
+            return XCTFail("a released capture is the next tap's to take")
+        }
+    }
+
+    /// The partial save itself: the record and the recording land, the picture's
+    /// write throws, and the call reports failure. The entry is REAL — the next
+    /// read adopts it — so a surface that treated its own failed save as proof
+    /// of absence would reserve nothing and race whoever claimed it.
+    func testAPartiallySavedCaptureIsStillAnEntryTheQueueWillHandOut() async throws {
+        let partial = Self.metadata(destination: .work)
+        // A picture the file system will refuse: the container's image path for
+        // this capture is occupied by a DIRECTORY, so the write throws after the
+        // sidecar and the audio have already committed.
+        let imageURL = container.appendingPathComponent(PendingRetryFiles.workImage(partial.id))
+        try FileManager.default.createDirectory(
+            at: container, withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: imageURL, withIntermediateDirectories: true
+        )
+        // Non-empty, so no atomic replace can quietly succeed by removing it.
+        try Data("occupied".utf8).write(to: imageURL.appendingPathComponent("occupant"))
+
+        do {
+            try await store.save(
+                audioData: Data("the only copy".utf8),
+                metadata: partial,
+                workImageData: Data("a picture that cannot land".utf8)
+            )
+            return XCTFail("the fixture must actually refuse the picture's write")
+        } catch {
+            // Expected: the picture's failure propagates, exactly as the
+            // recording's does.
+        }
+
+        guard case .claimed(let adopted) = await store.reserve(id: partial.id, duration: 600) else {
+            return XCTFail(
+                """
+                MEASURED: a save that threw after committing the record and the recording left an \
+                entry the queue hands out, and the reservation could not take it — so the surface \
+                that wrote it retries beside whoever claims it.
+                """
+            )
+        }
+        XCTAssertEqual(adopted.id, partial.id)
+        guard case .heldElsewhere = await store.reserve(id: partial.id, duration: 600) else {
+            return XCTFail("…and once reserved it refuses the second surface by name")
+        }
     }
 
     private static func metadata(

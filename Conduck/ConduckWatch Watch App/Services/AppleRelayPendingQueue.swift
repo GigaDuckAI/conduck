@@ -91,6 +91,16 @@ final class AppleRelayPendingQueue {
         /// drain. Additive like `providerID` (a persisted blob predating this
         /// field decodes nil).
         var conversationID: String?
+        /// The gateway the capture was ADDRESSED to, when the capture named one
+        /// and no conversation existed yet — the Ask chooser's pick for a `.new`
+        /// draft. Persisted for the same reason `conversationID` is: the reply
+        /// that settles this entry may land in a process that never saw the
+        /// pick, and without it the deferred hop falls through to the pointer /
+        /// default arms and delivers words addressed to one gateway to another.
+        /// Additive Codable (a blob predating the field decodes nil ⇒ resolve as
+        /// before), and written ONLY for a chat entry with no pin, so every
+        /// other entry's serialized shape is byte-identical to what it was.
+        var backendRef: String?
         /// Claim-token correlation id — the SAME id every delivery attempt for
         /// this entry uses, so the iPhone dedup ledger converges retries onto
         /// one transcription. Additive Codable: a legacy blob decodes nil and
@@ -204,6 +214,7 @@ final class AppleRelayPendingQueue {
         language: String?,
         providerID: String? = nil,
         conversationID: UUID? = nil,
+        backendRef: String? = nil,
         destination: WatchCaptureDestination = .chat
     ) -> URL {
         let ownedURL = takeOwnership(of: audioFileURL, requestID: requestID)
@@ -215,6 +226,10 @@ final class AppleRelayPendingQueue {
                 enqueuedAt: Date().timeIntervalSince1970,
                 providerID: providerID,
                 conversationID: conversationID?.uuidString,
+                // A pin and a ref are mutually exclusive answers to "where does
+                // this land": a pinned entry already names its conversation, and
+                // that conversation names its own gateway.
+                backendRef: conversationID == nil ? backendRef : nil,
                 requestID: requestID,
                 // The first attempt follows enqueue immediately (enqueue-first
                 // in `runRelay`), so the nil→`enqueuedAt` staleness fallback
@@ -584,6 +599,19 @@ final class AppleRelayPendingQueue {
         /// nothing. The words are all that can be rescued, so they are written
         /// to the desk FIRST and the entry is claimed only if that write lands.
         case workWordsOnly
+        /// Chat locally, Work on the receipt. `result.work == true` is written
+        /// by ONE line on the iPhone (`workSaved = workCardID != nil`), so a
+        /// reply carrying it is a reply about a capture that reached the DESK —
+        /// while this entry's own destination says gateway. Both readings
+        /// cannot be true, and the queue may not resolve the disagreement by
+        /// picking the one that sends: this lane exists to keep a private
+        /// thought off a gateway, and the two mistakes do not cost the same
+        /// (a retained entry is a delayed ask; a dispatched one is a thought
+        /// the person deliberately kept private, spoken to an agent). So
+        /// nothing is claimed, nothing is sent, and the recording stays exactly
+        /// where it is. Unreachable while the two halves agree, which is why an
+        /// ordinary chat reply — whose stamp is absent — never meets it.
+        case receiptContradictsDestination
     }
 
     /// The classification, pure. Absent destination already read as `.chat` by
@@ -598,7 +626,12 @@ final class AppleRelayPendingQueue {
         hasWords: Bool = true
     ) -> RelaySettlement {
         switch destination {
-        case .chat: return .converseHop
+        case .chat:
+            // The stamp is a SECOND witness to the destination, and it is
+            // consulted only to refuse: a chat entry whose reply says the
+            // iPhone put this capture on the desk is one of the two readings
+            // being wrong, and neither can be trusted enough to send.
+            return workSaved ? .receiptContradictsDestination : .converseHop
         case .work:
             guard workSaved else { return .workWordsOnly }
             return hasWords ? .workAcknowledged : .workRecordingOnly
@@ -642,6 +675,12 @@ final class AppleRelayPendingQueue {
             hasWords: carriesWords(reply.text)
         )
         switch outcome {
+        case .receiptContradictsDestination:
+            // BEFORE the claim, deliberately: the claim deletes the recording,
+            // and the one thing that is certain here is that we do not know
+            // where this capture belongs. Nothing is consumed, so a re-fire —
+            // or an operator who fixes the stamp — still has everything.
+            return .destinationContradicted
         case .converseHop:
             guard claim() else { return .superseded }
             await completeChat(reply.text)
@@ -676,6 +715,12 @@ final class AppleRelayPendingQueue {
         /// A Work reply's words could not be written to the desk, so nothing
         /// was claimed and nothing was lost.
         case workWordsUnwritten
+        /// The reply and the entry disagree about where this capture belongs,
+        /// so it was neither claimed nor delivered. Distinct from
+        /// `workWordsUnwritten` because it is not a transient write failure the
+        /// next drain fixes — it is a fault, and the log line is the only thing
+        /// anyone can act on.
+        case destinationContradicted
     }
 
     /// The ONE settled-success path — used by BOTH `drain()` and
@@ -713,6 +758,14 @@ final class AppleRelayPendingQueue {
             // next drain re-fires it, and by then the iPhone may well answer
             // with the durability stamp instead.
             WatchLog.note(.queue, "queue.settle.requeued", ["id": WatchLog.shortID(requestID)])
+        case .destinationContradicted:
+            // Silent on the wrist for the same reason and one more: there is no
+            // true sentence to show. Saying "saved to Work" or "sent" would
+            // each assert the half of the disagreement we refused to pick.
+            WatchLog.error(.queue, "queue.settle.destinationMismatch", [
+                "id": WatchLog.shortID(requestID),
+                "entry": entry.captureDestination.rawValue
+            ])
         }
     }
 
@@ -790,7 +843,19 @@ final class AppleRelayPendingQueue {
     /// transcribed ask actually reaches the agent — mirroring the live
     /// `runRelay` → `startConverseHop` chain.
     private func completeEntry(_ entry: Entry, text: String) async {
-        WatchLog.note(.queue, "queue.complete", ["id": WatchLog.shortID(entry.requestID ?? "")])
+        WatchLog.note(.queue, "queue.complete", [
+            "id": WatchLog.shortID(entry.requestID ?? ""),
+            // The BINDING SHAPE, because one of its four combinations is a
+            // known degradation and is otherwise invisible in the field: an
+            // entry written by a build that predates `backendRef` carries
+            // neither a pin nor a gateway, so the replay mints against the
+            // CURRENT default. Delivering it is the honest answer (see the
+            // resolver's replay comment) but it is still a guess, and this is
+            // the only line that says a guess was made. Never the values —
+            // ids and refs stay out of the log.
+            "bound": entry.conversationID != nil,
+            "addressed": entry.backendRef != nil
+        ])
         postTranscriptNotification()
         // Claim already deleted the queue-owned audio; belt-and-braces for a
         // degraded entry whose clip never made it into the owned directory.
@@ -804,9 +869,34 @@ final class AppleRelayPendingQueue {
         // `canAcceptDeferredDispatch` gate and dispatch a SECOND concurrent
         // hop (state + in-flight-marker clobber).
         WatchRecordingService.shared.clearRelayDeferralError()
+        await Self.deferredChatDispatch(
+            text,
+            entry.conversationID.flatMap { UUID(uuidString: $0) },
+            // The gateway this capture was addressed to, when it named one. Read
+            // off the ENTRY, never recovered from the current default or from
+            // another capture's live hint — an explicit choice that cannot be
+            // read back is not one this queue may guess at.
+            entry.backendRef
+        )
+    }
+
+    /// The deferred CHAT dispatch. A SEAM, for one reason: the defect this call
+    /// site keeps having is a DROPPED ARGUMENT — the entry's pin, or the
+    /// gateway it was addressed to, not handed over — and no pure helper can
+    /// catch that, because a helper that computes the binding is still passed
+    /// (or not passed) here. Substituting it is how a test reads what this
+    /// queue actually hands the service.
+    ///
+    /// Default is the real hop, and the real hop is the ONLY production value.
+    static var deferredChatDispatch: @MainActor (String, UUID?, String?) async -> Void = liveDeferredChatDispatch
+
+    /// The production dispatch, named so a test can put it back.
+    static let liveDeferredChatDispatch: @MainActor (String, UUID?, String?) async -> Void = {
+        transcript, conversationID, backendRef in
         await WatchRecordingService.shared.startDeferredConverseHop(
-            transcript: text,
-            boundTo: entry.conversationID.flatMap { UUID(uuidString: $0) }
+            transcript: transcript,
+            boundTo: conversationID,
+            addressedTo: backendRef
         )
     }
 
@@ -1147,7 +1237,8 @@ final class AppleRelayPendingQueue {
     private func postWorkNotification(_ settlement: RelaySettlement) {
         let body: String
         switch settlement {
-        case .converseHop:
+        case .converseHop, .receiptContradictsDestination:
+            // Neither settled anything on the desk, so neither has a banner.
             return
         case .workAcknowledged:
             body = String(

@@ -248,7 +248,10 @@ struct MacGeneralCategory: View {
             }
             .settingsCardPassiveRow()
         } header: {
-            Text(LocalizedStringResource("settings.mac.general.shortcut.header", defaultValue: "Keyboard Shortcut"))
+            // Plural: three recorder rows sit under it. New wording takes a NEW
+            // key — a reused one ships every existing translation of the old
+            // singular against the new English.
+            Text(LocalizedStringResource("settings.mac.general.shortcuts.header", defaultValue: "Keyboard Shortcuts"))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.mac.general.shortcut.footerModes",

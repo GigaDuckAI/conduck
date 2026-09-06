@@ -8022,6 +8022,50 @@
         }
       }
     },
+    "quitGuard.unsaved.body.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Quitting now loses what was captured. Try Again is still on the capture."
+          }
+        }
+      }
+    },
+    "quitGuard.unsaved.button.keep.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Keep the Capture"
+          }
+        }
+      }
+    },
+    "quitGuard.unsaved.multiple.title.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld captures haven’t reached your desk"
+          }
+        }
+      }
+    },
+    "quitGuard.unsaved.single.title.v2" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A capture hasn’t reached your desk"
+          }
+        }
+      }
+    },
     "Read the setup guide ↗" : {
 
     },
@@ -10739,13 +10783,13 @@
         }
       }
     },
-    "settings.mac.general.shortcut.header" : {
+    "settings.mac.general.shortcuts.header" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Keyboard Shortcut"
+            "value" : "Keyboard Shortcuts"
           }
         }
       }
@@ -23523,6 +23567,17 @@
         }
       }
     },
+    "workboard.menuBar.savedQueued" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "On its way to Work. Nothing was sent."
+          }
+        }
+      }
+    },
     "workboard.menuBar.saved.open.help" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23882,6 +23937,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Stop and Save"
+          }
+        }
+      }
+    },
+    "workboard.voice.stopped.body" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The recording is on your desk. Try Again adds the words to that same card."
+          }
+        }
+      }
+    },
+    "workboard.voice.stopped.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcription stopped"
           }
         }
       }

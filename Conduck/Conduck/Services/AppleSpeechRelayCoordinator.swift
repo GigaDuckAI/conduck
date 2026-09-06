@@ -411,15 +411,24 @@ final class AppleSpeechRelayCoordinator {
         // `WatchWorkRelayPhoneTests` asserts this structurally by reading
         // this source file, because the failure mode is a silent one line.
         var workCardID: UUID?
+        // The clip, held for the length of the request. It is read once, for
+        // the desk write, and kept because the SAME bytes are what a settled
+        // speech failure parks for the iPhone's retry card — by then the file
+        // is gone (both the transcribe arms and this scope's defer delete it)
+        // and the wrist has been told to stop keeping its own copy. ~50 KB by
+        // wrist-side policy, so holding it costs the request nothing.
+        var workAudio: Data?
         if Self.isWorkDestination(destination) {
             do {
                 // The bytes must be read HERE: the transcribe arms below hand
                 // the URL to `STTClient`, which defer-deletes it, and this
                 // scope's own defer deletes it on every exit. After those, the
                 // recording exists nowhere but on the wrist.
+                let audio = try Data(contentsOf: audioURL)
+                workAudio = audio
                 workCardID = try await Self.publishRelayedWorkRecording(
                     requestID: requestID,
-                    audioURL: audioURL
+                    audio: audio
                 )
             } catch {
                 // Retryable BY CONSTRUCTION (see `workPublicationFailure`):
@@ -476,16 +485,41 @@ final class AppleSpeechRelayCoordinator {
                 text = response.text
             }
             // ── Work phase 2: the words join the recording ──────────────
-            // A throw here is NOT a failure of the capture — the card is
-            // already standing — so the wrist still gets its transcript and
-            // the stamp. The desk is left with a playable recording the
-            // in-app retry surfaces can still fill in, which is exactly the
-            // state the two-phase design exists to produce. A SETTLED throw
-            // says the same thing with an empty transcript rather than an
-            // error code (`acknowledgesRecording(after:)`), so the wrist can
-            // release a clip the desk already holds.
+            // The stamp means "the desk holds this capture", and the wrist
+            // DELETES its only copy of the clip on reading it — so it may only
+            // be sent once phase 2 has actually landed. A refused write is
+            // answered on the same retryable verdict phase 1 uses: the wrist
+            // keeps the entry, keeps the clip, and re-fires the same requestID,
+            // which republishes idempotently and tries the words again. The one
+            // answer a re-fire cannot improve on is `.notAudio` — the id names a
+            // card of another kind, which every attempt reproduces — so that one
+            // settles as the wordless acknowledgement rather than looping on an
+            // entry that never ages out.
             if let workCardID {
-                await Self.attachRelayedWorkTranscript(text, toCard: workCardID)
+                switch await Self.attachRelayedWorkTranscript(text, toCard: workCardID) {
+                case .attached:
+                    break
+                case .settledWithoutWords:
+                    shipWorkRecordingAcknowledgement(
+                        requestID: requestID,
+                        preferMessage: replyPrefersMessage
+                    )
+                    #if DEBUG
+                    print("[Phone] Work relay phase 2 settled without words — acknowledged")
+                    #endif
+                    return
+                case .retryable:
+                    let failure = Self.workPublicationFailure
+                    sendReply(
+                        requestID: requestID,
+                        errorCode: failure.errorCode,
+                        preferMessage: replyPrefersMessage
+                    )
+                    #if DEBUG
+                    print("[Phone] Work relay phase 2 refused — wrist keeps the clip")
+                    #endif
+                    return
+                }
             }
             // Cache BEFORE shipping: a duplicate landing between ship and
             // in-flight removal must already see the verdict — INCLUDING the
@@ -510,7 +544,24 @@ final class AppleSpeechRelayCoordinator {
             // no re-fire will ever add the words, so the wrist is owed an
             // acknowledgement rather than a failure — see
             // `acknowledgesRecording(after:)`.
-            if workCardID != nil, Self.acknowledgesRecording(after: appError) {
+            if let workCardID, Self.acknowledgesRecording(after: appError) {
+                // The wrist's receipt for this state — "Saved to Work. Add the
+                // words on your iPhone." — names an iPhone action, and CarPlay
+                // speaks the same sentence for the same state because its Work
+                // lane parks the capture before it ever reaches speech
+                // (`CarPlayRecordingService.secureWorkNote`), so the phone's
+                // retry card really can finish it. This lane is the same
+                // promise made to a wrist that is about to DELETE its clip on
+                // reading the acknowledgement, so it parks the same record here
+                // — under the desk card's own id, marked `.published`, so a
+                // recovery attaches the words to that card rather than
+                // resurrecting a second recording beside it.
+                await Self.preserveRelayedWorkWords(
+                    cardID: workCardID,
+                    audio: workAudio,
+                    language: language,
+                    errorCode: appError.errorCode
+                )
                 shipWorkRecordingAcknowledgement(
                     requestID: requestID,
                     preferMessage: replyPrefersMessage
@@ -540,9 +591,21 @@ final class AppleSpeechRelayCoordinator {
             // `audioProcessingFailed` is permanent ⇒ cached; a future
             // re-classification is respected automatically).
             let fallback = AppError.audioProcessingFailed
-            // Same reading as the typed arm above: a published recording is a
-            // kept capture, and this verdict is settled, so the reply says so.
-            if workCardID != nil, Self.acknowledgesRecording(after: fallback) {
+            // Same reading as the typed arm above, and the same debt: a
+            // published recording is a kept capture, this verdict is settled,
+            // and the acknowledgement the reply ships is the one-way door the
+            // wrist deletes its clip on. So the record is parked HERE too — the
+            // arm that reads an untyped throw is not a different promise from
+            // the arm that reads a typed one, and shipping the same sentence
+            // from only one of them is how "Add the words on your iPhone" points
+            // at nothing.
+            if let workCardID, Self.acknowledgesRecording(after: fallback) {
+                await Self.preserveRelayedWorkWords(
+                    cardID: workCardID,
+                    audio: workAudio,
+                    language: language,
+                    errorCode: fallback.errorCode
+                )
                 shipWorkRecordingAcknowledgement(
                     requestID: requestID,
                     preferMessage: replyPrefersMessage
@@ -738,6 +801,68 @@ final class AppleSpeechRelayCoordinator {
         RelayReplyCache.CachedReply(text: "", errorCode: nil, workSaved: true)
     }
 
+    /// Park the clip so the iPhone can still buy the words the wrist is about
+    /// to stop waiting for.
+    ///
+    /// The acknowledgement is a one-way door: it is cached, so no re-fire ever
+    /// reaches the speech provider again, and the wrist deletes its queued
+    /// recording on reading it. Everything the wrist's receipt then promises —
+    /// "Add the words on your iPhone" — has to exist on THIS side of that door,
+    /// and one record is the whole of it: `ContentView`'s retry card claims any
+    /// queued capture, and a `.work` one is finished by attaching its words to
+    /// the card rather than by sending them anywhere.
+    ///
+    /// The record's id is the DESK CARD's, which is what makes the recovery an
+    /// attachment instead of a second recording, and `.published` is the fact
+    /// that says so — an id naming no card is then a deletion the person made,
+    /// not a write that never happened. The clock that governs it
+    /// (`publishedWorkRetryTTL`) already exists for exactly this shape.
+    ///
+    /// It is armed for EVERY settled speech verdict rather than for the subset
+    /// a user action can fix, because the alternative is a receipt that means
+    /// two different things and no way for the wrist to tell which — and
+    /// because the neighbouring lane that speaks the identical sentence
+    /// (`CarPlayRecordingService.secureWorkNote`) arms before it knows the
+    /// verdict at all. A capture nothing can rescue costs one card the person
+    /// discards; a capture that could have been rescued and was not costs them
+    /// their words.
+    ///
+    /// BEST-EFFORT, and deliberately not reported: the recording is on the desk
+    /// either way, so a save that fails changes nothing the reply may claim.
+    /// Nil `audio` is the same non-event — it means phase 1 never ran, and a
+    /// record with no bytes is one no retry surface could finish.
+    static func preserveRelayedWorkWords(
+        cardID: UUID,
+        audio: Data?,
+        language: String?,
+        errorCode: Int,
+        createdAt: Date = Date(),
+        lane: any PendingRetryQueueWriting = PendingRetryStore.shared
+    ) async {
+        guard let audio, !audio.isEmpty else { return }
+        try? await lane.save(
+            audioData: audio,
+            metadata: PendingRetryMetadata(
+                id: cardID,
+                createdAt: createdAt,
+                // Bookkeeping only — every retry surface re-materialises a
+                // temp file from the parked BYTES, and this path's file is
+                // already deleted by the time anything reads the record.
+                audioFileURL: URL(fileURLWithPath: NSTemporaryDirectory())
+                    .appendingPathComponent("relay-work-\(cardID.uuidString).m4a"),
+                preferredLanguage: language,
+                attemptCount: 1,
+                lastErrorCode: errorCode,
+                destination: .work,
+                transcript: nil,
+                publicationState: .published
+            ),
+            // The wrist sends no screenshot on this lane, and the card that
+            // holds the recording is already written.
+            workImageData: nil
+        )
+    }
+
     /// Whether this request's words belong on the Work desk.
     ///
     /// Exact match, and deliberately not a case-folded or prefix one: the
@@ -856,25 +981,38 @@ final class AppleSpeechRelayCoordinator {
         }
     }
 
-    /// PHASE 2 for the relay lane. Never throws to the caller and never fails
-    /// the wrist: by the time this runs the recording is already durable and
-    /// the transcript is already in hand, so the only thing a refusal here can
-    /// still cost is the words on the card — and the wrist gets them anyway,
-    /// in the reply.
+    /// What phase 2 leaves behind, in the wrist's vocabulary.
+    enum WorkTranscriptAttachment: Equatable {
+        /// The words are on the card. The stamp is earned.
+        case attached
+        /// The write did not happen and the identical bytes could still make it
+        /// happen — the wrist keeps its entry and re-fires.
+        case retryable
+        /// The write did not happen and no re-fire changes that, so holding the
+        /// clip costs the person a queue slot for ever and buys nothing.
+        case settledWithoutWords
+    }
+
+    /// PHASE 2 for the relay lane. Never throws to the caller: it answers with a
+    /// verdict the reply is built from instead.
     ///
     /// The two non-attached answers are logged rather than swallowed because
     /// each one is a BUG on this path, not a state: this lane published the
     /// card itself, moments earlier, under an id it derived. `recordingMissing`
-    /// means somebody deleted it mid-transcription (possible, and harmless) or
-    /// the write we believed succeeded did not; `notAudio` means the escape
-    /// above chose an id that is also taken, which the escape's own contract
-    /// says cannot happen twice. The log line carries the FACT only — never
-    /// the transcript, the bytes or the requestID.
+    /// means somebody deleted it mid-transcription, or the write we believed
+    /// succeeded did not — and either way the desk now holds NOTHING for this
+    /// capture, so acknowledging it would have the wrist delete the only
+    /// remaining copy of the recording; a re-fire republishes it. `notAudio`
+    /// means the escape above chose an id that is also taken, which the escape's
+    /// own contract says cannot happen twice and which every re-fire reproduces
+    /// identically. The log line carries the FACT only — never the transcript,
+    /// the bytes or the requestID.
+    @discardableResult
     static func attachRelayedWorkTranscript(
         _ transcript: String,
         toCard captureID: UUID,
         store: ConversationStore = .shared
-    ) async {
+    ) async -> WorkTranscriptAttachment {
         do {
             switch try await WorkVoiceCaptureCoordinator.attachTranscript(
                 transcript,
@@ -882,14 +1020,17 @@ final class AppleSpeechRelayCoordinator {
                 store: store
             ) {
             case .attached:
-                break
+                return .attached
             case .recordingMissing:
                 log.error("Work relay: card gone before its transcript landed")
+                return .retryable
             case .notAudio:
                 log.error("Work relay: capture id names a card of another kind")
+                return .settledWithoutWords
             }
         } catch {
             log.error("Work relay: transcript not written to a standing card")
+            return .retryable
         }
     }
 

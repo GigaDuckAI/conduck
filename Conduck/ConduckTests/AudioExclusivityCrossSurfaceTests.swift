@@ -22,9 +22,12 @@
 // Two things stay out of the bus by construction and are asserted as such:
 // CarPlay's own speaker (a separate `ReplyVoice` instance that registers
 // nothing, so no claim can preempt the car's exactly-once / deactivate-once
-// legs) and, unreachable from a headless run, a live CarPlay voice session —
-// `CarPlayRecordingService.anySessionActive` is written only by a real car
-// connection, so the desk's refusal against it stays a founder-QA item.
+// legs) and a live CarPlay voice session, which the bus cannot arbitrate at all
+// because CarPlay registers no authority on it either. The session is reached
+// instead through `CarPlayRecordingService.anySessionActive`, and since that
+// mirror is written only by a real car connection the recorder carries a seam
+// for it — so the iOS microphone refusal is measured here rather than left as a
+// founder-QA item nobody can execute.
 
 import Speech
 import XCTest
@@ -298,4 +301,72 @@ final class AudioExclusivityCrossSurfaceTests: XCTestCase {
             """
         )
     }
+
+    #if os(iOS)
+    // MARK: - CarPlay's MICROPHONE, which the same bus cannot arbitrate
+
+    /// iOS has an `AVAudioSession` and macOS does not, which is why the mic
+    /// lease was written macOS-only — and that reasoning skipped the case iOS
+    /// alone has. The session is ONE object for the whole process: the composer
+    /// microphone's start moves it to `.record` and its stop deactivates it,
+    /// under a live CarPlay voice session that registers nothing on this bus by
+    /// construction. The driver is mid-sentence and cannot see the surface that
+    /// took the route away.
+    ///
+    /// So the refusal is the same shape as the macOS one — a live capture is
+    /// sacred, the SECOND start is the one refused — and its answer is the
+    /// taxonomy's existing word for "another surface has the microphone".
+    @MainActor
+    func testAPhoneCaptureIsRefusedWhileACarPlaySessionHoldsTheMicrophone() async {
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        var microphoneCameUp = false
+        recorder.microphoneStartForTesting = {
+            microphoneCameUp = true
+            return true
+        }
+        recorder.speechAuthorizationForTesting = .authorized
+        recorder.carPlaySessionActiveForTesting = true
+
+        await recorder.startRecording()
+
+        guard case .error(let error) = recorder.state else {
+            return XCTFail("A start against a live car session produced \(recorder.state).")
+        }
+        XCTAssertEqual(
+            error.errorCode, AppError.audioMicBusy.errorCode,
+            "The refusal says the microphone is taken, which is what happened."
+        )
+        XCTAssertFalse(
+            microphoneCameUp,
+            """
+            MEASURED: the microphone was opened anyway. On iOS that start also \
+            reconfigures the shared session the car is holding, and the stop that \
+            follows deactivates it — from a window the driver cannot see.
+            """
+        )
+    }
+
+    /// NEGATIVE CONTROL. With no car session the identical start proceeds, so
+    /// the case above is measuring the gate and not a recorder that refuses
+    /// everything on a simulator with no input device.
+    @MainActor
+    func testThePhoneCaptureStartsNormallyWhenNoCarSessionHoldsTheMicrophone() async {
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        var microphoneCameUp = false
+        recorder.microphoneStartForTesting = {
+            microphoneCameUp = true
+            return true
+        }
+        recorder.speechAuthorizationForTesting = .authorized
+        recorder.carPlaySessionActiveForTesting = false
+
+        await recorder.startRecording()
+
+        XCTAssertTrue(microphoneCameUp, "control: the same start opens the microphone with no car session")
+        guard case .recording = recorder.state else {
+            return XCTFail("control: the recorder did not reach `.recording` — \(recorder.state)")
+        }
+        recorder.cancelRecording()
+    }
+    #endif
 }

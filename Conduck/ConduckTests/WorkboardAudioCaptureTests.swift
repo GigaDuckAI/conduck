@@ -568,6 +568,163 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         )
     }
 
+    /// "Cancel transcription" is a promise about the WRITE, not about the
+    /// provider. The request is already out and cannot be recalled, so what the
+    /// press cancels is the RESULT — and a result that happens to be a success
+    /// is the one the promise is hardest to keep and easiest to break: it used
+    /// to walk past every check into phase two and attach its words to the card
+    /// the person had already stopped waiting for.
+    ///
+    /// The recording stays, because the press was aimed at the words. What may
+    /// not stay is the transcript, and the answer the caller gets is a
+    /// cancellation rather than "Added to Work".
+    ///
+    /// The uncancelled control at the end is what stops this passing on a
+    /// pipeline that simply attaches nothing.
+    @MainActor
+    func testCancellingTheTranscriptionKeepsTheRecordingAndRefusesTheWords() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.capturedAudioForTesting = Self.recordingBytes
+
+        var cardKindAtThePress: WorkMaterialKind?
+        recorder.transcriptionHopForTesting = { [weak recorder] _ in
+            // The press lands while the provider is working — which is the only
+            // window this control exists for. The recording is already a card
+            // by then; the words are the one thing still owed.
+            let desk = try? await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+            cardKindAtThePress = desk?.materials.first?.kind
+            recorder?.cancelProcessing()
+            return .success("the words nobody waited for")
+        }
+
+        let result = await recorder._finishCaptureForTesting()
+
+        XCTAssertEqual(
+            cardKindAtThePress, .audio,
+            "control: the press really did land mid-hop, with the recording already on the desk"
+        )
+        guard case .failure(let surfaced) = result else {
+            return XCTFail("a cancelled transcription must not report the words settled")
+        }
+        guard case .unknown(let underlying) = surfaced, underlying is CancellationError else {
+            return XCTFail("the answer is a cancellation, not an error about the desk")
+        }
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let card = try XCTUnwrap(deskValue?.materials.first)
+        XCTAssertEqual(deskValue?.materials.count, 1, "one capture, one card, cancelled or not")
+        XCTAssertEqual(card.kind, .audio)
+        XCTAssertNil(
+            card.textContent,
+            """
+            MEASURED: the transcript of a CANCELLED run reached the card anyway. The success arm \
+            asked nothing about cancellation, so the only check that ran was the one after the \
+            write — which changes what the person is told and not what the desk holds.
+            """
+        )
+        let survivingPayload = try await store.loadWorkMaterialPayload(id: card.id)
+        XCTAssertEqual(
+            survivingPayload, Self.recordingBytes,
+            "…and the recording is untouched: the press was aimed at the words"
+        )
+
+        // CONTROL: the identical run with nobody pressing anything finishes and
+        // attaches, so the assertion above is about the cancel and not about a
+        // phase two that never runs.
+        let controlStore = ConversationStore(inMemory: true)
+        let control = InAppAudioRecorder(retryDestination: .work)
+        control.workStoreForTesting = controlStore
+        control.capturedAudioForTesting = Self.recordingBytes
+        control.transcriptionHopForTesting = { _ in .success("the words somebody waited for") }
+        let controlResult = await control._finishCaptureForTesting()
+        XCTAssertEqual(try controlResult.get(), "the words somebody waited for")
+        let controlDesk = try await controlStore.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertEqual(
+            controlDesk?.materials.first?.textContent, "the words somebody waited for",
+            "control: an uncancelled success does land on the card"
+        )
+    }
+
+    /// The same promise, one step later: the press lands AFTER the words are
+    /// bought and BEFORE they are written.
+    ///
+    /// The check `settle` takes cannot see this one — it has already run. The
+    /// attachment then suspends twice (the store's first-use load, and its own
+    /// queued write), and a transcript written under a cancel that landed in
+    /// there is words arriving on a capture the person let go of. "Cancel
+    /// transcription" is a promise about the WRITE, so the authorization has to
+    /// reach the write boundary itself.
+    @MainActor
+    func testCancellingAfterTheWordsArriveStillKeepsThemOffTheCard() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.capturedAudioForTesting = Self.recordingBytes
+        recorder.transcriptionHopForTesting = { _ in .success("the words nobody waited for") }
+
+        var cardKindAtThePress: WorkMaterialKind?
+        recorder.transcriptAttachPauseForTesting = { [weak recorder] in
+            // The recognition SUCCEEDED and the recorder is holding its answer;
+            // the card is already on the desk and only the words are owed.
+            let desk = try? await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+            cardKindAtThePress = desk?.materials.first?.kind
+            recorder?.cancelProcessing()
+        }
+
+        let result = await recorder._finishCaptureForTesting()
+
+        XCTAssertEqual(
+            cardKindAtThePress, .audio,
+            "control: the press really did land after phase one, with the recording on the desk"
+        )
+        guard case .failure(let surfaced) = result else {
+            return XCTFail("a cancelled attachment must not report the words settled")
+        }
+        guard case .unknown(let underlying) = surfaced, underlying is CancellationError else {
+            return XCTFail("the answer is a cancellation, not an error about the desk")
+        }
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let card = try XCTUnwrap(deskValue?.materials.first)
+        XCTAssertEqual(deskValue?.materials.count, 1, "one capture, one card, cancelled or not")
+        XCTAssertNil(
+            card.textContent,
+            """
+            MEASURED: a transcript reached the card after the cancel. The attachment wrote without \
+            asking, so the only reading that ran was the one AFTER the words had landed — which \
+            changes what the person is told and not what the desk holds.
+            """
+        )
+        let survivingPayload = try await store.loadWorkMaterialPayload(id: card.id)
+        XCTAssertEqual(
+            survivingPayload, Self.recordingBytes,
+            "…and the recording is untouched: the press was aimed at the words"
+        )
+        XCTAssertTrue(
+            recorder.canRetryWorkCapture,
+            "the capture keeps its debt and its Try Again — nothing failed, the person let go"
+        )
+
+        // CONTROL: the identical run whose pause presses nothing attaches, so
+        // the assertion above is about the cancel and not about a phase two that
+        // never runs.
+        let controlStore = ConversationStore(inMemory: true)
+        let control = InAppAudioRecorder(retryDestination: .work)
+        control.workStoreForTesting = controlStore
+        control.capturedAudioForTesting = Self.recordingBytes
+        control.transcriptionHopForTesting = { _ in .success("the words somebody waited for") }
+        control.transcriptAttachPauseForTesting = { }
+        let controlResult = await control._finishCaptureForTesting()
+        XCTAssertEqual(try controlResult.get(), "the words somebody waited for")
+        let controlDesk = try await controlStore.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertEqual(
+            controlDesk?.materials.first?.textContent, "the words somebody waited for",
+            "control: an uncancelled attachment does land on the card"
+        )
+    }
+
     /// Try Again finishes the capture that stopped, on the card it already
     /// published — it does not record a second time, and no second card appears.
     @MainActor
@@ -809,6 +966,187 @@ final class WorkboardAudioCaptureTests: XCTestCase {
         }
     }
 
+    /// The press that lands INSIDE the write's own suspensions — after the
+    /// store is open, after the last `Task` check, and before the row is
+    /// touched.
+    ///
+    /// `Task.isCancelled` cannot answer here: the mutation runs in a closure the
+    /// Core Data queue schedules, and inside it that flag describes the queue's
+    /// task rather than the capture's, so it reads `false` however hard the
+    /// person pressed. The authorization the write reads has to be a value
+    /// carried in, checked at the mutation boundary.
+    @MainActor
+    func testCancellingInsideTheQueuedWriteStillKeepsTheWordsOffTheCard() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.capturedAudioForTesting = Self.recordingBytes
+        recorder.transcriptionHopForTesting = { _ in .success("the words nobody waited for") }
+
+        let pressed = Pressed()
+        WorkVoiceCaptureCoordinator.transcriptWritePauseForTesting = { [weak recorder] in
+            pressed.record()
+            recorder?.cancelProcessing()
+        }
+        defer { WorkVoiceCaptureCoordinator.transcriptWritePauseForTesting = nil }
+
+        let result = await recorder._finishCaptureForTesting()
+
+        XCTAssertTrue(
+            pressed.happened,
+            "control: the press really did land inside the write, past the store's load"
+        )
+        guard case .failure(let surfaced) = result else {
+            return XCTFail("a cancelled write must not report the words settled")
+        }
+        guard case .unknown(let underlying) = surfaced, underlying is CancellationError else {
+            return XCTFail("the answer is a cancellation, not an error about the desk")
+        }
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let card = try XCTUnwrap(deskValue?.materials.first)
+        XCTAssertEqual(deskValue?.materials.count, 1, "one capture, one card, cancelled or not")
+        XCTAssertNil(
+            card.textContent,
+            """
+            MEASURED: the transcript reached the card from inside the queued write. The check \
+            above the `perform` had already passed, so the only thing between the press and the \
+            row was an authorization the closure could read — and it did not.
+            """
+        )
+        let survivingPayload = try await store.loadWorkMaterialPayload(id: card.id)
+        XCTAssertEqual(
+            survivingPayload, Self.recordingBytes,
+            "…and the recording is untouched: the press was aimed at the words"
+        )
+        XCTAssertTrue(
+            recorder.canRetryWorkCapture,
+            "the capture keeps its debt and its Try Again — nothing failed, the person let go"
+        )
+
+        // CONTROL: the identical run whose pause presses nothing writes the
+        // words, so the assertion above is about the cancel and not about a
+        // write that never runs.
+        let controlStore = ConversationStore(inMemory: true)
+        let control = InAppAudioRecorder(retryDestination: .work)
+        control.workStoreForTesting = controlStore
+        control.capturedAudioForTesting = Self.recordingBytes
+        control.transcriptionHopForTesting = { _ in .success("the words somebody waited for") }
+        WorkVoiceCaptureCoordinator.transcriptWritePauseForTesting = { }
+        let controlResult = await control._finishCaptureForTesting()
+        XCTAssertEqual(try controlResult.get(), "the words somebody waited for")
+        let controlDesk = try await controlStore.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertEqual(
+            controlDesk?.materials.first?.textContent, "the words somebody waited for",
+            "control: an uncancelled write does land on the card"
+        )
+    }
+
+    #if os(macOS)
+
+    /// The quit question, COUNTED rather than called.
+    ///
+    /// Its guard asserted the shape of the declaration and never its effect, so
+    /// `+= 1` written as `+= 0` left every assertion green while ⌘Q terminated
+    /// silently with the only copy of a recording. What the count has to be is
+    /// one per RECORDER still holding bytes nothing durable would take — and
+    /// nothing once that recorder is gone, because a declaration is a claim
+    /// about memory that dies with the object making it.
+    @MainActor
+    func testTheQuitQuestionCountsEveryRecorderHoldingBytesNothingWouldTake() async throws {
+        let baseline = InAppAudioRecorder.unsavedWorkCaptureCount
+        let broken = try Self.unusableStore()
+        let brokenRefuses = await Self.refusesWrites(broken)
+        XCTAssertTrue(brokenRefuses, "the fixture must actually refuse a desk write")
+
+        // ONE capture whose desk write and whose preservation both failed. The
+        // bytes are in this recorder's memory and nowhere else.
+        let first = InAppAudioRecorder(retryDestination: .work)
+        first.workStoreForTesting = broken
+        first.retryLaneForTesting = RefusingRetryLane()
+        first.capturedAudioForTesting = Self.recordingBytes
+        _ = await first._finishCaptureForTesting()
+
+        XCTAssertEqual(
+            InAppAudioRecorder.unsavedWorkCaptureCount - baseline, 1,
+            """
+            MEASURED: a capture the desk refused AND the queue refused is not being counted, so \
+            Cmd-Q reads a clear registry and quits with the only copy of a recording.
+            """
+        )
+        XCTAssertEqual(
+            QuitGuard.unsavedCaptureVerdict(
+                unsavedCount: InAppAudioRecorder.unsavedWorkCaptureCount,
+                powerOffInProgress: false
+            ),
+            .ask(QuitGuard.UnsavedCapturePrompt(count: baseline + 1)),
+            "…and the verdict that reads it still asks rather than terminating"
+        )
+
+        // A SECOND recorder — the menu bar's and the desk sheet's are different
+        // instances, and either may be holding.
+        let second = InAppAudioRecorder(retryDestination: .work)
+        second.workStoreForTesting = broken
+        second.retryLaneForTesting = RefusingRetryLane()
+        second.capturedAudioForTesting = Self.recordingBytes
+        _ = await second._finishCaptureForTesting()
+        XCTAssertEqual(
+            InAppAudioRecorder.unsavedWorkCaptureCount - baseline, 2,
+            "one declaration per recorder holding bytes, not one for the process"
+        )
+
+        // The person lets one go: the ✕ on the capture.
+        first.discardPendingWorkCapture()
+        XCTAssertEqual(
+            InAppAudioRecorder.unsavedWorkCaptureCount - baseline, 1,
+            "an explicit discard ends the question it raised"
+        )
+
+        // …and a capture whose preservation LANDS is not unsaved at all.
+        let durable = InAppAudioRecorder(retryDestination: .work)
+        durable.workStoreForTesting = broken
+        durable.retryLaneForTesting = RecordingOnlyRetryLane()
+        durable.capturedAudioForTesting = Self.recordingBytes
+        _ = await durable._finishCaptureForTesting()
+        XCTAssertEqual(
+            InAppAudioRecorder.unsavedWorkCaptureCount - baseline, 1,
+            "the queue took the bytes, so nothing about this capture is a question for the person"
+        )
+
+        // THE LIFETIME. A surface dismissed over a standing error releases
+        // nothing — its ✕ does nothing in `.error`, and so does its
+        // disappearance — so a count that had to be decremented by somebody
+        // stayed raised for the life of the app, and every later Cmd-Q asked
+        // about a recording whose Try Again had gone with the sheet.
+        var dismissed: InAppAudioRecorder? = InAppAudioRecorder(retryDestination: .work)
+        dismissed?.workStoreForTesting = broken
+        dismissed?.retryLaneForTesting = RefusingRetryLane()
+        dismissed?.capturedAudioForTesting = Self.recordingBytes
+        _ = await dismissed?._finishCaptureForTesting()
+        XCTAssertEqual(
+            InAppAudioRecorder.unsavedWorkCaptureCount - baseline, 2,
+            "control: the dismissed sheet's recorder really was holding one"
+        )
+        dismissed = nil
+        XCTAssertEqual(
+            InAppAudioRecorder.unsavedWorkCaptureCount - baseline, 1,
+            """
+            MEASURED: a recorder that no longer exists is still holding a quit window open. Its \
+            capture cannot be retried or discarded from anywhere, so the question is permanent \
+            and unanswerable.
+            """
+        )
+
+        second.discardPendingWorkCapture()
+        durable.discardPendingWorkCapture()
+        XCTAssertEqual(
+            InAppAudioRecorder.unsavedWorkCaptureCount, baseline,
+            "the suite leaves the process's registry as it found it"
+        )
+    }
+
+    #endif
+
     // MARK: - Fixtures
 
     /// Stands in for a compressed 16 kHz mono AAC voice note: small, so the
@@ -877,4 +1215,42 @@ final class WorkboardAudioCaptureTests: XCTestCase {
             encoding: .utf8
         )
     }
+}
+
+/// Recorded once, from a `@Sendable` seam that may not capture a mutable local.
+private final class Pressed: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pressed = false
+    var happened: Bool { lock.lock(); defer { lock.unlock() }; return pressed }
+    func record() { lock.lock(); pressed = true; lock.unlock() }
+}
+
+/// A retry queue that takes nothing. It stands for the second half of the one
+/// state the quit question exists for: the desk refused these bytes and so did
+/// the queue, so they are in one recorder's memory and nowhere else.
+private actor RefusingRetryLane: PendingRetryLaneReserving {
+    func save(audioData: Data, metadata: PendingRetryMetadata, workImageData: Data?) async throws {
+        throw AppError.settingsLoadFailed
+    }
+    func claim(id: UUID, duration: TimeInterval) async -> PendingRetryClaim? { nil }
+    func reserve(id: UUID, duration: TimeInterval) async -> PendingRetryReservation { .absent }
+    @discardableResult func renew(_ claim: PendingRetryClaim) async -> Bool { false }
+    func confirmOwnership(_ claim: PendingRetryClaim) async -> Bool { false }
+    func release(_ claim: PendingRetryClaim) async {}
+    @discardableResult func clear(_ claim: PendingRetryClaim) async -> Bool { false }
+}
+
+/// A retry queue that TAKES what it is given — the control for the lane above,
+/// so "unsaved" is measured against a capture the queue actually sheltered.
+private actor RecordingOnlyRetryLane: PendingRetryLaneReserving {
+    private(set) var saved: [UUID] = []
+    func save(audioData: Data, metadata: PendingRetryMetadata, workImageData: Data?) async throws {
+        saved.append(metadata.id)
+    }
+    func claim(id: UUID, duration: TimeInterval) async -> PendingRetryClaim? { nil }
+    func reserve(id: UUID, duration: TimeInterval) async -> PendingRetryReservation { .absent }
+    @discardableResult func renew(_ claim: PendingRetryClaim) async -> Bool { false }
+    func confirmOwnership(_ claim: PendingRetryClaim) async -> Bool { false }
+    func release(_ claim: PendingRetryClaim) async {}
+    @discardableResult func clear(_ claim: PendingRetryClaim) async -> Bool { false }
 }

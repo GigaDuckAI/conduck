@@ -26,9 +26,14 @@
 
 import CryptoKit
 import SwiftUI
-import UIKit
 import UniformTypeIdentifiers
 import XCTest
+
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 @testable import Conduck
 
 // MARK: - Doubles
@@ -58,6 +63,34 @@ private final class RecordingSharePresenter: WorkSharePresenting {
         guard succeeds else { return false }
         presented.append(share)
         return true
+    }
+}
+
+/// A real window to attach anchors to.
+///
+/// The registry keys off actual window attachment, so the two ordering cases
+/// below need a window rather than a stub — and they need one on BOTH platforms,
+/// because the anchor is a `UIView` on one and an `NSView` on the other while
+/// the rule under test is the same for each.
+@MainActor
+private final class AnchorWindow {
+    #if canImport(UIKit)
+    private let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+    #else
+    private let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 320, height: 480),
+        styleMask: [.borderless],
+        backing: .buffered,
+        defer: false
+    )
+    #endif
+
+    func attach(_ view: SharePresentationAnchorPlatformView) {
+        #if canImport(UIKit)
+        window.addSubview(view)
+        #else
+        window.contentView?.addSubview(view)
+        #endif
     }
 }
 
@@ -1064,7 +1097,7 @@ final class WorkMaterialShareTests: XCTestCase {
     /// the person is not looking at.
     func testTheAnchorFollowsAttachmentAndNotRedraws() {
         let anchor = SharePresentationAnchor()
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        let window = AnchorWindow()
 
         let desk = SharePresentationAnchorPlatformView(frame: .zero)
         desk.anchor = anchor
@@ -1074,13 +1107,13 @@ final class WorkMaterialShareTests: XCTestCase {
             "a mounted anchor with no window can show nothing, so it is not eligible"
         )
 
-        window.addSubview(desk)
+        window.attach(desk)
         XCTAssertTrue(anchor.presentationView === desk)
 
         let gallery = SharePresentationAnchorPlatformView(frame: .zero)
         gallery.anchor = anchor
         anchor.register(gallery)
-        window.addSubview(gallery)
+        window.attach(gallery)
         XCTAssertTrue(anchor.presentationView === gallery, "the newest attached surface wins")
 
         // A redraw of the desk underneath — a board refresh, a capture landing,
@@ -1098,7 +1131,7 @@ final class WorkMaterialShareTests: XCTestCase {
 
         // And it can be promoted back by attaching again, which is the only
         // event that reorders anything.
-        window.addSubview(gallery)
+        window.attach(gallery)
         XCTAssertTrue(anchor.presentationView === gallery)
     }
 
@@ -1107,13 +1140,13 @@ final class WorkMaterialShareTests: XCTestCase {
     /// reported an off-view rect would be a crash waiting for a large screen.
     func testTheAnchorRectSitsInsideTheAnchorView() {
         let anchor = SharePresentationAnchor()
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+        let window = AnchorWindow()
         let view = SharePresentationAnchorPlatformView(
             frame: CGRect(x: 0, y: 0, width: 200, height: 100)
         )
         view.anchor = anchor
         anchor.register(view)
-        window.addSubview(view)
+        window.attach(view)
 
         XCTAssertTrue(view.bounds.contains(anchor.presentationRect))
         XCTAssertEqual(anchor.presentationRect, CGRect(x: 100, y: 50, width: 1, height: 1))

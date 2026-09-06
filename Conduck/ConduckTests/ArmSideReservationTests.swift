@@ -466,6 +466,85 @@ final class ArmSideReservationTests: XCTestCase {
         source.filter { !$0.isWhitespace }
     }
 
+    // MARK: - A save that lands the recording and loses the picture
+
+    /// The screenshot is the LAST byte written before the index row, so it is
+    /// the one write that can fail with the recording already committed. What
+    /// followed was not a failed arm: `reconcile` adopts a sidecar/audio pair
+    /// whether or not the row landed, so the queue held a live, claimable entry
+    /// that the surface which made it had been told did not exist — it armed
+    /// nothing, so its next Record Again released nothing, and a later recovery
+    /// re-transcribed a recording the person had already replaced.
+    ///
+    /// The failure is injected by putting a DIRECTORY where the picture's file
+    /// goes: `Data.write(to:)` cannot overwrite one, and nothing else in the arm
+    /// touches that path.
+    func testAScreenshotWriteThatFailsStillArmsTheRecordingItAlreadyCommitted() async throws {
+        let id = UUID()
+        let bytes = Data(repeating: 0x5A, count: 512)
+        try FileManager.default.createDirectory(
+            at: container.appendingPathComponent(PendingRetryFiles.workImage(id)),
+            withIntermediateDirectories: true
+        )
+
+        var reported: Error?
+        do {
+            try await store.save(
+                audioData: bytes,
+                metadata: Self.metadata(id: id, destination: .work, publicationState: .published),
+                workImageData: Data(repeating: 0x11, count: 64)
+            )
+        } catch {
+            reported = error
+        }
+
+        guard case .some(PendingRetrySaveOutcome.recordingParkedWithoutPicture) = reported else {
+            return XCTFail(
+                """
+                A screenshot write that failed reported \(String(describing: reported)) instead of                 the outcome that says the RECORDING is parked. Read as a plain failure, the arm                 the store had already made is one its author can neither reserve nor retire.
+                """
+            )
+        }
+
+        let queued = await store.pendingCount()
+        XCTAssertEqual(
+            queued, 1,
+            "MEASURED: the recording is queued. The entry existed either way — reconcile adopts "
+            + "the sidecar/audio pair — so refusing to commit its row only hid it from its author."
+        )
+        let claim = await store.claim(id: id, duration: 60)
+        XCTAssertNotNil(
+            claim,
+            "the armed entry is addressable by the id its author holds, which is the whole point "
+            + "of committing the row"
+        )
+        XCTAssertNil(
+            try? Data(contentsOf: container.appendingPathComponent(PendingRetryFiles.workImage(id))),
+            "control: the picture really did not land — this case would be vacuous if it had"
+        )
+    }
+
+    /// NEGATIVE CONTROL for the case above: with the path clear, the identical
+    /// save throws nothing and the picture is on disk. Without this, an arm that
+    /// reported the partial outcome for EVERY save would pass.
+    func testAnUnobstructedSaveReportsNoPartialOutcomeAndKeepsThePicture() async throws {
+        let id = UUID()
+        let picture = Data(repeating: 0x11, count: 64)
+
+        try await store.save(
+            audioData: Data(repeating: 0x5A, count: 512),
+            metadata: Self.metadata(id: id, destination: .work, publicationState: .published),
+            workImageData: picture
+        )
+
+        let onDisk = try Data(
+            contentsOf: container.appendingPathComponent(PendingRetryFiles.workImage(id))
+        )
+        XCTAssertEqual(onDisk, picture, "the ordinary arm still writes the picture it was given")
+        let queued = await store.pendingCount()
+        XCTAssertEqual(queued, 1)
+    }
+
     private static func metadata(
         id: UUID,
         destination: PendingRetryDestination = .chat,

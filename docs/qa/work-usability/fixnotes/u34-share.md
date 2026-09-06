@@ -1314,3 +1314,45 @@ Builds:
 xcodebuild build-for-testing … -destination 'platform=iOS Simulator,id=04DEF4F5-…'  → ** TEST BUILD SUCCEEDED **, 0 ": error:" lines
 xcodebuild build … -destination 'platform=macOS'                                    → ** BUILD SUCCEEDED **, 0 ": error:" lines
 ```
+
+---
+
+# macOS test-target fix
+
+Reported by the Mac menu-bar lane, and it was mine: `WorkMaterialShareTests.swift`
+imported UIKit unconditionally, so `xcodebuild build-for-testing -destination
+platform=macOS` failed with "unable to resolve module dependency: 'UIKit'" and
+NO Mac test could be compiled or run by any lane. It has been there since round
+4, when the anchor-ordering cases started needing a real window. Every run I
+quoted was an iOS test run plus a macOS APP build, so nothing I measured would
+ever have caught it.
+
+## What changed
+
+The import is gated (`#if canImport(UIKit)` / `#elseif canImport(AppKit)`), and
+the two cases that needed a window now go through an `AnchorWindow` helper that
+makes a `UIWindow` on one platform and a borderless `NSWindow` on the other.
+
+I chose that over gating the tests out of the macOS build. The anchor registry's
+rule is the same on both platforms and the anchor is a `UIView` on one and an
+`NSView` on the other, so running the cases on macOS is the point rather than a
+bonus — and it is where an AppKit-only mistake would show up.
+
+## Measured on both platforms
+
+```
+xcodebuild build-for-testing … -destination 'platform=macOS'                       → ** TEST BUILD SUCCEEDED **, 0 ": error:" lines
+xcodebuild test-without-building … -destination 'platform=macOS' (share suite)     → Executed 45 tests, with 0 failures (0 unexpected) in 2.204 (2.213) seconds
+xcodebuild build-for-testing … -destination 'platform=iOS Simulator,id=04DEF4F5-…' → ** TEST BUILD SUCCEEDED **, 0 ": error:" lines
+xcodebuild test-without-building … -only-testing:ConduckTests (iPhone sim)         → Executed 5450 tests, with 1 test skipped and 0 failures (0 unexpected) in 89.646 (91.181) seconds
+```
+
+The whole-target count moved from 5384 to 5450 because other lanes added tests
+to this worktree between runs; none of them are mine.
+
+## Worth carrying forward
+
+Every round of this feature verified the macOS APP build and the iOS TEST build,
+never the macOS test build. That gap is exactly the shape of this defect. Any
+lane touching `ConduckTests` should run `build-for-testing` against
+`platform=macOS` as well.

@@ -219,23 +219,47 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
     /// How long a capture may wait for a TRANSCRIPTION it can buy again.
     static let transcriptionRetryTTL: TimeInterval = 600
 
-    /// True when the only thing this record protects is a transcription, so the
-    /// TTL above may retire it.
+    /// The same wait, measured for somebody who cannot answer it yet.
+    ///
+    /// A published Work capture protects only its words — the recording is a
+    /// card — so the clock still governs it. But ten minutes is a budget for a
+    /// person holding the device that failed, and the car is the surface where
+    /// that is never true: a drive is hours, the phone may stay locked until
+    /// the driver is home, and "add the words on your iPhone" is false the
+    /// moment the entry is swept. A day covers the drive and the evening after
+    /// it while keeping the queue bounded, which is the whole difference
+    /// between a longer clock and no clock: these bytes are a SECOND copy of a
+    /// recording already on the desk, and a queue that never retires them grows
+    /// without any exit but the person's own discard.
+    static let publishedWorkRetryTTL: TimeInterval = 86_400
+
+    /// True when this record holds bytes that exist nowhere else, so no clock
+    /// may retire it.
     ///
     /// A Chat capture's words are the artifact and the provider can produce
     /// them again; a Work capture that reports `.published` has its recording
     /// on the desk already. Every other Work record — a publication the desk
-    /// refused, and the UNKNOWN verdict an older record carries — holds bytes
-    /// that exist nowhere else, and a clock is not a reason to delete them.
+    /// refused, and the UNKNOWN verdict an older record carries — is the only
+    /// copy, and a clock is not a reason to delete it.
     var isExemptFromExpiry: Bool {
         resolvedDestination == .work && publicationState != .published
+    }
+
+    /// How long THIS record may wait. Exempt records answer `nil`: they are not
+    /// on a longer clock, they are on none.
+    var retryTTL: TimeInterval? {
+        if isExemptFromExpiry { return nil }
+        if resolvedDestination == .work, publicationState == .published {
+            return Self.publishedWorkRetryTTL
+        }
+        return Self.transcriptionRetryTTL
     }
 
     var isExpired: Bool { isExpired(at: Date()) }
 
     func isExpired(at now: Date) -> Bool {
-        guard !isExemptFromExpiry else { return false }
-        return now.timeIntervalSince(createdAt) > Self.transcriptionRetryTTL
+        guard let ttl = retryTTL else { return false }
+        return now.timeIntervalSince(createdAt) > ttl
     }
 
     /// The same record with one more attempt and a fresh diagnostic code. Every
@@ -510,7 +534,9 @@ nonisolated enum PendingRetryQueue {
 
     /// Split the queue into what survives the clock and what the clock may
     /// retire. `isExemptFromExpiry` is what keeps an irreplaceable recording on
-    /// the left-hand side forever.
+    /// the left-hand side forever; `retryTTL` is what decides how long everybody
+    /// else gets, which is a day for a published Work capture and ten minutes
+    /// for a Chat one.
     static func partitioningExpired(
         _ entries: [PendingRetryMetadata],
         at now: Date
@@ -570,6 +596,22 @@ nonisolated protocol PendingRetryQueueWriting: Sendable {
         metadata: PendingRetryMetadata,
         workImageData: Data?
     ) async throws
+}
+
+/// What a `save` that could not commit everything still left behind.
+///
+/// One shape, because one write can fail with the recording already durable:
+/// the screenshot is the last byte written before the index row, and the
+/// sidecar and the audio are committed above it. `reconcile` adopts that pair
+/// on the next read regardless, so "the save threw" and "nothing is queued"
+/// stopped being the same sentence — and every caller that read them as one
+/// left a live entry it did not know it owned. The recording IS parked; the
+/// picture is not, and the caller still has the only copy of it.
+///
+/// Deliberately NOT an `AppError`: it is a fact about this store's own write,
+/// carried to the one caller that acts on it, not a verdict for a person.
+nonisolated enum PendingRetrySaveOutcome: Error {
+    case recordingParkedWithoutPicture(underlying: any Error)
 }
 
 /// Persists pending audio retries across app launches, so a network failure
@@ -683,6 +725,10 @@ actor PendingRetryStore: PendingRetryQueueWriting {
     ) async throws {
         guard let container = containerURL else { throw AppError.settingsLoadFailed }
         let defaults = defaults
+        // Carried out of the lock rather than thrown from inside it, so the
+        // index row still commits and the announcement still goes out. See the
+        // screenshot write below.
+        var pictureFailure: (any Error)?
         try withExclusiveLock(in: container) {
             // Read the queue BEFORE anything of this capture's lands, so its
             // own files are never briefly residue the same read would judge.
@@ -712,15 +758,35 @@ actor PendingRetryStore: PendingRetryQueueWriting {
             )
             try audioData.write(to: audioURL, options: [.atomic, .completeFileProtection])
 
+            // The picture's failure PROPAGATES, exactly as the recording's does
+            // one line up and for the identical reason: this is the only copy
+            // of a screenshot that reached no card, so a caller told the save
+            // landed would stop treating memory as the last place it exists.
+            // A swallowed write here armed an entry whose picture was never
+            // written — the recovery it promises then finds nothing to
+            // republish, and the quit that follows takes the bytes.
+            //
+            // It does NOT abandon the arm. The sidecar and the recording are
+            // already committed above, and step 5 of `reconcile` adopts that
+            // pair on the next read whether or not the index row lands — so a
+            // throw taken HERE produced an entry that was real, claimable by any
+            // surface, and unknown to the one that made it: it armed nothing,
+            // released nothing on the next Record Again, and its ⌘Q guard read
+            // the recording as memory-only. The row is committed and the picture's
+            // failure travels back as its own outcome instead.
             if metadata.resolvedDestination == .work,
                let workImageData,
                !workImageData.isEmpty {
-                try? workImageData.write(
-                    to: container.appendingPathComponent(
-                        PendingRetryFiles.workImage(metadata.id)
-                    ),
-                    options: [.atomic, .completeFileProtection]
-                )
+                do {
+                    try workImageData.write(
+                        to: container.appendingPathComponent(
+                            PendingRetryFiles.workImage(metadata.id)
+                        ),
+                        options: [.atomic, .completeFileProtection]
+                    )
+                } catch {
+                    pictureFailure = error
+                }
             }
 
             // The index row is the LAST thing committed. The process lock makes
@@ -733,6 +799,9 @@ actor PendingRetryStore: PendingRetryQueueWriting {
         // there, and one that refreshed inside the lock would read the queue
         // through a lock this call still holds.
         NotificationCenter.default.post(name: Self.queueDidChangeNotification, object: nil)
+        if let pictureFailure {
+            throw PendingRetrySaveOutcome.recordingParkedWithoutPicture(underlying: pictureFailure)
+        }
     }
 
     // MARK: - The claim API
@@ -822,6 +891,53 @@ actor PendingRetryStore: PendingRetryQueueWriting {
                 metadata, at: url, duration: duration, now: now, in: container
             )
         }
+    }
+
+    /// The same reservation, with a refusal that says WHICH refusal it is.
+    ///
+    /// `claim(id:duration:)` answers nil for a capture nobody queued and for one
+    /// somebody else is holding, and those demand opposite behavior: the first
+    /// leaves the bytes in hand as the only copy, so the caller's own retry is
+    /// the only thing that can finish it; the second must be refused, or two
+    /// surfaces transcribe one recording and attach different words to one card.
+    ///
+    /// The distinction is not decorative. A `save` that wrote the sidecar and
+    /// the audio and then THREW on the screenshot leaves an entry reconciliation
+    /// adopts — real, claimable, and unknown to the local bookkeeping of the
+    /// process that wrote it. Asked through `claim` alone, that process reads
+    /// the refusal as "nothing was ever queued" and retries a recording another
+    /// surface is already finishing.
+    ///
+    /// One pass under the same lock as `claim`, so the two answers cannot swap
+    /// between a claim and a follow-up question.
+    func reserve(
+        id: UUID,
+        duration: TimeInterval = PendingRetryStore.claimLeaseDuration
+    ) async -> PendingRetryReservation {
+        guard let container = containerURL else { return .absent }
+        let defaults = defaults
+        let outcome = try? withExclusiveLock(in: container) { () -> PendingRetryReservation in
+            let now = Date()
+            let entries = liveQueueLocked(from: defaults, in: container)
+            guard let metadata = entries.first(where: { $0.id == id }) else { return .absent }
+            guard !isReserved(id, in: container, at: now) else { return .heldElsewhere }
+            guard let url = readableAudioURL(for: metadata, in: container) else {
+                // A capture whose recording is gone is FINISHED here, exactly as
+                // `claimNext` finishes one — and an entry that no longer exists
+                // is absent, which is the answer that lets the caller's own
+                // bytes still be retried.
+                _ = finishLocked([metadata], from: entries, defaults: defaults, in: container)
+                return .absent
+            }
+            guard let claim = reserveLocked(
+                metadata, at: url, duration: duration, now: now, in: container
+            ) else { return .heldElsewhere }
+            return .claimed(claim)
+        }
+        // A lock this process could not take says nothing about the entry, and
+        // the safe reading of "somebody may be working on it" is the one that
+        // refuses a second transcription.
+        return outcome ?? .heldElsewhere
     }
 
     /// Extend the reservation this claim holds, by the duration it was granted
@@ -1088,7 +1204,10 @@ actor PendingRetryStore: PendingRetryQueueWriting {
     /// queued capture names any more. Called from `ConduckApp` on launch
     /// (privacy: don't leave stale audio sitting in App Groups storage
     /// indefinitely). A recording whose desk card never landed is exempt — see
-    /// `PendingRetryMetadata.isExemptFromExpiry`.
+    /// `PendingRetryMetadata.isExemptFromExpiry` — and a published Work capture
+    /// is held for a day rather than ten minutes, because the person whose
+    /// words are owed may be driving; `PendingRetryMetadata.retryTTL` is the
+    /// one place those two budgets are decided.
     func cleanupExpired() async {
         guard let container = containerURL else { return }
         let defaults = defaults

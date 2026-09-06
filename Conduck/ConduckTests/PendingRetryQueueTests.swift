@@ -129,22 +129,66 @@ final class PendingRetryQueueTests: XCTestCase {
         XCTAssertFalse(capture.isExpired(at: armed.addingTimeInterval(601)))
     }
 
-    /// …and the records the TTL is actually about keep it. A Chat capture's
-    /// words can be bought again, and a `.published` Work capture's recording is
-    /// already a card on the desk.
-    func testChatAndPublishedWorkCapturesStillExpireOnTheTenMinuteBudget() {
+    /// …and a Chat capture keeps the ten-minute budget the TTL was written for.
+    /// Its words are the artifact and the provider can produce them again, so
+    /// the bytes are worth exactly one short retry window.
+    func testAChatCaptureStillExpiresOnTheTenMinuteBudget() {
         let armed = Date(timeIntervalSince1970: 1_700_000_000)
         let chat = Self.metadata(at: armed, destination: .chat)
+
+        XCTAssertFalse(chat.isExemptFromExpiry)
+        XCTAssertFalse(chat.isExpired(at: armed.addingTimeInterval(599)))
+        XCTAssertTrue(chat.isExpired(at: armed.addingTimeInterval(601)))
+        XCTAssertEqual(PendingRetryMetadata.transcriptionRetryTTL, 600)
+        XCTAssertEqual(chat.retryTTL, PendingRetryMetadata.transcriptionRetryTTL)
+    }
+
+    /// A published Work capture is on a clock too — its recording is a card, so
+    /// these bytes are a second copy and the queue may not keep them for ever —
+    /// but on a DAY rather than ten minutes.
+    ///
+    /// Ten minutes is a budget for somebody holding the device that failed. The
+    /// car is where that is never true: a drive is hours and the phone may stay
+    /// locked until the driver is home, so a ten-minute sweep makes "add the
+    /// words on your iPhone" false before it can be acted on, and nothing on
+    /// the desk can transcribe an audio card afterwards.
+    func testAPublishedWorkCaptureGetsADayRatherThanTenMinutes() {
+        let armed = Date(timeIntervalSince1970: 1_700_000_000)
         let published = Self.metadata(
             at: armed, destination: .work, publicationState: .published
         )
 
-        for capture in [chat, published] {
-            XCTAssertFalse(capture.isExemptFromExpiry)
-            XCTAssertFalse(capture.isExpired(at: armed.addingTimeInterval(599)))
-            XCTAssertTrue(capture.isExpired(at: armed.addingTimeInterval(601)))
-        }
-        XCTAssertEqual(PendingRetryMetadata.transcriptionRetryTTL, 600)
+        // Still governed by a clock — this is a longer budget, not an exemption.
+        XCTAssertFalse(
+            published.isExemptFromExpiry,
+            """
+            A published Work capture's recording is already a card, so these bytes are \
+            a SECOND copy. Exempting them would leave the Work side of the queue with \
+            no exit but the person's own discard.
+            """
+        )
+        XCTAssertEqual(published.retryTTL, PendingRetryMetadata.publishedWorkRetryTTL)
+        XCTAssertEqual(PendingRetryMetadata.publishedWorkRetryTTL, 86_400)
+
+        // The control the old ten-minute rule fails: past the transcription TTL
+        // and still live, which is the whole point of the longer budget.
+        XCTAssertFalse(
+            published.isExpired(at: armed.addingTimeInterval(601)),
+            """
+            Swept at ten minutes, a capture made in the car is gone before the driver \
+            can reach the phone the acknowledgement told them to use.
+            """
+        )
+        XCTAssertFalse(published.isExpired(at: armed.addingTimeInterval(86_399)))
+
+        // …and the control the UNBOUNDED rule fails: the day ends.
+        XCTAssertTrue(
+            published.isExpired(at: armed.addingTimeInterval(86_401)),
+            """
+            The budget is longer, not absent. A queue that never retires a second copy \
+            of a recording already on the desk grows without bound.
+            """
+        )
     }
 
     /// A sweep splits the queue rather than emptying it: the capture the clock

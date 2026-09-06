@@ -132,7 +132,7 @@ Remaining, for the **copy agent only**: the eleven WATCH-catalog keys listed abo
 
 ## Nobody undo
 
-- **The button is a button, not a mode.** No sticky destination toggle on Ask, ever. The failure direction is unrecoverable: a private thought reaching an AI because a switch was still flipped from last time. Two buttons cannot leave anything switched on.
+- **The door is a per-press pick, never a mode.** *Superseded by `design/watch-work-destination.md`: the door is the Add to Work row in Ask's destination chooser, not a second launchpad button.* The rule that survives is the one that matters — no sticky destination toggle on Ask, ever. The failure direction is unrecoverable: a private thought reaching an AI because a switch was still flipped from last time. A chooser that opens on every press has no last destination to leave switched on.
 - **`.workCapture` stays its own route case carrying no `WatchCaptureTarget`.** That is the structural reason `navigationDestination` can never build a chat thread for a Work push. Folding it into `.capture(target:)` with a destination field re-opens exactly that.
 - **The terminal line has no Retry.** Every outcome except a refusal is already durable (on the desk, or on the wrist awaiting the iPhone); a retry button would ask the user to re-record something that is not lost, and would imply the capture failed.
 - **`.deferredToPhone` must never render `"Saved to Work."`** They mean different things to the person reading them, and the cross-wire lies in the reassuring direction. `testEveryTerminalOutcomeRendersItsOwnSentence` is the guard.

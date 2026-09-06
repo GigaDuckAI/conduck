@@ -4,24 +4,27 @@
 // WatchWorkCaptureView.swift
 //
 // The wrist's Work capture surface: speak a private thought, and it lands on
-// the single Work desk the other devices read. Pushed from the launchpad's
-// "Save to Work" button as `WatchRoute.workCapture(nonce:)`.
+// the single Work desk the other devices read. Pushed from the Ask chooser's
+// Add to Work row as `WatchRoute.workCapture(nonce:)`.
 //
 // THREE THINGS THIS SCREEN DELIBERATELY DOES NOT HAVE, each of them a rule
 // rather than an omission:
 //
 // 1. No gateway chooser, and no gateway anywhere below it. A Work capture has
 //    no conversation, no agent and no reply — the whole point of the desk is
-//    that a private thought stays private. The screen is reached by its OWN
-//    button so there is no mode to leave switched on by accident.
+//    that a private thought stays private. The screen is reached by a
+//    per-press pick in the Ask chooser, so there is no mode to leave switched
+//    on by accident.
 // 2. No word for sending. Everything here SAVES; "send", "dispatch" and their
 //    relatives describe a thing this lane cannot do, and reading one on a
 //    private-capture screen is exactly the wrong reassurance.
-// 3. No retry affordance on the terminal line. Every outcome below is already
+// 3. No retry affordance on the TERMINAL LINE. Every outcome there is already
 //    durable somewhere — on the desk, or on the wrist waiting for the iPhone —
 //    so a "try again" would ask the user to re-record something that is not
 //    lost. Only a refusal ends with nothing captured, and its sentence says
-//    what to do instead.
+//    what to do instead. A recorder ERROR is not a terminal outcome and is the
+//    one place the offer belongs: it can still be holding the recording, and
+//    that is the case this screen must not send anywhere else to resolve.
 //
 // The recorder states mirror the in-thread chat capture overlay (arming →
 // "Starting…", live ring + timer, then a saving spinner) so the wrist's two
@@ -93,7 +96,8 @@ struct WatchWorkCaptureView: View {
                     messageView(
                         symbolName: "exclamationmark.triangle.fill",
                         tint: .orange,
-                        text: message
+                        text: message,
+                        dismissesRecorderError: true
                     )
                 }
             }
@@ -211,8 +215,30 @@ struct WatchWorkCaptureView: View {
     /// recorder error). SCROLLS on purpose: the deferred sentence is two lines
     /// on a 41mm face with large text, and a Done button pushed below the
     /// bezel is a screen with no exit.
-    private func messageView(symbolName: String, tint: Color, text: String) -> some View {
-        ScrollView {
+    ///
+    /// `dismissesRecorderError` is set by the RECORDER-ERROR case only, and it
+    /// is what keeps one failure from being read twice: a terminal outcome is
+    /// this screen's own line, but an error is the SERVICE's state, so clearing
+    /// the outcome leaves `.error` standing and the launchpad re-presents the
+    /// identical sentence the instant this screen pops.
+    ///
+    /// A failure that still HAS its audio is the reason there is a second
+    /// button label rather than a second screen: the recovery is offered right
+    /// here, on the error the person is reading, instead of by dismissing into
+    /// the launchpad's copy of the same sentence. It is the launchpad's own
+    /// rule (`canRetry` decides the word), moved to where the failure is shown.
+    private func messageView(
+        symbolName: String,
+        tint: Color,
+        text: String,
+        dismissesRecorderError: Bool = false
+    ) -> some View {
+        // Read at BODY time for the label and again at TAP time for the act,
+        // both from the same rule: `canRetry` turns false the moment the
+        // preserved capture is consumed, and a button must never perform an act
+        // the state it was drawn for no longer allows.
+        let canRetry = recordingService.canRetry
+        return ScrollView {
             VStack(spacing: 10) {
                 Image(systemName: symbolName)
                     .font(.title3)
@@ -224,18 +250,16 @@ struct WatchWorkCaptureView: View {
                     .foregroundStyle(.secondary)
 
                 Button {
-                    // Drop the line now that it has been read. `startWorkCapture`
-                    // clears it too, so this is not what makes the NEXT capture
-                    // correct — it is what keeps a DEFERRED settlement arriving
-                    // minutes later from being mistaken for the capture the user
-                    // just acknowledged.
-                    recordingService.clearWorkCaptureOutcome()
-                    dismiss()
+                    let action = Self.messageAction(
+                        showingRecorderError: dismissesRecorderError,
+                        canRetry: recordingService.canRetry
+                    )
+                    if Self.perform(action, on: recordingService) { dismiss() }
                 } label: {
-                    Text(String(localized: LocalizedStringResource(
-                        "watch.work.capture.done",
-                        defaultValue: "Done"
-                    )))
+                    Text(Self.buttonLabel(
+                        showingRecorderError: dismissesRecorderError,
+                        canRetry: canRetry
+                    ))
                     .font(.caption)
                 }
                 .buttonStyle(.bordered)
@@ -287,9 +311,83 @@ struct WatchWorkCaptureView: View {
     }
 
     private static let screenTitle = String(localized: LocalizedStringResource(
-        "watch.work.capture.title",
-        defaultValue: "Save to Work"
+        "watch.work.capture.navigationTitle",
+        defaultValue: "Add to Work"
     ))
+
+    /// What the single button on an end-of-capture screen does.
+    ///
+    /// One value rather than a pair of booleans because the label and the
+    /// effect have to agree: a button that says Try Again and dismisses the
+    /// error deletes the recording it offered to re-send.
+    enum MessageAction: Equatable {
+        /// A terminal outcome. It is this screen's own line, so reading it is
+        /// the whole of ending it.
+        case done
+        /// A recorder error with NOTHING left to retry. The error is the
+        /// SERVICE's state, so clearing only the outcome leaves `.error`
+        /// standing and the launchpad re-presents the identical sentence the
+        /// instant this screen pops — one failure, read twice.
+        case dismissErrorThenDone
+        /// A recorder error whose audio is still on the wrist. The recovery
+        /// belongs on the error the person is looking at: `dismissError()`
+        /// DELETES the preserved capture, so this arm must not take it, and
+        /// sending them to the launchpad to find the same sentence with a
+        /// better button is a second reading of one failure.
+        case retry
+    }
+
+    /// The action, pure.
+    static func messageAction(showingRecorderError: Bool, canRetry: Bool) -> MessageAction {
+        guard showingRecorderError else { return .done }
+        return canRetry ? .retry : .dismissErrorThenDone
+    }
+
+    /// Run it against the service, and answer whether the screen goes.
+    ///
+    /// The service calls live HERE rather than in the button closure so the
+    /// button's real effect — which of the two destructive service calls it
+    /// makes, and whether it leaves the screen — is reachable from a test.
+    @MainActor
+    @discardableResult
+    static func perform(_ action: MessageAction, on service: WatchRecordingService) -> Bool {
+        switch action {
+        case .retry:
+            // Stay. `retry()` re-runs the preserved capture through the same
+            // Work relay, and this screen renders its progress and its outcome.
+            service.retry()
+            return false
+        case .dismissErrorThenDone:
+            service.dismissError()
+            service.clearWorkCaptureOutcome()
+            return true
+        case .done:
+            // Drop the line now that it has been read. `startWorkCapture`
+            // clears it too, so this is not what makes the NEXT capture
+            // correct — it is what keeps a DEFERRED settlement arriving minutes
+            // later from being mistaken for the capture the user just
+            // acknowledged.
+            service.clearWorkCaptureOutcome()
+            return true
+        }
+    }
+
+    /// The word on the button, from the SAME two facts the action is decided
+    /// from — so a button can never say Try Again over an act that dismisses,
+    /// and the retryability gate is readable at the label site rather than one
+    /// call away. `Try Again` is the launchpad's own literal, so the two
+    /// surfaces cannot drift into two names for one act.
+    static func buttonLabel(showingRecorderError: Bool, canRetry: Bool) -> String {
+        switch messageAction(showingRecorderError: showingRecorderError, canRetry: canRetry) {
+        case .retry:
+            return String(localized: "Try Again")  // xcstrings
+        case .done, .dismissErrorThenDone:
+            return String(localized: LocalizedStringResource(
+                "watch.work.capture.done",
+                defaultValue: "Done"
+            ))
+        }
+    }
 }
 
 /// Outcome → copy, as a PURE function so the mapping is testable without a
@@ -332,8 +430,8 @@ nonisolated enum WatchWorkCaptureCopy {
     }
 
     /// SF Symbol for the terminal line. The two "it is on the desk" outcomes
-    /// share the desk's own glyph — the same one the launchpad button carries —
-    /// so the end of the flow visibly answers the button that began it.
+    /// share the desk's own glyph, so the end of the flow visibly answers the
+    /// row that began it.
     static func symbolName(for outcome: WatchWorkCaptureOutcome) -> String {
         switch outcome {
         case .saved, .savedWordsOnly, .savedWithoutWords: return "tray.and.arrow.down.fill"

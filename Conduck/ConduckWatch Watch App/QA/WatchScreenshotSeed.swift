@@ -53,8 +53,8 @@ enum WatchScreenshotSeed {
     }
 
     /// Inject OpenClaw + Hermes as keyless (`.none`) configured gateways so the
-    /// launchpad Ask chooser presents a 2-gateway picker ("Ask which gateway?")
-    /// and each seeded thread's badge resolves. Uses the real
+    /// Ask destination chooser presents two gateway rows above Add to Work, and
+    /// each seeded thread's badge resolves. Uses the real
     /// `updateRemoteAgents(multi:)` path with a synthesized envelope; a `Date()`-
     /// now timestamp beats any stale stored high-water so it is always accepted.
     @MainActor

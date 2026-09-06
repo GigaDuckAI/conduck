@@ -18,17 +18,6 @@
         }
       }
     },
-    "A queued recording couldn't reach your iPhone and has expired." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A queued recording couldn't reach your iPhone and has expired."
-          }
-        }
-      }
-    },
     "A queued recording expired before your iPhone could transcribe it." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -56,28 +45,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Ask"
-          }
-        }
-      }
-    },
-    "Ask which gateway?" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Ask which gateway?"
-          }
-        }
-      }
-    },
-    "Ask your personal AI to start one." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Ask your personal AI to start one."
           }
         }
       }
@@ -246,28 +213,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Couldn't reach the internet. Check your connection and try again."
-          }
-        }
-      }
-    },
-    "Couldn't reach your personal AI. Try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't reach your personal AI. Try again."
-          }
-        }
-      }
-    },
-    "Couldn't read the reply from your personal AI." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't read the reply from your personal AI."
           }
         }
       }
@@ -473,17 +418,6 @@
     },
     "Recording…" : {
 
-    },
-    "Reply from your personal AI" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Reply from your personal AI"
-          }
-        }
-      }
     },
     "Resume" : {
       "extractionState" : "manual",
@@ -2946,6 +2880,39 @@
         }
       }
     },
+    "watch.ask.destination.noAI" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No personal AI available."
+          }
+        }
+      }
+    },
+    "watch.ask.destination.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Where to?"
+          }
+        }
+      }
+    },
+    "watch.ask.destination.work" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add to Work"
+          }
+        }
+      }
+    },
     "watch.attachment.location" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -3133,6 +3100,17 @@
         }
       }
     },
+    "watch.work.capture.navigationTitle" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Add to Work"
+          }
+        }
+      }
+    },
     "watch.work.capture.saved" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -3206,28 +3184,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "1 min left"
-          }
-        }
-      }
-    },
-    "watch.work.capture.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Save to Work"
-          }
-        }
-      }
-    },
-    "watch.work.launchpad.save" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Save to Work"
           }
         }
       }
@@ -3316,6 +3272,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Untitled note"
+          }
+        }
+      }
+    },
+    "workboard.voice.error.deskWrite" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Work couldn’t save this recording just now."
+          }
+        }
+      }
+    },
+    "workboard.voice.error.screenshotWrite" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Work couldn’t save the screenshot just now."
           }
         }
       }

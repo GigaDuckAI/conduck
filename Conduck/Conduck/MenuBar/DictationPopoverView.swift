@@ -349,12 +349,23 @@ struct DictationPopoverView: View {
 
     @ViewBuilder
     private var content: some View {
-        if coordinator.workCaptureIsActive {
-            // HIGHEST PRIORITY, above even a live chat recording. The two lanes
-            // cannot both hold the microphone, so this can never mask one — and
-            // a ⌃⌘W capture has no other surface anywhere: the desk sheet is in
-            // a window this popover does not open, so whatever it shows here is
-            // the only place the recording can be stopped or finished.
+        if coordinator.workCaptureIsActive, service.state != .recording {
+            // FIRST, but only while the Ask microphone is not live. The two
+            // lanes are exclusive at the MICROPHONE, not at the surface: a Work
+            // capture stays active through its transcription and through a
+            // standing retryable error, and ⌘⇧1 is gated on the live Work mic
+            // rather than on this HUD — so an Ask recording really can be
+            // running underneath. Whichever lane holds the microphone is the one
+            // the person has to be able to see and stop, and the status item's
+            // click already resolves it that way; the surface must agree with
+            // the click or one stops what the other hides.
+            //
+            // Otherwise this arm is first for the reason it always was: a ⌃⌘W
+            // capture has no other surface anywhere — the desk sheet is in a
+            // window this popover does not open — so whatever it shows here is
+            // the only place the recording can be stopped or finished. The Work
+            // HUD, its Try Again and its debt return the instant the Ask
+            // microphone is released.
             workCaptureView
         } else if service.state == .recording {
             recordingStatusView
@@ -1172,7 +1183,10 @@ struct DictationPopoverView: View {
     /// person is entitled to check: the card is on the desk, the desk is one
     /// click away, and a banner that says a thing happened without offering to
     /// show it is asking to be believed. A FAILED row stays inert — there is
-    /// nothing on the desk to go and look at.
+    /// nothing on the desk to go and look at. A QUEUED row stays inert for the
+    /// same reason read the other way: the note is durable in the inbox but the
+    /// import has not happened, so there is no card yet to offer, and a button
+    /// here would promise one.
     @ViewBuilder
     private func workFeedbackRow(_ feedback: MenuBarWorkCaptureFeedback) -> some View {
         switch feedback.kind {
@@ -1196,6 +1210,11 @@ struct DictationPopoverView: View {
                 "workboard.menuBar.saved.open.help",
                 defaultValue: "Open Work and see the new card"
             )))
+        case .queued:
+            Label(feedback.message, systemImage: "clock")
+                .font(.caption)
+                .foregroundStyle(AppColors.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         case .failed:
             Label(feedback.message, systemImage: "exclamationmark.triangle.fill")
                 .font(.caption)
@@ -1243,11 +1262,17 @@ struct DictationPopoverView: View {
                 coordinator.cancelActiveCapture()
                 dismiss()
             })
-            // Interactive ONLY in `.answering`. STT isn't cleanly cancellable,
-            // and during `.sending` there is no task to cancel yet — an X there
-            // would dismiss the popover while the send carried on underneath,
-            // which reads as "cancelled" and isn't. Space stays reserved in
-            // every phase so the popover never resizes.
+            // Interactive ONLY in `.answering`. During `.sending` there is no
+            // task to cancel yet — an X there would dismiss the popover while
+            // the send carried on underneath, which reads as "cancelled" and
+            // isn't. Space stays reserved in every phase so the popover never
+            // resizes.
+            //
+            // Through STT this is restraint, not inability: Esc DOES cancel a
+            // transcription (`DictationService` invalidates the run's generation,
+            // so its words never reach `onTranscript`), and one exit for one
+            // phase is the popover's rule — a second control that says the same
+            // thing is a second thing to explain.
             //
             // MACOS-SPECIFIC REASONING, and the phone deliberately does the
             // opposite: an iOS send has a real background `URLSessionTask` from

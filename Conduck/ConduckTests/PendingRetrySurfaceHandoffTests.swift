@@ -437,10 +437,32 @@ final class PendingRetrySurfaceHandoffTests: XCTestCase {
         let retry = try RefusalLaneSource.body(ofFunction: "retryLast", in: source, path: path)
         XCTAssertTrue(retry.contains("PendingRetryStore.shared.claimNext()"),
                       "The menu bar no longer reserves the capture it retries.")
-        XCTAssertTrue(retry.contains("attemptRetry(claim) == false"))
+        // The attempt carries the run's cancellation identity, and `false` is
+        // the answer a cancelled Retry gives — which is the same answer as "not
+        // finished", so the release below covers it with no second exit.
+        XCTAssertTrue(
+            retry.contains("attemptRetry(claim, generation: generation) == false"),
+            "The attempt no longer answers `false` for an unfinished capture, or no longer carries "
+            + "the identity an Esc during its STT moves — and then a cancelled Retry retires the "
+            + "entry and sends the words anyway."
+        )
         XCTAssertTrue(retry.contains("PendingRetryStore.shared.release(claim)"),
                       "Nothing releases the reservation on a refusal, so this window parks its "
                       + "own recording for the whole lease.")
+        // The COMPLETE block, not its three substrings. Each of the assertions
+        // above survives a condition wrapped around the release — `if state ==
+        // .recording`, say — and then a failed or cancelled Retry keeps its
+        // reservation for the whole 600-second lease while the card, the desk
+        // sheet and every Shortcut host are told the recording is busy.
+        XCTAssertTrue(
+            Self.callText(retry).contains(Self.callText("""
+            if await attemptRetry(claim, generation: generation) == false {
+                await PendingRetryStore.shared.release(claim)
+            }
+            """)),
+            "The release is no longer the unconditional answer to an unfinished attempt: "
+            + "\(retry.suffix(600))"
+        )
     }
 
     /// The card says how many are waiting and offers a confirmed way out.

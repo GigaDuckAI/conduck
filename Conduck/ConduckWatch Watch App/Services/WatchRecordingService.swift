@@ -107,12 +107,15 @@ extension WatchWorkCaptureOutcome {
     /// `runRelay` and the deferred one the queue reconciles — because the two
     /// drifting apart is precisely how a screen ends up saying something the
     /// banner beside it contradicts. `nil` for `.converseHop`: a chat ask has
-    /// no Work line, and this lane never shows one for it.
+    /// no Work line, and this lane never shows one for it. `nil` too for
+    /// `.receiptContradictsDestination`: nothing was settled, so every sentence
+    /// this type can produce would be a claim about a capture that is still
+    /// waiting.
     nonisolated static func forSettlement(
         _ settlement: AppleRelayPendingQueue.RelaySettlement
     ) -> WatchWorkCaptureOutcome? {
         switch settlement {
-        case .converseHop: return nil
+        case .converseHop, .receiptContradictsDestination: return nil
         case .workAcknowledged: return .saved
         case .workRecordingOnly: return .savedWithoutWords
         case .workWordsOnly: return .savedWordsOnly
@@ -534,11 +537,41 @@ final class WatchRecordingService {
 
     /// The capture request that owns the live turn — the `WatchRoute.capture`
     /// nonce the trigger minted, threaded through `startCapture`. Cleared on
-    /// every terminal/reset boundary alongside `pendingConversationID`, which is
-    /// the load-bearing part: a hop that never went through `startCapture` (the
-    /// deferred-relay drain, a relaunched background-STT process) then owns
-    /// NOTHING, so its mint is stamped with no request and no draft can adopt it.
-    private var captureRequestID: UUID?
+    /// every terminal/reset boundary alongside `pendingConversationID`.
+    ///
+    /// A deferred-relay drain has no route nonce, so it mints one of its own
+    /// (`deferredHopRequestID`) and holds THIS the same way a capture does. The
+    /// two things ownership answers are both wanted there: an older turn's
+    /// completion must not release the machine under a hop that has not minted
+    /// yet (`liveTurnOwns`), and a start that arrives mid-hop must be refused.
+    /// What the deferred hop must NOT get is an adoptable mint, which is why
+    /// `recordMint` compares the two ids rather than merely testing this for nil.
+    private var captureRequestID: UUID? {
+        didSet {
+            // The deferred token is a FLAVOUR of the request id, never a second
+            // owner: whoever replaces the request id — a capture entry point, a
+            // terminal clear — ends the deferred hop's claim in the same write.
+            // Expressed once here so no clear site can forget it.
+            if captureRequestID != deferredHopRequestID { deferredHopRequestID = nil }
+        }
+    }
+
+    /// The request id a DEFERRED dispatch minted for itself, when one owns the
+    /// machine right now.
+    ///
+    /// It exists because a deferred hop is unpinned for its whole first
+    /// suspension — `startDeferredConverseHop` sets `.waiting` synchronously,
+    /// but the conversation is only created several awaits later — and an
+    /// unowned `.waiting` reads to `liveTurnOwns` as a RESTORED wait, whose
+    /// reply the machine may be released for. An older Chat reply landing in
+    /// that window returned the machine to `.idle`, a Work capture started on
+    /// top of it, and the resumed hop then wrote `.waiting` over a live
+    /// recording whose Stop no longer saved anything.
+    ///
+    /// Set BEFORE the first suspension and always in the same write as
+    /// `captureRequestID`; read only by `recordMint`, which must keep the
+    /// deferred mint unowned (see `lastMintOutcome`).
+    private var deferredHopRequestID: UUID?
 
     /// The last mint, stamped with the request that owns it. Written at the mint
     /// and DELIBERATELY NEVER CLEARED — a draft that was suspended across its
@@ -624,16 +657,20 @@ final class WatchRecordingService {
     /// durable outcome, and the invalidation edge — so no caller can bump one
     /// without the others and leave a draft reading a half-written mint.
     ///
-    /// The outcome is stamped only when a capture request owns the turn. A
+    /// The outcome is stamped only when a CAPTURE request owns the turn. A
     /// deferred-relay drain or a relaunched background-STT hop reaches the same
-    /// resolver without ever calling `startCapture`, so `captureRequestID` is
-    /// nil there and the mint is recorded as belonging to nobody — which is
-    /// exactly right: a draft on screen waiting for its OWN turn must not adopt
-    /// a conversation minted for an older, unrelated one.
+    /// resolver without ever calling `startCapture`, and its mint is recorded as
+    /// belonging to nobody — which is exactly right: a draft on screen waiting
+    /// for its OWN turn must not adopt a conversation minted for an older,
+    /// unrelated one.
+    ///
+    /// "Nobody" is a comparison rather than a nil test because a deferred hop
+    /// DOES hold `captureRequestID` — it has to, or an older turn's reply
+    /// releases the machine under it — with an id no route ever handed out.
     private func recordMint(_ conversationID: UUID) {
         mintedConversationID = conversationID
         captureMintCount += 1
-        guard let requestID = captureRequestID else { return }
+        guard let requestID = captureRequestID, requestID != deferredHopRequestID else { return }
         lastMintOutcome = WatchCaptureMintOutcome(
             requestID: requestID,
             conversationID: conversationID
@@ -1747,6 +1784,18 @@ final class WatchRecordingService {
             language: language,
             providerID: providerID,
             conversationID: pendingConversationID,
+            // The gateway the person PICKED, for the case that has no
+            // conversation to pin: an Ask chooser row starts a `.new` draft, so
+            // the pin is nil and the pick lives only in the one-shot Ask hint —
+            // which the deferred settlement is forbidden to consume. Persisting
+            // it here is what keeps words addressed to one gateway from being
+            // delivered to another (or appended to a thread on it) when the
+            // relay defers. Peeked, never consumed: the LIVE hop still owns the
+            // hint. Chat only — a Work capture cleared the hint on the way in
+            // and reaches no gateway at all.
+            backendRef: destination == .chat
+                ? WatchSettingsReader.shared.peekPendingInAppNewConversationBackend()
+                : nil,
             // PERSISTED, not remembered: the reply that settles this entry may
             // land in a process that never saw the capture, and only this field
             // can tell that process the capture must not reach a gateway.
@@ -1819,6 +1868,23 @@ final class WatchRecordingService {
                     Self.workNoteUnwrittenMessage,
                     destination: destination,
                     deferred: false
+                )
+            case .destinationContradicted:
+                // The reply says the desk holds this capture and the lane says
+                // gateway. Nothing was claimed, so the entry and the recording
+                // are both still here — which is exactly what the deferral line
+                // already describes, and it is the only sentence that asserts
+                // neither half of the disagreement. The fault itself goes to the
+                // log, where it can be acted on.
+                WatchLog.error(.stt, "stt.relay.destinationMismatch", [
+                    "turn": turnTag,
+                    "entry": destination.rawValue
+                ])
+                // xcstrings: relay-convergence fix
+                surfaceRelayVerdict(
+                    String(localized: "Sent to iPhone. Your transcript will arrive when it reconnects."),
+                    destination: destination,
+                    deferred: true
                 )
             }
         } catch {
@@ -2320,7 +2386,16 @@ final class WatchRecordingService {
     /// predates any pending in-app Ask hint — consuming (or clearing) the
     /// one-shot hint there would steal the gateway binding from the LIVE Ask
     /// it belongs to.
-    func startConverseHop(transcript: String, consumeAskHint: Bool = true) async {
+    /// `mintingInto` (default nil — every live call site keeps today's
+    /// behavior): the gateway a DEFERRED turn was addressed to, which mints
+    /// always-new against that ref rather than falling through the pointer /
+    /// default arms. A live turn never sets it; its pick is still the one-shot
+    /// hint.
+    func startConverseHop(
+        transcript: String,
+        consumeAskHint: Bool = true,
+        mintingInto backendRef: String? = nil
+    ) async {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             // Empty transcript — nothing to ask, and (per guardrail 1/2) NOTHING
@@ -2364,7 +2439,10 @@ final class WatchRecordingService {
             // resolve that ref's gateway config (per-ref url/token/cert/model).
             // Decision B — an unconfigured / deleted bound ref surfaces the
             // not-configured error; NEVER silently reroute to the default.
-            let (conversationID, ref, stampsQuickPointer) = try await resolveActiveConversationAndBackend(consumeAskHint: consumeAskHint)
+            let (conversationID, ref, stampsQuickPointer) = try await resolveActiveConversationAndBackend(
+                consumeAskHint: consumeAskHint,
+                mintingInto: backendRef
+            )
 
             guard let config = WatchSettingsReader.shared.remoteAgentConfig(for: ref) else {
                 WatchLog.error(.converse, "gateway.notConfigured", ["turn": turnTag])
@@ -2506,15 +2584,28 @@ final class WatchRecordingService {
     /// reached the agent — the transcript notification implied success for a
     /// turn that silently died in the queue. Re-pins the original thread when
     /// the capture was bound (in-thread composer voice) so the deferred ask
-    /// lands in the SAME conversation; nil (headless capture, or a pre-binding
-    /// queue blob) falls through the resolver's pointer/new-default path WITH
+    /// lands in the SAME conversation; nil with a named `addressedTo` mints
+    /// against THAT gateway (the Ask chooser's pick, replayed from the entry);
+    /// nil with neither (headless capture, or a pre-binding queue blob) falls
+    /// through the resolver's pointer/new-default path WITH
     /// the in-app Ask hint excluded (`consumeAskHint: false`) — the one-shot
     /// hint belongs to a LIVE Ask, never to a turn captured earlier. Always
     /// voice modality. CALLER CONTRACT: dispatch only when
     /// `canAcceptDeferredDispatch` (the drain/reconcile gate) — this writes
     /// the shared pin + drives the live state machine, and it OCCUPIES the
     /// machine synchronously on entry (see below).
-    func startDeferredConverseHop(transcript: String, boundTo conversationID: UUID?) async {
+    /// `addressedTo` is the gateway the ORIGINAL capture named, read off the
+    /// queue entry: an Ask chooser row starts a `.new` draft, so there is no
+    /// conversation to pin and the pick would otherwise be unrecoverable by the
+    /// time this runs. It mints against that gateway instead of falling through
+    /// to the pointer / default arms — the difference between a deferred ask
+    /// reaching the gateway it was spoken to and reaching whichever one happens
+    /// to be default when the phone comes back.
+    func startDeferredConverseHop(
+        transcript: String,
+        boundTo conversationID: UUID?,
+        addressedTo backendRef: String? = nil
+    ) async {
         // Occupy the state machine SYNCHRONOUSLY, before the first await:
         // `startConverseHop` only reaches its own `state = .waiting`
         // assignment after several awaits (conversation fetch, user-turn
@@ -2534,28 +2625,54 @@ final class WatchRecordingService {
         // speaking it unprompted minutes later would be a jump-scare, so
         // deferred replies must stay silent (nil source fails the verdict).
         captureSource = nil
-        // OWN NOTHING. `recordMint` stamps its outcome with whatever request
-        // holds the machine, and a deferred drain replays a capture from
-        // MINUTES ago — if a live draft's request were still latched here, its
-        // mint would be stamped with that draft's id and the draft would adopt
-        // an older turn's conversation. The four terminal boundaries normally
-        // clear this, but the claim-nil resets do not go through them, so the
-        // invariant is asserted HERE rather than assumed of every caller.
-        captureRequestID = nil
+        // OWN THIS HOP, AND NOTHING ELSE'S. Two separate things are settled in
+        // one write, and both are load-bearing:
+        //
+        //   • The live draft's request, if one was still latched, is DROPPED.
+        //     `recordMint` stamps its outcome with whatever request holds the
+        //     machine, and a deferred drain replays a capture from MINUTES ago
+        //     — that draft would otherwise adopt an older turn's conversation.
+        //     The four terminal boundaries normally clear this, but the
+        //     claim-nil resets do not go through them, so the invariant is
+        //     asserted HERE rather than assumed of every caller.
+        //   • A token of this hop's own is latched in its place, because the
+        //     machine is OCCUPIED from here until the mint several awaits
+        //     later, and an unowned `.waiting` is exactly the shape
+        //     `liveTurnOwns` reads as a restored wait — an older Chat reply
+        //     landing in that window took the machine back to `.idle`, a Work
+        //     capture started on it, and this hop's resumed `.waiting` then
+        //     wrote over a live recording whose Stop no longer saved anything.
+        //     The token is never a route nonce, so no draft can adopt the mint
+        //     it stamps (`recordMint` compares the two ids).
+        let hopRequestID = UUID()
+        deferredHopRequestID = hopRequestID
+        captureRequestID = hopRequestID
         pendingConversationID = conversationID
         // Deferred drains are EXPLICIT for pointer purposes (they replay an
         // old turn; they must not retarget where the next headless capture
         // lands) — matches the pre-merge behavior of the bound path.
         pendingPinStampsQuickPointer = false
         pendingTypedSend = false
-        await startConverseHop(transcript: transcript, consumeAskHint: false)
+        // The lane, stamped rather than inherited. A Work capture that failed
+        // and was dismissed leaves `.work` on the machine, and a deferred CHAT
+        // turn taking that machine over would run a real gateway hop under the
+        // launchpad's "Saving to Work…" caption — the one sentence a gateway
+        // turn must never be described by.
+        captureDestination = .chat
+        workCaptureOutcome = nil
+        await startConverseHop(
+            transcript: transcript,
+            consumeAskHint: false,
+            mintingInto: conversationID == nil ? backendRef : nil
+        )
     }
 
     /// Resolve the active conversation pointer AND its bound
     /// REF together: an EXISTING conversation routes to its persisted `.backend`
     /// ref STRING verbatim ("openclaw" / "hermes" / "custom_<uuid>"); a
-    /// Watch-MINTED new conversation binds to the default ref
-    /// (`WatchSettingsReader.shared.defaultBackendRef`).
+    /// Watch-MINTED new conversation binds to the ref the capture NAMED — the
+    /// live Ask hint, or `mintingInto` for the deferred replay of one — and to
+    /// `WatchSettingsReader.shared.defaultBackendRef` only when it named none.
     ///
     /// CORRECTNESS FIX (Decision B — no silent reroute): an existing
     /// conversation's persisted ref is passed through UNCHANGED — it is NOT
@@ -2570,7 +2687,10 @@ final class WatchRecordingService {
     /// turns may write the quick lane; the pinned in-thread composer is
     /// EXPLICIT and returns `false`, gating both the anti-orphan pre-hop
     /// stamp in `startConverseHop` and the uploader's reply-time stamp.
-    private func resolveActiveConversationAndBackend(consumeAskHint: Bool) async throws -> (id: UUID, ref: String, stampsQuickPointer: Bool) {
+    private func resolveActiveConversationAndBackend(
+        consumeAskHint: Bool,
+        mintingInto addressedRef: String? = nil
+    ) async throws -> (id: UUID, ref: String, stampsQuickPointer: Bool) {
         // Composer-bound path: the in-thread composer pinned a specific
         // conversation. Look it up + route to its persisted ref VERBATIM.
         // CRITICAL: do NOT consume the in-app-Ask hint here — the always-new
@@ -2613,7 +2733,36 @@ final class WatchRecordingService {
             recordMint(record.id)
             return (record.id, ref, true)
         }
-        if let pointerID = WatchSettingsReader.shared.resolveActiveConversationID() {
+        // Deferred turn that NAMED its gateway. The live Ask arm above is the
+        // same decision one hop earlier — always-new, bound to the ref the row
+        // carried — and this is that decision replayed from the queue for a
+        // capture whose hint was never consumable here. It precedes the pointer
+        // branch for exactly the reason the hint branch does: a pick is not a
+        // continuation, and an explicit destination must never be resolved into
+        // whichever thread the pointer happens to hold. An unconfigured ref is
+        // left to `remoteAgentConfig(for:)` below, as the live arm leaves it —
+        // refusing a NAMED gateway here would substitute the very default this
+        // branch exists to avoid.
+        if let addressedRef {
+            let record = try await store.createConversation(backend: addressedRef)
+            WatchSettingsReader.shared.recordActiveConversation(record.id)
+            recordMint(record.id)
+            return (record.id, addressedRef, true)
+        }
+        // The pointer arm CONTINUES the thread the person is currently in, and
+        // it decides that at hop time. A live capture may do that; a REPLAY may
+        // not — `consumeAskHint == false` marks one, and
+        // `startDeferredConverseHop` is its only caller. An entry that arrives
+        // here with neither a pin nor an addressed ref was an ALWAYS-NEW
+        // capture by construction: every capture that continues a thread pins
+        // it (`.existing`), and both of the always-new paths (the Ask chooser
+        // and the headless trigger) name a gateway — one on the entry, and on
+        // builds that predate that field only in the one-shot hint, which the
+        // replay is forbidden to read. So the honest replay is the mint below;
+        // appending an old always-new capture to whichever thread the pointer
+        // happens to hold minutes later puts the person's words in a
+        // conversation they never spoke them into.
+        if consumeAskHint, let pointerID = WatchSettingsReader.shared.resolveActiveConversationID() {
             // Confirm it still exists locally (could have been deleted on
             // another device) AND read its bound ref VERBATIM. Targeted fetch
             // by id — never load the whole roster to find one (mirrors the
@@ -2696,10 +2845,37 @@ final class WatchRecordingService {
             // background-STT chained → converse; also accept
         } else {
             // Not actively showing this turn — the store + thread refresh carry it.
-            clearInFlight(forConversation: conversationID)
+            forgetPersistedInFlight(forConversation: conversationID)
             // The machine may already be idle here (wrist-drop teardown) —
             // give queued deferred relays the same chance to dispatch as the
             // main path below. `drain()` self-gates, so a busy state no-ops.
+            Task { @MainActor in
+                await AppleRelayPendingQueue.shared.drain()
+            }
+            return
+        }
+        // Match the TAKEOVER to the turn, not just the marker clear (the
+        // failure counterpart does the same). Two ways a reply can be somebody
+        // else's:
+        //
+        //   • The machine is running a WORK capture. No gateway reply can be
+        //     its completion — Work reaches no gateway at all — so this is an
+        //     older Chat turn's reply arriving while a private save is in
+        //     flight. Releasing the machine here would hand it to the next
+        //     capture mid-save, and the Work relay's own `recordingFileURL =
+        //     nil` would then take that replacement capture's handle with it
+        //     ("Recording file not found" on a Stop the person just pressed).
+        //   • The reply is not the live turn's (`liveTurnOwns`). An older
+        //     turn's reply must not reset a newer turn's wait — or, with no pin
+        //     minted yet, release a capture that is still uploading; the store
+        //     and the thread refresh carry it, exactly as they do when the
+        //     machine is not showing a turn at all.
+        //
+        // Either way the OLD turn's persisted marker still goes (it is dead
+        // either way) and the queue still gets its dispatch chance — but the
+        // live capture's pins, hint and request id stay exactly where they are.
+        if captureDestination == .work || !liveTurnOwns(conversationID) {
+            forgetPersistedInFlight(forConversation: conversationID)
             Task { @MainActor in
                 await AppleRelayPendingQueue.shared.drain()
             }
@@ -2722,15 +2898,15 @@ final class WatchRecordingService {
     /// (`WatchNotificationDelegate.willPresent`), so without this transition
     /// the `.waiting`/`.uploading` spinner persists with ZERO feedback until
     /// pop-to-root or relaunch (the 600 s stale-guard only runs on
-    /// restore-from-idle). Same state guard as the success path: only
-    /// transition when the live machine is actually showing a turn — AND the
-    /// failure is for THAT turn: a resurrected OLD task's failure
-    /// (conversation B) must not overwrite the machine while it waits on a
-    /// NEWER turn (conversation A), or B's error masquerades as A's and A's
-    /// later success can't restore the machine. `conversationID` nil = an
-    /// unmatchable turn (STT task / failed metadata decode) — those can't be
-    /// pin-checked, so they keep the takeover (and clear the in-flight marker
-    /// unconditionally).
+    /// restore-from-idle). Same guards as the success path, for the same
+    /// reasons: only transition when the live machine is actually showing a
+    /// turn, when the lane it is showing is CHAT, and when the failure is that
+    /// turn's own. A resurrected OLD task's failure (conversation B) must not
+    /// overwrite the machine while it waits on a NEWER turn (conversation A),
+    /// or B's error masquerades as A's and A's later success can't restore the
+    /// machine. `conversationID` nil = an unmatchable turn (STT task / failed
+    /// metadata decode) — those can't be pin-checked, so they keep the takeover
+    /// (and clear the in-flight marker unconditionally).
     func handleBackgroundFailure(_ message: String, conversationID: UUID?) {
         if case .waiting = state {
             // proceed
@@ -2738,16 +2914,33 @@ final class WatchRecordingService {
             // STT stage, or background-STT chained → converse; also accept
         } else {
             // Not actively showing this turn — the notification carries it.
-            if let conversationID { clearInFlight(forConversation: conversationID) }
+            if let conversationID { forgetPersistedInFlight(forConversation: conversationID) }
             return
         }
-        // Conversation-match the TAKEOVER, not just the marker clear. A nil
-        // live pin (headless turn) can't disambiguate → takeover stands.
-        if let conversationID, let pinned = pendingConversationID, pinned != conversationID {
-            // A different turn's failure — keep the live wait on screen; the
-            // notification carries it. (The conversation-matched clear is a
-            // no-op here unless the persisted marker really is that turn's.)
-            clearInFlight(forConversation: conversationID)
+        // Match the TAKEOVER to the LANE and the turn, exactly as
+        // `handleBackgroundReply` does — same two ways it can be somebody
+        // else's, and the same reason each one matters:
+        //
+        //   • The machine is running a WORK capture. No gateway failure can be
+        //     its completion (Work forces the iPhone relay, so it reaches
+        //     neither the background-STT funnel nor the `.uploading` watchdog
+        //     — both of which pass `conversationID: nil` and are CHAT-only).
+        //     Releasing a live save to `.error` would admit the next capture
+        //     while Work's pipeline is still running, and that pipeline's
+        //     `recordingFileURL = nil` would erase the replacement's handle.
+        //   • The failure is not the live turn's. A nil `conversationID` is an
+        //     unmatchable turn (STT task / failed metadata decode) and keeps
+        //     the takeover, because it is the only thing that unsticks a live
+        //     `.uploading` chat machine.
+        if captureDestination == .work {
+            if let conversationID { forgetPersistedInFlight(forConversation: conversationID) }
+            return
+        }
+        if let conversationID, !liveTurnOwns(conversationID) {
+            // A different turn's failure — keep the live wait (or the live
+            // capture) exactly as it is; the notification carries it. Only the
+            // dead turn's persisted marker goes.
+            forgetPersistedInFlight(forConversation: conversationID)
             return
         }
         if let conversationID {
@@ -2806,7 +2999,13 @@ final class WatchRecordingService {
                 state = .idle
                 recordingTime = 0
             } else {
-                // Reply not in yet — restore the thinking state.
+                // Reply not in yet — restore the thinking state. Stamp the lane
+                // with it: only a GATEWAY turn ever reaches `.waiting` (Work
+                // goes straight back to `.idle`), and a `.work` stamp left over
+                // from a dismissed Work error would both caption this wait
+                // "Saving to Work…" and make its reply look like it belongs to
+                // somebody else.
+                captureDestination = .chat
                 state = .waiting(startedAt: startedAt)
             }
         }
@@ -2912,11 +3111,57 @@ final class WatchRecordingService {
 
     /// Clear only when the persisted marker matches `conversationID` — avoids a
     /// late reply for an old turn wiping a freshly-started one.
+    ///
+    /// Reserved for a completion the LIVE machine owns (`liveTurnOwns`). Every
+    /// other caller wants `forgetPersistedInFlight(forConversation:)`: a marker
+    /// match is not ownership, and the full reset takes the pins, the one-shot
+    /// Ask hint and the request id with it.
     private func clearInFlight(forConversation conversationID: UUID) {
         if let raw = appGroupDefaults.string(forKey: Self.inFlightConversationKey),
            raw == conversationID.uuidString {
             clearInFlight()
         }
+    }
+
+    /// Drop the persisted marker for a turn that is NOT the live machine's —
+    /// and NOTHING else.
+    ///
+    /// The dead turn's marker must go either way (it is what a later restore
+    /// would resurrect a thinking view from), but the pins, the one-shot Ask
+    /// hint and the request id belong to whatever is running NOW. Reaching for
+    /// the full `clearInFlight()` here is how an older gateway turn's reply
+    /// stripped a newer Ask of the gateway it was addressed to — the ref lived
+    /// only in the hint until the hop consumed it — and handed a live Work save
+    /// to the next capture.
+    private func forgetPersistedInFlight(forConversation conversationID: UUID) {
+        guard let raw = appGroupDefaults.string(forKey: Self.inFlightConversationKey),
+              raw == conversationID.uuidString else { return }
+        appGroupDefaults.removeObject(forKey: Self.inFlightConversationKey)
+        appGroupDefaults.removeObject(forKey: Self.inFlightStartedAtKey)
+        appGroupDefaults.removeObject(forKey: Self.inFlightTurnKey)
+    }
+
+    /// Whether a background completion for `conversationID` belongs to the turn
+    /// the live machine is showing.
+    ///
+    /// A pin (composer pin or minted draft) answers it exactly. With NO pin
+    /// there are two very different machines, and `captureRequestID` is what
+    /// tells them apart:
+    ///
+    ///   • Nobody holds it → a restored wait (the wrist dropped, or the process
+    ///     relaunched and `restoreInFlightStateIfNeeded` put the thinking view
+    ///     back from the persisted marker alone). Its reply is exactly this
+    ///     one; the takeover is the whole point.
+    ///   • A request holds it → something is LIVE on the machine and has minted
+    ///     nothing yet, so it has no reply and no failure of its own. The
+    ///     completion is an older turn's, and treating it as this one's
+    ///     releases a machine mid-upload. Both kinds of holder count: a capture
+    ///     (`startCapture` / `startWorkCapture`) and a deferred dispatch, which
+    ///     latches `deferredHopRequestID` before its first suspension precisely
+    ///     so this answers false across its unminted window.
+    private func liveTurnOwns(_ conversationID: UUID) -> Bool {
+        if let live = inFlightConversationID { return live == conversationID }
+        return captureRequestID == nil
     }
 
     /// Retry from error state

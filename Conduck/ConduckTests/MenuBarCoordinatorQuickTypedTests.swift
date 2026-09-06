@@ -291,7 +291,10 @@ final class MenuBarCoordinatorQuickTypedTests: XCTestCase {
     func testVoiceTranscriptOnDeletedExplicitDestinationStillStashes() async {
         let (coordinator, _) = makeCoordinator()
         aimAtDeletedThread(coordinator)
-        await coordinator.handleTranscript("spoken words")
+        await coordinator.handleTranscript(
+            "spoken words",
+            sendGeneration: coordinator.quickSendGeneration
+        )
         XCTAssertTrue(coordinator.hasPendingFailedTurn,
                       "The `.voice` path through the shared `handleQuickSend` must stash exactly as before the refactor.")
         XCTAssertTrue(isError(coordinator),

@@ -26,6 +26,15 @@ struct WorkboardVoiceCaptureView: View {
     // default remains Chat for the established conversation composers.
     @State private var recorder = InAppAudioRecorder(retryDestination: .work)
     @State private var didStart = false
+    /// True once "Cancel Transcription" has stopped a hop on this capture.
+    ///
+    /// The recorder answers a cancel with `.idle` and NO banner — deliberately,
+    /// because nothing failed — and `.idle` is also the state this sheet opens
+    /// in. Without a second reading the two are indistinguishable, so a stopped
+    /// transcription rendered as "Starting the microphone…" beside no controls
+    /// at all: a dead end over a capture that still had a Try Again in it.
+    /// Cleared by every start, so it describes only the hop that was stopped.
+    @State private var transcriptionStopped = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -63,6 +72,7 @@ struct WorkboardVoiceCaptureView: View {
             recorder.onAutoStopResult = { result in
                 handle(result)
             }
+            transcriptionStopped = false
             await recorder.startRecording()
         }
         .onDisappear {
@@ -107,10 +117,24 @@ struct WorkboardVoiceCaptureView: View {
         VStack(spacing: 8) {
             switch recorder.state {
             case .idle:
-                Text(LocalizedStringResource(
-                    "workboard.voice.starting",
-                    defaultValue: "Starting the microphone…"
-                ))
+                if transcriptionStopped {
+                    Text(LocalizedStringResource(
+                        "workboard.voice.stopped.title",
+                        defaultValue: "Transcription stopped"
+                    ))
+                    .font(.title3.weight(.semibold))
+                    Text(LocalizedStringResource(
+                        "workboard.voice.stopped.body",
+                        defaultValue: "The recording is on your desk. Try Again adds the words to that same card."
+                    ))
+                    .font(.subheadline)
+                    .foregroundStyle(AppColors.textSecondary)
+                } else {
+                    Text(LocalizedStringResource(
+                        "workboard.voice.starting",
+                        defaultValue: "Starting the microphone…"
+                    ))
+                }
             case .recording(let startedAt):
                 Text(LocalizedStringResource(
                     "workboard.voice.listening",
@@ -268,7 +292,32 @@ struct WorkboardVoiceCaptureView: View {
             }
             .buttonStyle(.bordered)
         case .idle:
-            EmptyView()
+            // A stopped transcription is the ONE idle this sheet can be looked
+            // at in, and the capture it stopped still owns a card and a
+            // reservation — so the action that finishes it belongs here, not
+            // only in `.error`. Reached solely through `handle(_:)`, which
+            // dismisses instead whenever there is nothing left to finish.
+            if transcriptionStopped, recorder.canRetryWorkCapture {
+                Button {
+                    transcriptionStopped = false
+                    Task { handle(await recorder.retryWorkCapture()) }
+                } label: {
+                    Label(
+                        LocalizedStringResource("workboard.voice.tryAgain", defaultValue: "Try Again"),
+                        systemImage: "arrow.counterclockwise"
+                    )
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppColors.brandAmber)
+                Button(LocalizedStringResource("common.done", defaultValue: "Done")) {
+                    cancel()
+                }
+                .buttonStyle(.bordered)
+            } else {
+                EmptyView()
+            }
         }
     }
 
@@ -322,7 +371,7 @@ struct WorkboardVoiceCaptureView: View {
     private var accessibilityStatusID: String {
         let busy = recorder.retryRefusedBusy ? "-busy" : ""
         switch recorder.state {
-        case .idle: return "idle" + busy
+        case .idle: return (transcriptionStopped ? "stopped" : "idle") + busy
         case .recording: return "recording" + busy
         case .processing: return "processing" + busy
         case .preparingVoice: return "preparing" + busy
@@ -339,6 +388,12 @@ struct WorkboardVoiceCaptureView: View {
         }
         switch recorder.state {
         case .idle:
+            guard !transcriptionStopped else {
+                return String(
+                    localized: "workboard.voice.stopped.title",
+                    defaultValue: "Transcription stopped"
+                )
+            }
             return String(localized: "workboard.voice.starting", defaultValue: "Starting the microphone…")
         case .recording:
             return String(localized: "workboard.voice.listening", defaultValue: "Listening")
@@ -372,7 +427,27 @@ struct WorkboardVoiceCaptureView: View {
             } else {
                 onTranscript(transcript)
             }
-        case .failure:
+        case .failure(let error):
+            // A CANCELLED hop is not a failure and the recorder says so: it
+            // returns to `.idle` with no banner, because "Cancel Transcription"
+            // is a promise about the WORDS and the recording it published is
+            // already a card. What that leaves on screen is this sheet's
+            // problem: `.idle` renders the startup line and no controls, so the
+            // capture's own Try Again — the thing that would still put the words
+            // on that card — became unreachable the moment the press landed.
+            //
+            // Two answers, decided by whether anything is left to finish. A
+            // capture still in hand earns the stopped state and its Try Again; a
+            // capture with nothing owed is a finished piece of work, and this
+            // sheet's only dismissal hook is `onCancel`.
+            if case .unknown(let underlying) = error, underlying is CancellationError {
+                if recorder.canRetryWorkCapture {
+                    transcriptionStopped = true
+                } else {
+                    onCancel()
+                }
+                return
+            }
             // The recorder already owns the typed error state and retry lane,
             // and the recording it published before transcribing stands on the
             // desk either way.

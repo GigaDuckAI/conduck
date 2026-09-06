@@ -337,6 +337,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The decision and its wording are `QuitGuard`'s (pure, unit-tested); this
     /// method only supplies the inputs and drives the modality.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // A Work capture between its stop and its desk write is the one thing in
+        // flight that the registry below cannot see: no gateway is involved, and
+        // `AudioRecorder.stopRecording()` has already deleted the audio file, so
+        // for those few hundred milliseconds the recording exists only in this
+        // process. Quitting there takes it with no card and no Try Again behind
+        // it. So wait — silently and briefly; there is nothing here for a person
+        // to decide, and the alert below is reserved for the choice that costs
+        // them something. A power-off is not waited on: the OS is not asking
+        // politely, and it times the app out.
+        if InAppAudioRecorder.workPublicationsInFlight > 0, !isPowerOffInProgress {
+            Task { @MainActor in
+                await InAppAudioRecorder.waitForWorkPublications(timeout: .seconds(5))
+                // The wait is BOUNDED, so it can end with the recording still
+                // in this process's memory — and the answer there is no. The
+                // guard below counts gateway turns and by construction cannot
+                // see a Work capture, so consulting it alone would turn every
+                // slow compression or desk write into a silent deletion.
+                //
+                // Refusing is not a hang: the deferral is over, the app carries
+                // on, and the next ⌘Q waits again — by which time the write has
+                // almost certainly landed. A logout or restart never reaches
+                // here (`isPowerOffInProgress` above), and Force Quit is
+                // unaffected.
+                guard InAppAudioRecorder.workPublicationsInFlight == 0 else {
+                    NSApp.reply(toApplicationShouldTerminate: false)
+                    return
+                }
+                guard self.unsavedWorkCapturePermitsTermination() else {
+                    NSApp.reply(toApplicationShouldTerminate: false)
+                    return
+                }
+                NSApp.reply(toApplicationShouldTerminate: self.quitGuardPermitsTermination())
+            }
+            return .terminateLater
+        }
+        // A capture that has been REFUSED everywhere durable is the other case,
+        // and it is not the same case. Waiting resolves nothing — the desk write
+        // and the retry queue have both already said no — so the only honest
+        // answers are the person's: quit and lose it, or go back to the Try
+        // Again the capture is still showing. Asked before the gateway question
+        // because it is the more destructive loss and the one nothing else can
+        // undo.
+        guard unsavedWorkCapturePermitsTermination() else { return .terminateCancel }
+        return quitGuardPermitsTermination() ? .terminateNow : .terminateCancel
+    }
+
+    /// The unsaved-capture half of the decision. Same shape as the gateway half
+    /// below, and split out for the same reason: the deferred path and the
+    /// direct one must ask the identical question.
+    private func unsavedWorkCapturePermitsTermination() -> Bool {
+        switch QuitGuard.unsavedCaptureVerdict(
+            unsavedCount: InAppAudioRecorder.unsavedWorkCaptureCount,
+            powerOffInProgress: isPowerOffInProgress
+        ) {
+        case .quitNow:
+            return true
+        case .ask(let prompt):
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = prompt.messageText
+            alert.informativeText = prompt.informativeText
+            // DESTRUCTIVE first with no key equivalent, safe second owning Esc —
+            // the rule the gateway alert follows, for the identical reason.
+            alert.addButton(withTitle: prompt.quitButtonTitle).keyEquivalent = ""
+            alert.addButton(withTitle: prompt.keepButtonTitle).keyEquivalent = "\u{1b}"
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+    }
+
+    /// The gateway-turn half of the decision, which is `QuitGuard`'s: quit
+    /// silently, or put the choice to the person. Split out so the wait above
+    /// can answer the same question the direct path does — a delayed quit must
+    /// not become a quit that skipped the guard.
+    private func quitGuardPermitsTermination() -> Bool {
         switch QuitGuard.verdict(
             liveCount: InFlightTurnRegistry.shared.liveCount,
             singleThreadTitle: coordinator.soleLiveThreadTitle,
@@ -344,9 +419,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             powerOffInProgress: isPowerOffInProgress
         ) {
         case .quitNow:
-            return .terminateNow
+            return true
         case .ask(let prompt):
-            return runQuitGuardAlert(prompt) ? .terminateNow : .terminateCancel
+            return runQuitGuardAlert(prompt)
         }
     }
 

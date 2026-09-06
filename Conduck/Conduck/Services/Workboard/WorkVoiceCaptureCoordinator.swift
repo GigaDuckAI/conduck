@@ -59,7 +59,42 @@ typealias WorkVoiceAttachOutcome = WorkVoiceCaptureCoordinator.WorkVoiceAttachOu
 /// Same rule for the recovery answer.
 typealias WorkVoiceRecoveryOutcome = WorkVoiceCaptureCoordinator.WorkVoiceRecoveryOutcome
 
+/// A cancellation the Core Data write queue can read.
+///
+/// `Task.isCancelled` is the wrong instrument inside a `context.perform`
+/// closure: it answers about the task the queue is running the closure on, not
+/// the capture's, so it reads `false` however hard the person pressed Cancel
+/// transcription. This box is set from a cancellation handler on whatever
+/// thread delivers it and read at the mutation boundary, which is the only
+/// place a promise about the WORDS can still be kept.
+///
+/// `@unchecked Sendable` with a lock rather than an actor, because the reader is
+/// a synchronous closure on a queue it may not leave.
+final class WorkVoiceWriteAuthorization: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+}
+
 enum WorkVoiceCaptureCoordinator {
+
+    #if CONDUCK_TESTING
+    /// Stands between the store's first-use load and the queued transcript
+    /// write — the one gap a press can land in that no `Task.isCancelled` on
+    /// the far side would ever see.
+    @MainActor static var transcriptWritePauseForTesting: (@Sendable @MainActor () async -> Void)?
+    #endif
 
     /// What became of a transcript handed to a capture id.
     ///
@@ -533,7 +568,52 @@ private extension ConversationStore {
         transcript: String,
         title: String
     ) async throws -> WorkVoiceAttachOutcome {
+        // The authorization the WRITE itself can read. `Task.isCancelled` inside
+        // a `context.perform` closure answers about the queue's own task rather
+        // than this one, so it reads `false` however hard the person pressed —
+        // a check that looks right and is not. This box is set from the
+        // cancellation handler, on whatever thread delivers it, and read at the
+        // mutation boundary below.
+        let authorization = WorkVoiceWriteAuthorization()
+        return try await withTaskCancellationHandler {
+            try await applyWorkVoiceTranscript(
+                materialID: materialID,
+                transcript: transcript,
+                title: title,
+                authorization: authorization
+            )
+        } onCancel: {
+            authorization.cancel()
+        }
+    }
+
+    private func applyWorkVoiceTranscript(
+        materialID: UUID,
+        transcript: String,
+        title: String,
+        authorization: WorkVoiceWriteAuthorization
+    ) async throws -> WorkVoiceAttachOutcome {
         try await ensureLoaded()
+        // THE WRITE BOUNDARY, and the last place the cancel can still mean
+        // something. "Cancel transcription" is a promise about the WORDS, and
+        // the recorder's own check is upstream of `ensureLoaded()` — which opens
+        // a store on first use and can suspend for as long as that takes. A
+        // press landing in there used to be answered only AFTER the words were
+        // on the card, by a check that changed the sentence and not the desk.
+        //
+        // Cooperative, and it throws rather than reporting an outcome: nothing
+        // was attempted, so there is no attachment verdict to report, and the
+        // recorder maps a cancelled capture to `.idle` with no banner and no
+        // retry save — the same answer its provider hop already gives.
+        try Task.checkCancellation()
+        #if CONDUCK_TESTING
+        // Exactly the gap this authorization exists for: the store is open, the
+        // check above has passed, and the write has not been queued yet. The
+        // production path has no statement here at all.
+        if let pause = await WorkVoiceCaptureCoordinator.transcriptWritePauseForTesting {
+            await pause()
+        }
+        #endif
         let context = newWriteContext()
         let written = try await context.perform { [context] () -> (WorkVoiceAttachOutcome, Bool) in
             let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
@@ -554,6 +634,15 @@ private extension ConversationStore {
                 row.value(forKey: "textContent") as? String != transcript
                     || row.value(forKey: "title") as? String != title
             }) else { return (.attached, false) }
+
+            // THE MUTATION BOUNDARY. The check above was taken before this
+            // closure was queued and before the fetches inside it ran, and
+            // "Cancel transcription" is a promise about the WORDS: a press that
+            // landed in that gap has to be answered here, where the words would
+            // otherwise be written. It throws, because nothing was attempted —
+            // there is no attachment verdict to report, and the recorder maps a
+            // cancellation to `.idle` with no banner and no retry save.
+            guard !authorization.isCancelled else { throw CancellationError() }
 
             let now = Date()
             for row in rows {

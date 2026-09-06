@@ -20,6 +20,12 @@
 // content on a car screen is what the voice-based-conversation entitlement
 // forbids, and this row only records.
 //
+// The desk has a SECOND door: the nav-bar destination chooser (shown with two
+// or more gateways) ends with the same "Add to Work" row. There it is an
+// ACTION — it starts the note and is over — while every row above it is a
+// drive-long gateway pick. Work is never a mode: no state outlives the tap, so
+// the next "New voice chat" still goes to the gateway.
+//
 // NAV MODEL: the list picker is the permanent root (set ONCE in `didConnect`,
 // never removed); the `CPVoiceControlTemplate` is a modal-only template (SDK
 // `presentTemplate` supports exactly {action-sheet, alert, voice-control}; it is
@@ -55,7 +61,29 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// the permanent list root. The list root is set once in `didConnect` and
     /// never removed, so this is the only navigation state we track. Reset on
     /// background/disconnect (the system may tear the modal down).
-    private var isVoicePresented = false
+    ///
+    /// Every write bumps `presentationGeneration` — that is what makes a
+    /// present completion able to tell ITS presentation from the one that
+    /// replaced it. Deliberately a `didSet` on the flag rather than a bump at
+    /// each call site: the flag is written from eight places (connect, resign,
+    /// become-active reconciliation, disconnect, `templateDidDisappear`, both
+    /// halves of `ensureVoicePresented`, `ensureVoiceDismissed`) and a ninth
+    /// added later would silently opt out of the identity check.
+    private var isVoicePresented = false {
+        didSet { presentationGeneration &+= 1 }
+    }
+
+    /// The identity of the CURRENT presentation transition.
+    ///
+    /// Connection identity is not presentation identity, and neither is enough:
+    /// a presentation can be started, cancelled by a backgrounding, and
+    /// replaced by a second one on the SAME controller while the first
+    /// `presentTemplate` callback is still outstanding. That callback used to
+    /// pass the controller check and then clear `isVoicePresented` — leaving a
+    /// live modal behind a flag reading "nothing presented", which lets a later
+    /// state change present a second time and makes `ensureVoiceDismissed`
+    /// return without dismissing at End.
+    private var presentationGeneration: UInt64 = 0
 
     /// One-shot picker hint: the last session ended because the microphone
     /// could not be started (activation failure / engine-start exhaustion).
@@ -84,6 +112,28 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// routing (reads `Conversation.backend`) is unaffected.
     private var sessionDefaultRefOverride: RemoteAgentRef?
 
+    /// Monotonic id for the current start claim. Serials are never reused, so a
+    /// claim left over from a previous connection can neither begin a session
+    /// nor release the claim the new connection is holding.
+    private var startClaimSerial: UInt64 = 0
+
+    /// The ONE session start allowed to be in flight, from the row tap until the
+    /// service's `begin…` has run or the start was refused.
+    ///
+    /// `startSession` suspends on the gateway pre-flight between its own idle
+    /// test and `beginSession`; without a synchronous claim a tap on "Add to
+    /// Work" during that suspension passes the same test, presents the modal,
+    /// and the resumed chat start then wins `beginSession` underneath it — a
+    /// private note becomes an AI chat, which is the boundary this whole lane
+    /// exists to hold.
+    private var pendingStart: (serial: UInt64, destination: CarPlayCaptureDestination)?
+
+    /// The destination of the most recent start attempt. Read only by the
+    /// one-shot mic-couldn't-start hint, so a failed Work start is told to tap
+    /// the row it actually tapped rather than routing the repeated private
+    /// thought to an AI.
+    private var lastStartDestination: CarPlayCaptureDestination = .chat
+
     nonisolated private static let log = Logger(subsystem: Constants.identityNamespace, category: "CarPlayScene")
 
     // MARK: - CPTemplateApplicationSceneDelegate
@@ -99,10 +149,13 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         // live — handlers on the SHARED `AVAudioSession` acting behind the new
         // session's back, and a possibly-running capture engine holding the
         // HFP input (the persistent-'nope' wedge). Tear it down first.
-        if let stale = recordingService {
+        // The SAME teardown the two disconnect callbacks run, not an ad-hoc
+        // subset of it: a hard drop that skipped both of them would otherwise
+        // leave this connection with the previous one's start claim, refresh
+        // latch, session override and observer generation still set.
+        if recordingService != nil {
             Self.log.info("didConnect found a stale recordingService — tearing it down first")
-            stale.teardown()
-            recordingService = nil
+            disconnectCleanup()
         }
         self.interfaceController = interfaceController
         interfaceController.delegate = self
@@ -203,6 +256,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         // while backgrounded); `sceneDidBecomeActive` reconciles it against the
         // live `presentedTemplate` on return, which is the authoritative sync.
         isVoicePresented = false
+        // A start still suspended in its pre-flight must not begin over Maps,
+        // nor survive `sceneDidBecomeActive`'s reconciliation and present a
+        // Listening modal the driver never asked for on their return.
+        pendingStart = nil
         recordingService?.setSceneActive(false)
     }
 
@@ -250,6 +307,111 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         // Session-local override dies with the connection — the next drive
         // starts from the iPhone's device-local default again.
         self.sessionDefaultRefOverride = nil
+        // A start suspended in its pre-flight when the cable dropped must not
+        // begin, and must not hold the next connection's claim hostage.
+        self.pendingStart = nil
+        self.lastStartDestination = .chat
+    }
+
+    // MARK: - One start at a time
+
+    /// Claim the single in-flight session start, SYNCHRONOUSLY, before the
+    /// caller suspends on anything.
+    ///
+    /// Returns the serial the caller must carry to `startIsLive` /
+    /// `releaseStart`, or nil when a start is already claimed or the service
+    /// cannot start one. Consuming the one-shot hint here (rather than in each
+    /// starter) is deliberate: the driver is acting again, and the row that
+    /// disappears is the row whose failure the flag recorded.
+    private func claimStart(
+        _ destination: CarPlayCaptureDestination,
+        service: CarPlayRecordingService
+    ) -> UInt64? {
+        guard service === recordingService else { return nil }
+        var isIdle = false
+        if case .idle = service.state { isIdle = true }
+        guard CarPlayStartGate.mayClaim(
+            isIdle: isIdle,
+            sessionActive: service.sessionActive,
+            claimHeld: pendingStart != nil
+        ) else { return nil }
+        startClaimSerial &+= 1
+        pendingStart = (startClaimSerial, destination)
+        lastStartDestination = destination
+        oneShotStartFailureHint = false
+        return startClaimSerial
+    }
+
+    /// Whether the claim `serial` may still act, asked after EVERY suspension
+    /// group that precedes a side effect and again inside the present
+    /// completion. The claim is bound to the live connection, so a start left
+    /// over from a previous connection — or one suspended across a
+    /// backgrounding, a permission flip or the driver's own End — answers false
+    /// and mutates nothing.
+    private func startIsLive(_ serial: UInt64, service: CarPlayRecordingService) -> Bool {
+        var isIdle = false
+        if case .idle = service.state { isIdle = true }
+        return CarPlayStartGate.isLive(
+            claimSerial: pendingStart?.serial,
+            serial: serial,
+            serviceIsCurrent: service === recordingService,
+            controllerAttached: interfaceController != nil,
+            sceneActive: service.isSceneActive,
+            isIdle: isIdle,
+            sessionActive: service.sessionActive
+        )
+    }
+
+    /// Release the claim — BY SERIAL, so a stale completion from a previous
+    /// connection can never clear the claim the new connection is holding. A
+    /// picker refresh refused while the claim was held is retained rather than
+    /// dropped, and this is where it drains: a start that never began still has
+    /// to leave a correctly painted picker behind.
+    private func releaseStart(_ serial: UInt64) {
+        guard pendingStart?.serial == serial else { return }
+        pendingStart = nil
+        if pickerRefreshPending, recordingService?.sessionActive != true {
+            refreshPicker()
+        }
+    }
+
+    /// Drop a start that has been CLAIMED but has not begun a session yet.
+    ///
+    /// The two places the driver cancels such a start reach no session to end:
+    /// "End" calls `endFromButton()`, whose `endSession` opens with `guard
+    /// sessionActive`, and a modal dismissed before the present completion runs
+    /// leaves the same nothing behind. Without this the claim survives both, and
+    /// the present completion — which asks only whether the claim is still live
+    /// — begins recording under a driver who has just cancelled it.
+    ///
+    /// Routed through `releaseStart` (by serial) so a picker refresh retained
+    /// under the claim still drains, exactly as on every other refusal path.
+    private func cancelPendingStart(for service: CarPlayRecordingService) {
+        guard service === recordingService, let claim = pendingStart else { return }
+        releaseStart(claim.serial)
+    }
+
+    /// Run the `.idle` transition for an end the state observer cannot deliver.
+    ///
+    /// `endSession` reaches this scene through ONE signal — `state = .idle` —
+    /// and a session whose listen has not committed the microphone yet is
+    /// ALREADY `.idle`: the cold-route settle and the VAD model load both sit
+    /// above the commit, and `beginWorkNote`/`beginSession` flip `sessionActive`
+    /// without touching `state`. So "End" during that window ends a real session
+    /// and closes it with an EQUAL assignment, which `@Observable` publishes
+    /// nothing for. Left to it the driver keeps a Listening modal over a session
+    /// that has just died — its own "End" now a no-op, since `endSession` guards
+    /// on `sessionActive` — the dismiss completion that frees the car radio
+    /// never runs, and the abandoned startup supplies no signal either: it
+    /// discards its engine and returns.
+    ///
+    /// The same chokepoint the observer would have used, so this is the missed
+    /// transition and not a second, divergent one. Whether the state could
+    /// change at all is asked at the CALL SITE, before the end — afterwards the
+    /// answer is `.idle` either way.
+    private func finishIdleEndTheObserverCannotDeliver(service: CarPlayRecordingService) {
+        guard service === recordingService, service.state == .idle else { return }
+        applyState(service.state, service: service)
     }
 
     // MARK: - CPInterfaceControllerDelegate (diagnostic only)
@@ -274,6 +436,11 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         // Set FIRST so a re-entrant `ensureVoiceDismissed` (driven by the
         // `state = .idle` below) no-ops instead of issuing a second dismiss.
         isVoicePresented = false
+        // BEFORE the `sessionActive` guard below, which returns on exactly the
+        // case this covers: the modal went away while a start was still inside
+        // its present completion, so there is no session to end and the claim
+        // would otherwise survive to begin a recording behind the picker.
+        cancelPendingStart(for: service)
         // Our own dismiss (End button / sign-off) and the background path
         // already flipped `sessionActive` false → nothing left to do.
         guard service.sessionActive else { return }
@@ -349,12 +516,16 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// the test suite can drive without a CarPlay scene; this body only performs
     /// what that plan decided.
     private func startSession(service: CarPlayRecordingService, conversationID: UUID?) {
-        guard case .idle = service.state, !service.sessionActive else { return }
-        // Consumed: the driver is acting again — the hint's job is done. (The
-        // row disappears on the refresh after this session ends, whatever its
-        // outcome; a NEW start failure sets it again.)
-        oneShotStartFailureHint = false
+        // The claim is taken SYNCHRONOUSLY, before the first suspension below:
+        // the idle test alone cannot hold the boundary, because "Add to Work"
+        // passes it too while this body is parked in the pre-flight. It also
+        // consumes the one-shot hint — the driver is acting again.
+        guard let serial = claimStart(.chat, service: service) else { return }
         Task { @MainActor in
+            // Every early return below — a missing token, a chooser repair, a
+            // phone with nothing set up — releases the claim through this.
+            var handedToPresent = false
+            defer { if !handedToPresent { self.releaseStart(serial) } }
             // Capture the effective CarPlay ref (session-local override ?? the
             // iPhone's device-local default) and stash it on the service so a
             // NEW-conversation mint uses it instead of reading the global default.
@@ -362,6 +533,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // this. Captured at session start so a chooser change mid-session can't
             // retarget a live session.
             var defaultRef = await self.effectiveCarPlayRef()
+            guard self.startIsLive(serial, service: service) else { return }
 
             if let conversationID {
                 // EXISTING chat: the thread is BOUND to its gateway. Apply the
@@ -372,6 +544,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 let bound = try? await ConversationStore.shared.fetchConversation(id: conversationID)
                 let snapshot = await SettingsManager.shared
                     .remoteAgentSnapshot(forConversationBackend: bound?.backend ?? "")
+                guard self.startIsLive(serial, service: service) else { return }
                 let tokenMissing = snapshot.map {
                     $0.authScheme.requiresToken && ($0.token?.isEmpty ?? true)
                 } ?? true
@@ -386,6 +559,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 // NEW chat: the DEFAULT is the destination, so its verdict
                 // decides. One snapshot turn feeds every branch below.
                 let snap = await SettingsManager.shared.newChatPickerSnapshot()
+                guard self.startIsLive(serial, service: service) else { return }
                 let plan = Self.newChatPlan(
                     resolution: snap.resolution,
                     configured: snap.configuredRefs,
@@ -456,12 +630,26 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // and avoids the post-dismiss mutation that used to live in
             // `applyState(.idle)`.
             self.setMuteButton(service: service)
-            self.ensureVoicePresented(service: service, voiceState: "listening", animated: false) { [weak service] in
+            guard self.startIsLive(serial, service: service) else { return }
+            // From here the claim belongs to the present completion, which
+            // releases it on both of its exits.
+            handedToPresent = true
+            self.ensureVoicePresented(service: service, voiceState: "listening", animated: false) { [weak self, weak service] presented in
+                guard let self, let service else { return }
+                // Re-validated INSIDE the completion: the present is itself a
+                // suspension, and a disconnect, a backgrounding or a revoked
+                // microphone during it must not be answered with a session.
+                guard presented, self.startIsLive(serial, service: service) else {
+                    self.releaseStart(serial)
+                    self.dismissModalLeftOverBy(refusedStart: service)
+                    return
+                }
                 // Audio-race contract (g1): beginSession AFTER the
                 // presentTemplate completion — calling it before CarPlay
                 // finishes attaching the voice modal races AVAudioSession
                 // .setActive (engine.start() FourCC '!obj' / 560947818).
-                service?.beginSession(conversationID: conversationID, defaultRef: sessionRef)
+                service.beginSession(conversationID: conversationID, defaultRef: sessionRef)
+                self.releaseStart(serial)
             }
         }
     }
@@ -476,17 +664,60 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     ///
     /// The g1 audio-race contract is preserved verbatim: the engine starts
     /// INSIDE the `presentTemplate` completion. This body has no suspension
-    /// before that call, so — unlike `startSession` — it needs no `Task` hop,
-    /// and the mute button is re-synced on the not-yet-presented template for
-    /// the same reason it is there.
+    /// before that call, so — unlike `startSession` — it needs no `Task` hop.
+    ///
+    /// Split in two because the note has TWO doors — the root row (one tap) and
+    /// the destination chooser's action row (which has to claim before it pops,
+    /// then present on the far side of the pop animation). The claim is taken
+    /// here, once, and `presentWorkNote` carries it; a second door that claimed
+    /// twice would hold its own claim shut.
     private func startWorkNote(service: CarPlayRecordingService) {
-        guard case .idle = service.state, !service.sessionActive else { return }
-        // Consumed: the driver is acting again — the hint's job is done.
-        oneShotStartFailureHint = false
-        self.setMuteButton(service: service)
-        self.ensureVoicePresented(service: service, voiceState: "listening", animated: false) { [weak service] in
-            service?.beginWorkNote()
+        // Same synchronous claim the chat starter takes, and for the same
+        // reason from the other side: a chat start suspended in its pre-flight
+        // must not begin under this tap.
+        guard let serial = claimStart(.work, service: service) else { return }
+        presentWorkNote(serial: serial, service: service)
+    }
+
+    /// The presentation half of a Work note, entered with the claim ALREADY
+    /// held: `serial` is the caller's, never a fresh one.
+    ///
+    /// A Work note shows END ONLY. `mute()` tears capture down and DELETES the
+    /// partial recording, and Unmute starts a fresh listen — call-style mute on
+    /// a multi-turn chat, silent data loss on a one-shot note. The button is
+    /// cleared on the not-yet-presented template, the same "install before
+    /// present" timing `setMuteButton` relies on; `startSession` repaints it
+    /// before the next chat.
+    private func presentWorkNote(serial: UInt64, service: CarPlayRecordingService) {
+        service.voiceControlTemplate.trailingNavigationBarButtons = []
+        self.ensureVoicePresented(service: service, voiceState: "listening", animated: false) { [weak self, weak service] presented in
+            guard let self, let service else { return }
+            guard presented, self.startIsLive(serial, service: service) else {
+                self.releaseStart(serial)
+                self.dismissModalLeftOverBy(refusedStart: service)
+                return
+            }
+            service.beginWorkNote()
+            self.releaseStart(serial)
         }
+    }
+
+    /// Clear the Listening modal a REFUSED start left standing — and only that
+    /// one.
+    ///
+    /// Connection identity is not presentation identity. A present completion
+    /// delayed past a backgrounding lands on a scene where the driver has
+    /// already started again: the stale completion fails `startIsLive`, but its
+    /// service still matches, and dismissing on that alone tears down the NEWER
+    /// capture (`templateDidDisappear` then ends it and deletes its partial
+    /// recording). So the dismiss is conditioned on the modal belonging to
+    /// nobody: no claim held (`releaseStart` ran first, so a claim still here is
+    /// someone else's) and no session behind it.
+    private func dismissModalLeftOverBy(refusedStart service: CarPlayRecordingService) {
+        guard service === recordingService,
+              pendingStart == nil,
+              !service.sessionActive else { return }
+        ensureVoiceDismissed(animated: true)
     }
 
     /// Present the voice template MODALLY over the persistent list root (or, if
@@ -494,20 +725,38 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// activated and `completion` fired INSIDE the present completion — this is
     /// where `beginSession()` runs (g1: engine.start() must not race
     /// `AVAudioSession.setActive`, which the present completion guarantees).
+    ///
+    /// `completion` is told WHETHER a modal is up: `true` when the template is
+    /// presented (already, or by this call), `false` when there is no interface
+    /// controller to present through or the present itself failed. A caller
+    /// that starts a recording must never be told "presented" for a modal that
+    /// is not there — that is the path that records behind the picker.
     private func ensureVoicePresented(
         service: CarPlayRecordingService,
         voiceState: String,
         animated: Bool,
-        completion: (@MainActor () -> Void)? = nil
+        completion: (@MainActor (Bool) -> Void)? = nil
     ) {
+        // BEFORE the already-presented fast path: with no controller there is
+        // no modal, whatever a flag left over from the previous connection says.
+        guard let controller = interfaceController else {
+            isVoicePresented = false
+            completion?(false)
+            return
+        }
         if isVoicePresented {
             service.voiceControlTemplate.activateVoiceControlState(withIdentifier: voiceState)
-            completion?()
+            completion?(true)
             return
         }
         isVoicePresented = true
+        // Taken AFTER the write above, which is the write that owns this
+        // presentation. Anything that touches the flag from here on — a
+        // backgrounding, a dismiss, a replacement start — makes this callback
+        // obsolete.
+        let generation = presentationGeneration
         Self.log.info("Presenting voice template (modal)")
-        interfaceController?.presentTemplate(
+        controller.presentTemplate(
             service.voiceControlTemplate,
             animated: animated
         ) { [weak self, weak service] success, error in
@@ -522,6 +771,26 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // completion) is preserved — it just runs one main-runloop tick
             // later, after the present transaction has drained.
             Task { @MainActor in
+                guard let self else { completion?(false); return }
+                // A present that belonged to a torn-down connection neither
+                // flips this connection's flag nor answers its caller "yes".
+                guard self.interfaceController === controller else {
+                    completion?(false)
+                    return
+                }
+                // And a present that was overtaken ON THIS controller answers
+                // for nothing either — ABOVE both arms below, because each of
+                // them writes presentation state: the failure arm clears the
+                // flag (over a modal that a later start has since put up), and
+                // the success arm activates a voice state on it. "No" is the
+                // honest answer to the caller: this presentation is not the one
+                // on screen, so nothing may begin behind it. The refusal path
+                // dismisses only a modal that belongs to nobody
+                // (`dismissModalLeftOverBy`), so a live replacement is safe.
+                guard self.presentationGeneration == generation else {
+                    completion?(false)
+                    return
+                }
                 guard success else {
                     // NSError domain/code, never `localizedDescription` — see the
                     // same reduction in `CarPlayRecordingService`. A
@@ -531,18 +800,18 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                     // unchecked. Domain + code are unconditionally safe.
                     let nsError = error.map { $0 as NSError }
                     Self.log.error("presentTemplate(voice) failed: \(nsError?.domain ?? "unknown", privacy: .public) \(nsError?.code ?? 0, privacy: .public)")
-                    // No voice modal is up, so do NOT run the completion — for
-                    // `startSession` that completion is `beginSession()`, and
-                    // starting a recording session with no modal to host it is
-                    // the path that records behind the picker. Reset the flag so
-                    // a later state change / tap can re-present.
-                    self?.isVoicePresented = false
+                    // No voice modal is up: the caller is told so, and for
+                    // `startSession` that answer is what stops `beginSession()`
+                    // recording behind the picker. Reset the flag so a later
+                    // state change / tap can re-present.
+                    self.isVoicePresented = false
+                    completion?(false)
                     return
                 }
-                guard let service else { completion?(); return }
-                let live = self?.voiceStateIdentifier(for: service.state) ?? voiceState
+                guard let service else { completion?(true); return }
+                let live = self.voiceStateIdentifier(for: service.state) ?? voiceState
                 service.voiceControlTemplate.activateVoiceControlState(withIdentifier: live)
-                completion?()
+                completion?(true)
             }
         }
     }
@@ -568,19 +837,29 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     private func ensureVoiceDismissed(animated: Bool) {
         guard isVoicePresented else { return }
         isVoicePresented = false
+        guard let controller = interfaceController else { return }
         Self.log.info("Dismissing voice template (modal)")
-        interfaceController?.dismissTemplate(animated: animated) { [weak self] success, error in
+        controller.dismissTemplate(animated: animated) { [weak self] success, error in
             // Same off-main delivery caveat as `presentTemplate` (CPInterfaceController
             // is not `NS_SWIFT_UI_ACTOR`) — re-hop before calling the `@MainActor`
             // `deactivateAudioSession()` so the audio teardown can't run off-main.
             Task { @MainActor in
+                // A dismiss belonging to a torn-down connection must not free
+                // the NEW connection's audio route out from under a live session.
+                guard let self, self.interfaceController === controller else { return }
+                // Nor may one OVERTAKEN on this connection: a start claimed and
+                // presented while this dismiss was in flight owns the modal and
+                // the route now, and deactivating here would cut its capture and
+                // its spoken acknowledgement.
+                guard !self.isVoicePresented,
+                      self.recordingService?.sessionActive != true else { return }
                 if !success {
                     // NSError domain/code, never `localizedDescription` — see the
                     // sibling reduction above.
                     let nsError = error.map { $0 as NSError }
                     Self.log.error("dismissTemplate(voice) failed: \(nsError?.domain ?? "unknown", privacy: .public) \(nsError?.code ?? 0, privacy: .public)")
                 }
-                self?.recordingService?.deactivateAudioSession()
+                self.recordingService?.deactivateAudioSession()
             }
         }
     }
@@ -696,20 +975,38 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
 
         Task { @MainActor in
             defer {
-                self.pickerRefreshInFlight = false
-                if self.pickerRefreshPending {
-                    self.pickerRefreshPending = false
-                    // Re-apply the gate the notification path applies before it
-                    // ever calls here: a session may have STARTED while this
-                    // pass was in flight, and repainting the picker root under a
-                    // presented voice modal is a known CarPlay assertion source.
-                    // The deferred ask is dropped, not queued — the session's
-                    // own teardown refreshes the list on the way out.
-                    if self.recordingService?.sessionActive != true {
-                        self.refreshPicker()
+                // Scoped to THIS connection's template: a refresh still in
+                // flight when the cable dropped must not unlatch the refresh
+                // the reconnect is already running.
+                if template === self.listTemplate {
+                    self.pickerRefreshInFlight = false
+                    if self.pickerRefreshPending {
+                        // A start claim is held: KEEP the ask latched —
+                        // `releaseStart` drains it — instead of dropping a
+                        // repaint nothing else is going to run.
+                        if self.pendingStart == nil {
+                            self.pickerRefreshPending = false
+                            // Re-apply the gate the notification path applies
+                            // before it ever calls here: a session may have
+                            // STARTED while this pass was in flight, and
+                            // repainting the picker root under a presented voice
+                            // modal is a known CarPlay assertion source. That
+                            // ask is dropped, not queued — the session's own
+                            // teardown refreshes the list on the way out.
+                            if self.recordingService?.sessionActive != true {
+                                self.refreshPicker()
+                            }
+                        }
                     }
                 }
             }
+
+            // COMPUTE FIRST. Every read this pass needs is gathered across the
+            // suspensions below with NOT ONE template mutation between them, so
+            // the gate that follows is asked exactly once. Painting as we went
+            // meant a refusal landing between two mutations — the switcher
+            // button of this pass over the rows of the last one.
+            //
             // No-gateway → the setup-hint row (no New voice chat: there's
             // nothing to talk to yet) PLUS "Add to Work", which needs no
             // gateway at all: a note goes to the driver's own desk, so the car
@@ -719,6 +1016,50 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // backend is set up; the per-conversation send routing already
             // binds each chat to its own backend.
             let configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
+            // Custom roster (for labeling built-in vs custom refs in the
+            // switcher + chooser). Fetched once per refresh.
+            var customs: [CustomGateway] = []
+            // Effective CarPlay ref = session-local override (this drive) ?? the
+            // iPhone's device-local default. NEVER reads the global default
+            // directly so a CarPlay switch can't leak to the phone. Read only
+            // when there is a switcher to title with it.
+            var current: RemoteAgentRef?
+            var recents: [ConversationStore.RecentConversation] = []
+            // Badge visibility spans the WHOLE store, not `recents` — that slice
+            // is capped, and the phone answers from every conversation. Failing
+            // the fetch degrades to the displayed slice, which is the safe
+            // direction: it can only under-report identities and hide the badge,
+            // never draw a blank one.
+            var allBackends: Set<String> = []
+            if !configuredRefs.isEmpty {
+                customs = await SettingsManager.shared.gatewayBadgeRoster()
+                if configuredRefs.count >= 2 {
+                    current = await self.effectiveCarPlayRef()
+                }
+                recents = (try? await ConversationStore.shared.fetchRecentForPicker(limit: cap)) ?? []
+                if !recents.isEmpty {
+                    allBackends = (try? await ConversationStore.shared.distinctBackends())
+                        ?? Set(recents.map(\.backend))
+                }
+            }
+
+            // GATE ONCE, after the last suspension and before the first
+            // mutation. A refusal is RETAINED, never dropped: a start claim
+            // released without a session (the present failed, the pre-flight
+            // refused) still has to leave a correctly painted picker behind, and
+            // `releaseStart` is what runs this again.
+            guard service === self.recordingService,
+                  template === self.listTemplate,
+                  self.pendingStart == nil,
+                  !service.sessionActive else {
+                self.pickerRefreshPending = true
+                return
+            }
+            // The synchronous prologue already painted this state; repainting it
+            // from here would only race it.
+            if case .permissionBlocked = service.state { return }
+
+            // PAINT.
             guard !configuredRefs.isEmpty else {
                 // xcstrings
                 let item = CPListItem(
@@ -726,7 +1067,11 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                     detailText: nil
                 )
                 item.setImage(UIImage(systemName: "iphone"))
-                var firstSectionItems: [CPListItem] = [item]
+                // The WORKING row first. This state's setup row is not a
+                // prerequisite for the note below it — reading as one is exactly
+                // what putting it on top did — and on day one "Add to Work" is
+                // the only row here that does anything at all.
+                var firstSectionItems: [CPListItem] = [self.makeWorkNoteItem(service: service), item]
                 // The one-shot mic-couldn't-start hint belongs in THIS state
                 // too, and only became reachable here when "Add to Work" made
                 // the state startable at all: a start failure ends the session
@@ -743,30 +1088,21 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                     hint.handler = { _, completion in completion() }
                     firstSectionItems.insert(hint, at: 0)
                 }
-                // Three rows at most (hint + setup + Work), so this state cannot
+                // Three rows at most (hint + Work + setup), so this state cannot
                 // reach `CPListTemplate.maximumItemCount`; it draws no recents,
                 // which is what the hint's row is priced out of in the branch
                 // below.
-                firstSectionItems.append(self.makeWorkNoteItem(service: service))
                 template.leadingNavigationBarButtons = []
                 template.updateSections([CPListSection(items: firstSectionItems)])
                 return
             }
-
-            // Custom roster (for labeling built-in vs custom refs in the
-            // switcher + chooser). Fetched once per refresh.
-            let customs = await SettingsManager.shared.gatewayBadgeRoster()
 
             // Default-gateway switcher (idle list ONLY — the picker is the root
             // and no voice modal is up while idle). Shown only when ≥2 gateways
             // (built-ins + customs) are configured (with one there is nothing to
             // switch). Titled with the current default's display name; tapping
             // pushes a chooser. List templates render nav-bar buttons reliably.
-            if configuredRefs.count >= 2 {
-                // Effective CarPlay ref = session-local override (this drive) ??
-                // the iPhone's device-local default. NEVER reads the global
-                // default directly so a CarPlay switch can't leak to the phone.
-                let current = await self.effectiveCarPlayRef()
+            if let current {
                 // The SHORT form: this is a nav-bar button on a head unit, read
                 // at a glance from the driver's seat, and a custom gateway's name
                 // may be up to 40 characters. The car's own truncation is opaque
@@ -798,10 +1134,17 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // only feedback a silent start-failure end gets (no TTS over a
             // wedged session; no CPAlertTemplate, which races the voice-modal
             // dismiss animation). Informational: tapping it does nothing.
+            //
+            // The sentence names the row that FAILED. This state draws both
+            // rows, so a failed Work start told to "Tap New voice chat" would
+            // route the repeated private thought to an AI.
             if oneShotStartFailureHint {
+                let detail = self.lastStartDestination == .work
+                    ? String(localized: "carplay.hint.captureStartFailed.detail.work", defaultValue: "Tap Add to Work to try again.")  // xcstrings
+                    : String(localized: "carplay.hint.captureStartFailed.detail", defaultValue: "Tap New voice chat to try again.")  // xcstrings
                 let hint = CPListItem(
                     text: String(localized: "carplay.hint.captureStartFailed.title", defaultValue: "Mic couldn't start"),  // xcstrings
-                    detailText: String(localized: "carplay.hint.captureStartFailed.detail", defaultValue: "Tap New voice chat to try again.")  // xcstrings
+                    detailText: detail
                 )
                 hint.setImage(UIImage(systemName: "mic.slash.fill"))
                 hint.handler = { _, completion in completion() }
@@ -816,16 +1159,8 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
 
             // "Recent" section — conversations to continue (label + date only).
             var sections: [CPListSection] = [newSection]
-            let recents = (try? await ConversationStore.shared.fetchRecentForPicker(limit: cap)) ?? []
             if !recents.isEmpty {
                 let now = Date()
-                // Badge visibility spans the WHOLE store, not `recents` — that
-                // slice is capped, and the phone answers from every
-                // conversation. Failing the fetch degrades to the displayed
-                // slice, which is the safe direction: it can only under-report
-                // identities and hide the badge, never draw a blank one.
-                let allBackends = (try? await ConversationStore.shared.distinctBackends())
-                    ?? Set(recents.map(\.backend))
                 let showGatewayBadge = RemoteAgentRefMetadata.shouldShowBadges(
                     configured: configuredRefs,
                     conversationBackends: allBackends,
@@ -981,12 +1316,28 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// their active-conversation pointers) and NEVER touches any active-conversation
     /// pointer. New chats mint on the effective CarPlay ref; existing recents keep
     /// their bound `Conversation.backend` — no routing change.
+    ///
+    /// The list ends with the desk: one **ACTION** row, "Add to Work", after
+    /// every gateway row. It is the SECOND door to the note the root row already
+    /// offers in one tap — the destination picker the driver is looking at
+    /// should name every destination, including the one that is not an AI — and
+    /// it is an action precisely because the rows above it are not: a gateway
+    /// row stores this drive's target, and a Work row that did the same would be
+    /// a drive-long mode that survives the note, resets silently on the next
+    /// reconnect, and one day answers a private thought with an AI. So it never
+    /// carries a checkmark, never writes `sessionDefaultRefOverride`, and starts
+    /// the note immediately: claim, pop, present. Nothing about the tap survives
+    /// it, and the next "New voice chat" goes to the gateway exactly as it would
+    /// have if this row had never been tapped.
     private func presentGatewayChooser(
         configured: [RemoteAgentRef],
         current: RemoteAgentRef,
         customs: [CustomGateway]
     ) {
-        let items: [CPListItem] = configured.map { ref in
+        // The service this chooser was pushed over. A pick that lands after a
+        // reconnect belongs to a connection that no longer exists.
+        let service = recordingService
+        var items: [CPListItem] = configured.map { ref in
             let item = CPListItem(
                 // Short form, same reason as the switcher button that opens this
                 // list: a row the driver cannot read to the end is a row they
@@ -997,10 +1348,12 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             if ref == current {
                 item.setImage(UIImage(systemName: "checkmark"))
             }
-            item.handler = { [weak self] _, completion in
+            item.handler = { [weak self, weak service] _, completion in
                 defer { completion() }
                 guard let self else { return }
                 Task { @MainActor in
+                    guard let service, service === self.recordingService,
+                          !service.sessionActive, self.pendingStart == nil else { return }
                     // SESSION-LOCAL only: re-point THIS drive, never the global
                     // default and never any active-conversation pointer.
                     self.sessionDefaultRefOverride = ref
@@ -1010,6 +1363,52 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             }
             return item
         }
+        // LAST, after every gateway row: the list is read top-down at the wheel
+        // and the AIs are what the driver opened it for. Same words as the root
+        // row — one action has one name — and the same symbol, so the two doors
+        // read as the one thing they are.
+        let workItem = CPListItem(
+            // xcstrings
+            text: String(localized: "carplay.picker.addToWork.title", defaultValue: "Add to Work"),
+            detailText: nil
+        )
+        workItem.setImage(UIImage(systemName: "tray.and.arrow.down.fill"))
+        workItem.handler = { [weak self, weak service] _, completion in
+            defer { completion() }
+            guard let self, let service else { return }
+            guard service === self.recordingService, !service.sessionActive else { return }
+            // CLAIMED BEFORE THE POP, synchronously, exactly as the root row
+            // claims before its present: the pop is a suspension, and "New voice
+            // chat" is one tap away on the list underneath this one. A claim
+            // taken on the far side would let that tap's chat start win the
+            // guard and answer this note with an AI.
+            guard let serial = self.claimStart(.work, service: service) else { return }
+            // No controller, no pop and no note — and the claim must not be left
+            // holding the next tap's door shut.
+            guard let controller = self.interfaceController else {
+                self.releaseStart(serial)
+                return
+            }
+            // Present on the FAR SIDE of the pop: the voice modal goes up over
+            // the picker root, which is where every other session presents from,
+            // and never over a chooser that is still animating away.
+            controller.popTemplate(animated: true) { [weak self, weak service] success, _ in
+                // Same off-main delivery caveat as `presentTemplate`
+                // (`CPInterfaceController` is not `NS_SWIFT_UI_ACTOR`).
+                Task { @MainActor in
+                    guard let self else { return }
+                    // The claim carried through, never re-taken: a start refused
+                    // here releases the serial it was given, and the picker
+                    // refresh retained under it drains with it.
+                    guard let service, success, self.startIsLive(serial, service: service) else {
+                        self.releaseStart(serial)
+                        return
+                    }
+                    self.presentWorkNote(serial: serial, service: service)
+                }
+            }
+        }
+        items.append(workItem)
         let chooser = CPListTemplate(
             title: String(localized: "chat.chooseAI.label", defaultValue: "Choose AI"),
             sections: [CPListSection(items: items)]
@@ -1025,8 +1424,19 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let service = self.recordingService else { return }
-                // Don't churn the list mid-session (it's disabled then anyway).
+                // Don't churn the list mid-session — it's disabled then
+                // anyway, and the session's own teardown refreshes on the way
+                // out, so that ask is dropped.
                 guard !service.sessionActive else { return }
+                // Under a CLAIMED start the refresh would be refused, so RETAIN
+                // the ask instead of dropping it: `releaseStart` drains it. A
+                // start that is then refused (the present failed, the pre-flight
+                // said no) leaves nothing else to repaint the Recent list, and it
+                // would stay stale for the rest of the drive.
+                guard self.pendingStart == nil else {
+                    self.pickerRefreshPending = true
+                    return
+                }
                 self.refreshPicker()
             }
         }
@@ -1045,8 +1455,19 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     ///   re-assigns ITSELF to reflect the new state. Re-assignment on a discrete
     ///   user tap (not a per-state swap) is the supported update path.
     private func installVoiceTemplateButtons(service: CarPlayRecordingService) {
-        let endButton = CPBarButton(title: String(localized: "End")) { [weak service] _ in  // xcstrings
-            service?.endFromButton()
+        let endButton = CPBarButton(title: String(localized: "End")) { [weak self, weak service] _ in  // xcstrings
+            guard let service else { return }
+            // A start still inside its present completion has no session yet, so
+            // `endFromButton` alone returns on its `sessionActive` guard and the
+            // completion goes on to record. Drop the claim FIRST.
+            self?.cancelPendingStart(for: service)
+            // Asked BEFORE the end, because afterwards the answer is `.idle`
+            // either way — see `finishIdleEndTheObserverCannotDeliver`.
+            let startupNeverLeftIdle = service.state == .idle
+            service.endFromButton()
+            if startupNeverLeftIdle {
+                self?.finishIdleEndTheObserverCannotDeliver(service: service)
+            }
         }
         service.voiceControlTemplate.leadingNavigationBarButtons = [endButton]
         setMuteButton(service: service)
@@ -1120,6 +1541,49 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 String(localized: "Turn it on in iPhone Settings.")
             )
         }
+    }
+}
+
+/// The one-start-at-a-time rule, as two pure answers.
+///
+/// Extracted for the same reason `newChatPlan` and `sessionOverrideRef` are:
+/// the authoritative suite runs on the iOS Simulator with no CarPlay scene, so
+/// a rule written inside `CarPlaySceneDelegate`'s private starters — which need
+/// a `CPInterfaceController` and an audio engine to reach — is never exercised
+/// by a test. What is at stake is the boundary itself: the driver who tapped
+/// "Add to Work" must not end up in an AI chat because a chat start was parked
+/// in its gateway pre-flight under their tap.
+enum CarPlayStartGate {
+
+    /// Whether a row tap may claim the single in-flight start. Every condition
+    /// is a refusal: a service already recording, a live session, or a start
+    /// already claimed and not yet begun.
+    static func mayClaim(isIdle: Bool, sessionActive: Bool, claimHeld: Bool) -> Bool {
+        isIdle && !sessionActive && !claimHeld
+    }
+
+    /// Whether the claim `serial` may still act after a suspension.
+    ///
+    /// Six independent protections, and each one is a way a start can be
+    /// overtaken between the tap and the engine: the claim was released or
+    /// replaced, the connection was torn down and rebuilt, the interface
+    /// controller went away, the driver switched to Maps, the service is no
+    /// longer idle, or a session already began.
+    static func isLive(
+        claimSerial: UInt64?,
+        serial: UInt64,
+        serviceIsCurrent: Bool,
+        controllerAttached: Bool,
+        sceneActive: Bool,
+        isIdle: Bool,
+        sessionActive: Bool
+    ) -> Bool {
+        claimSerial == serial
+            && serviceIsCurrent
+            && controllerAttached
+            && sceneActive
+            && isIdle
+            && !sessionActive
     }
 }
 #endif

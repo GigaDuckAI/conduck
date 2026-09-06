@@ -65,11 +65,18 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
 
         var thePictureWasPublished = false
         var kindsWhenThePictureWasPublished: [WorkMaterialKind] = []
+        // The picture's pipeline is SLOWED on purpose. Both cards are published
+        // from one stop, and the only way to tell "dated from the capture" apart
+        // from "dated when it happened to be written" is to put measurable time
+        // between the two writes — the image normalize is exactly where a real
+        // one spends it. See the date assertions at the end.
+        let normalizeDelay: TimeInterval = 1.5
         recorder.workScreenshotNormalizeForTesting = { raw in
             thePictureWasPublished = true
             XCTAssertEqual(raw, Self.rawScreenshot, "the staged bytes are what reach the pipeline")
             let desk = try? await store.fetchWorkItem(id: Constants.workboardDeskItemID)
             kindsWhenThePictureWasPublished = desk?.materials.map(\.kind) ?? []
+            try? await Task.sleep(nanoseconds: UInt64(normalizeDelay * 1_000_000_000))
             return Self.jpegBytes
         }
         var kindsAtTheHop: Set<WorkMaterialKind> = []
@@ -80,6 +87,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         }
 
         recorder.stageWorkScreenshot(Self.rawScreenshot)
+        let beforeTheStop = Date()
         let result = await recorder._finishCaptureForTesting()
 
         XCTAssertEqual(try result.get(), "the ferry leaves at seven")
@@ -122,6 +130,33 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         XCTAssertEqual(picture.kind, .image)
         let picturePayload = try await store.loadWorkMaterialPayload(id: screenshotID)
         XCTAssertEqual(picturePayload, Self.jpegBytes)
+
+        // ONE stop, one date. Both cards are published from the capture's own
+        // `createdAt` — the picture always was, and the recording is dated from
+        // it too rather than from a `Date()` taken at the moment it happens to
+        // be written. The desk orders by sequence, so this does not buy
+        // adjacency; what it buys is two cards from one stop that do not
+        // disagree about when the person spoke.
+        //
+        // The tolerance is ONE SECOND and it is not slack: the picture travels
+        // through the App-Group envelope, whose JSON dates are ISO-8601 and
+        // therefore whole seconds, so its card carries the capture's instant
+        // truncated. A recording dated at WRITE time would land a full
+        // `normalizeDelay` later than that — which is why the normalize above
+        // sleeps longer than the tolerance. Without the fix this reads ≥1.5s.
+        let spread = recording.createdAt.timeIntervalSince(picture.createdAt)
+        XCTAssertLessThan(
+            abs(spread), 1,
+            """
+            MEASURED: the recording's card is \(spread)s from the picture's, after a picture \
+            pipeline that took \(normalizeDelay)s. Two artifacts of ONE capture must carry that \
+            capture's date, not the clock reading of whenever each one happened to be written.
+            """
+        )
+        XCTAssertGreaterThanOrEqual(
+            recording.createdAt, beforeTheStop,
+            "control: the shared date is this capture's own, not a zero or an inherited one"
+        )
         XCTAssertEqual(
             recorder.workCaptureFacts,
             InAppAudioRecorder.WorkCaptureFacts(
@@ -135,6 +170,73 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
             "every artifact landed, which is the ONE shape a receipt may describe as complete"
         )
     }
+
+    #if os(macOS)
+    /// The AUDIO's own crash window, declared so a quit cannot land inside it.
+    ///
+    /// `AudioRecorder.stopRecording()` hands back the bytes and deletes the
+    /// file, so from the stop until phase one copies them into the store the
+    /// recording exists nowhere but memory — through the compression, through
+    /// the whole picture pipeline the case above measures at a second and a
+    /// half. Nothing else can see that window: no gateway turn is involved, so
+    /// the quit guard's in-flight registry reads zero and ⌘Q terminates at once,
+    /// taking a recording with no card and no Try Again behind it.
+    ///
+    /// It closes at PHASE ONE, not at the end of the capture: after that the
+    /// desk holds the recording and only the words are outstanding, and a quit
+    /// should not wait out a speech hop to keep a promise already kept.
+    @MainActor
+    func testTheStoppedRecordingIsDeclaredInFlightUntilTheDeskHoldsIt() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
+        recorder.capturedAudioForTesting = Self.recordingBytes
+
+        XCTAssertEqual(
+            InAppAudioRecorder.workPublicationsInFlight, 0,
+            "control: nothing is declared before the stop"
+        )
+
+        // The picture's pipeline stands INSIDE the window — the audio is in
+        // memory and the desk holds nothing at all while it runs.
+        var declaredWhileThePictureRan = -1
+        recorder.workScreenshotNormalizeForTesting = { _ in
+            declaredWhileThePictureRan = InAppAudioRecorder.workPublicationsInFlight
+            return Self.jpegBytes
+        }
+        var declaredAtTheSpeechHop = -1
+        recorder.transcriptionHopForTesting = { _ in
+            declaredAtTheSpeechHop = InAppAudioRecorder.workPublicationsInFlight
+            return .success("the ferry leaves at seven")
+        }
+
+        recorder.stageWorkScreenshot(Self.rawScreenshot)
+        let result = await recorder._finishCaptureForTesting()
+        XCTAssertEqual(try result.get(), "the ferry leaves at seven")
+
+        XCTAssertEqual(
+            declaredWhileThePictureRan, 1,
+            """
+            MEASURED: the stopped recording is NOT declared in flight while its picture is being \
+            written. A ⌘Q there returns `.terminateNow` and the audio — which the stop already \
+            deleted from disk — goes with the process.
+            """
+        )
+        XCTAssertEqual(
+            declaredAtTheSpeechHop, 0,
+            """
+            MEASURED: the declaration outlives phase one and holds a quit for the whole speech \
+            hop. The desk already has the recording by then; only the words are owed, and those \
+            are retryable.
+            """
+        )
+        XCTAssertEqual(
+            InAppAudioRecorder.workPublicationsInFlight, 0,
+            "the balance returns to zero, or the next quit waits out the whole timeout"
+        )
+    }
+    #endif
 
     /// A capture with nothing staged is the capture this lane always was.
     ///
@@ -569,8 +671,10 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
 
     /// …and the half of that the recorder cannot show: what the retirement does
     /// to the clock. The exemption is read off the FILE, so an entry whose
-    /// picture is published expires on the ordinary budget again.
-    func testRetiringAPublishedPictureLetsItsEntryExpireOnTheOrdinaryBudget() async throws {
+    /// picture is published is governed by a budget again — the DAY a published
+    /// Work capture waits, since its recording is a card and these bytes are a
+    /// second copy.
+    func testRetiringAPublishedPictureLetsItsEntryExpireOnTheDayBudget() async throws {
         let container = FileManager.default.temporaryDirectory
             .appendingPathComponent("conduck-shot-retire-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: container) }
@@ -590,6 +694,11 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         try await store.save(
             audioData: Self.recordingBytes, metadata: stillOwed, workImageData: Self.rawScreenshot
         )
+        // The cross-lane control. A Chat record of the same age is on the SHORT
+        // budget and must also be gone, which is what says the sweep below is
+        // the ordinary one rather than something special-cased to Work.
+        let chat = Self.chatMetadata(id: UUID(), createdAt: armedLongAgo)
+        try await store.save(audioData: Self.recordingBytes, metadata: chat, workImageData: nil)
 
         let reservation = await store.claim(
             id: published.id, duration: PendingRetryStore.claimLeaseDuration
@@ -625,8 +734,9 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
             surviving, [stillOwed.id],
             """
             MEASURED: with its picture published, the entry is protecting only a transcription \
-            again and the ten-minute budget retires it. The sibling that still shelters a \
-            picture is exempt, which is what shows the clock is running at all.
+            again and the day budget retires it. The sibling that still shelters a picture is \
+            exempt, and the Chat record of the same age is gone on the shorter budget — which \
+            together show the clock is running at all and running for both lanes.
             """
         )
     }
@@ -1513,15 +1623,40 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
             metadata: withoutPicture,
             workImageData: nil
         )
+        // The control that pins WHICH budget. Same record, same verdict, no
+        // picture, but aged past ten minutes and well inside the day: on the
+        // transcription TTL this is swept, and on the published-Work one it
+        // survives. It is the only fixture here whose fate differs between the
+        // two rules, so it is the one that says the longer budget is real —
+        // and it is the case the car actually depends on.
+        let withinTheDay = Self.metadata(
+            id: UUID(),
+            createdAt: Date().addingTimeInterval(-Self.pastTenMinutesWithinTheDay)
+        )
+        try await store.save(
+            audioData: Self.recordingBytes, metadata: withinTheDay, workImageData: nil
+        )
+        // …and the cross-lane control at that same age. A Chat capture IS on the
+        // ten-minute budget, so it must be gone — which is what stops the
+        // survivor above being explained by a clock that had simply stopped.
+        let chatWithinTheDay = Self.chatMetadata(
+            id: UUID(),
+            createdAt: Date().addingTimeInterval(-Self.pastTenMinutesWithinTheDay)
+        )
+        try await store.save(
+            audioData: Self.recordingBytes, metadata: chatWithinTheDay, workImageData: nil
+        )
 
-        let surviving = await store.load().map(\.metadata.id)
+        let surviving = Set(await store.load().map(\.metadata.id))
 
         XCTAssertEqual(
-            surviving, [withPicture.id],
+            surviving, [withPicture.id, withinTheDay.id],
             """
-            MEASURED: the clock retired the capture that owed nothing and kept the one still \
-            holding a picture. Both say `.published`, which is true of their RECORDINGS and \
-            says nothing at all about the pictures.
+            MEASURED: the clock retired the day-old capture that owed nothing and kept the one \
+            still holding a picture. Both say `.published`, which is true of their RECORDINGS \
+            and says nothing at all about the pictures. It also kept the hour-old published \
+            Work capture and retired the hour-old CHAT one, which is the whole of the new \
+            rule: past ten minutes, the two lanes no longer answer the same way.
             """
         )
         XCTAssertTrue(
@@ -1548,9 +1683,21 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
     /// card's payload.
     private static let jpegBytes = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46])
 
-    /// Comfortably past `PendingRetryMetadata.transcriptionRetryTTL`, so the
+    /// Comfortably past the LONGEST budget any fixture here can be on, so a
     /// case is about the exemption rather than about a clock skew of seconds.
-    private static let wellPastTheBudget: TimeInterval = 3_600
+    ///
+    /// Derived rather than written as a number: every record below is a
+    /// `.published` Work one, which waits `publishedWorkRetryTTL` — a day — and
+    /// a hardcoded hour would have quietly stopped being "past the budget" the
+    /// moment that constant grew, leaving these cases asserting a sweep that
+    /// never ran.
+    private static let wellPastTheBudget: TimeInterval =
+        PendingRetryMetadata.publishedWorkRetryTTL + 3_600
+
+    /// Past the ten-minute transcription budget and well INSIDE the day a
+    /// published Work capture gets. The age at which the two rules disagree,
+    /// which is the only age that proves which one is running.
+    private static let pastTenMinutesWithinTheDay: TimeInterval = 3_600
 
     /// A store that cannot mount, so every operation on it throws — including
     /// the drain that turns a queued envelope into a card. The URL names a
@@ -1611,7 +1758,8 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
     }
 
     /// A Work record in the state this lane leaves behind: the recording is a
-    /// card, so the clock believes the entry protects only a transcription.
+    /// card, so the entry protects only a transcription — on the day budget a
+    /// published Work capture waits, not the ten-minute one.
     private static func metadata(id: UUID, createdAt: Date) -> PendingRetryMetadata {
         PendingRetryMetadata(
             id: id,
@@ -1624,6 +1772,24 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
             destination: .work,
             transcript: "already bought",
             publicationState: .published
+        )
+    }
+
+    /// The other lane's record, for the cases that have to show the two budgets
+    /// are actually different. A Chat capture's words can be bought again, so
+    /// it waits ten minutes and nothing about the desk applies to it.
+    private static func chatMetadata(id: UUID, createdAt: Date) -> PendingRetryMetadata {
+        PendingRetryMetadata(
+            id: id,
+            createdAt: createdAt,
+            audioFileURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("conduck-shot-chat-\(id.uuidString).m4a"),
+            preferredLanguage: nil,
+            attemptCount: 1,
+            lastErrorCode: AppError.sttProviderUnreachable.errorCode,
+            destination: .chat,
+            transcript: nil,
+            publicationState: nil
         )
     }
 }

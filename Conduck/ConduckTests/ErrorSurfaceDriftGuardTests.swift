@@ -471,6 +471,18 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
             it cannot perform.
             """
         ),
+        "ConduckWatch Watch App/Views/WatchWorkCaptureView.swift": .gated(
+            tokens: ["canRetry"],
+            decidedIn: nil,
+            reason: """
+            The launchpad's rule, on the screen where the failure is actually \
+            read: `messageAction` offers Try Again only when `canRetry` says a \
+            preserved capture exists, and Done otherwise. A Work capture that \
+            still holds its audio is the one case this screen must not send \
+            elsewhere to resolve — dismissing deletes the recording the offer \
+            was about.
+            """
+        ),
     ]
 
     // MARK: - Rule 3's anchors
@@ -687,6 +699,20 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
             form of this name that has room for it, and leave a blind user with \
             "hermes-vps-01-f…" where a sighted user gets a colour and a monogram \
             they can tap. The rule is about width; this text has none.
+            """
+        ),
+        FullNameExemption(
+            path: "ConduckWatch Watch App/Views/WatchNoteView.swift",
+            declaration: "spoken",
+            reason: """
+            `WatchGatewayLabel.spoken` exists to be the ACCESSIBILITY LABEL for \
+            the Ask chooser's rows and the capture overlay's destination \
+            caption, both of which draw the bounded form beside it. Two customs \
+            whose names agree over their first fifteen characters shorten to one \
+            string, so the ear is exactly where the full name has to survive — \
+            a blind user choosing between two rows that sound identical has no \
+            colour or monogram to fall back on. The rule is about width; this \
+            text has none.
             """
         ),
     ]
@@ -2091,6 +2117,57 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
     /// width, and a rule that enumerated types would go quiet on the first one
     /// nobody listed. The escape is `fullNameExemptions`, which forces the next
     /// surface to be classified rather than assumed.
+    /// The exemption above covers the SPOKEN form, and the scanner cannot tell
+    /// where a spoken form is consumed.
+    ///
+    /// `WatchGatewayLabel.spoken` reads `RemoteAgentRefMetadata.displayName`
+    /// unbounded, which is right for a VoiceOver label and wrong for a button on
+    /// a watch face. Nothing above notices when the two adapters swap: the rule
+    /// searches for `.displayName`, and the visible adapter reaching the exempt
+    /// helper instead spells `WatchGatewayLabel.spoken` — so a full 40-character
+    /// custom name lands in the Ask chooser's rows with every assertion in this
+    /// file still green. Both adapters and both consumers are therefore pinned by
+    /// name.
+    func testTheWristsAskChooserDrawsTheBoundedNameAndSpeaksTheFullOne() throws {
+        let url = projectContainerURL()
+            .appendingPathComponent("ConduckWatch Watch App/Views/WatchNoteView.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        let code = source
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .replacingOccurrences(of: "( ", with: "(")
+
+        XCTAssertTrue(
+            code.contains(
+                "private func displayName(forRef ref: String) -> String { "
+                + "guard let parsed = RemoteAgentRef(rawString: ref) else { return ref } "
+                + "return WatchGatewayLabel.visible(for: parsed, customs: settingsReader.customGateways) }"
+            ),
+            """
+            The chooser's VISIBLE name no longer comes from the bounded adapter. A row drawn from \
+            the spoken form runs a 40-character custom name off a watch face, and the exemption \
+            registry above is written on the promise that the spoken form is never displayed.
+            """
+        )
+        XCTAssertTrue(
+            code.contains(
+                "private func spokenName(forRef ref: String) -> String { "
+                + "guard let parsed = RemoteAgentRef(rawString: ref) else { return ref } "
+                + "return WatchGatewayLabel.spoken(for: parsed, customs: settingsReader.customGateways) }"
+            ),
+            "The chooser's SPOKEN name no longer comes from the full-name adapter, so two customs "
+            + "that shorten to one string become two rows that sound identical."
+        )
+        XCTAssertTrue(
+            code.contains("Button(displayName(forRef: ref))"),
+            "The chooser's row label no longer reads the bounded adapter."
+        )
+        XCTAssertTrue(
+            code.contains(".accessibilityLabel(spokenName(forRef: ref))"),
+            "The chooser's row no longer speaks the full adapter."
+        )
+    }
+
     func testNarrowAndSpokenSurfacesUseTheShortNameForm() throws {
         var violations: [String] = []
         var exercisedExemptions: Set<String> = []

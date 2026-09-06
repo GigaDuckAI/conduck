@@ -511,6 +511,18 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             queued.isExemptFromExpiry,
             "…and the recording no longer exists only here, so the clock may govern it again"
         )
+        // WHICH clock, though. The words are still owed and the person who owes
+        // them may be driving, so the budget is a day rather than the ten
+        // minutes a Chat transcription gets. The exemption above stays false on
+        // purpose: a longer clock still ends, and these bytes are a second copy
+        // of a card that is already on the desk.
+        XCTAssertEqual(
+            queued.retryTTL, PendingRetryMetadata.publishedWorkRetryTTL,
+            """
+            A published Work capture waits on the long budget. On the ten-minute one it \
+            is swept before a driver can reach the phone the acknowledgement named.
+            """
+        )
     }
 
     /// The words the entry already carries are the ones a surface with none of
@@ -1130,6 +1142,100 @@ final class WorkVoiceRecoveryTests: XCTestCase {
     private static let recordingBytes = Data(repeating: 0x7F, count: 4_096)
 
     @MainActor
+    // MARK: - A reservation that lapses MID-RETRY
+
+    /// The reservation is taken before the provider round trip and the round
+    /// trip can outlast it: renewals are refused for a cross-process lock this
+    /// process could not take exactly as they are for a hold somebody overtook,
+    /// and the renewal loop deliberately never stops on a refusal. So this
+    /// recorder can arrive at the write still believing it owns a capture the
+    /// retry card, the menu bar or a Shortcut host has since claimed and is
+    /// transcribing — and the write it would then make lands on THAT surface's
+    /// card, over whichever words finished first.
+    ///
+    /// The last question before the words are written is therefore whether this
+    /// reservation is still real. A refusal is not a failure of the capture: the
+    /// recording stands on the desk, somebody is finishing it, and the sheet's
+    /// busy sentence is what says so.
+    func testWordsAreNotWrittenOnceThisRetrysReservationHasBeenOvertaken() async throws {
+        let store = ConversationStore(inMemory: true)
+        let lane = RecordingRetryLane()
+        let recorder = Self.workRecorder(store: store, lane: lane)
+
+        var hops = 0
+        recorder.transcriptionHopForTesting = { _ in
+            hops += 1
+            return hops == 1
+                ? .failure(.sttProviderUnreachable)
+                : .success("the words this run bought")
+        }
+        _ = await recorder._finishCaptureForTesting()
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+
+        // The provider has answered and the write has not happened yet — the
+        // exact gap a lapsed hold is discovered in. Another surface takes the
+        // capture there.
+        recorder.transcriptAttachPauseForTesting = {
+            await lane.reserveForAnotherSurface(id: captureID)
+        }
+
+        let refused = await recorder.retryWorkCapture()
+
+        guard case .failure = refused else {
+            return XCTFail("a write this retry was not allowed to make must not report a transcript")
+        }
+        XCTAssertTrue(
+            recorder.retryRefusedBusy,
+            "the one honest sentence here is that the recording is being finished somewhere else"
+        )
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        let card = try XCTUnwrap(desk.materials.first { $0.id == captureID })
+        XCTAssertNil(
+            card.textContent,
+            """
+            MEASURED: this run wrote its words onto a card it no longer owned. The surface that \
+            claimed the capture is transcribing the same recording, and whichever of the two \
+            finishes last silently replaces the other's answer.
+            """
+        )
+        let stillQueued = await lane.entry(id: captureID)
+        XCTAssertNotNil(stillQueued, "and nothing was deleted — the holder still has a capture to finish")
+    }
+
+    /// NEGATIVE CONTROL for the case above. With the reservation intact across
+    /// the same gap, the identical retry writes its words onto the card — so
+    /// what the case measures is the ownership check and not a write that never
+    /// happens.
+    func testTheSameRetryWritesItsWordsWhileItStillHoldsTheReservation() async throws {
+        let store = ConversationStore(inMemory: true)
+        let lane = RecordingRetryLane()
+        let recorder = Self.workRecorder(store: store, lane: lane)
+
+        var hops = 0
+        recorder.transcriptionHopForTesting = { _ in
+            hops += 1
+            return hops == 1
+                ? .failure(.sttProviderUnreachable)
+                : .success("the words this run bought")
+        }
+        _ = await recorder._finishCaptureForTesting()
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+
+        var pausedAtTheWrite = false
+        recorder.transcriptAttachPauseForTesting = { pausedAtTheWrite = true }
+
+        let repaired = await recorder.retryWorkCapture()
+
+        XCTAssertEqual(try repaired.get(), "the words this run bought")
+        XCTAssertTrue(pausedAtTheWrite, "control: the run really did reach the write boundary")
+        XCTAssertFalse(recorder.retryRefusedBusy, "control: nothing was refused")
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        let card = try XCTUnwrap(desk.materials.first { $0.id == captureID })
+        XCTAssertEqual(card.textContent, "the words this run bought")
+    }
+
     private static func workRecorder(
         store: ConversationStore,
         lane: RecordingRetryLane
@@ -1383,19 +1489,31 @@ private actor RecordingRetryLane: PendingRetryLaneReserving {
     // MARK: - The reservation half
 
     func claim(id: UUID, duration: TimeInterval) async -> PendingRetryClaim? {
-        guard let entry = entries.first(where: { $0.metadata.id == id }) else { return nil }
-        if let lease = leases[id], lease.expiresAt > Date() { return nil }
+        guard case .claimed(let claim) = await reserve(id: id, duration: duration) else {
+            return nil
+        }
+        return claim
+    }
+
+    /// The three-way answer, which is the one the recorder asks for: an entry
+    /// this lane does not hold is ABSENT — the bytes in hand are the only copy —
+    /// while one under somebody's live lease must refuse a second transcription.
+    /// The default implementation cannot tell them apart, so a double that
+    /// models a queue has to say so itself or every refusal reads as absence.
+    func reserve(id: UUID, duration: TimeInterval) async -> PendingRetryReservation {
+        guard let entry = entries.first(where: { $0.metadata.id == id }) else { return .absent }
+        if let lease = leases[id], lease.expiresAt > Date() { return .heldElsewhere }
         let token = UUID()
         leases[id] = (token, Date().addingTimeInterval(duration), duration)
         reservations.append(id)
-        return PendingRetryClaim(
+        return .claimed(PendingRetryClaim(
             entry: PendingRetryEntry(
                 audioData: entry.audio,
                 metadata: entry.metadata,
                 workImageData: nil
             ),
             token: token
-        )
+        ))
     }
 
     @discardableResult

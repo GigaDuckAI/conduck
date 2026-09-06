@@ -410,10 +410,12 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         // arms that ASK for the deferral shape, and the helper is what proves the
         // ask still reaches the flag. Counting the assignment inside `runRelay`
         // would now measure the funnel, not the arms.
-        XCTAssertEqual(body.components(separatedBy: "deferred: true").count - 1, 2,
-                       "Exactly two deferral arms: the reply-wait timeout and the blackout. A blackout that "
-                       + "stopped asking for the deferral shape has taken the claim shape instead — or its "
-                       + "toast will outlive the transcript that eventually lands.")
+        XCTAssertEqual(body.components(separatedBy: "deferred: true").count - 1, 3,
+                       "Exactly three deferral arms: the reply-wait timeout, the blackout, and "
+                       + "`.destinationContradicted` — the reply-side disagreement that claimed nothing, so "
+                       + "the entry and the recording are both still queued. A blackout that stopped asking "
+                       + "for the deferral shape has taken the claim shape instead — or its toast will "
+                       + "outlive the transcript that eventually lands.")
         let verdict = try RefusalLaneSource.body(ofFunction: "surfaceRelayVerdict", in: source, path: path)
         XCTAssertTrue(verdict.contains("lastErrorIsRelayDeferral = true"),
                       "`surfaceRelayVerdict` is where a deferral arm's `deferred: true` becomes the "

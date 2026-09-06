@@ -83,7 +83,10 @@ struct QuickDestinationSnapshot: Equatable {
 }
 
 struct MenuBarWorkCaptureFeedback: Identifiable, Equatable {
-    enum Kind { case saved, failed }
+    /// `queued` is `saved`'s honest half-step: the envelope is durable, so the
+    /// note cannot be lost, but the import that puts a CARD on the desk has not
+    /// happened yet — so the row may not offer to go and look at one.
+    enum Kind { case saved, queued, failed }
 
     let id = UUID()
     let kind: Kind
@@ -899,6 +902,44 @@ final class MenuBarCoordinator {
     /// here ever reaches a gateway.
     private(set) var pendingWorkCaptureImage: Data?
 
+    /// The picture of a Work save that FAILED and could not be put back, held
+    /// until the next commit of the words it belongs to — or until those words
+    /// are discarded.
+    ///
+    /// The commit takes the picture out of the composition synchronously, so no
+    /// sender can read a slot whose contents are being filed privately. That
+    /// leaves the failure arm with one bad case: a NEWER capture staged into the
+    /// same slot while the publication was in flight. The newer one keeps the
+    /// slot — it is what the person is looking at — and before this the older
+    /// one simply ceased to exist: no card, no envelope, no retry entry, no
+    /// composition reference, and an error banner that described a note it had
+    /// silently halved.
+    ///
+    /// It is a HOLDING place, never a second composition: nothing renders it,
+    /// and the only way out is the next `saveQuickDraftToWork` of the words it
+    /// was filed with (which the failure left in the composition, untouched) or
+    /// an explicit discard of those words. One picture, because one composition
+    /// can only have one save in flight.
+    ///
+    /// It carries the composition it belongs to — the aim AND the words — and a
+    /// commit may take it only on an exact match of both. Without that identity
+    /// the hold is a shared drawer: a picture staged for the desk was handed to
+    /// the Chat surface's "Add to Work" for unrelated text, and the failure arm
+    /// then put it back in `pendingCaptureImage`, one Return away from a
+    /// gateway. Desk material reaching a gateway is the one thing this lane
+    /// exists to make impossible, so the hold names its owner.
+    private struct StalledWorkSave: Equatable {
+        let image: Data
+        /// The surface the picture was staged on. The two slots are separate
+        /// for this reason and the hold must not undo it.
+        let aim: MenuBarComposeTarget
+        /// The words it was filed beside, exactly as they were committed. The
+        /// failure leaves them in the composition, so a re-press of the same
+        /// save matches; anything else is a different composition.
+        let text: String
+    }
+    private var stalledWorkSave: StalledWorkSave?
+
     /// One-shot "Type Instead" bridge: when the user bails out of a pending
     /// capture's voice turn into the typed composer, the captured screenshot is
     /// parked here and the main window drains it into the composer's staging
@@ -918,7 +959,12 @@ final class MenuBarCoordinator {
     /// hand-off, on the popover's Dismiss, on Esc over the error state, and
     /// when a fresh capture starts (`discardPendingFailedTurn`).
     private enum PendingFailedTurn {
-        case voice(transcript: String)
+        /// `carriesComposition` travels WITH the words, because a stash is not
+        /// a fresh press: a recording recovered from the durable queue owns no
+        /// composition, and the replay of its stash owns none either. Without
+        /// it the second hop silently restored the default and attached a
+        /// screenshot staged for a question still being written.
+        case voice(transcript: String, carriesComposition: Bool)
         case typed(text: String)
         /// A text-mode QUICK-lane turn (popover compose field). Distinct from
         /// `.typed` — that case replays through `handleTypedText` into the
@@ -964,6 +1010,38 @@ final class MenuBarCoordinator {
     /// beats automatic) wouldn't protect it — automatic-vs-automatic is a tie the
     /// generation breaks in favor of the latest arm.
     @ObservationIgnored private var armGeneration = 0
+
+    /// Which quick-lane SEND the person is waiting for. Bumped by every explicit
+    /// bail that owns the Ask surface, and carried by the send that was in
+    /// flight when it moved.
+    ///
+    /// The hand-off between a finished transcription and a dispatched turn is
+    /// asynchronous and can suspend for a while — the arm resolve, a settings
+    /// snapshot, a Core Data mint — and throughout it there is nothing for a
+    /// cancel to act on: the dictation is `.idle`, no reply is awaited, and the
+    /// gateway has not been called. Settings promises "Esc always cancels the
+    /// request"; this token is what makes that true of the window before the
+    /// request exists.
+    ///
+    /// It is TAKEN SYNCHRONOUSLY at the press (`beginQuickSend`) and carried
+    /// into the send as a parameter. Read inside the send's own `Task` it would
+    /// be no identity at all: a bail landing between the claim and that task's
+    /// first resumption has already advanced it, so the send would adopt the
+    /// value the bail moved to and sail through its own final check.
+    @ObservationIgnored private(set) var quickSendGeneration = 0
+
+    /// Claim the quick lane for a send and take its cancellation identity, in
+    /// ONE synchronous step at the press.
+    ///
+    /// Both halves have to happen before the `Task` exists. `turnStarting`
+    /// bridges the render gap until the VM claims `isAwaitingReply`; the
+    /// generation is what a bail pressed during the send's suspensions can
+    /// still reach it with. Read either of them later and there is a window in
+    /// which the press has already happened and the send does not know it.
+    private func beginQuickSend() -> Int {
+        turnStarting = true
+        return quickSendGeneration
+    }
 
     /// Recent threads, most-recently-active first (refreshed by
     /// `refreshQuickCaches`; ≤6). Two jobs: the synchronous metadata source for
@@ -1023,9 +1101,27 @@ final class MenuBarCoordinator {
             // `state=.idle`, bridging the gap until the send Task claims
             // `isAwaitingReply` (no stale-reply flash). `handleTranscript`'s
             // `defer` clears it. Then hop through a Task for the async send path.
-            self?.turnStarting = true
+            //
+            // The send's IDENTITY is taken in that same synchronous step and
+            // carried in. An Esc landing between here and the task's first
+            // resumption moves the generation, and a send that read it inside
+            // the task would read the moved value as its own.
+            guard let generation = self?.beginQuickSend() else { return }
             Task { [weak self] in
-                await self?.handleTranscript(transcript)
+                await self?.handleTranscript(transcript, sendGeneration: generation)
+            }
+        }
+        // A RECOVERED transcript — the footer's Retry — takes nothing from the
+        // composition on screen. Same claim, same hop, same send; only the
+        // attachment rule differs, and it differs because the recording being
+        // replayed was captured before whatever picture is staged now.
+        self.dictationService.onRecoveredTranscript = { [weak self] transcript in
+            guard let generation = self?.beginQuickSend() else { return }
+            Task { [weak self] in
+                await self?.handleRecoveredTranscript(
+                    transcript,
+                    sendGeneration: generation
+                )
             }
         }
 
@@ -1777,34 +1873,117 @@ final class MenuBarCoordinator {
         pendingWorkCaptureImage = nil
     }
 
+    /// Which surface an explicit bail lands on.
+    ///
+    /// The popover draws ONE thing at a time and its router picks it in a fixed
+    /// order, so "what was the person looking at" is a question no single flag
+    /// answers: the Work HUD covers a transcribing Ask, an Ask RECORDING covers
+    /// the Work HUD, and the working view covers both compositions. Esc, the
+    /// Work HUD's ✕ and the working view's ✕ all have to agree with that order,
+    /// or one press stops what another one is hiding.
+    ///
+    /// Resolved once and used for the whole teardown. Mirrors
+    /// `DictationPopoverView.content`'s first three arms (`workCaptureView`,
+    /// `recordingStatusView`, `workingView`) — keep the two in step.
+    enum MenuBarBailOwner {
+        /// The ⌃⌘W Work HUD: a Work capture recording, transcribing, or holding
+        /// a failure nobody has dismissed, with the Ask microphone down.
+        case workCapture
+        /// The Ask lane's own surface — its recording HUD, or the working view
+        /// that replaces it at the stop (STT, the hand-off gap, the reply wait).
+        case askCapture
+        /// Neither capture is drawn, so the compose surface is, and its own aim
+        /// says which composition.
+        case composition
+    }
+
+    /// The screen, read as one answer. See `MenuBarBailOwner`.
+    var visibleBailOwner: MenuBarBailOwner {
+        if workCaptureIsActive, dictationService.state != .recording { return .workCapture }
+        if dictationService.state == .recording { return .askCapture }
+        if dictationService.state == .processing { return .askCapture }
+        if turnStarting { return .askCapture }
+        if quickViewModel?.isAwaitingReply == true { return .askCapture }
+        return .composition
+    }
+
     /// Universal explicit-bail teardown — Esc, the popover's recording Cancel-X,
     /// its working-view X, the capture-recovery Discard, and the error-footer
-    /// Dismiss ALL route here. Mode- AND state-independent: cancels an in-flight
-    /// reply (guarded), cancels the active recording (discards audio, no STT;
-    /// also clears `.error → .idle`), drops a staged ⌘⇧2 screenshot AND the typed
-    /// draft, discards any stranded-turn stash, and releases the armed
-    /// destination. After this nothing survives to spill into the next ⌘⇧1/⌘⇧2
-    /// summon. Every clear is a guard-free no-op when N/A. Only the IMPLICIT
-    /// click-away dismiss preserves compose state (see `popoverDidCloseHook`).
+    /// Dismiss ALL route here. It bails whatever the popover is SHOWING
+    /// (`visibleBailOwner`), which is the only thing an explicit press can mean:
+    ///
+    /// - Work HUD on screen → exactly what its ✕ does, and nothing else.
+    /// - Ask capture on screen → cancels the in-flight reply (guarded) and the
+    ///   recording or its transcription (discards audio, no STT; also clears
+    ///   `.error → .idle`), and leaves both parked compositions alone.
+    /// - Compose surface on screen → the above, plus the composition its aim
+    ///   names: the ⌃⌘W Work draft with its picture, or the chat draft.
+    ///
+    /// The staged ⌘⇧2 screenshot, the stranded-turn stash and the armed
+    /// destination go on every non-Work-HUD press, so nothing spills into the
+    /// next ⌘⇧1/⌘⇧2 summon. Every clear is a guard-free no-op when N/A. Only the
+    /// IMPLICIT click-away dismiss preserves compose state
+    /// (see `popoverDidCloseHook`).
     func cancelActiveCapture() {
+        // ONE reading of the screen, taken FIRST — before `cancelRecording()`
+        // below sets the service `.idle` synchronously and turns every later
+        // question into a question about the teardown.
+        let owner = visibleBailOwner
+        // The press generation moves UNCONDITIONALLY, whichever lane the bail
+        // was aimed at. A ⌃⌘W still suspended in its screenshot await owns
+        // nothing a teardown can reach, and the Ask cancel below frees the
+        // microphone synchronously — so without the bump that press would sail
+        // through its post-await guard and bring a microphone up after the Esc.
+        bailWorkCapturePress()
+
+        // The Work HUD is the surface, so this press IS the ✕ — typed instead
+        // of clicked — and it takes exactly what the ✕ takes and nothing else.
+        // An Ask transcription suspended underneath is not on screen; its words
+        // come back to a surface of their own, and invalidating it from here
+        // would throw away a capture the person cannot see. A RUNNING Work
+        // capture's screenshot goes with it; a parked Work composition's does
+        // not (`cancelWorkVoiceCapture` scopes that itself).
+        if owner == .workCapture {
+            cancelWorkVoiceCapture()
+            return
+        }
+
+        // The Ask lane is the one this press owns, so a send suspended between
+        // its transcript and its dispatch is invalidated here — and only here.
+        // Above the Work-HUD return it would reach an Ask capture the person
+        // cannot see, which is the same mistake `visibleBailOwner` exists to
+        // stop the teardown making.
+        quickSendGeneration &+= 1
+        // …and the surface that send was holding open comes down with it. The
+        // withdrawn send no longer clears the gap-bridge flag — its cleanup is
+        // gated on the identity this line just moved, so that a bail cannot
+        // reach past it into a NEWER send's state — which makes this press the
+        // one thing left that owns the working view. Nothing newer exists at
+        // this instant, so nothing newer can be taken.
+        turnStarting = false
         if quickViewModel?.isAwaitingReply == true { quickViewModel?.cancelInFlight() }
         dictationService.cancelRecording()
-        // The Work lane bails on the same press. Its recorder is invisible to
-        // `dictationService`, so an Esc that skipped it would close the popover
-        // over a live microphone with no surface left to stop it. A RUNNING
-        // capture's screenshot goes with it; a parked Work composition's does
-        // not, which is the picture half of the rule the two branches below
-        // apply to the words.
-        cancelWorkVoiceCapture()
         clearPendingCaptureImage()
-        // Discard the composition ON SCREEN. A parked Work draft is not
-        // abandoned by an Esc pressed over the Chat surface (and vice versa) —
-        // an explicit bail throws away what the person was looking at, never a
-        // second composition they cannot see.
-        if compose.target == .work {
-            discardWorkOnlyCompose()
-        } else {
-            quickDraft = ""
+        // Discard the composition ON SCREEN, and only then. An explicit bail
+        // throws away what the person was looking at, never a second one they
+        // cannot see — and while EITHER capture is drawn, no composition is on
+        // screen at all: the popover's router puts the recording HUD and the
+        // working view over both of them. A Work composition parked from an
+        // earlier ⌃⌘W (typed, never saved, its dragged region in the Work slot)
+        // and a chat draft under a transcription are the same case, and the
+        // stored aim can speak for neither. What is preserved here has no
+        // durable copy anywhere else.
+        if owner == .composition {
+            switch compose.target {
+            case .work: discardWorkOnlyCompose()
+            case .chat:
+                quickDraft = ""
+                // The failed save's picture dies with the words it was filed
+                // beside — the Work arm does the same inside its discard. Only
+                // this surface's, though: a hold staged for the desk belongs to
+                // a Work composition that is still parked and still holds words.
+                discardStalledWorkSave(aimedAt: .chat)
+            }
         }
         discardPendingFailedTurn()
         resetQuickDestinationAfterTurn()
@@ -1839,8 +2018,27 @@ final class MenuBarCoordinator {
     /// `PendingAttachment.image`. The image is cleared in the `defer` (every
     /// exit here is terminal for the screenshot — empty/failed STT flips
     /// `DictationService` to `.error` UPSTREAM and never calls through here).
-    func handleTranscript(_ transcript: String) async {
-        await handleQuickSend(transcript, modality: .voice)
+    func handleTranscript(_ transcript: String, sendGeneration: Int) async {
+        await handleQuickSend(transcript, modality: .voice, sendGeneration: sendGeneration)
+    }
+
+    /// Forward a transcript RECOVERED from the durable queue — the popover
+    /// footer's Retry, and only it.
+    ///
+    /// Identical to `handleTranscript` but for one thing: it carries no
+    /// composition. The recording being replayed was captured before the
+    /// picture now staged in `pendingCaptureImage` existed — a ⌘⇧2 press for a
+    /// different question, still being composed — so attaching that picture
+    /// sends it to a gateway on the wrong words AND clears the slot out from
+    /// under the person who staged it. A Retry has its own recording and its
+    /// own words, and it takes nothing else.
+    func handleRecoveredTranscript(_ transcript: String, sendGeneration: Int) async {
+        await handleQuickSend(
+            transcript,
+            modality: .voice,
+            carriesComposition: false,
+            sendGeneration: sendGeneration
+        )
     }
 
     /// Send a TEXT-mode quick turn: the popover compose field's Return press.
@@ -1855,6 +2053,16 @@ final class MenuBarCoordinator {
         // path begins rather than only in the view that hides the button: while
         // the surface is aimed at the desk, nothing it holds may be sent.
         guard compose.target == .chat else { return }
+        // …and the second half of that line, for the words that are ALREADY on
+        // their way to the desk. `saveQuickDraftToWork` commits across an await
+        // with the popover interactive and the composition still in its slot —
+        // it is consumed on the way back — so the Chat surface's "Add to Work"
+        // button leaves a window in which the same words, and the ⌘⇧2 screenshot
+        // filed with them, are one Return away from a gateway turn under a
+        // receipt that says nothing was sent. The Ask button is disabled for
+        // exactly that window; Return obeys the same rule or the rule is
+        // decorative.
+        guard !isSavingQuickDraftToWork else { return }
         let trimmed = quickDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         // Empty no-op MUST precede any state change: entering `handleQuickSend`
         // empty would burn a staged ⌘⇧2 screenshot via its defer. Attachment-only
@@ -1881,11 +2089,18 @@ final class MenuBarCoordinator {
         case .idle:
             break
         }
-        turnStarting = true
+        // The claim, the identity, the draft and the arm are ONE synchronous
+        // step: nothing between them may suspend, or the press and the send
+        // stop being the same act.
+        let generation = beginQuickSend()
         quickDraft = ""
         armQuickCapture()
         Task { [weak self] in
-            await self?.handleQuickSend(trimmed, modality: .text)
+            await self?.handleQuickSend(
+                trimmed,
+                modality: .text,
+                sendGeneration: generation
+            )
         }
     }
 
@@ -1933,7 +2148,21 @@ final class MenuBarCoordinator {
     func discardWorkOnlyCompose() {
         compose.discardActive()
         clearPendingWorkCaptureImage()
+        // A picture stranded by a failed save belongs to these words, so it goes
+        // when they do. This is the explicit discard that ends its wait.
+        discardStalledWorkSave(aimedAt: .work)
         quickWorkCaptureFeedback = nil
+    }
+
+    /// Let go of a stalled picture whose composition is being thrown away.
+    ///
+    /// Scoped to the AIM, because the two surfaces hold two compositions: a
+    /// Chat draft discarded by Esc says nothing about a ⌃⌘W Work draft parked
+    /// behind it, and a hold that answered to either press would be the shared
+    /// drawer the identity exists to stop it being.
+    private func discardStalledWorkSave(aimedAt aim: MenuBarComposeTarget) {
+        guard stalledWorkSave?.aim == aim else { return }
+        stalledWorkSave = nil
     }
 
     // MARK: - Work voice capture (⌃⌘W, voice input mode)
@@ -2132,17 +2361,28 @@ final class MenuBarCoordinator {
         _ = await beginWorkVoiceCapture()
     }
 
+    /// Invalidate any ⌃⌘W press that is still in flight, without touching the
+    /// recorder.
+    ///
+    /// Separate from the teardown below because the press this bail has to reach
+    /// may own nothing yet: a ⌃⌘W whose screenshot is still being acquired has
+    /// no recorder state, no flag and no capture for a teardown to act on. The
+    /// generation is the only thing an Esc pressed during that window can leave
+    /// behind — so it moves on EVERY bail, including one aimed at the other lane
+    /// (`cancelActiveCapture`), where tearing the Work recorder down would
+    /// discard a capture the person cannot even see.
+    func bailWorkCapturePress() {
+        workCaptureCancellationGeneration &+= 1
+    }
+
     /// Explicit bail on a Work capture. A live recording is discarded, a
     /// transcription in flight is abandoned, and a standing error is cleared —
     /// none of which touches a card already on the desk or the queued recording
     /// behind an unfinished capture, both of which outlive this popover.
     func cancelWorkVoiceCapture() {
-        // Bumped FIRST and unconditionally, because the press this bail has to
-        // reach may own nothing yet: a ⌃⌘W whose screenshot is still being
-        // acquired has no recorder state, no flag and no capture for any of the
-        // work below to act on. The generation is the only thing an Esc pressed
-        // during that window can leave behind.
-        workCaptureCancellationGeneration &+= 1
+        // FIRST, so a press suspended in its screenshot await is invalidated
+        // even if every branch below is a no-op.
+        bailWorkCapturePress()
         // The staged picture belongs to the capture being torn down and ONLY to
         // it. `cancelActiveCapture` bails both lanes on one press, so an Esc
         // typed over the Chat surface arrives here too — and a parked Work
@@ -2219,11 +2459,26 @@ final class MenuBarCoordinator {
     /// The busy case reuses the sentence `DictationService` has always shown for
     /// the same lease refusal — one microphone, one explanation, whichever lane
     /// asked for it.
+    private static var microphoneBusyMessage: String {
+        String(localized: "Microphone is in use by another recording.")
+    }
+
+    /// A ⌃⌘W refused BEFORE its overlay because another recorder — the main
+    /// window's composer — already holds the microphone. Same sentence the lease
+    /// refusal prints after a start, so one conflict reads one way whether it is
+    /// caught before the drag or after it.
+    func noteWorkCaptureRefusedMicrophoneBusy() {
+        quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(
+            kind: .failed,
+            message: Self.microphoneBusyMessage
+        )
+    }
+
     private func presentWorkVoiceStartRefusal() {
         let message: String
         if case .error(let error) = workVoiceRecorder.state {
             message = error.errorCode == AppError.audioMicBusy.errorCode
-                ? String(localized: "Microphone is in use by another recording.")
+                ? Self.microphoneBusyMessage
                 : error.localizedDescription
         } else {
             message = AppError.audioMissingData.localizedDescription
@@ -2261,15 +2516,61 @@ final class MenuBarCoordinator {
         // one fixed slot would publish one composition's image under the other
         // one's words — or, on the Chat door, silently drop the screenshot that
         // is the entire reason the button was pressed.
-        let screenshotAtCommit = aimAtCommit == .work ? pendingWorkCaptureImage : pendingCaptureImage
+        //
+        // A picture STRANDED by a previous failed save of this same composition
+        // rides here when the slot itself is empty. It belongs to these words —
+        // the words were never taken, so the composition still holds them — and
+        // the only reason it is not in the slot is that a newer capture claimed
+        // the slot while the failed publication was in flight.
+        let stagedAtCommit = aimAtCommit == .work ? pendingWorkCaptureImage : pendingCaptureImage
+        // …and the hold is offered only to the composition it names. A match on
+        // BOTH halves — this surface, and these exact words — is what makes it
+        // the same save being re-pressed rather than a picture wandering into
+        // somebody else's note.
+        let heldForThisCommit: Data? = stalledWorkSave.flatMap {
+            $0.aim == aimAtCommit && $0.text == draftAtCommit ? $0.image : nil
+        }
+        let screenshotAtCommit = stagedAtCommit ?? heldForThisCommit
         guard !isSavingQuickDraftToWork, !thought.isEmpty || screenshotAtCommit != nil else { return }
 
         isSavingQuickDraftToWork = true
         quickWorkCaptureFeedback = nil
+        // The hold ends when it is TAKEN, and only then. Filed, leaving it
+        // behind would file it twice.
+        //
+        // A commit that did not take it — a newer picture claimed the slot while
+        // the failed publication was in flight — leaves it exactly where it is.
+        // Dropping it there is the loss this hold exists to prevent said twice:
+        // no card, no envelope, no retry entry, and now not even a holding
+        // place. It cannot leak, because the identity above is what a commit
+        // must match to reach it; the composition it names is the only door.
+        if screenshotAtCommit != nil, stagedAtCommit == nil { stalledWorkSave = nil }
+        // The arm this commit is leaving behind, so the destination cleanup at
+        // the end of the publication cannot reach an Ask armed AFTER it. See
+        // `resetQuickDestinationAfterTurn`'s call site below.
+        let armAtCommit = armGeneration
+        // The picture leaves the composition NOW, synchronously, and the bytes
+        // travel in `screenshotAtCommit` alone.
+        //
+        // A slot is the composition that is still AVAILABLE to send, and every
+        // send reads the slot rather than this flag: `handleQuickSend` attaches
+        // whatever `pendingCaptureImage` holds, and it is reached during this
+        // await by the error footer's Retry and by a ⌘⇧1 transcript alike —
+        // neither of which passes through `sendQuickTypedDraft`'s guard. So a
+        // screenshot left staged while it is being committed to Work is a
+        // picture the person filed privately arriving at a gateway moments
+        // later. Consuming it on the way BACK closes only the door Return uses.
+        //
+        // The failure arm below puts it back, which is what keeps this a
+        // transfer rather than a discard.
+        switch aimAtCommit {
+        case .work: clearPendingWorkCaptureImage()
+        case .chat: clearPendingCaptureImage()
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                _ = try await WorkCaptureInbox.shared.publishAppCapture(
+                let published = try await WorkCaptureInbox.shared.publishAppCapture(
                     note: thought,
                     screenshotPNG: screenshotAtCommit
                 )
@@ -2279,37 +2580,130 @@ final class MenuBarCoordinator {
                 // invisible until something else opens the desk, so a banner
                 // reading "Added to Work" would name a card that is not on the
                 // board yet. A drain that cannot reach the store is still not a
-                // failed capture — the envelope stays queued and the desk's own
-                // observer imports it — so its throw is deliberately swallowed.
-                _ = try? await WorkCaptureDrainer(
-                    sourceDevice: SourceDevice.current
-                ).drainAvailableCaptures()
+                // failed capture — it puts its claim back first, so the envelope
+                // stays queued and the desk's own observer imports it — but it
+                // is not an "Added" either, which is why the throw is BOUND
+                // rather than swallowed.
+                let drained: Bool
+                do {
+                    _ = try await WorkCaptureDrainer(
+                        sourceDevice: SourceDevice.current
+                    ).drainAvailableCaptures()
+                    drained = true
+                } catch {
+                    drained = false
+                }
+
+                // …and a drain that RETURNED still proves nothing about this
+                // capture. It imports whatever it can claim, and the desk's own
+                // observer may have claimed this envelope first — in which case
+                // this drain found nothing, succeeded, and knows nothing about
+                // whether that other import then failed and put the envelope
+                // back. So the card is asked for by name.
+                //
+                // `publishAppCapture` returns the capture id, and the desk
+                // material that carries it is deterministic: with a picture, the
+                // image entry IS that id; without one, the visible note takes
+                // it. Either shape lands exactly one material under this id, so
+                // one desk read is the whole answer.
+                //
+                // …and the id ALONE is not this capture either. Both ids a card
+                // of this capture may be published under can be held by cards of
+                // another kind, in which case the desk refuses the import, the
+                // drainer retires the capture and reports success — and a read
+                // that asked only "is something standing under this id" would
+                // find the unrelated occupant and print "Added to Work" for a
+                // capture that was refused. The kind is what tells them apart,
+                // because a kind collision is exactly what the refusal was.
+                let landed = drained
+                    ? await deskHoldsWorkMaterial(
+                        published,
+                        expecting: screenshotAtCommit == nil ? .note : .image
+                    )
+                    : false
 
                 // The popover stays interactive while disk I/O runs. Consume only
                 // the exact values that were published; text or a screenshot added
                 // during the await belongs to the next capture and must survive —
                 // and a composition that kept its words keeps its aim with them.
-                compose.clearCommitted(draftAtCommit, aimedAt: aimAtCommit)
-                // Consume the picture from the slot it was published FROM, and
-                // only when it is still the one that was published: a second
-                // ⌃⌘W drag during the await belongs to the next capture.
-                switch aimAtCommit {
-                case .work:
-                    if pendingWorkCaptureImage == screenshotAtCommit { clearPendingWorkCaptureImage() }
-                case .chat:
-                    if pendingCaptureImage == screenshotAtCommit { clearPendingCaptureImage() }
+                let filed = compose.clearCommitted(draftAtCommit, aimedAt: aimAtCommit)
+                // A hold this commit did not take dies HERE — with the words it
+                // belongs to, and only when they actually left the composition.
+                // A picture whose owner has been filed has no door left to come
+                // back through, and one kept past that point is the old screen
+                // hanging over whatever note is written next. If the words are
+                // still there (edited during the await, so `clearCommitted`
+                // refused) the composition is unfinished and so is its hold.
+                if filed,
+                   stalledWorkSave?.aim == aimAtCommit,
+                   stalledWorkSave?.text == draftAtCommit {
+                    stalledWorkSave = nil
                 }
-                if quickDraft.isEmpty, pendingCaptureImage == nil {
+                // The picture was consumed at the commit, above. Anything in
+                // the slot now was staged DURING the await and belongs to the
+                // next capture, so there is nothing to take here.
+                //
+                // Gated on the ARM this commit was made under. `armQuickCapture`
+                // moves the generation, so a ⌘⇧1 pressed during this publication
+                // — with a destination the person picked for it — is a newer arm
+                // than this one, and clearing its snapshot here would send those
+                // words wherever automatic resolution lands instead. An empty
+                // composition is not evidence about a capture armed after the
+                // commit.
+                if armAtCommit == armGeneration, quickDraft.isEmpty, pendingCaptureImage == nil {
                     resetQuickDestinationAfterTurn()
                 }
-                quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(
-                    kind: .saved,
-                    message: String(localized: LocalizedStringResource(
-                        "workboard.menuBar.saved",
-                        defaultValue: "Added to Work. Nothing was sent."
-                    ))
-                )
+                quickWorkCaptureFeedback = landed
+                    ? MenuBarWorkCaptureFeedback(
+                        kind: .saved,
+                        message: String(localized: LocalizedStringResource(
+                            "workboard.menuBar.saved",
+                            defaultValue: "Added to Work. Nothing was sent."
+                        ))
+                    )
+                    : MenuBarWorkCaptureFeedback(
+                        kind: .queued,
+                        message: String(localized: LocalizedStringResource(
+                            "workboard.menuBar.savedQueued",
+                            defaultValue: "On its way to Work. Nothing was sent."
+                        ))
+                    )
             } catch {
+                // Nothing was filed, so the composition gets its picture back —
+                // the words were never taken, and half a composition is worse
+                // than none. Only into an EMPTY slot: a screenshot staged during
+                // the await belongs to the next capture and outranks a failed
+                // one's.
+                //
+                // A slot that is NO LONGER EMPTY is the case that used to lose
+                // the picture outright: the newer capture keeps the slot, which
+                // is right, and the failed one had nowhere left to be — no card,
+                // no envelope, no retry entry and no composition. It is held
+                // instead, and the next commit of these same words takes it
+                // (see `stalledWorkSaveImage`).
+                if let screenshotAtCommit {
+                    // The hold names the composition that failed: this surface,
+                    // and these exact words. Nothing else may reach it.
+                    let held = StalledWorkSave(
+                        image: screenshotAtCommit,
+                        aim: aimAtCommit,
+                        text: draftAtCommit
+                    )
+                    switch aimAtCommit {
+                    case .work:
+                        if pendingWorkCaptureImage == nil {
+                            setPendingWorkCaptureImage(screenshotAtCommit)
+                        } else {
+                            stalledWorkSave = held
+                        }
+                    case .chat:
+                        if pendingCaptureImage == nil {
+                            setPendingCaptureImage(screenshotAtCommit)
+                        } else {
+                            stalledWorkSave = held
+                        }
+                    }
+                }
                 quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(
                     kind: .failed,
                     message: error.localizedDescription
@@ -2319,11 +2713,68 @@ final class MenuBarCoordinator {
         }
     }
 
+    /// Whether the desk actually holds the material a published capture id
+    /// names. The one question that separates "the envelope survived" from "the
+    /// card arrived", and the receipt above may only say the second when this
+    /// says yes.
+    ///
+    /// A refusal — a store that would not open — reads as NOT on the desk, which
+    /// is the honest direction: the queued receipt is true of a capture whose
+    /// card exists as well as of one whose card is still coming, and the saved
+    /// receipt is true of neither when nothing could be read.
+    ///
+    /// THREE questions, not one, because an id is not an identity here:
+    ///
+    /// - Either id. A card whose primary id is taken is republished under
+    ///   `WorkMaterialCollisionEscape.materialID(forCapture:)`, so a capture
+    ///   that escaped a collision IS on the desk under a name the publication
+    ///   did not return.
+    /// - The KIND this capture published. A collision happens precisely because
+    ///   a card of another kind holds the id, and when BOTH ids are held the
+    ///   import is refused and the capture retired — so an occupant of the wrong
+    ///   kind is the proof of refusal, never the proof of arrival.
+    /// - The PAYLOAD, for the one kind that is its bytes. A screenshot card with
+    ///   no picture behind it has not arrived in any sense the person would
+    ///   recognise.
+    func deskHoldsWorkMaterial(
+        _ materialID: UUID,
+        expecting kind: WorkMaterialKind
+    ) async -> Bool {
+        guard let desk = try? await conversationStore.fetchWorkItem(
+            id: Constants.workboardDeskItemID
+        ) else { return false }
+        let escaped = WorkMaterialCollisionEscape.materialID(forCapture: materialID)
+        return desk.materials.contains { material in
+            guard material.id == materialID || material.id == escaped else { return false }
+            guard material.kind == kind else { return false }
+            return kind != .image || material.hasPayload
+        }
+    }
+
     /// The shared quick-lane send (voice transcripts + text-mode typed turns).
     /// One body so the snapshot-consume / mint / busy / stash ladder cannot
     /// drift between modalities — only the stash case, the empty-text rule,
     /// and `sendUserTurn`'s modality differ.
-    private func handleQuickSend(_ text: String, modality: TurnModality) async {
+    ///
+    /// `carriesComposition` is false for exactly one caller: a transcript
+    /// recovered from the durable queue. Such a run owns no composition — the
+    /// staged screenshot belongs to whatever is being composed NOW — so it
+    /// attaches nothing and clears nothing.
+    private func handleQuickSend(
+        _ text: String,
+        modality: TurnModality,
+        carriesComposition: Bool = true,
+        sendGeneration: Int
+    ) async {
+        // `sendGeneration` is the identity of this send, taken SYNCHRONOUSLY at
+        // the press (`beginQuickSend`) so a bail pressed while it is suspended
+        // can still stop it. Everything between the transcript and
+        // `sendUserTurn` is asynchronous — the arm resolve, a settings read, a
+        // conversation mint — and for all of it there is no request to cancel
+        // and no recording to stop, so `cancelActiveCapture` finds nothing.
+        // Without this token "Esc always cancels the request" is false of the
+        // one window in which the request has not been made yet.
+        //
         // The stash-error returns below (deleted/busy/mint-failed destination)
         // keep the snapshot LATCHED so the error footer's Retry replays into
         // EXACTLY the destination this capture froze; every other exit resets
@@ -2332,10 +2783,19 @@ final class MenuBarCoordinator {
         // Clear the gap-bridge flag + staged screenshot on EVERY exit; reset
         // the destination unless a stash-error kept it; sweep so a turn that
         // re-bound the quick lane releases the previous thread's VM.
+        //
+        // …but only for the send the person is STILL WAITING FOR. A withdrawn
+        // send owns none of this state any more: the bail cleared the surface
+        // itself, and everything staged since belongs to whatever was started
+        // after it. A stale cleanup here took a screenshot captured for the
+        // NEXT question and reset the destination that question had armed —
+        // the cancel doing the damage the send was stopped from doing.
         defer {
-            turnStarting = false
-            clearPendingCaptureImage()
-            if !keepSnapshot { resetQuickDestinationAfterTurn() }
+            if sendGeneration == quickSendGeneration {
+                turnStarting = false
+                if carriesComposition { clearPendingCaptureImage() }
+                if !keepSnapshot { resetQuickDestinationAfterTurn() }
+            }
             sweepRegistry()
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2416,9 +2876,13 @@ final class MenuBarCoordinator {
                 // (see `pendingFailedTurn` invariant) AND there are words to
                 // replay — a typed attachment-only turn has none (its image is
                 // cleared by the defer), so it degrades to a Dismiss-only error.
-                if dictationService.presentHandoffError(message: destinationDeletedMessage),
-                   !trimmed.isEmpty {
-                    pendingFailedTurn = quickStash(trimmed, modality: modality)
+                if stashQuickHandoffFailure(
+                    message: destinationDeletedMessage,
+                    text: trimmed,
+                    modality: modality,
+                    carriesComposition: carriesComposition,
+                    sendGeneration: sendGeneration
+                ) {
                     quickDestination = QuickDestinationSnapshot(
                         destination: .explicitNew(nil),
                         titleSnippet: nil,
@@ -2458,11 +2922,13 @@ final class MenuBarCoordinator {
             // still unknown. Refusing here costs a visible error with the words
             // kept; not refusing costs a thread that can never answer.
             guard snapshot.configuredRefs.contains(ref) else {
-                if dictationService.presentHandoffError(message: destinationUnavailableMessage),
-                   !trimmed.isEmpty {
-                    pendingFailedTurn = quickStash(trimmed, modality: modality)
-                    keepSnapshot = true
-                }
+                keepSnapshot = stashQuickHandoffFailure(
+                    message: destinationUnavailableMessage,
+                    text: trimmed,
+                    modality: modality,
+                    carriesComposition: carriesComposition,
+                    sendGeneration: sendGeneration
+                )
                 return
             }
             guard let fresh = try? await conversationStore.createConversation(backend: ref.rawString) else {
@@ -2471,11 +2937,13 @@ final class MenuBarCoordinator {
                 // the snapshot stays latched so Retry replays the SAME
                 // destination decision (e.g. an explicit "New chat" pick stays
                 // a new chat, not whatever automatic resolves to later).
-                if dictationService.presentHandoffError(message: mintFailedMessage),
-                   !trimmed.isEmpty {
-                    pendingFailedTurn = quickStash(trimmed, modality: modality)
-                    keepSnapshot = true
-                }
+                keepSnapshot = stashQuickHandoffFailure(
+                    message: mintFailedMessage,
+                    text: trimmed,
+                    modality: modality,
+                    carriesComposition: carriesComposition,
+                    sendGeneration: sendGeneration
+                )
                 return
             }
             // Same reason as the window mint: `viewModel(for:)` below binds a VM
@@ -2499,7 +2967,22 @@ final class MenuBarCoordinator {
         // path assertable — the desk's screenshot never rides a gateway turn —
         // because a negative is only worth checking where the forbidden value
         // was available to be taken. Read the doc on `onQuickTurnAttachments`.
-        let attachments: [PendingAttachment] = pendingCaptureImage.map { [.image($0)] } ?? []
+        //
+        // A RECOVERED transcript takes none of it. Its recording predates the
+        // slot's contents — the picture there was staged for a question the
+        // person is still composing — so a Retry that read the slot would send
+        // somebody else's screenshot and empty their composition on the way
+        // out. The one caller that passes `false` is the footer's Retry.
+        //
+        // …and the slot is read only for a send that is still the person's. A
+        // withdrawn one reaching this line would publish the picture staged for
+        // whatever they started INSTEAD onto its own doomed turn — visible on
+        // the popover through `onQuickTurnAttachments` before the dispatch
+        // guard below ever refuses it.
+        guard sendGeneration == quickSendGeneration else { return }
+        let attachments: [PendingAttachment] = carriesComposition
+            ? (pendingCaptureImage.map { [.image($0)] } ?? [])
+            : []
         onQuickTurnAttachments?(attachments)
 
         // Busy target: the VM's atomic in-flight claim would silently swallow
@@ -2509,13 +2992,22 @@ final class MenuBarCoordinator {
         // target once it frees up.
         let vm = viewModel(for: resolvedID)
         if vm.isAwaitingReply {
-            if dictationService.presentHandoffError(message: destinationBusyMessage),
-               !trimmed.isEmpty {
-                pendingFailedTurn = quickStash(trimmed, modality: modality)
-                keepSnapshot = true
-            }
+            keepSnapshot = stashQuickHandoffFailure(
+                message: destinationBusyMessage,
+                text: trimmed,
+                modality: modality,
+                carriesComposition: carriesComposition,
+                sendGeneration: sendGeneration
+            )
             return
         }
+
+        // THE COMMIT POINT, and the last line before it that can still be a
+        // no-op. Every step above suspends; a bail landing in any of them found
+        // no dictation to cancel and no reply to abandon, because at that
+        // moment there was neither — so this is where the press is honored.
+        // Below it a turn exists, and the reply-side cancel takes over.
+        guard sendGeneration == quickSendGeneration else { return }
 
         // Successful hand-off — a stale stash (user re-recorded instead of
         // Retrying) must not ride a later, unrelated error's Retry.
@@ -2539,13 +3031,53 @@ final class MenuBarCoordinator {
         )
     }
 
+    /// Present a hand-off failure on the popover and keep the words behind it —
+    /// for the send the person is STILL WAITING FOR, and only that one.
+    ///
+    /// Every call site sits below a suspension: a store fetch, a settings read,
+    /// a conversation mint. A bail landing in any of them has already withdrawn
+    /// the send, and a stash written afterwards resurrects a transcript the
+    /// person threw away as a live Retry, behind an error drawn over whatever
+    /// they started instead. So the cancellation is asked HERE, above the
+    /// writes — the dispatch guard further down is too late, because by then
+    /// the error surface and the stash are already the state of the popover.
+    ///
+    /// Answers whether the words are kept, which is exactly when the latched
+    /// snapshot must survive: a Retry replays into the destination this capture
+    /// froze, and a failure that stashed nothing has nothing to keep it for.
+    private func stashQuickHandoffFailure(
+        message: String,
+        text: String,
+        modality: TurnModality,
+        carriesComposition: Bool,
+        sendGeneration: Int
+    ) -> Bool {
+        guard sendGeneration == quickSendGeneration else { return false }
+        // The error is presented for a failure with no words too — a typed
+        // attachment-only turn has nothing to replay, so it degrades to a
+        // Dismiss-only error rather than to silence.
+        guard dictationService.presentHandoffError(message: message), !text.isEmpty else {
+            return false
+        }
+        pendingFailedTurn = quickStash(
+            text,
+            modality: modality,
+            carriesComposition: carriesComposition
+        )
+        return true
+    }
+
     /// The quick-lane stash case for a modality — voice replays keep their
     /// transcript framing; text-mode replays go back through
     /// `handleQuickSend(.text)` so the modality chip and snapshot consumption
     /// match the original press.
-    private func quickStash(_ text: String, modality: TurnModality) -> PendingFailedTurn {
+    private func quickStash(
+        _ text: String,
+        modality: TurnModality,
+        carriesComposition: Bool
+    ) -> PendingFailedTurn {
         switch modality {
-        case .voice: return .voice(transcript: text)
+        case .voice: return .voice(transcript: text, carriesComposition: carriesComposition)
         case .text: return .quickTyped(text: text)
         }
     }
@@ -2717,17 +3249,30 @@ final class MenuBarCoordinator {
         pendingFailedTurn = nil
         dictationService.cancelRecording()   // .error → .idle (dismisses the error surface)
         switch turn {
-        case .voice(let transcript):
-            turnStarting = true
+        case .voice(let transcript, let carriesComposition):
+            // The stash remembers whose composition these words own — none, if
+            // the recording came out of the durable queue. A replay that reset
+            // that to the default would attach the screenshot staged for the
+            // question being written now, and empty its slot on the way out.
+            let generation = beginQuickSend()
             Task { [weak self] in
-                await self?.handleTranscript(transcript)
+                await self?.handleQuickSend(
+                    transcript,
+                    modality: .voice,
+                    carriesComposition: carriesComposition,
+                    sendGeneration: generation
+                )
             }
         case .quickTyped(let text):
             // Same gap-bridge + quick-lane replay as `.voice`, with the typed
             // modality preserved (re-consumes the kept-latched snapshot).
-            turnStarting = true
+            let generation = beginQuickSend()
             Task { [weak self] in
-                await self?.handleQuickSend(text, modality: .text)
+                await self?.handleQuickSend(
+                    text,
+                    modality: .text,
+                    sendGeneration: generation
+                )
             }
         case .typed(let text):
             Task { [weak self] in

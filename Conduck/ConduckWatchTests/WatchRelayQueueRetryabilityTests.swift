@@ -265,16 +265,16 @@ final class WatchRelayQueueRetryabilityTests: XCTestCase {
 
     /// NEGATIVE CONTROL: the same helper MUST still dispatch the hop for a chat
     /// ask, or the assertion above would pass on a settlement path that had
-    /// simply stopped working.
+    /// simply stopped working. An ordinary chat reply carries no Work stamp —
+    /// the iPhone writes one from a single line (`workSaved = workCardID !=
+    /// nil`) and only for a capture it published to the desk.
     func testAChatReplyStillClaimsAndDispatchesTheHop() async {
         var hops: [String] = []
         var writes = 0
         var finished: [AppleRelayPendingQueue.RelaySettlement] = []
         let result = await AppleRelayPendingQueue.applySettledSuccess(
             destination: .chat,
-            // A chat reply can carry the Work stamp only if the iPhone wrote it
-            // onto the wrong lane; the destination decides, never the stamp.
-            reply: RelayReply(text: "ask the agent", workSaved: true),
+            reply: RelayReply(text: "ask the agent", workSaved: false),
             claim: { true },
             completeChat: { hops.append($0) },
             writeWorkWords: { _ in writes += 1; return true },
@@ -284,6 +284,49 @@ final class WatchRelayQueueRetryabilityTests: XCTestCase {
         XCTAssertEqual(writes, 0)
         XCTAssertTrue(finished.isEmpty)
         XCTAssertEqual(result, .applied(.converseHop))
+    }
+
+    /// The receipt is a SECOND witness to the destination, and the two
+    /// disagreeing is not a tie the queue may break by sending. A reply
+    /// carrying `work: true` is a reply about a capture the iPhone put on the
+    /// desk; an entry whose destination says chat — because the field was
+    /// dropped, or written with a value this build does not recognise, and
+    /// `captureDestination` reads both as chat — is the other half of the
+    /// disagreement. Dispatching would speak a private thought to an agent,
+    /// which is the one outcome this lane exists to prevent, so nothing is
+    /// claimed and nothing is sent.
+    func testAWorkReceiptOnAChatStampedEntryIsRefusedRatherThanSent() async {
+        var hops = 0
+        var claims = 0
+        var writes = 0
+        var finished: [AppleRelayPendingQueue.RelaySettlement] = []
+        let result = await AppleRelayPendingQueue.applySettledSuccess(
+            destination: .chat,
+            reply: RelayReply(text: "a private thought", workSaved: true),
+            claim: { claims += 1; return true },
+            completeChat: { _ in hops += 1 },
+            writeWorkWords: { _ in writes += 1; return true },
+            finishWork: { finished.append($0) }
+        )
+        XCTAssertEqual(
+            hops, 0,
+            "A reply that says the iPhone published this capture to the DESK still reached the converse hop."
+        )
+        XCTAssertEqual(
+            claims, 0,
+            "The entry was claimed on a verdict nobody could resolve — the claim deletes the recording."
+        )
+        XCTAssertEqual(writes, 0)
+        XCTAssertTrue(finished.isEmpty, "Nothing settled, so no line may be written for it.")
+        XCTAssertEqual(result, .destinationContradicted)
+        XCTAssertEqual(
+            AppleRelayPendingQueue.settlement(for: .chat, workSaved: true),
+            .receiptContradictsDestination
+        )
+        XCTAssertNil(
+            WatchWorkCaptureOutcome.forSettlement(.receiptContradictsDestination),
+            "Every sentence this type can produce would claim one half of the disagreement."
+        )
     }
 
     /// THE ORDERING THAT KEEPS THE WORDS: a claim DELETES the recording, and a
@@ -330,7 +373,11 @@ final class WatchRelayQueueRetryabilityTests: XCTestCase {
             var effects = 0
             let result = await AppleRelayPendingQueue.applySettledSuccess(
                 destination: destination,
-                reply: RelayReply(text: "already handled", workSaved: true),
+                // The stamp AGREES with each lane in turn: a chat reply
+                // carrying a Work receipt is refused before the claim is even
+                // asked, which would measure the contradiction rather than the
+                // exactly-once rule this case is about.
+                reply: RelayReply(text: "already handled", workSaved: destination == .work),
                 claim: { false },
                 completeChat: { _ in effects += 1 },
                 writeWorkWords: { _ in effects += 1; return true },
@@ -467,6 +514,142 @@ final class WatchRelayQueueRetryabilityTests: XCTestCase {
             )
             XCTAssertEqual(service.state, .idle, "Work parks nothing in the state machine.")
         }
+    }
+
+    /// The entry holding the pick is only half the guarantee: the queue has to
+    /// HAND IT OVER. That half has no pure helper behind it — the defect is a
+    /// dropped argument at one call site — so this drives the settlement with
+    /// the dispatch substituted and reads what the queue actually passed.
+    /// Deleting either binding from `completeEntry` fails here and nowhere else.
+    ///
+    /// The two shapes run separately because the entry itself keeps them
+    /// exclusive: a pinned entry already names its conversation, and that
+    /// conversation names its own gateway, so `enqueue` drops the ref for one.
+    func testTheSettlementHandsTheDeferredHopWhicheverBindingTheEntryCarries() async throws {
+        final class Handover: @unchecked Sendable {
+            var calls = 0
+            var transcript: String?
+            var conversationID: UUID?
+            var backendRef: String?
+        }
+
+        let pinned = UUID()
+        let picked = RemoteAgentRef.custom(UUID()).rawString
+        let shapes: [(name: String, pin: UUID?, ref: String?)] = [
+            (name: "a pinned in-thread capture", pin: pinned, ref: nil),
+            (name: "an Ask chooser pick", pin: nil, ref: picked)
+        ]
+
+        for shape in shapes {
+            let handover = Handover()
+            AppleRelayPendingQueue.deferredChatDispatch = { transcript, conversationID, backendRef in
+                handover.calls += 1
+                handover.transcript = transcript
+                handover.conversationID = conversationID
+                handover.backendRef = backendRef
+            }
+            defer {
+                AppleRelayPendingQueue.deferredChatDispatch = AppleRelayPendingQueue.liveDeferredChatDispatch
+            }
+
+            let requestID = "handover-\(UUID().uuidString)"
+            let audioURL = try makeRelayAudio()
+            defer { try? FileManager.default.removeItem(at: audioURL) }
+            _ = AppleRelayPendingQueue.shared.enqueue(
+                requestID: requestID,
+                audioFileURL: audioURL,
+                language: nil,
+                conversationID: shape.pin,
+                backendRef: shape.ref,
+                destination: .chat
+            )
+            defer { _ = AppleRelayPendingQueue.shared.claimEntry(requestID: requestID) }
+
+            await AppleRelayPendingQueue.shared.reconcile(
+                requestID: requestID,
+                outcome: .success(RelayReply(text: "the words", workSaved: false))
+            )
+
+            XCTAssertEqual(handover.calls, 1,
+                           "\(shape.name): the settled chat entry never reached the deferred dispatch at all.")
+            XCTAssertEqual(handover.transcript, "the words")
+            XCTAssertEqual(
+                handover.conversationID, shape.pin,
+                "\(shape.name): the entry's pin was dropped on the way to the hop — the deferred ask lands in a NEW thread instead of the one it was spoken into."
+            )
+            XCTAssertEqual(
+                handover.backendRef, shape.ref,
+                "\(shape.name): the entry's gateway was dropped on the way to the hop — the words go to whichever gateway happens to be default when the phone comes back."
+            )
+        }
+    }
+
+    /// The gateway the person picked has to reach the ENTRY, because the
+    /// settlement has nowhere else to read it: the Ask hint is one-shot and
+    /// belongs to the live hop, and a `.new` draft has no conversation to pin.
+    /// Work stamps none — it cleared the hint on the way in and reaches no
+    /// gateway at all — which is also the control that the field is written by
+    /// the lane rather than by whatever happens to be in the hint.
+    func testADeferredChatEntryCarriesThePickedGatewayAndAWorkEntryCarriesNone() async throws {
+        let picked = RemoteAgentRef.custom(UUID()).rawString
+        defer { WatchSettingsReader.shared.clearPendingInAppNewConversationBackend() }
+
+        for destination in [WatchCaptureDestination.chat, .work] {
+            let service = WatchRecordingService()
+            service.store = ConversationStore(inMemory: true)
+            var relayed: String?
+            service.relayTranscribe = { requestID, _, _, _, _ in
+                relayed = requestID
+                // Retryable on both lanes, so the entry is still there to read.
+                throw AppError.sttProviderUnreachable
+            }
+            WatchSettingsReader.shared.setPendingInAppNewConversationBackend(picked)
+            let audioURL = try makeRelayAudio()
+            defer { try? FileManager.default.removeItem(at: audioURL) }
+
+            await service.runRelay(
+                audioFileURL: audioURL,
+                originalFileURL: audioURL,
+                providerID: nil,
+                destination: destination
+            )
+
+            let requestID = try XCTUnwrap(relayed, "The relay seam was never reached.")
+            defer { _ = AppleRelayPendingQueue.shared.claimEntry(requestID: requestID) }
+            let entry = try XCTUnwrap(AppleRelayPendingQueue.shared.peekEntry(requestID: requestID))
+            XCTAssertEqual(
+                entry.backendRef,
+                destination == .chat ? picked : nil,
+                "\(destination) wrote the wrong addressed gateway onto its entry."
+            )
+            if destination == .chat {
+                // Peeked, never consumed — the LIVE hop still owns the one-shot
+                // hint. (Work's own terminal clears it moments later, which is
+                // why this is asked of the lane that keeps it.)
+                XCTAssertEqual(
+                    WatchSettingsReader.shared.peekPendingInAppNewConversationBackend(), picked,
+                    "The enqueue consumed the hint the live hop still needs."
+                )
+            }
+        }
+    }
+
+    /// The persisted half: `backendRef` is additive, so an entry without one
+    /// must keep the exact shape it had before the field existed.
+    func testAnEntryWithNoAddressedGatewayKeepsItsOldSerializedShape() throws {
+        let plain = entry(.chat)
+        let blob = try XCTUnwrap(String(data: try JSONEncoder().encode(plain), encoding: .utf8))
+        XCTAssertFalse(
+            blob.contains("backendRef"),
+            "An entry that named no gateway now serializes a key for one. The absent value IS the answer."
+        )
+
+        let legacy = Data("""
+        [{"audioFilePath":"/tmp/legacy.m4a","enqueuedAt":1,"requestID":"legacy-id"}]
+        """.utf8)
+        let old = try JSONDecoder().decode([AppleRelayPendingQueue.Entry].self, from: legacy)
+        XCTAssertNil(old.first?.backendRef,
+                     "A blob written before the field existed must decode as naming no gateway, not fail.")
     }
 
     /// NEGATIVE CONTROL, and the byte-identical half of the rule: a CHAT ask
@@ -616,7 +799,7 @@ final class WatchRelayQueueRetryabilityTests: XCTestCase {
             "An unstamped reply kept no recording; its entry is settled by the WRITE, not by a stamp it never carried."
         )
         XCTAssertEqual(
-            AppleRelayPendingQueue.settlement(for: .chat, workSaved: true, hasWords: false),
+            AppleRelayPendingQueue.settlement(for: .chat, workSaved: false, hasWords: false),
             .converseHop,
             "The destination decides. A chat ask with an empty transcript is still a chat ask."
         )

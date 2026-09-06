@@ -105,3 +105,52 @@ passed vacuously.
    before, reached without writing the file first.
 3. A set that adds up past 512 MB. Expected: `Those files are too big to add at once. Add
    them in smaller batches.`
+
+---
+
+## MAC-R1-P1-A — "Siri and Shortcuts can start Work captures without a deliberate press" · REFUTED
+
+Routed here by the Mac menu-bar fixer because every file it names is this slice's. **No code
+changed.** The finding is `verify/codex-r1-mac-work-destination.md`'s first P1 re-raised
+verbatim — same four file:line anchors, same "smallest fix" wording (stop intent-driven
+navigation at an unarmed surface; reject `.work` in `ConverseIntent`). It was never written
+down as adjudicated, which is why it came back; that is what this section fixes.
+
+**The boundary it tests against is not the boundary this product states.**
+
+- `docs/ai-context/spec.md:428` — "Work is one desk per person… **no code path leads from it
+  to a gateway**." The invariant is about what leaves Work, not about what may put something
+  on it. `spec.md:434` documents the Shortcut lanes as shipped behaviour.
+- `design/watch-work-destination.md:39` states it exactly: "**no implicit or hands-free
+  trigger REROUTES to Work** — the only hands-free door to the desk is the one that names
+  Work in its own phrase," and `:202` records that wording as accepted.
+- Codex's own design-round verifier already reached the same answer —
+  `verify/codex-design-watch-r1.md:55`: "the accurate boundary is **no implicit headless
+  rerouting to Work**, not 'no hands-free trigger can reach Work.'" The round-1 finding's own
+  text agrees, calling these routes ones that "disprove the hard hands-free boundary" — it
+  was an argument for correcting the DOC, and the doc was corrected.
+
+**The phrase is the press.** "Record a note to Work" names the destination and the act.
+`RecordWorkNoteIntent` is `supportedModes = [.foreground]` and owns no recorder: it sets the
+route and reveals the desk. What the person then sees is a sheet with a level meter, elapsed
+time, a Cancel button and `interactiveDismissDisabled` only while busy. A capture nobody can
+see is the thing the boundary is about, and this is not one.
+
+**Making the auto-start conditional on the route would harm the in-app button.**
+`WorkboardCaptureCanvas.swift:538` — the "Add by voice" mic button — sets `showsVoiceCapture
+= true`, the identical state `consumeVoiceCaptureLaunchRoute()` sets at `:222`. The `.task`
+auto-start at `WorkboardVoiceCaptureView.swift:60-66` therefore belongs to the MIC BUTTON
+first: a person who taps a microphone has already pressed the record button. Arming only the
+intent's presentation inverts that — the spoken request would record and the deliberate tap
+would need a second tap.
+
+**`ConverseIntent(destination: .work)` opens no microphone.** Its `audioFile: IntentFile`
+(`:169-174`) is audio the shortcut ALREADY holds; the intent receives a file exactly as
+`AddFilesToWorkIntent` does, and `WorkVoiceCaptureCoordinator.publishRecording` writes it to
+the desk. Rejecting `.work` there deletes a shipped, publicly documented feature — `README.md:55`
+advertises both Shortcuts actions and CarPlay's "one spoken note, hands free" onto Work — to
+enforce a rule the spec does not make.
+
+**What would change the answer:** a founder decision that the desk may only be written by a
+surface the person is looking at when they trigger it. That is a product call, not a defect,
+and it would retire the CarPlay Work row and the `.work` destination along with it.

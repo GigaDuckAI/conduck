@@ -5,23 +5,30 @@ import WatchKit
 
 /// Root Watch surface for Conduck — a LAUNCHPAD (avatar + Ask + Conversations +
 /// the watch-disabled state) and the NAV HOST for the capture-in-
-/// thread model. Both quick-capture triggers — the in-app "Ask"
-/// button and the headless ControlWidget / Action-Button intent — push a
-/// (possibly draft) chat THREAD via `WatchRoute.capture(...)` and auto-start
-/// recording inside it; there is no transient reply card any more (the reply
-/// lands as a bubble in the thread). The two triggers differ ONLY by gateway:
-/// Ask = picker (≥2 gateways) → new thread; headless = default gateway →
-/// continue-or-new per the session-continuation policy.
+/// thread model. The two quick-capture triggers differ by DESTINATION as well
+/// as by gateway.
+///
+/// Ask opens the DESTINATION CHOOSER on every press — every configured gateway
+/// in roster order, then Add to Work — and pushes either a (possibly draft)
+/// chat THREAD via `WatchRoute.capture(...)` or the private
+/// `WatchRoute.workCapture(...)` screen, auto-starting the recorder inside it;
+/// there is no transient reply card any more (a chat reply lands as a bubble in
+/// the thread).
+///
+/// The headless ControlWidget / Action-Button intent resolves the DEFAULT
+/// gateway and continues-or-news per the session-continuation policy. It never
+/// reaches Work: a trigger with no screen in front of the person must not route
+/// a private thought to the desk, nor a desk note to a gateway.
 struct WatchNoteView: View {
     /// Shared singleton so the two background hops (STT + converse) drive one
     /// state machine, and the conversation thread shares one TTS synthesizer.
     @State private var recordingService = WatchRecordingService.shared
     @State private var conversationViewModel = WatchConversationViewModel()
     @State private var path = NavigationPath()
-    /// Drives the gateway picker shown when ≥2 gateways are configured and the
-    /// user taps the in-app "Ask" button (always-new conversation + explicit
-    /// gateway binding). Single-gateway taps push straight into a new thread.
-    @State private var showGatewayChooser = false
+    /// Drives the destination chooser the in-app "Ask" button opens on EVERY
+    /// press: every configured gateway (always-new conversation + explicit
+    /// gateway binding), then Add to Work.
+    @State private var showDestinationChooser = false
     /// Snapshot of configured refs backing the Ask chooser, captured ONCE at
     /// tap time in `beginInAppAsk()`. `configuredBackendRefs()` performs a
     /// per-ref Keychain token read — inlining it as the `confirmationDialog`
@@ -162,6 +169,12 @@ struct WatchNoteView: View {
                     // The master switch outranks the gateway: with Conduck
                     // turned off for Watch, "pick a different AI" is not the
                     // user's next step.
+                    //
+                    // A root error takes the root over, so an Ask chooser left
+                    // open under it would be a live sheet in front of a message
+                    // the person cannot read — every arm below that writes one,
+                    // or replaces the navigation, drops the sheet first.
+                    showDestinationChooser = false
                     // xcstrings
                     recordingService.state = .error(
                         message: String(localized: "Conduck is turned off for Apple Watch. Enable it in iPhone Settings.")
@@ -174,6 +187,7 @@ struct WatchNoteView: View {
                     // ref, the URL or anything token-shaped.
                     WKInterfaceDevice.current().play(.failure)
                     WatchLog.note(.capture, "actionbtn.gatewayRefused", ["state": recordingService.state.phaseKind])
+                    showDestinationChooser = false
                     recordingService.state = .error(message: message)
                 }
                 return
@@ -203,6 +217,7 @@ struct WatchNoteView: View {
                 // a ControlWidget action, so gating the action here (not the
                 // widget) is the correct V1 behavior. The app opens, shows the
                 // disabled message, does nothing else.
+                showDestinationChooser = false
                 // xcstrings
                 recordingService.state = .error(
                     message: String(localized: "Conduck is turned off for Apple Watch. Enable it in iPhone Settings.")
@@ -210,6 +225,9 @@ struct WatchNoteView: View {
 
             case .directStart:
                 clearAskHintForHeadlessEntry()
+                // This press takes the machine, so a chooser opened while it
+                // was idle has nothing left to pick.
+                showDestinationChooser = false
                 // NO-REMOUNT FIX: the resolved target is the thread ALREADY on
                 // screen — re-pushing the identical `.capture(.existing(id))`
                 // route is a SwiftUI no-op (the destination view is reused, so
@@ -232,6 +250,7 @@ struct WatchNoteView: View {
 
             case .pushAndStart:
                 clearAskHintForHeadlessEntry()
+                showDestinationChooser = false
                 path = NavigationPath()
                 // Fresh nonce → a distinct route value every trigger, so the
                 // NavigationStack ALWAYS remounts a fresh thread (its auto-start
@@ -284,6 +303,9 @@ struct WatchNoteView: View {
         if WatchSettingsReader.shared.readRepliesAloud() {
             AutoSpeakMailbox.shared.request(id)
         }
+        // An accepted deep link replaces the root's navigation: the chooser
+        // goes with it rather than reopening over the thread it pushed.
+        showDestinationChooser = false
         path = NavigationPath()
         // BROWSE route — never `.capture(...)`: a notification tap opens the
         // thread to READ the reply; auto-starting the mic here would record
@@ -293,32 +315,34 @@ struct WatchNoteView: View {
         path.append(route)
     }
 
-    /// In-app "Ask" entry point. ALWAYS starts a NEW conversation (option A) and
-    /// lets the user pick its gateway when ≥2 are configured; single / none →
-    /// pushes straight into a new thread bound to the only / default gateway.
-    /// Distinct from the headless triggers, which continue-or-new per the
-    /// session-continuation policy.
+    /// In-app "Ask" entry point. Opens the destination chooser on EVERY press —
+    /// every configured gateway in roster order, then Add to Work — so the desk
+    /// is always offered beside the gateways and no press silently assumes one.
+    /// A gateway row starts a NEW conversation bound to that gateway; the Work
+    /// row starts a private capture that reaches no gateway. Headless triggers
+    /// never come here.
     private func beginInAppAsk() {
         // Refuse before the chooser, so the user is never asked to pick a
-        // gateway for a capture that cannot start.
+        // destination for a capture that cannot start.
         guard !refuseAskIfBusy() else { return }
-        let configured = settingsReader.configuredBackendRefs()
-        if configured.count >= 2 {
-            askGatewayRefs = configured
-            showGatewayChooser = true
-        } else {
-            pushNewCapture(ref: configured.first ?? settingsReader.defaultBackendRef)
-        }
+        askGatewayRefs = settingsReader.configuredBackendRefs()
+        showDestinationChooser = true
     }
 
     /// Push a new draft thread bound to `ref` and start recording into it.
     ///
-    /// THE CHOKE POINT for both in-app Ask paths (single-gateway tap and the
-    /// chooser), so the busy check lives here as well as in `beginInAppAsk` —
-    /// the chooser can be answered seconds later, by which time a headless turn
-    /// may own the machine.
+    /// The choke point for every gateway row, so the busy check lives here as
+    /// well as in `beginInAppAsk` — the chooser can be answered seconds later,
+    /// by which time a headless turn may own the machine.
     private func pushNewCapture(ref: String) {
         guard !refuseAskIfBusy() else { return }
+        // The master switch is read when the launchpad is DRAWN, and this row
+        // can be picked after the phone has turned the wrist off. Refusing here
+        // pushes nothing, starts nothing and writes no hint.
+        guard settingsReader.isWatchEnabled() else {
+            WatchLog.note(.capture, "ask.disabled")
+            return
+        }
         let target = WatchCaptureTarget.new(backendRef: ref)
         let nonce = UUID()
         let route = WatchRoute.capture(target, nonce: nonce)
@@ -334,20 +358,28 @@ struct WatchNoteView: View {
         recordingService.startCapture(boundTo: target, requestID: nonce)
     }
 
-    /// In-app "Save to Work" entry point — a private voice capture that lands on
+    /// In-app "Add to Work" entry point — a private voice capture that lands on
     /// the Work desk and touches no gateway, no conversation and no reply.
     ///
-    /// A SEPARATE BUTTON, NEVER A MODE ON ASK. A sticky destination toggle fails
-    /// in exactly one direction and it is the unrecoverable one: a private
-    /// thought reaching an AI because a switch was still flipped from last time.
-    /// Two buttons cannot leave anything switched on.
+    /// Reached ONLY from the destination chooser's Add to Work row: A PER-PRESS
+    /// PICK, NEVER A MODE. There is no last-destination preference to leave
+    /// switched on, and `startWorkCapture` stamps `.work` and clears the Ask
+    /// hint and every conversation pin — so nothing from an earlier gateway
+    /// press can ride along into the desk.
     ///
     /// Starts at the PUSH SITE for the same reason `pushNewCapture` does — the
-    /// busy check and the start are synchronous with no `await` between them, so
+    /// checks and the start are synchronous with no `await` between them, so
     /// nothing can occupy the machine in the gap. The pushed view starts
-    /// nothing: it reads the service and renders it.
+    /// nothing: it reads the service and renders it — including a capacity
+    /// refusal, which is why the start's return value is deliberately ignored.
     private func beginWorkCapture() {
         guard !refuseAskIfBusy() else { return }
+        // Same re-check as the gateway rows, for the same reason: the chooser
+        // outlives the draw that read the switch.
+        guard settingsReader.isWatchEnabled() else {
+            WatchLog.note(.capture, "ask.disabled")
+            return
+        }
         let nonce = UUID()
         let route = WatchRoute.workCapture(nonce: nonce)
         WatchLog.info(.nav, "nav.push", ["route": route.logLabel])
@@ -370,17 +402,25 @@ struct WatchNoteView: View {
         return true
     }
 
-    /// Display name for a ref string in the Ask chooser. Built-in →
-    /// `RemoteAgentBackend.shortDisplayName`; custom → its roster name, truncated
-    /// (via `RemoteAgentRefMetadata`).
+    /// Display name for a ref string in the Ask chooser — `WatchGatewayLabel`'s
+    /// short form, disambiguated when another gateway shortens to the same
+    /// string.
     ///
-    /// The SHORT form: this is a confirmation-dialog button on a watch face, and
-    /// a 40-character custom name is what the save cap allows. A row the user
-    /// cannot read to the end is a row they cannot tell from the one above it,
-    /// which is the entire job of this chooser.
+    /// A SHORT form because this is a confirmation-dialog button on a watch
+    /// face and a 40-character custom name is what the save cap allows; a
+    /// DISAMBIGUATED one because a row the user cannot tell from the one above
+    /// it defeats the entire job of this chooser.
     private func displayName(forRef ref: String) -> String {
         guard let parsed = RemoteAgentRef(rawString: ref) else { return ref }
-        return RemoteAgentRefMetadata.shortDisplayName(for: parsed, customs: settingsReader.customGateways)
+        return WatchGatewayLabel.visible(for: parsed, customs: settingsReader.customGateways)
+    }
+
+    /// The same row's name in full, for VoiceOver. A cut label is a reading
+    /// problem on a watch face; spoken aloud there is no face to run out of, so
+    /// the name is never cut for the ear.
+    private func spokenName(forRef ref: String) -> String {
+        guard let parsed = RemoteAgentRef(rawString: ref) else { return ref }
+        return WatchGatewayLabel.spoken(for: parsed, customs: settingsReader.customGateways)
     }
 
     // MARK: - Launchpad
@@ -438,6 +478,16 @@ struct WatchNoteView: View {
                         Group {
                             if recordingService.isCapturing {
                                 Text("Recording…")  // xcstrings
+                            } else if recordingService.captureDestination == .work {
+                                // The Work screen's back button is enabled the
+                                // moment the mic is off, so the launchpad is
+                                // reachable mid-save. Calling a private save
+                                // "answering your last question" is the one
+                                // sentence this lane must never show.
+                                Text(String(localized: LocalizedStringResource(
+                                    "watch.work.capture.saving",
+                                    defaultValue: "Saving to Work…"
+                                )))
                             } else {
                                 Text("Still answering your last question.")  // xcstrings
                             }
@@ -447,33 +497,6 @@ struct WatchNoteView: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 6)
                     }
-
-                    // The desk's own button, deliberately NOT a mode on Ask
-                    // above it (see `beginWorkCapture`). It sits in the
-                    // Conversations style family rather than Ask's prominent
-                    // one: Ask is the primary thing this watch does, and a
-                    // second prominent button would make the launchpad a
-                    // choice where today it is an action.
-                    //
-                    // Gated by the same master switch as Ask: with Conduck
-                    // turned off for Apple Watch the whole surface is off, and
-                    // a Work capture still needs the iPhone leg the switch
-                    // governs. Busy rule is Ask's, verbatim — one machine, one
-                    // live turn.
-                    Button {
-                        beginWorkCapture()
-                    } label: {
-                        Label(
-                            String(localized: LocalizedStringResource(
-                                "watch.work.launchpad.save",
-                                defaultValue: "Save to Work"
-                            )),
-                            systemImage: "tray.and.arrow.down.fill"
-                        )
-                        .font(.caption)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(recordingService.isBusy && path.isEmpty)
                 } else {
                     Text("Turned off for Apple Watch. Enable it in iPhone Settings.")  // xcstrings
                         .font(.caption2)
@@ -493,19 +516,50 @@ struct WatchNoteView: View {
         // `.disabled(isBusy)`, and `isEnabled` propagates through the
         // environment into presented content — so an Action-Button press while
         // this chooser was open (accepted, because the machine was idle when it
-        // opened) would leave every gateway row dead with only Cancel alive.
-        // `pushNewCapture` still refuses a busy pick, which is the authoritative
-        // check either way.
+        // opened) would leave every destination row dead with only Cancel
+        // alive. `pushNewCapture` and `beginWorkCapture` each refuse a busy
+        // pick, which is the authoritative check either way.
         .confirmationDialog(
-            "Ask which gateway?",  // xcstrings
-            isPresented: $showGatewayChooser,
+            String(localized: LocalizedStringResource(
+                "watch.ask.destination.title",
+                defaultValue: "Where to?"
+            )),
+            isPresented: $showDestinationChooser,
             titleVisibility: .visible
         ) {
-            ForEach(askGatewayRefs, id: \.self) { ref in
-                Button(displayName(forRef: ref)) {
-                    pushNewCapture(ref: ref)
+            ForEach(WatchAskDestinationRows.rows(configured: askGatewayRefs), id: \.self) { row in
+                switch row {
+                case .gateway(let ref):
+                    Button(displayName(forRef: ref)) {
+                        pushNewCapture(ref: ref)
+                    }
+                    // The visible label is already distinct from every other
+                    // row's; this hands the ear the name in full on top of
+                    // that, so a long custom name is not chosen by its first
+                    // fifteen characters.
+                    .accessibilityLabel(spokenName(forRef: ref))
+                case .work:
+                    Button(String(localized: LocalizedStringResource(
+                        "watch.ask.destination.work",
+                        defaultValue: "Add to Work"
+                    ))) {
+                        beginWorkCapture()
+                    }
                 }
             }
+        } message: {
+            if WatchAskDestinationRows.showsNoAILine(configured: askGatewayRefs) {
+                Text(String(localized: LocalizedStringResource(
+                    "watch.ask.destination.noAI",
+                    defaultValue: "No personal AI available."
+                )))
+            }
+        }
+        // The switch is read at DRAW time, and this sheet outlives the draw:
+        // a phone that turns the wrist off while it is open must not leave a
+        // live chooser in front of a surface that is now off.
+        .onChange(of: settingsReader.isWatchEnabled()) { _, enabled in
+            if !enabled { showDestinationChooser = false }
         }
     }
 
@@ -574,7 +628,7 @@ enum WatchRoute: Hashable {
     /// distinct route cases holding distinct payloads, so no equality or hash
     /// collapse can route one into the other's destination. The `nonce` plays
     /// the same role it does there: a unique route identity per tap, so a
-    /// second "Save to Work" always remounts a fresh screen instead of
+    /// second Add to Work pick always remounts a fresh screen instead of
     /// re-presenting the previous capture's terminal line.
     case workCapture(nonce: UUID)
 
@@ -588,5 +642,157 @@ enum WatchRoute: Hashable {
         case .attachmentText: return "attachmentText"
         case .workCapture: return "workCapture"
         }
+    }
+}
+
+/// The rows the Ask destination chooser offers, as a pure value so the truth
+/// table is testable without a watch face: every configured gateway in roster
+/// order, then Add to Work — always present, always last. Ask is the AI
+/// button, so the AI rows lead; Work last is a stable RELATIONSHIP to them
+/// rather than a fixed position.
+nonisolated enum WatchAskDestinationRows {
+    enum Row: Hashable {
+        case gateway(String)
+        case work
+    }
+
+    static func rows(configured: [String]) -> [Row] {
+        configured.map(Row.gateway) + [.work]
+    }
+
+    /// An empty roster is explained in ONE line rather than hidden behind a
+    /// thread that cannot send. "Available", not "set up": an empty roster is
+    /// also what a locked keychain or an un-hydrated wrist reads (I3), and the
+    /// wrist is a working private recorder either way.
+    static func showsNoAILine(configured: [String]) -> Bool {
+        configured.isEmpty
+    }
+}
+
+/// The gateway name the WRIST shows where the person is picking a destination
+/// or checking the one a live capture is bound to.
+///
+/// `RemoteAgentRefMetadata.shortDisplayName` is a HEAD cut at
+/// `shortDisplayNameLimit`, and it is the right policy for the surfaces its
+/// budget was derived from (the in-thread error banner, a notification title,
+/// a sentence read aloud at the wheel). It is the wrong ANSWER for a choice:
+/// two customs whose names agree over their first 15 characters ("Frankfurt
+/// production alpha" / "Frankfurt production beta") render one identical
+/// label, so the chooser stops being a choice and the recording caption names
+/// a destination the person cannot check.
+///
+/// The shared policy is left exactly as it is — every other surface keeps it.
+/// The fix is local and small: when a name shortens to the same string as
+/// another gateway's, show it from where the names DIVERGE instead, behind a
+/// leading ellipsis ("…alpha" / "…beta"). Names can only collide this way when
+/// their heads are identical, so the head is the half that carries no
+/// information for this decision. The leading ellipsis costs one character
+/// beyond the shared budget, which neither of these two surfaces spends on the
+/// 18-character sentence frame the budget was derived for.
+///
+/// VoiceOver is given `RemoteAgentRefMetadata.displayName` — the full,
+/// untruncated name — at both call sites, so the SPOKEN label is never the
+/// ambiguous one even where the visible label had to be cut.
+///
+/// Main-actor isolated (unlike the row builder beside it, which is pure): it
+/// reads the roster through `RemoteAgentRefMetadata`, which is.
+enum WatchGatewayLabel {
+
+    /// The label to draw: the WHOLE roster resolved together, and this
+    /// gateway's answer handed back.
+    ///
+    /// Resolved as a set, never one name at a time, and the set is the whole
+    /// roster rather than one colliding group. A label computed against only
+    /// the names it collides with can land on a string another row ALREADY
+    /// shows — a custom literally named "…alpha" beside a "Frankfurt production
+    /// alpha" that shortens to exactly that — and two rows that read alike are
+    /// one row as far as the person tapping is concerned.
+    static func visible(for ref: RemoteAgentRef, customs: [CustomGateway]) -> String {
+        let short = RemoteAgentRefMetadata.shortDisplayName(for: ref, customs: customs)
+        // A built-in is not on the custom roster: its name is compiled in,
+        // short, and nothing here may reshape it.
+        guard let index = customs.firstIndex(where: { $0.ref == ref }) else { return short }
+        return rosterLabels(customs: customs)[index]
+    }
+
+    /// One label per gateway, in ROSTER order, unique AS A SET — so every row
+    /// resolves against the same list in the same order and the labels are
+    /// stable across rows and redraws.
+    ///
+    /// Two passes, and both are load-bearing.
+    ///
+    /// **Divergence.** Each name the shortener CUT opens at the EARLIEST
+    /// character that tells it from any name it collides with, so the label
+    /// keeps every character that carries a difference rather than only the
+    /// last one. "Frankfurt production alpha one" diverges from "…alpha two" at
+    /// "one" but from "Frankfurt production one" at "alpha", and opening at
+    /// "alpha" is exactly what stops it reading "…one" like that third name
+    /// does.
+    ///
+    /// **Uniqueness, over the COMPLETE roster.** The untouched short forms are
+    /// checked with the disambiguated ones, because a name the shortener never
+    /// cut can still read exactly like a label the first pass produced, and two
+    /// unnamed customs can share one monogram fallback. Residual duplicates —
+    /// gateways named identically, divergent tails that truncate to the same
+    /// string, a name that is a strict prefix of the ones it collides with —
+    /// take a bounded ordinal by roster position: the only honest answer left
+    /// is which of them this row is. Bounded by construction, since each
+    /// ordinal is tried at most once per row.
+    private static func rosterLabels(customs: [CustomGateway]) -> [String] {
+        let refs = customs.map(\.ref)
+        let names = refs.map { spoken(for: $0, customs: customs) }
+        var labels = refs.indices.map { index -> String in
+            let short = RemoteAgentRefMetadata.shortDisplayName(for: refs[index], customs: customs)
+            // Only a name the shortener actually CUT can collide by cutting. A
+            // short custom name and the monogram/generic fallback an unnamed
+            // custom resolves to are each their own answer already — the
+            // uniqueness pass below is what still holds them to being
+            // DISTINGUISHABLE answers.
+            guard short != names[index],
+                  short == RemoteAgentRefMetadata.truncatedToShortLimit(names[index])
+            else { return short }
+            let colliders = names.indices.filter {
+                $0 != index && RemoteAgentRefMetadata.truncatedToShortLimit(names[$0]) == short
+            }
+            guard !colliders.isEmpty else { return short }
+            let divergence = colliders.map { commonPrefixCount(names[index], names[$0]) }.min() ?? 0
+            let tail = String(names[index].dropFirst(divergence))
+            // A name that is a strict prefix of every name it collides with has
+            // no divergent tail of its own; the shared form is still the honest
+            // answer for it, and the ordinal below tells it from the rest.
+            guard !tail.isEmpty else { return short }
+            return "…" + RemoteAgentRefMetadata.truncatedToShortLimit(tail)
+        }
+        var taken: Set<String> = []
+        for index in labels.indices {
+            let base = labels[index]
+            var label = base
+            var ordinal = 2
+            while taken.contains(label) {
+                label = numbered(base, ordinal)
+                ordinal += 1
+            }
+            taken.insert(label)
+            labels[index] = label
+        }
+        return labels
+    }
+
+    /// `label` with an ordinal appended, cut so the result still fits the shared
+    /// budget plus the one leading ellipsis a disambiguated label is allowed.
+    private static func numbered(_ label: String, _ ordinal: Int) -> String {
+        let suffix = " \(ordinal)"
+        let budget = RemoteAgentRefMetadata.shortDisplayNameLimit + 1 - suffix.count
+        guard label.count > budget else { return label + suffix }
+        return String(label.prefix(budget)) + suffix
+    }
+
+    /// The full, untruncated name — what VoiceOver reads.
+    static func spoken(for ref: RemoteAgentRef, customs: [CustomGateway]) -> String {
+        RemoteAgentRefMetadata.displayName(for: ref, customs: customs)
+    }
+
+    private static func commonPrefixCount(_ lhs: String, _ rhs: String) -> Int {
+        zip(lhs, rhs).prefix { $0 == $1 }.count
     }
 }

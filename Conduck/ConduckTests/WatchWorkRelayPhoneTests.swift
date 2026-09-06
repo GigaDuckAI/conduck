@@ -253,9 +253,11 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
             requestID: requestID, audio: Self.recordingBytes, store: store
         )
 
-        await AppleSpeechRelayCoordinator.attachRelayedWorkTranscript(
+        let verdict = await AppleSpeechRelayCoordinator.attachRelayedWorkTranscript(
             "remember the oat milk", toCard: cardID, store: store
         )
+
+        XCTAssertEqual(verdict, .attached, "The words landed, so the reply may carry the stamp.")
 
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
@@ -272,20 +274,56 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
         XCTAssertEqual(payload, Self.recordingBytes)
     }
 
-    func testACardDeletedMidTranscriptionDoesNotFailTheWrist() async throws {
-        // A missing card after a successful publication is a BUG, not a state
-        // this lane is entitled to fail on: the transcript is already in hand
-        // and the wrist is owed it either way. The answer is logged and the
-        // reply still ships.
+    func testACardGoneBeforeItsTranscriptIsRetryableRatherThanAcknowledged() async throws {
+        // The desk holds NOTHING for this capture, and the wrist deletes its
+        // only copy of the clip the moment it reads the stamp. So a missing card
+        // must travel back as the retryable verdict the wrist keeps its entry
+        // on — a re-fire republishes the recording and tries the words again.
         let store = stores.make()
-        await AppleSpeechRelayCoordinator.attachRelayedWorkTranscript(
+
+        let verdict = await AppleSpeechRelayCoordinator.attachRelayedWorkTranscript(
             "nothing to land on", toCard: UUID(), store: store
+        )
+
+        XCTAssertEqual(
+            verdict, .retryable,
+            """
+            Acknowledging this would hand the wrist a stamp for a recording nowhere on this             phone, and the wrist would delete the clip on reading it.
+            """
+        )
+        XCTAssertTrue(
+            AppleSpeechRelayCoordinator.workPublicationFailure.isRetryable,
+            "control: the verdict this maps onto is the one the wrist leaves queued"
         )
         let desk = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         XCTAssertTrue(
             desk?.materials.isEmpty ?? true,
             "the words are NOT published beside a card this lane never had — that is the recovery lane's decision, not this one's"
         )
+    }
+
+    /// The other half of the same verdict: an id a card of ANOTHER kind already
+    /// holds is reproduced identically by every re-fire, so holding the clip for
+    /// it costs the person an eviction-exempt queue slot for ever and wins
+    /// nothing. That one settles.
+    func testAnIdHeldByAnotherKindOfCardSettlesInsteadOfLoopingForever() async throws {
+        let store = stores.make()
+        let captureID = UUID()
+        _ = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                id: captureID,
+                kind: .note,
+                title: "already here",
+                textContent: "already here",
+                storageMode: .metadataOnly
+            )
+        )
+
+        let verdict = await AppleSpeechRelayCoordinator.attachRelayedWorkTranscript(
+            "the wrist's words", toCard: captureID, store: store
+        )
+
+        XCTAssertEqual(verdict, .settledWithoutWords)
     }
 
     // MARK: - The reply the wrist reads
@@ -457,14 +495,123 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
                 """
             )
         }
-        XCTAssertTrue(
-            code.contains("workCardID != nil, Self.acknowledgesRecording(after:"),
+        for arm in ["appError", "fallback"] {
+            XCTAssertTrue(
+                code.contains("if let workCardID, Self.acknowledgesRecording(after: \(arm))"),
+                """
+                The `\(arm)` arm no longer reads BOTH facts. Publication alone is not enough (a \
+                retryable verdict must keep travelling back as an error so the words can still \
+                arrive), and the verdict alone is not enough (an unpublished capture has nothing \
+                to acknowledge).
+                """
+            )
+        }
+
+        // AND each arm PARKS the words before it ships the one-way door. The
+        // acknowledgement is cached and the wrist deletes its clip on reading
+        // it, so "Add the words on your iPhone" has to name something that
+        // exists on this side of it — from BOTH arms, not just the typed one.
+        let preserves = Self.occurrences(of: "await Self.preserveRelayedWorkWords(", in: tail)
+        XCTAssertEqual(
+            preserves.count, 2,
             """
-            The branch no longer reads BOTH facts. Publication alone is not enough (a retryable \
-            verdict must keep travelling back as an error so the words can still arrive), and \
-            the verdict alone is not enough (an unpublished capture has nothing to acknowledge).
+            An acknowledgement arm ships the wrist's "Add the words on your iPhone" without \
+            parking anything for the phone's retry card to find, so the sentence points at \
+            nothing and the clip it released is gone.
             """
         )
+        for (preserve, acknowledgement) in zip(preserves, acknowledgements) {
+            XCTAssertLessThan(
+                preserve.lowerBound, acknowledgement.lowerBound,
+                """
+                An arm ships the acknowledgement BEFORE parking the record, so a wrist that reads \
+                it first can delete its clip against a preservation that never ran.
+                """
+            )
+        }
+    }
+
+    /// The helper's verdict is only half of it: the SWITCH that ships it is
+    /// where a one-line edit turns a refusal into a success.
+    ///
+    /// `attachRelayedWorkTranscript` answering `.retryable` while its caller's
+    /// arm is a bare `break` falls through to the stamped success reply — the
+    /// wrist reads the stamp, consumes its entry and deletes the only remaining
+    /// copy of the clip, for a write that was refused. The helper's own tests
+    /// cannot see that, and neither can the source guards that count catch arms.
+    /// So both non-attached arms are pinned as COMPLETE bodies, and the
+    /// `.attached` arm is pinned as the only one that may fall through.
+    func testThePhaseTwoSwitchShipsEachVerdictItIsGiven() throws {
+        let source = try String(
+            contentsOf: Self.projectContainerURL()
+                .appendingPathComponent("Conduck/Services/AppleSpeechRelayCoordinator.swift"),
+            encoding: .utf8
+        )
+        let code = Self.callText(Self.strippingComments(source))
+
+        XCTAssertTrue(
+            code.contains(Self.callText("""
+            switch await Self.attachRelayedWorkTranscript(text, toCard: workCardID) {
+            case .attached:
+            break
+            """)),
+            "Only a written transcript may fall through to the stamped success reply."
+        )
+        XCTAssertTrue(
+            code.contains(Self.callText("""
+            case .settledWithoutWords:
+            shipWorkRecordingAcknowledgement(
+                requestID: requestID,
+                preferMessage: replyPrefersMessage
+            )
+            """)),
+            "The settled-without-words arm no longer ships the wordless acknowledgement, so a "
+            + "verdict no re-fire can improve on leaves the wrist holding its clip for ever."
+        )
+        XCTAssertTrue(
+            code.contains(Self.callText("""
+            case .retryable:
+            let failure = Self.workPublicationFailure
+            sendReply(
+                requestID: requestID,
+                errorCode: failure.errorCode,
+                preferMessage: replyPrefersMessage
+            )
+            """)),
+            """
+            The refusal arm no longer ships the retryable code. An arm that falls through instead \
+            hands the wrist the durability stamp for a write that did not happen, and the wrist \
+            deletes its clip on reading it.
+            """
+        )
+        for arm in [".settledWithoutWords:", ".retryable:"] {
+            let start = try XCTUnwrap(
+                code.range(of: "case \(arm)")?.upperBound,
+                "the `\(arm)` arm has been renamed; re-anchor this guard"
+            )
+            let next = try XCTUnwrap(
+                code.range(of: "case ", range: start..<code.endIndex)?.lowerBound
+                    ?? code.range(of: "} }", range: start..<code.endIndex)?.lowerBound,
+                "the switch's shape has changed; re-anchor this guard"
+            )
+            XCTAssertTrue(
+                code[start..<next].contains("return"),
+                """
+                The `\(arm)` arm no longer ENDS the request, so it falls into the stamped success \
+                reply below it — the exact shape a wrist reads as "saved" for a refusal.
+                """
+            )
+        }
+    }
+
+    /// Call text with every run of whitespace collapsed to one space and the
+    /// space after an opening parenthesis removed, so a body broken across lines
+    /// matches the same needle as one written on fewer.
+    private static func callText(_ source: String) -> String {
+        source
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .replacingOccurrences(of: "( ", with: "(")
     }
 
     // MARK: - Isolation: nothing on this branch reaches a gateway

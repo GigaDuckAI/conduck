@@ -73,12 +73,7 @@ enum QuitGuard {
 
         /// The DESTRUCTIVE choice. Rendered first and with no key equivalent so
         /// a lost answer is unreachable by muscle memory.
-        var quitButtonTitle: String {
-            String(
-                localized: "quitGuard.button.quit",
-                defaultValue: "Quit Anyway"
-            )  // xcstrings: session-continuation
-        }
+        var quitButtonTitle: String { QuitGuard.quitAnywayTitle }
 
         /// The safe choice, and the one Esc lands on.
         var keepWaitingButtonTitle: String {
@@ -87,6 +82,90 @@ enum QuitGuard {
                 defaultValue: "Keep Waiting"
             )  // xcstrings: session-continuation
         }
+    }
+
+    /// The DESTRUCTIVE choice, shared by both prompts. Rendered first and with
+    /// no key equivalent so a loss is unreachable by muscle memory. One
+    /// definition because it is one sentence: the alert that follows it differs,
+    /// what the button does does not.
+    static var quitAnywayTitle: String {
+        String(
+            localized: "quitGuard.button.quit",
+            defaultValue: "Quit Anyway"
+        )  // xcstrings: session-continuation
+    }
+
+    /// The choice a capture with nowhere durable to be puts to the person.
+    ///
+    /// A different loss from the one above, with a different remedy. No gateway
+    /// is involved and nothing is in flight, so waiting cannot help: the desk
+    /// write and the retry queue have BOTH already refused these bytes, and the
+    /// recording exists only in this process's memory. Quitting deletes it. The
+    /// alternative is the Try Again its own capture surface is already showing —
+    /// which is why this is a question and not a silent refusal: a ⌘Q that
+    /// simply did nothing would leave the person with no way out and no idea
+    /// why.
+    struct UnsavedCapturePrompt: Equatable, Sendable {
+        /// Captures whose only copy is in memory. Always ≥ 1 here.
+        let count: Int
+
+        /// CAPTURE-neutral, because the count is. A capture is a recording, a
+        /// screenshot, or both, and the artifact left with nowhere durable to
+        /// be is whichever one the desk and the queue both refused — often the
+        /// picture, while the recording is already playable on the desk. Naming
+        /// the recording there offered to keep something that was never at
+        /// risk and said nothing about what actually was.
+        var messageText: String {
+            count == 1
+                ? String(
+                    localized: "quitGuard.unsaved.single.title.v2",
+                    defaultValue: "A capture hasn’t reached your desk"
+                )  // xcstrings: work-capture
+                : String(
+                    localized: "quitGuard.unsaved.multiple.title.v2",
+                    defaultValue: "\(count) captures haven’t reached your desk"
+                )  // xcstrings: work-capture
+        }
+
+        /// Names the loss and the way out in one line. It promises nothing about
+        /// recovery after the quit, because there is none — the bytes are in
+        /// memory and nowhere else.
+        var informativeText: String {
+            String(
+                localized: "quitGuard.unsaved.body.v2",
+                defaultValue: "Quitting now loses what was captured. Try Again is still on the capture."
+            )  // xcstrings: work-capture
+        }
+
+        var quitButtonTitle: String { QuitGuard.quitAnywayTitle }
+
+        /// The safe choice, and the one Esc lands on.
+        var keepButtonTitle: String {
+            String(
+                localized: "quitGuard.unsaved.button.keep.v2",
+                defaultValue: "Keep the Capture"
+            )  // xcstrings: work-capture
+        }
+    }
+
+    enum UnsavedCaptureVerdict: Equatable, Sendable {
+        case quitNow
+        case ask(UnsavedCapturePrompt)
+    }
+
+    /// - Parameter unsavedCount: `InAppAudioRecorder.unsavedWorkCaptureCount` —
+    ///   captures whose durable homes have all been tried and refused. NOT the
+    ///   in-flight publication count, which is answered by waiting instead.
+    /// - Parameter powerOffInProgress: wins unconditionally, exactly as above —
+    ///   nobody is present to answer, and a modal panel would hold the power-off
+    ///   until macOS times the app out.
+    static func unsavedCaptureVerdict(
+        unsavedCount: Int,
+        powerOffInProgress: Bool
+    ) -> UnsavedCaptureVerdict {
+        guard !powerOffInProgress else { return .quitNow }
+        guard unsavedCount > 0 else { return .quitNow }
+        return .ask(UnsavedCapturePrompt(count: unsavedCount))
     }
 
     enum Verdict: Equatable, Sendable {
