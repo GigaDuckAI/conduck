@@ -163,7 +163,13 @@
     "Add %@ to your Watch" : {
 
     },
+    "Add ${files} to Work" : {
+
+    },
     "Add ${thought} to Work" : {
+
+    },
+    "Add Files to Work" : {
 
     },
     "Add Shortcut" : {
@@ -6775,28 +6781,6 @@
         }
       }
     },
-    "intent.workVoiceNote.description" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Work and start recording a voice note. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation."
-          }
-        }
-      }
-    },
-    "intent.workVoiceNote.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Record a Note to Work"
-          }
-        }
-      }
-    },
     "intent.workboardCapture.confirmation" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -6859,6 +6843,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Add to Work"
+          }
+        }
+      }
+    },
+    "intent.workVoiceNote.description" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Work and start recording a voice note. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation."
+          }
+        }
+      }
+    },
+    "intent.workVoiceNote.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Record a Note to Work"
           }
         }
       }
@@ -8007,6 +8013,9 @@
           }
         }
       }
+    },
+    "Record a Note to Work" : {
+
     },
     "Recording" : {
       "extractionState" : "manual",
