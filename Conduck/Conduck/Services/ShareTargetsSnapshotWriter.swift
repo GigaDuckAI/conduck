@@ -9,9 +9,9 @@
 // value (display name, badge color "#RRGGBB", monogram) is RESOLVED here and
 // frozen into the flat `ShareTargetsSnapshot` contract.
 //
-// WORK TARGETS: none. Work is ONE desk, so the appex's Add-to-Work mode offers
-// no destination and `recentWorkItems` is published EMPTY. The field itself
-// stays in the contract because its three source copies must stay byte-identical.
+// WORK TARGETS: none. Work is ONE desk, so the appex's Add to Work row names no
+// card, and `recentWorkItems` is published EMPTY. The field itself stays in the
+// contract because its three source copies must stay byte-identical.
 //
 // WRITE LOCATION (load-bearing): `<AppGroup>/Application Support/share-targets.json`
 // — the appex reads the SAME literal path. The write is ATOMIC (sibling temp +

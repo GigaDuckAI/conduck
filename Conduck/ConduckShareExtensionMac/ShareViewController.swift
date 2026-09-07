@@ -183,11 +183,14 @@ final class ShareViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        // Load the tiny "Send to" snapshot the main app published (gateways +
-        // recent conversations). Missing / malformed → nil, and `ShareView` shows
-        // the single legacy fallback row (the share never dead-ends). The picker is
-        // always the surface; the manifest's `shouldAutosend` is stamped `true` at
-        // commit time so the picked target always sends (share-and-go).
+        // Load the tiny destination snapshot the main app published (gateways +
+        // recent conversations). Missing / malformed → nil, and `ShareView` keeps
+        // the legacy "New conversation" row (the share never dead-ends). The view
+        // offers ONE destination list — every gateway, the recent chats, then Add
+        // to Work as the last row — and pre-selects nothing: `onSend` is reached
+        // only by a gateway pick, `onAddToWorkboard` only by the Work row. The
+        // manifest's `shouldAutosend` is stamped `true` at commit time, so a
+        // gateway pick still sends (share-and-go).
         let rootView = ShareView(
             attachmentCount: extractedAttachmentCount(),
             attachmentLimitExceeded: rawProviders.count > Self.maxAttachments,
@@ -620,9 +623,9 @@ final class ShareViewController: NSViewController {
     }
 
     /// Publish the shared material to the separate inert Work queue. Unlike
-    /// `commit` it takes no target at all — Work is ONE desk, so the envelope is
-    /// always targetless and the main-app drainer resolves the desk. With no
-    /// gateway or Chat parameter, this API cannot dispatch.
+    /// `commit` it takes no target at all — Work is ONE desk, so the pick names no
+    /// card, the envelope is always targetless and the main-app drainer resolves
+    /// the desk. With no gateway or Chat parameter, this API cannot dispatch.
     private func commitToWork(
         note: String,
         includePageText: Bool

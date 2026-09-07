@@ -4,9 +4,9 @@
 // ShareTargetFilter.swift  (ConduckShareExtension appex)
 //
 // VERBATIM MIRROR of `ConduckShareExtensionMac/ShareTargetFilter.swift` below the
-// header comment — pure, view-free search/threshold logic for the iOS Share
-// Extension picker (the iOS "Send to" redesign reuses the same matching rules as
-// macOS). The appex carries no test target of its own; the macOS copy is the one
+// header comment — pure, view-free search, threshold and destination-list rules
+// for the iOS Share Extension's one destination list (the iOS sheet reuses the
+// same rules as macOS). The appex carries no test target of its own; the macOS copy is the one
 // compiled into the main-app `ConduckTests` bundle, where `@testable import
 // Conduck` resolves `ShareTargetsSnapshot.Gateway`/`.RecentConversation` to the
 // byte-identical main-app mirror — so the existing `ShareTargetFilterTests` covers
@@ -23,10 +23,10 @@
 
 import Foundation
 
-/// Search + visibility rules for the "Send to" picker. Stateless namespace —
-/// every entry point is a pure function of its inputs (no stored picker state),
-/// so `ShareView` stays a thin renderer and the matching logic gets covered by
-/// `ShareTargetFilterTests` rather than UI QA.
+/// Search + visibility rules for the share sheet's destination list. Stateless
+/// namespace — every entry point is a pure function of its inputs (no stored
+/// picker state), so `ShareView` stays a thin renderer and the rules get covered
+/// by `ShareTargetFilterTests` rather than UI QA.
 enum ShareTargetFilter {
 
     /// The picker only grows a search field once the combined target count
@@ -34,6 +34,22 @@ enum ShareTargetFilter {
     /// so a field would just be clutter. Boundary: 8 → false, 9 → true.
     static func shouldShowSearch(gatewayCount: Int, recentCount: Int) -> Bool {
         gatewayCount + recentCount > 8
+    }
+
+    /// The legacy "New conversation" row (whose manifest refs are both nil, so
+    /// the drainer routes to the default gateway) is offered only when NO
+    /// snapshot decoded: the roster is unknown, not empty, and the app may hold
+    /// a gateway the extension cannot see.
+    static func showsLegacyNewConversationRow(snapshotDecoded: Bool) -> Bool {
+        !snapshotDecoded
+    }
+
+    /// A decoded snapshot with no configured gateway and no recent chat is told
+    /// in one line rather than offered a send that the drainer would refuse.
+    /// "Available", not "set up": an empty roster is also what a stale snapshot
+    /// reads. The Add to Work row is rendered outside this rule and stays.
+    static func showsNoAILine(snapshotDecoded: Bool, gatewayCount: Int, recentCount: Int) -> Bool {
+        snapshotDecoded && gatewayCount == 0 && recentCount == 0
     }
 
     /// Filter the NEW-conversation gateway rows by the search query. An empty /

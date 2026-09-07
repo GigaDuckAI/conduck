@@ -119,11 +119,14 @@ final class ShareViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        // Load the tiny "Send to" snapshot the main app published (gateways +
-        // recent conversations). Missing / malformed → nil, and `ShareView` shows
-        // the single legacy fallback row (the share never dead-ends). The picker is
-        // always the surface; the manifest's `shouldAutosend` is stamped `true` at
-        // commit time so the picked target always sends (share-and-go).
+        // Load the tiny destination snapshot the main app published (gateways +
+        // recent conversations). Missing / malformed → nil, and `ShareView` keeps
+        // the legacy "New conversation" row (the share never dead-ends). The view
+        // offers ONE destination list — every gateway, the recent chats, then Add
+        // to Work as the last row — and pre-selects nothing: `onSend` is reached
+        // only by a gateway pick, `onAddToWorkboard` only by the Work row. The
+        // manifest's `shouldAutosend` is stamped `true` at commit time, so a
+        // gateway pick still sends (share-and-go).
         let rootView = ShareView(
             attachmentCount: extractedAttachmentCount(),
             previewItems: buildPreviewItems(),
@@ -440,9 +443,9 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    /// Publish the same shared bytes into the separate Work capture inbox. It names
-    /// no destination — Work is one desk, which the drainer resolves — and it has no
-    /// conversation/gateway route, so it cannot dispatch: it writes an inert
+    /// Publish the same shared bytes into the separate Work capture inbox. Work is
+    /// one desk, so the pick names no card — the drainer resolves it — and there is
+    /// no conversation/gateway route here, so it cannot dispatch: it writes an inert
     /// envelope, posts a wake hint, and exits.
     private func commitToWork(
         note: String,

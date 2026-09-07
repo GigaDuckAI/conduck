@@ -300,7 +300,9 @@ final class WorkCaptureInboxTests: XCTestCase {
         let expectedWorkKeys = [
             "share.addToWork",
             "share.addToWork.progress",
-            "share.work.desk.detail",
+            "share.section.work",
+            "share.destination.choose",
+            "share.destination.noAI",
             "share.work.error.empty",
             "share.work.error.title",
             "share.work.error.tooLarge",
@@ -308,15 +310,25 @@ final class WorkCaptureInboxTests: XCTestCase {
             "share.work.error.invalidContent",
             "share.work.error.unsupportedItem",
         ]
-        // Work is ONE desk: the destination picker has no subject, so neither
-        // appex may carry a target list, a "New Work" row or an untitled-card
-        // placeholder. Guarded positively so a revert shows up here first.
+        // Work is ONE desk: the Add to Work row names no card, so neither appex
+        // may carry a Work target list, a "New Work" row or an untitled-card
+        // placeholder. And Work is a DESTINATION ROW, not a mode: the segmented
+        // Work/Send picker, the panel that replaced the list in Work mode, and
+        // the two mode-dependent titles are gone with it. Guarded positively so
+        // a revert shows up here first.
         let retiredWorkKeys = [
             "share.work.new",
             "share.work.new.detail",
             "share.work.section.destination",
             "share.work.section.recent",
             "share.work.untitled",
+            "share.work.desk.detail",
+            "share.mode.work",
+            "share.mode.send",
+            "share.mode.accessibility",
+            "share.work.title",
+            "share.title",
+            "share.send",
         ]
         for relativePath in [
             "ConduckShareExtension/ShareView.swift",
@@ -374,6 +386,337 @@ final class WorkCaptureInboxTests: XCTestCase {
             }
             XCTAssertFalse(catalog.contains("\"share.addToWorkboard\" :"), relativePath)
             XCTAssertFalse(catalog.contains("\"share.workboard."), relativePath)
+        }
+
+        // The chooser's title is iOS-ONLY. The iOS sheet asks the wrist's own
+        // question over the one destination list; the macOS panel has no title
+        // bar at all, so the key must exist on exactly one side — a Mac copy that
+        // grew it would be carrying a string nothing can render.
+        let iosShareView = try String(
+            contentsOf: projectDirectory.appendingPathComponent("ConduckShareExtension/ShareView.swift"),
+            encoding: .utf8
+        )
+        let macShareView = try String(
+            contentsOf: projectDirectory.appendingPathComponent("ConduckShareExtensionMac/ShareView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(iosShareView.contains("String(localized: \"share.destination.title\""))
+        XCTAssertTrue(iosShareView.contains("defaultValue: \"Where to?\""))
+        XCTAssertFalse(macShareView.contains("String(localized: \"share.destination.title\""))
+        let iosCatalog = try String(
+            contentsOf: projectDirectory.appendingPathComponent("ConduckShareExtension/Localizable.xcstrings"),
+            encoding: .utf8
+        )
+        let macCatalog = try String(
+            contentsOf: projectDirectory.appendingPathComponent("ConduckShareExtensionMac/Localizable.xcstrings"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(iosCatalog.contains("\"share.destination.title\" :"))
+        XCTAssertFalse(macCatalog.contains("\"share.destination.title\" :"))
+    }
+
+    // MARK: - The share sheet picks nothing, and remembers nothing
+
+    /// The names of the rules `shareSheetPicksNothing` can report, so a negative
+    /// control names the rule it expects rather than an index.
+    private enum ShareSheetRule {
+        static let noInitializer = "a (the destination state carries no initializer)"
+        static let rowScoped = "b (every destination assignment is a row's action)"
+        static let fiveAssignments = "b (exactly five destination assignment sites)"
+        static let notOnAppear = "c (no destination inside onAppear / task)"
+        static let noModeNoMemory = "d (no mode picker, no stored pick)"
+        static let targetHasNoWork = "e (ShareTarget carries no work case)"
+        static let dispatchIsBound = "f (commit dispatches to inbox-bound helpers)"
+        static let retryIsWork = "g (Try Again is a Work retry)"
+        static let lockedWhileCommitting = "h (the button and the rows lock)"
+        static let disabledLooksDisabled = "i (the disabled button is drawn disabled)"
+    }
+
+    /// Every way the forbidden mechanisms — a pre-selection, a remembered pick, a
+    /// retry that follows whatever row is lit, a refusing button drawn as a live
+    /// one — were written at the tip or could plausibly be re-written, as ONE pure
+    /// predicate over the source. Returns the rules the source violates; `[]` is a
+    /// pass.
+    ///
+    /// Each rule is evaluated on the source AFTER collapsing every run of
+    /// whitespace (newlines included) to a single space, so a line break cannot
+    /// split a token a rule looks for.
+    ///
+    /// What this proves, stated honestly: these are TARGETED REGRESSION CHECKS on
+    /// the source's shape. They do not execute the view and they do not prove
+    /// absence in general — a novel construction the rules do not name would pass,
+    /// which is why the negative controls in the test below sit beside them and
+    /// are extended whenever a new dodge is found. The invocation-lifetime
+    /// property (a fresh appex process per share) is the system's, not ours.
+    private static func shareSheetPicksNothing(source raw: String) -> [String] {
+        let source = raw.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        var violations: [String] = []
+
+        // (a) The pick starts nil: the declaration is followed by no `=`.
+        let declaration = "@State private var destination: ShareDestination? "
+        if let declared = source.range(of: declaration) {
+            if source[declared.upperBound...].first == "=" {
+                violations.append(ShareSheetRule.noInitializer)
+            }
+        } else {
+            violations.append(ShareSheetRule.noInitializer)
+        }
+
+        // (b) Every assignment sits in a row's OWN action closure, and there are
+        //     exactly five sites: the Work row, the collapsed single-gateway row,
+        //     the per-gateway row, the recent row, and the legacy row. An
+        //     assignment anywhere else — an onAppear, a task, an init, a didSet,
+        //     however it is wrapped or line-broken — breaks the prefix or the count.
+        var assignments = 0
+        var everyAssignmentIsARowAction = true
+        var cursor = source.startIndex
+        while let assignment = source.range(of: "destination = ", range: cursor..<source.endIndex) {
+            assignments += 1
+            let prefixStart = source.index(assignment.lowerBound, offsetBy: -10,
+                                           limitedBy: source.startIndex)
+            if prefixStart == nil || String(source[prefixStart!..<assignment.lowerBound]) != "action: { " {
+                everyAssignmentIsARowAction = false
+            }
+            cursor = assignment.upperBound
+        }
+        if !everyAssignmentIsARowAction { violations.append(ShareSheetRule.rowScoped) }
+        if assignments != 5 { violations.append(ShareSheetRule.fiveAssignments) }
+
+        // (c) Neither lifecycle hook touches the pick.
+        let lifecycleBodies = bracedBodies(in: source, after: ".onAppear {")
+            + bracedBodies(in: source, after: ".task {")
+        if lifecycleBodies.contains(where: { $0.contains("destination") }) {
+            violations.append(ShareSheetRule.notOnAppear)
+        }
+
+        // (d) No mode control, and nothing that could hold a pick between shares.
+        //     The view reads the snapshot through the host; a view that opens
+        //     files is a view that could read a remembered pick.
+        let forbidden = ["ShareDisposition", ".pickerStyle(.segmented)", "UserDefaults",
+                         "@AppStorage", "@SceneStorage", "NSUbiquitousKeyValueStore",
+                         "FileManager"]
+        if forbidden.contains(where: { source.contains($0) }) {
+            violations.append(ShareSheetRule.noModeNoMemory)
+        }
+
+        // (e) The send manifest's target type never learns about the desk.
+        if let target = bracedBodies(in: source, after: "enum ShareTarget").first {
+            if target.contains("case work") { violations.append(ShareSheetRule.targetHasNoWork) }
+        } else {
+            violations.append(ShareSheetRule.targetHasNoWork)
+        }
+
+        // (f) One read of the pick, then two helpers each bound to ONE inbox.
+        let commitBody = bracedBodies(in: source, after: "private func commit()").first ?? ""
+        let workHelper = bracedBodies(in: source, after: "private func addToWorkboard()").first ?? ""
+        let sendHelper = bracedBodies(in: source, after: "private func send(_ target: ShareTarget)").first ?? ""
+        let dispatchIsBound = commitBody.contains("case .work: addToWorkboard()")
+            && commitBody.contains("case .send(let target): send(target)")
+            && workHelper.contains("onAddToWorkboard(") && !workHelper.contains("destination")
+            && sendHelper.contains("onSend(") && !sendHelper.contains("destination")
+        if !dispatchIsBound { violations.append(ShareSheetRule.dispatchIsBound) }
+
+        // (g) The retry replays what the person approved, not the current row.
+        let retryClosure = bracedBodies(in: source,
+                                        after: "primaryButton: .default(Text(Strings.retry))").first ?? ""
+        if !retryClosure.contains("addToWorkboard()") || retryClosure.contains("commit()") {
+            violations.append(ShareSheetRule.retryIsWork)
+        }
+
+        // (h) Nothing commits without a pick, and no tap moves the pick under a
+        //     commit already running. The button's predicate is pinned by its
+        //     SHAPE, not by a prefix: a `.disabled(destination == nil` check
+        //     passed whatever operator came next, so an `&&` — which leaves the
+        //     button live with no pick — read as a pass (Codex S-R1-4). The two
+        //     permitted bodies are the whole predicate, so a flipped operator, a
+        //     dropped clause and an added escape hatch all fail here.
+        let primaryPredicate = bracedBodies(in: source, after: "private var isPrimaryDisabled: Bool")
+            .first?
+            .trimmingCharacters(in: .whitespaces)
+        let permittedPredicates = [
+            // iOS: a pick is made, and no commit is already running.
+            "destination == nil || submissionState.isCommitting",
+            // macOS: the same, plus the whole-share attachment-limit refusal.
+            "destination == nil || submissionState.isCommitting || attachmentLimitExceeded",
+        ]
+        let buttonLocked = permittedPredicates.contains(primaryPredicate ?? "")
+            && source.contains(".disabled(isPrimaryDisabled)")
+            // Nothing may disable the button on its own reading of the pick: the
+            // one predicate is the only source, or the look and the behaviour can
+            // drift apart again.
+            && !source.contains(".disabled(destination")
+        if !buttonLocked
+            || !source.contains(".disabled(!selectable || submissionState.isCommitting)") {
+            violations.append(ShareSheetRule.lockedWhileCommitting)
+        }
+
+        // (i) A disabled primary button LOOKS disabled. `.buttonStyle(.plain)` over
+        //     an explicit amber fill and an explicit foreground dims neither, so
+        //     the mute has to be drawn — and it reads the SAME property as the
+        //     `.disabled(…)` above, which is the whole point of that property.
+        if !source.contains(".opacity(isPrimaryDisabled ? 0.45 : 1)") {
+            violations.append(ShareSheetRule.disabledLooksDisabled)
+        }
+
+        return violations
+    }
+
+    /// Every `{ … }` body that follows an occurrence of `marker`, brace-matched.
+    private static func bracedBodies(in source: String, after marker: String) -> [String] {
+        var bodies: [String] = []
+        var cursor = source.startIndex
+        while let found = source.range(of: marker, range: cursor..<source.endIndex) {
+            cursor = found.upperBound
+            guard let open = source[found.lowerBound...].firstIndex(of: "{") else { break }
+            var depth = 0
+            var index = open
+            var close: String.Index?
+            while index < source.endIndex {
+                if source[index] == "{" {
+                    depth += 1
+                } else if source[index] == "}" {
+                    depth -= 1
+                    if depth == 0 { close = index; break }
+                }
+                index = source.index(after: index)
+            }
+            guard let close else { break }
+            bodies.append(String(source[source.index(after: open)..<close]))
+            cursor = source.index(after: close)
+        }
+        return bodies
+    }
+
+    /// Replace the first occurrence of `needle` (optionally, the first one after
+    /// `anchor`) — the negative controls' one editing primitive.
+    private static func replacingFirst(
+        _ needle: String,
+        with replacement: String,
+        in source: String,
+        after anchor: String? = nil
+    ) -> String {
+        var start = source.startIndex
+        if let anchor {
+            guard let anchored = source.range(of: anchor) else { return source }
+            start = anchored.upperBound
+        }
+        guard let found = source.range(of: needle, range: start..<source.endIndex) else { return source }
+        return source.replacingCharacters(in: found, with: replacement)
+    }
+
+    /// The share sheet picks NOTHING for the person and remembers NOTHING between
+    /// invocations, and a button that refuses a commit says so on screen. Both
+    /// `ShareView` copies are read off disk and run through the one predicate
+    /// above; then seven negative controls mutate that same real source into
+    /// shapes the rules exist to reject, and each must be reported — without them
+    /// a predicate could pass by being vacuous.
+    ///
+    /// The fifth control reconstructs the shape this branch replaced (a mode
+    /// enum, a pre-selected mode, a pick-reading dispatch). It is a mutation
+    /// rather than the tip's file itself because an iOS test host cannot run
+    /// `git show`; the tip's real `ShareView` was additionally run through these
+    /// same rules from the command line while they were written, and is red on
+    /// (a), (d) and (f) there for exactly the reasons the control names.
+    func testTheShareSheetPicksNoDestinationAndRemembersNone() throws {
+        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let projectDirectory = testsDirectory.deletingLastPathComponent()
+
+        for relativePath in [
+            "ConduckShareExtension/ShareView.swift",
+            "ConduckShareExtensionMac/ShareView.swift",
+        ] {
+            let source = try String(
+                contentsOf: projectDirectory.appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+            XCTAssertEqual(
+                Self.shareSheetPicksNothing(source: source), [],
+                "\(relativePath) broke a rule that keeps the share sheet from picking, remembering or rerouting a destination"
+            )
+
+            // 1. A pre-selection restored on appear — the mechanism this branch
+            //    deleted, and the one Codex round 1 showed the first draft missed.
+            let onAppearPreselect = Self.replacingFirst(
+                ".task {", with: ".onAppear { destination = .work }\n        .task {", in: source)
+            let onAppearViolations = Self.shareSheetPicksNothing(source: onAppearPreselect)
+            XCTAssertTrue(onAppearViolations.contains(ShareSheetRule.rowScoped), relativePath)
+            XCTAssertTrue(onAppearViolations.contains(ShareSheetRule.notOnAppear), relativePath)
+
+            // 2. The same thing LINE-BROKEN inside a `.task` — Codex round 2's
+            //    dodge of an unnormalised line rule.
+            let taskPreselect = Self.replacingFirst(
+                ".task {",
+                with: ".task {\n            destination =\n                .work\n        }\n        .task {",
+                in: source)
+            let taskViolations = Self.shareSheetPicksNothing(source: taskPreselect)
+            XCTAssertTrue(taskViolations.contains(ShareSheetRule.rowScoped), relativePath)
+            XCTAssertTrue(taskViolations.contains(ShareSheetRule.notOnAppear), relativePath)
+
+            // 3. A default written straight onto the state.
+            let initializedState = Self.replacingFirst(
+                "destination: ShareDestination?", with: "destination: ShareDestination? = .work",
+                in: source)
+            XCTAssertTrue(
+                Self.shareSheetPicksNothing(source: initializedState).contains(ShareSheetRule.noInitializer),
+                relativePath)
+
+            // 4. A retry that follows whatever row is lit when the alert closes.
+            let reroutingRetry = Self.replacingFirst(
+                "addToWorkboard()", with: "commit()", in: source,
+                after: "primaryButton: .default(Text(Strings.retry))")
+            XCTAssertTrue(
+                Self.shareSheetPicksNothing(source: reroutingRetry).contains(ShareSheetRule.retryIsWork),
+                relativePath)
+
+            // 5. The shape this branch replaced: a mode enum, a mode pre-selected
+            //    to Work, and a dispatch that reads the mode instead of the pick.
+            let tipShape = Self.replacingFirst(
+                "@State private var destination: ShareDestination?",
+                with: "@State private var disposition: ShareDisposition = .work\n    @State private var selection: ShareTarget?",
+                in: Self.replacingFirst("addToWorkboard()", with: "break", in: source,
+                                        after: "switch destination {"))
+            let tipViolations = Self.shareSheetPicksNothing(source: tipShape)
+            XCTAssertTrue(tipViolations.contains(ShareSheetRule.noInitializer), relativePath)
+            XCTAssertTrue(tipViolations.contains(ShareSheetRule.noModeNoMemory), relativePath)
+            XCTAssertTrue(tipViolations.contains(ShareSheetRule.dispatchIsBound), relativePath)
+
+            // 6. The full-strength amber pill this branch shipped with: the button
+            //    still refuses every tap, and still looks exactly like the one that
+            //    commits (U-66).
+            let undimmedButton = Self.replacingFirst(
+                ".opacity(isPrimaryDisabled ? 0.45 : 1)", with: "", in: source)
+            XCTAssertTrue(
+                Self.shareSheetPicksNothing(source: undimmedButton)
+                    .contains(ShareSheetRule.disabledLooksDisabled),
+                relativePath)
+
+            // 7. The operator the old prefix rule could not see: `&&` leaves the
+            //    button live — and, bound to the same property, drawn live — with
+            //    no destination picked (Codex S-R1-4).
+            let flippedPredicate = Self.replacingFirst(
+                "destination == nil ||", with: "destination == nil &&", in: source,
+                after: "private var isPrimaryDisabled: Bool")
+            XCTAssertTrue(
+                Self.shareSheetPicksNothing(source: flippedPredicate)
+                    .contains(ShareSheetRule.lockedWhileCommitting),
+                relativePath)
+        }
+
+        // The send manifest writer takes a gateway target BY TYPE in both hosts,
+        // so a Work pick cannot reach it however either view is edited.
+        for relativePath in [
+            "ConduckShareExtension/ShareViewController.swift",
+            "ConduckShareExtensionMac/ShareViewController.swift",
+        ] {
+            let source = try String(
+                contentsOf: projectDirectory.appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+            let collapsed = source.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            XCTAssertTrue(
+                collapsed.contains("private func writeEnvelope(uuid: UUID, caption: String, target: ShareTarget,"),
+                "\(relativePath) must keep the send writer closed over gateway targets"
+            )
         }
     }
 

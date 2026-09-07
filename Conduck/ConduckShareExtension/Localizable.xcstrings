@@ -112,6 +112,42 @@
         }
       }
     },
+    "share.destination.choose" : {
+      "comment" : "Disabled primary button label until a destination row is picked",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Choose a destination"
+          }
+        }
+      }
+    },
+    "share.destination.noAI" : {
+      "comment" : "Shown in place of the gateway rows when the snapshot lists no configured gateway and no recent chat",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No personal AI available."
+          }
+        }
+      }
+    },
+    "share.destination.title" : {
+      "comment" : "Share Extension navigation title over the destination list (gateways, recent chats, Add to Work)",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Where to?"
+          }
+        }
+      }
+    },
     "share.item.fallback" : {
       "comment" : "Generic fallback label when a shared item has no resolvable name",
       "extractionState" : "extracted_with_value",
@@ -168,42 +204,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Text"
-          }
-        }
-      }
-    },
-    "share.mode.accessibility" : {
-      "comment" : "Accessibility label for the Work versus Send mode picker",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Choose whether to save or send"
-          }
-        }
-      }
-    },
-    "share.mode.send" : {
-      "comment" : "Segment that immediately sends shared material",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Send now"
-          }
-        }
-      }
-    },
-    "share.mode.work" : {
-      "comment" : "Segment that saves shared material without sending it",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Work"
           }
         }
       }
@@ -304,14 +304,14 @@
         }
       }
     },
-    "share.send" : {
-      "comment" : "Send button in the Share Extension",
+    "share.section.work" : {
+      "comment" : "Picker section header above the Add to Work row",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Send"
+            "value" : "Work"
           }
         }
       }
@@ -376,18 +376,6 @@
         }
       }
     },
-    "share.title" : {
-      "comment" : "Share Extension navigation title",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Send to"
-          }
-        }
-      }
-    },
     "share.type.image" : {
       "comment" : "Type description for a shared image in the Share Extension header",
       "extractionState" : "extracted_with_value",
@@ -396,18 +384,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Image"
-          }
-        }
-      }
-    },
-    "share.work.desk.detail" : {
-      "comment" : "Explains where a Work capture lands, in place of a destination picker",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Everything you share is added to your Work desk."
           }
         }
       }
@@ -485,25 +461,13 @@
       }
     },
     "share.work.inert" : {
-      "comment" : "Privacy reassurance for an inert Work capture",
+      "comment" : "Subtitle of the Add to Work row — privacy reassurance for an inert Work capture",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
             "value" : "Nothing is sent to AI"
-          }
-        }
-      }
-    },
-    "share.work.title" : {
-      "comment" : "Share Extension title while saving an inert Work draft",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Add to Work"
           }
         }
       }

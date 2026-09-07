@@ -4,10 +4,12 @@
 // ShareTargetFilterTests.swift
 //
 // Pure-logic coverage for `ShareTargetFilter` — the macOS Share Extension
-// picker's search/threshold helper (extracted from `ShareView` so it's testable
-// without SwiftUI). Asserts the search-visibility boundary (8 → no field, 9 →
-// field) and the gateway/recent filters' empty-query passthrough +
-// case-insensitive match + no-match → empty contract.
+// destination list's search/threshold/visibility helper (extracted from
+// `ShareView` so it's testable without SwiftUI). Asserts the search-visibility
+// boundary (8 → no field, 9 → field), the gateway/recent filters' empty-query
+// passthrough + case-insensitive match + no-match → empty contract, and the two
+// destination-list rules: when the legacy "New conversation" row is offered, and
+// when a decoded-but-empty roster is TOLD instead.
 //
 // `ShareTargetFilter.swift` physically lives in `ConduckShareExtensionMac/` (the
 // appex consumes it) but is ALSO compiled into this test bundle, where
@@ -105,6 +107,31 @@ final class ShareTargetFilterTests: XCTestCase {
     func testFilterRecentsNoMatchReturnsEmpty() {
         let list = [recent("Trip planning"), recent("Grocery list")]
         XCTAssertTrue(ShareTargetFilter.filterRecents(list, query: "xyz").isEmpty)
+    }
+
+    // MARK: - Destination-list rules
+
+    func testTheLegacyRowShowsOnlyWhenNoSnapshotDecoded() {
+        // No snapshot decoded → the roster is UNKNOWN, not empty (the app may hold
+        // a gateway the appex cannot see), so the legacy route stays on offer.
+        XCTAssertTrue(ShareTargetFilter.showsLegacyNewConversationRow(snapshotDecoded: false))
+        // A decoded snapshot names the roster, so the guessing row goes.
+        XCTAssertFalse(ShareTargetFilter.showsLegacyNewConversationRow(snapshotDecoded: true))
+    }
+
+    func testTheNoAILineShowsOnlyForADecodedEmptyRoster() {
+        // Decoded + nothing to send to → tell the person; the Add to Work row
+        // (rendered outside this rule) is then the only destination.
+        XCTAssertTrue(ShareTargetFilter.showsNoAILine(snapshotDecoded: true,
+                                                      gatewayCount: 0, recentCount: 0))
+        // Undecoded is not empty — the legacy row covers that case instead.
+        XCTAssertFalse(ShareTargetFilter.showsNoAILine(snapshotDecoded: false,
+                                                       gatewayCount: 0, recentCount: 0))
+        // Either list carrying a row means there IS something to send to.
+        XCTAssertFalse(ShareTargetFilter.showsNoAILine(snapshotDecoded: true,
+                                                       gatewayCount: 1, recentCount: 0))
+        XCTAssertFalse(ShareTargetFilter.showsNoAILine(snapshotDecoded: true,
+                                                       gatewayCount: 0, recentCount: 1))
     }
 
     // MARK: - Byte-identical mirror guard (iOS appex ↔ macOS appex)

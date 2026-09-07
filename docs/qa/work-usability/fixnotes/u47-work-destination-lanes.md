@@ -1,4 +1,5 @@
-# U-47 — Work as a destination: the wrist, the car, and the Mac's third capture
+# U-47 — Work as a destination: the wrist, the car, the Mac's third
+capture, and the share sheet's last row
 
 Work is reached by NAMING it, on every surface that can reach it. The wrist's
 Ask opens a destination chooser on every press — every configured gateway, then
@@ -11,13 +12,17 @@ drive-long mode whose failure is a private thought reaching an AI. The Mac is th
 founder's third
 option — screenshot + voice to the desk, speech-to-text and no gateway — so its
 lane carries the polish three design rounds and four implementation rounds found
-around it rather than a re-cut. On all three, a Work pick is one speech hop and
-no LLM step.
+around it rather than a re-cut. The share sheet is the fourth: one destination
+list — every configured gateway, the recent chats, then **Add to Work** as its
+last row — and nothing pre-selected, so no share is routed for the person who
+does not read the button. On all four, a Work pick reaches the desk and nothing
+else: one speech hop where there is speech at all, and no LLM step.
 
 Each lane was designed before it was cut (`design/watch-work-destination.md`,
-`design/carplay-work-destination.md`, `design/mac-work-destination.md`), each
-design was read three times by Codex, each implementation four times more, and
-the finished wave once more end to end.
+`design/carplay-work-destination.md`, `design/mac-work-destination.md`,
+`design/share-work-destination.md`), each design was read three times by Codex,
+each of the first three implementations four times more and the share sheet's
+once, and the finished wave once more end to end.
 
 ## What changed
 
@@ -249,6 +254,50 @@ after it, so a completion resuming into a NEWER recording writes nothing; and
 Work's "Cancel transcription" is checked at the attachment boundary rather than
 only before it.
 
+### Share sheet — one list, and nothing picked for you
+
+The segmented `ShareDisposition` (Work · Send now), the Work explanation panel
+and the sheet's Work default are gone. `workSection` draws the desk as the LAST
+row of the one destination list — its own `Section` header ("Work"), an amber
+badge carrying the desk glyph `tray.and.arrow.down.fill`, title **Add to Work**,
+subtitle **Nothing is sent to AI** — and it renders OUTSIDE the
+`if showsLegacyRow / else if showsNoAILine / else if isEmptySearch / else` chain,
+so no search, no empty roster and no missing snapshot can take the destination
+away. Its own section because the list pins section headers: a header-less
+trailing row scrolls under RECENT CHATS and reads as a chat.
+
+The pick is `ShareDestination { case work; case send(ShareTarget) }`, a two-case
+value BESIDE `ShareTarget` rather than a third case inside it. The send manifest
+writer `writeEnvelope(uuid:caption:target: ShareTarget,…)` is closed over gateway
+targets by TYPE, so the desk cannot reach the manifest however either view is
+edited — a `.work` case would instead give that writer's `switch` an arm that
+must never fire. `@State private var destination: ShareDestination?` carries no
+initializer and no lifecycle hook assigns it; the only five assignment sites per
+copy are row `action:` closures. `commit()` reads the pick once and dispatches to
+`addToWorkboard()` or `send(_ target:)`, each bound to one inbox and neither
+reading `destination` again. The primary button is disabled until a row is
+tapped, reads "Choose a destination" until then, and ⌘-Return fires only an
+enabled button.
+
+Two pure rules move into `ShareTargetFilter`, byte-identical below the header in
+both copies as its drift guard requires.
+`showsLegacyNewConversationRow(snapshotDecoded:)`: the legacy "New conversation"
+row is offered only when NO snapshot decoded, because undecoded is *unknown*, not
+empty — the app may hold a gateway the appex cannot see — and it is tappable now
+that nothing is pre-selected. `showsNoAILine(snapshotDecoded:gatewayCount:recentCount:)`:
+a DECODED empty roster is told "No personal AI available." — the wrist's own
+sentence — rather than offered a send the drainer would refuse.
+
+iOS titles the sheet **Where to?**, the wrist's string, because "Send to" is
+false the moment Work is a row. The Mac pair changes in lockstep and loses the
+filler panel the mode left it, keeping its ✕ header, its attachment-limit banner
+(which still disables the button and still guards `commit()` and both helpers),
+its 30 pt badges (34 pt on iOS) and plain-Return-inserts-newline. Both
+`ShareViewController` copies and `ShareTargetsSnapshotWriter` take comment-only
+edits: no payload decoding is added on either side (spec line ~467),
+`recentWorkItems` is still published EMPTY, and every wire type, publisher and
+mirror triplet is untouched.
+
 ## Decisions
 
 | # | Decision | Why |
@@ -266,6 +315,10 @@ only before it.
 | 11 | Mac: no structural change to the Work lane | It is the founder's third option verbatim, and re-cutting a lane that seven earlier rounds already read is pure risk |
 | 12 | Mac: whichever lane holds the microphone owns the popover, the glyph, the click and the bail | A running microphone with no visible surface is worse than a Work error that waits. Resolves handoff decision 13 |
 | 13 | Mac: "Capture to Work" names the action, "Add to Work" names the commit | The hotkey does three different things and "Capture" is the only word true of all three |
+| 14 | Share sheet: Work is the last row of ONE destination list, in its own "Work" section, after every gateway and every recent chat | The founder's shape, and the mode was a second control for one decision. Its hidden-list behaviour is what made Work feel like a different sheet; the panel's one load-bearing sentence survives as the row's subtitle |
+| 15 | Nothing is pre-selected; the button is disabled and reads "Choose a destination" until a row is tapped | Both directions of the boundary are silent-reroute directions. A Work default costs a redone share; a first-gateway default costs a private document sent to an AI. A pre-selected destination under a big amber button is a choice made for the person who does not read the button. The cost is two taps on the share-and-go path, the founder's own trade on the wrist |
+| 16 | The pick is a `ShareDestination`, never a third `ShareTarget` case | The manifest writer takes only a `ShareTarget`, so the desk cannot reach it by type. The same "cannot dispatch" property the two host closures already give, now on the value that carries the pick |
+| 17 | An undecoded snapshot keeps the legacy "New conversation" row and makes it tappable; a DECODED empty roster is told "No personal AI available." instead | Unknown is not empty: the app may hold a gateway the appex cannot see, and with nothing pre-selected a non-selectable row is a dead end. A decoded empty roster is a route the app itself says cannot succeed, and the wrist and the car both tell the person rather than offer it |
 
 ## Catalog
 
@@ -297,8 +350,23 @@ reuses `pendingRetry.card.busy`. CarPlay adds none: `carplay.picker.addToWork.ti
 `carplay.hint.captureStartFailed.detail{,.work}` and the two saved lines all
 already existed.
 
-Both catalogs: `plutil -convert xml1`, `python3 -m json.tool`, and a duplicate-key
-load with `object_pairs_hook` — clean, and round-trip fidelity was checked against
+Share extensions (`ConduckShareExtension/Localizable.xcstrings`,
+`ConduckShareExtensionMac/Localizable.xcstrings`): add `share.section.work`
+("Work"), `share.destination.choose` ("Choose a destination") and
+`share.destination.noAI` ("No personal AI available.") to BOTH, and
+`share.destination.title` ("Where to?") to iOS alone — the macOS share host
+renders no toolbar, so there is no title to fill. Retire `share.mode.work`,
+`share.mode.send`, `share.mode.accessibility`, `share.work.desk.detail`,
+`share.send` (the accessibility label of the deleted `sendCircle`), and on iOS
+`share.title` and `share.work.title`. `share.addToWork` and `share.work.inert`
+are reused in a second role — the row's title and the row's subtitle — because
+the sentence, the state and the surface are the same. Both catalogs end at 40
+rows; the only single-sided keys are `share.destination.title` (iOS) and
+`share.error.tooManyItems` (Mac), and `WorkCaptureInboxTests` pins both facts,
+each retired key absent from source AND catalog with it.
+
+Every edited catalog: `plutil -convert xml1`, `python3 -m json.tool`, and a
+duplicate-key load with `object_pairs_hook` — clean, and round-trip fidelity was checked against
 the untouched files byte-for-byte before any row was written.
 
 ## Files
@@ -323,6 +391,14 @@ desk read-back, send identity) · `MenuBar/DictationPopoverView.swift` (router,
 queued row) · `MenuBar/DictationService.swift` (cancellation generation) ·
 `MenuBar/QuitGuard.swift` · `AppDelegate.swift` · `Views/Settings/MacGeneralCategory.swift`.
 
+**Share extensions:** `ConduckShareExtension/ShareView.swift` and
+`ConduckShareExtensionMac/ShareView.swift` (the destination list, `workSection`,
+`ShareDestination`, `commit()` and its two bound helpers, the disabled button,
+and the deleted mode picker, Work panel, `sendCircle` and `SendButtonStyle`) ·
+both `ShareTargetFilter.swift` copies (the two visibility rules, byte-identical
+below the header) · both `ShareViewController.swift` copies (comments) ·
+`Services/ShareTargetsSnapshotWriter.swift` (comment).
+
 **Shared:** `Services/PendingRetryStore.swift` (`publishedWorkRetryTTL`) ·
 `Services/InAppAudioRecorder.swift` (durability accounting, cancellation at the
 write) · `Services/AppleSpeechRelayCoordinator.swift` (parked words before a
@@ -343,6 +419,24 @@ model. Two new files, `ConduckTests/MenuBarEscCancellationContractTests.swift`
 and `ConduckTests/WatchWorkRelayRecoveryTests.swift` (the watch target's own
 files needed no `pbxproj` edit because everything was appended to existing
 classes — `ConduckWatchTests` has no synchronized group).
+
+The share sheet takes the iOS suite 5,505 → 5,508 with no new file:
+`ShareTargetFilterTests` gains the two visibility truth tables (a decoded empty
+roster, and the four cases that must NOT show the no-AI line), and
+`WorkCaptureInboxTests` gains `testTheShareSheetPicksNoDestinationAndRemembersNone`
+— one pure predicate over whitespace-collapsed source (no initializer; exactly
+five assignment sites, each a row `action:`; no lifecycle body touching the pick;
+no mode control and no store of any kind; no `case work` in `ShareTarget`; one
+read of the pick and two bound helpers; a Work-only retry; the two `.disabled`
+rules) with five negative controls that each mutate the REAL source and must be
+reported, the line-broken `.task` assignment among them.
+`testShareSurfacesUseDistinctWorkVocabularyAndAdaptivePrimaryActions` is re-pinned
+to the new key set, with the seven retired keys asserted absent in source AND
+catalog. What a source predicate proves is stated where it lives: these are
+targeted regression checks on the source's shape, not a proof of absence — a
+construction the rules do not name would pass, which is why the controls sit
+beside the rules and grow when a dodge is found (U-70 names three that need one
+more assertion each).
 
 Shape, because the rounds kept finding the same test defect: a source guard
 proves a call site exists, never that it runs, so every claimed protection is
@@ -371,7 +465,14 @@ expiry, the unparked transcript and the day-one order were all accepted; the
 and recorded as a standing disagreement, then taken by founder override and
 built in the non-sticky action form Codex itself proposed — which is what closes
 the disagreement rather than overrules it. Mac: 10 + 7 + 5 — the reading was confirmed in all three, and the
-findings became the polish list.
+findings became the polish list. Share sheet: 3 + 1 + 0 — round 1 blocked twice
+(a Try Again that read the current row, and the dead `sendCircle` that makes the
+`send()` rename uncompilable unless it goes), round 2 re-cut the
+no-pre-selection guard onto whitespace-collapsed source after a line-broken
+assignment dodged the line rule, round 3 accepted as is with no disagreement
+left. Its three taste calls — nothing pre-selected, "Where to?", Work last in its
+own scrolling section — carry Codex's support and stay founder-reversible
+(`design/share-work-destination.md` §10).
 
 **Implementation.**
 
@@ -380,6 +481,7 @@ findings became the polish list.
 | Watch | 3 raised, all carried | 8 + 2 re-opened; 5 fixed | 10 raised; 6 fixed | 8 raised; 5 fixed | W-R4-1 (legacy deferred entries mint against the current default) → U-54; closed on merit three times and not re-raised in R5 |
 | CarPlay | 10 raised; 5 fixed | 13 raised; 6 fixed | 11 raised; 2 fixed | 12 raised; 2 fixed | CP-R4-01 → U-48 (founder decision) · 02, 03, 04, 08 → closed by the cross-lane pass, with U-49 (CarPlay's own half), U-58 and U-63 as residuals · 05, 09 (closed by the Mac lane) · 07 (closed by the relay's parked words, U-57 residual) |
 | Mac | 8 raised; 6 fixed | 10 raised; 7 fixed | 17 raised; 14 fixed | 19 raised; 13 fixed | MAC-R4-P1-A → U-48 (founder decision) · P2-C, P2-M → closed by the cross-lane pass, with U-59, U-60 and U-61 as residuals · P2-F (closed by the relay's parked words) · P2-G → U-53 |
+| Share sheet | 5 raised, all P3; none fixed | — | — | — | S-R1-1 → U-68 · S-R1-2 → U-69 · S-R1-3…5 → U-70 |
 | Cross-lane | — | — | — | 11 forwarded items fixed | CP-R4-01 / MAC-R4-P1-A → U-48 (closed by founder decision) · MAC-R4-P2-G → U-53 (declined on merit, below) · the CarPlay half of the microphone gate → U-49 |
 
 A fifth round reads all three lanes and the cross-lane fixes in one pass
@@ -477,6 +579,39 @@ maximum roster), and the watch catalog's stale rows.
   and presence only — the run wrote the verdict and the sticky line is the whole
   remedy) and in `releasePendingRetryDiscard` (full refresh — a cancelled question
   decided nothing). Any full `refreshPendingRetryState()` consumes it too.
+
+### Share sheet — one implementation round
+
+`verify/codex-r1-share-work-destination.md` reads the finished diff: **no P1 and
+no P2**. The two inboxes stay separate roots with separate drainers whose
+mandatory identity keys differ (`uuid` against `id`), so a misplaced envelope
+fails decoding rather than becoming the other lane's input; both copies hold
+exactly five destination assignments and all ten are row actions; the retry is
+Work-only, the rows lock while a commit runs, and `begin()` claims the phase
+synchronously; every paired file still matches below its header; and each catalog
+carries exactly the keys its view asks for. Five P3 stand, none of them a
+regression this change introduced, each carried as an open item:
+
+- **S-R1-1 → U-68.** A query matching nothing hides the picked gateway row while
+  the button still reads Send now and ⌘-Return still sends to it. The smallest
+  fix asks whether the pick is still displayed and falls back to the neutral
+  label — it picks nothing for anybody, so it does not contradict decision 15.
+- **S-R1-2 → U-69.** The legacy "New conversation" row's all-nil routing fields
+  enter the legacy resolver, which returns a live continuation on the default
+  gateway. The resolver predates this branch; a row offering it BY NAME does not.
+  QA step 128 says what that route actually delivers.
+- **S-R1-3 → U-70.** The inbox-binding rule checks that the Work helper calls
+  `onAddToWorkboard(`, never that it does NOT call `onSend(` — a helper doing
+  both would pass. The shipped helper has no such leak; its guard misses it.
+- **S-R1-4 → U-70.** The disabled-button rule matches the prefix
+  `.disabled(destination == nil` whichever operator follows, so `&&` for `||`
+  passes with the button live on an empty pick.
+- **S-R1-5 → U-70.** The lifecycle rule reads comments as code: the tip fails
+  rule (c) on the word "destination" inside an `onAppear` comment, and a comment
+  added inside a clean `.task` would fail a clean view.
+
+Compilation, rendered layout and announcements are outside a read-only round —
+they are QA steps 121–133.
 
 ## Nobody undo
 
@@ -607,6 +742,40 @@ one and another stops meaning what it says.
 - **A switch-arm source guard is bounded by the switch's own braces and pins each
   arm's WHOLE body ending in `return`.** An unbounded search for the next `case `
   reads past the switch and is satisfied by an unrelated arm.
+- **The share sheet pre-selects NOTHING.** `@State private var destination:
+  ShareDestination?` has no initializer and no lifecycle hook assigns it; the only
+  five assignment sites per copy are row `action:` closures. A default in either
+  direction is the silent reroute the boundary names — Work's own cost a redone
+  share, a gateway's costs a private document sent to an AI. Reversing it is a
+  founder call (`design/share-work-destination.md` §10), never an implementer's.
+- **The Work row renders OUTSIDE every branch, last, in its own section.** No
+  search, no empty roster and no missing snapshot may take the destination away,
+  and the header is load-bearing: the list pins section headers, so a header-less
+  trailing row scrolls under RECENT CHATS and reads as a chat.
+- **The pick is a `ShareDestination`, never a third `ShareTarget` case.** The send
+  manifest writer takes only a `ShareTarget`, so the desk cannot reach the
+  manifest however either view is edited. A `.work` case would give that writer's
+  `switch` an arm that must never fire.
+- **Try Again calls `addToWorkboard()`, never `commit()`, and the rows lock while
+  a commit runs** (`.disabled(!selectable || submissionState.isCommitting)`). A
+  retry replays what the person approved. The mode picker held that lock at the
+  tip and the rows did not, because the pick could not change the inbox then; it
+  can now. Either rule alone closes the round-1 reroute — pick Work → commit →
+  tap a gateway during the copy → `.unavailable` → Try Again — and both are kept
+  because each is one line and they fail independently.
+- **The legacy "New conversation" row appears only when NO snapshot decoded, and
+  it is tappable.** Undecoded is unknown, not empty. A decoded empty roster is
+  told instead. Making the row non-selectable again is a dead end now that
+  nothing is pre-selected.
+- **Neither `ShareView` reads or writes a stored pick.** No defaults store, no
+  scene storage, no key-value store, no file access anywhere in either view: the
+  appex reads the snapshot through its host and writes envelopes, and nothing
+  else. "No sticky Work state that survives to the next share" is the founder's
+  verbatim rule, and a remembered GATEWAY pick is the same mechanism pointed the
+  other way.
+- **Both destination-list rules live in `ShareTargetFilter`, byte-identical below
+  the header in both copies.** They are pure, so the truth table is unit-tested
+  rather than QA'd, and the mirror guard fails the build if one copy moves.
 
 ## Known limits
 
@@ -624,13 +793,26 @@ one and another stops meaning what it says.
   (U-64).
 - **A published Work entry now lingers up to a day on every surface**, the Mac
   and phone included. The exit is the existing confirmed discard or the clock.
-- **U-48 through U-65** in the handoff. Closed there: the unattended-trigger
+- **The share-and-go path is two taps** — row, then Send now — where the
+  pre-Work sheet was one. The founder's own trade on the wrist, and the reversal
+  (pre-select the first gateway) re-opens the direction the boundary calls
+  unrecoverable.
+- **Work is a scroll away on a long list.** Twelve recents plus the gateways put
+  the row below the fold on an iPhone, as on the wrist: a stable relationship,
+  not a fixed position. The remedy if QA disagrees is a fixed last row pinned
+  beneath the scroll region, which costs a visual gap on a short list.
+- **"No personal AI available." can render on a STALE snapshot**, hiding the send
+  route until the app is opened once and the writer runs. Recorded, not guarded:
+  the writer regenerates on every conversation and settings change.
+- **U-48 through U-70** in the handoff. Closed there: the unattended-trigger
   boundary (founder decision), the phone's queue observer, the lapsed
   reservation, the partial retry save, the phone desk sheet after a cancelled
   transcription, the test that pinned a helper rather than the reply it feeds,
-  and all seven close-out items (U-57 – U-63). Still open: the CarPlay half of
-  the microphone gate (U-49), a republished deleted card (U-53), the legacy
-  deferred entry (U-54), the chooser's title (U-64), 140 pre-existing orphan
-  catalog rows (U-65), and the two P3 residuals the sixth round left inside their
-  own fixes — the busy-sentence assertion's breadth (U-59) and a queue arrival
-  landing inside the consume read's await (U-63).
+  all seven close-out items (U-57 – U-63), and the share sheet's own two —
+  a disabled button drawn disabled (U-66) and comments that name the destination
+  list (U-67). Still open: the CarPlay half of the microphone gate (U-49), a
+  republished deleted card (U-53), the legacy deferred entry (U-54), the
+  chooser's title (U-64), 140 pre-existing orphan catalog rows (U-65), and the
+  two P3 residuals the sixth round left inside their own fixes — the
+  busy-sentence assertion's breadth (U-59) and a queue arrival landing inside the
+  consume read's await (U-63) — plus the share sheet's own three (U-68 – U-70).

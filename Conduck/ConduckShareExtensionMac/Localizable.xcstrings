@@ -112,6 +112,30 @@
         }
       }
     },
+    "share.destination.choose" : {
+      "comment" : "Disabled primary button label until a destination row is picked",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Choose a destination"
+          }
+        }
+      }
+    },
+    "share.destination.noAI" : {
+      "comment" : "Shown in place of the gateway rows when the snapshot lists no configured gateway and no recent chat",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No personal AI available."
+          }
+        }
+      }
+    },
     "share.error.tooManyItems" : {
       "comment" : "Visible refusal when a mixed macOS share exceeds the total attachment limit",
       "extractionState" : "extracted_with_value",
@@ -180,42 +204,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Text"
-          }
-        }
-      }
-    },
-    "share.mode.accessibility" : {
-      "comment" : "Accessibility label for the Work versus Send mode picker",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Choose whether to save or send"
-          }
-        }
-      }
-    },
-    "share.mode.send" : {
-      "comment" : "Segment that immediately sends shared material",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Send now"
-          }
-        }
-      }
-    },
-    "share.mode.work" : {
-      "comment" : "Segment that saves shared material without sending it",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Work"
           }
         }
       }
@@ -316,14 +304,14 @@
         }
       }
     },
-    "share.send" : {
-      "comment" : "Send button in the Share Extension",
+    "share.section.work" : {
+      "comment" : "Picker section header above the Add to Work row",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Send"
+            "value" : "Work"
           }
         }
       }
@@ -396,18 +384,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Image"
-          }
-        }
-      }
-    },
-    "share.work.desk.detail" : {
-      "comment" : "Explains where a Work capture lands, in place of a destination picker",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Everything you share is added to your Work desk."
           }
         }
       }
@@ -485,7 +461,7 @@
       }
     },
     "share.work.inert" : {
-      "comment" : "Privacy reassurance for an inert Work capture",
+      "comment" : "Subtitle of the Add to Work row — privacy reassurance for an inert Work capture",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
