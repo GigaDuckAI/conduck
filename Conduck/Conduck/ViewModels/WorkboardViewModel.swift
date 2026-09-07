@@ -838,13 +838,15 @@ final class WorkboardViewModel {
             adopt(refreshed)
             return true
         } catch {
-            // The drag is optimistic for direct-manipulation responsiveness. On
-            // conflict, prefer the latest private-store order; if that read also
-            // fails, restore only the order captured before this drag.
-            do {
-                desk = try await dependencies.loadDesk()
-            } catch {
-                applyMaterials(previousMaterials)
+            // Roll back only our own optimistic order, preserving newer sync
+            // arrivals and presentation edits. Do this before the corrective
+            // read so a missing or older snapshot cannot leave the failed
+            // move on screen. A sync can also arrive while that read awaits.
+            if desk?.revision == current.revision {
+                applyMaterialOrder(previousMaterials.map(\.id))
+            }
+            if let refreshed = try? await dependencies.loadDesk() {
+                adopt(refreshed)
             }
             notice = WorkboardNotice(
                 kind: .error,
@@ -872,10 +874,6 @@ final class WorkboardViewModel {
             reordered[position].sequence = position
         }
         desk?.materials = reordered
-    }
-
-    private func applyMaterials(_ materials: [WorkboardMaterialSnapshot]) {
-        desk?.materials = materials
     }
 
     func openMaterial(_ material: WorkboardMaterialSnapshot) {

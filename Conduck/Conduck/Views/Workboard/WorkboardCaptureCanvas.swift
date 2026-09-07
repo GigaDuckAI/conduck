@@ -1088,7 +1088,10 @@ private struct WorkboardMaterialBoard: View {
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
     @State private var boardWidth: CGFloat = 0
-    @State private var isDropTargeted = false
+    @State private var layoutMode = WorkboardLayoutMode.load()
+    @State private var dropLocation: CGPoint?
+    @State private var rowFrames: [UUID: CGRect] = [:]
+    @State private var coordinateSpaceID = UUID()
     @State private var materialPendingRemoval: WorkboardMaterialSnapshot?
 
     private var metrics: WorkboardMosaicMetrics {
@@ -1117,40 +1120,44 @@ private struct WorkboardMaterialBoard: View {
     }
 
     var body: some View {
-        WorkboardMosaicLayout(metrics: metrics, layoutDirection: layoutDirection) {
-            ForEach(Array(item.materials.enumerated()), id: \.element.id) { index, material in
-                card(for: material, at: index)
-                    .workboardMosaicCardSize(material.cardSize)
-                    .draggable(WorkMaterialDragPayload(
-                        itemID: Constants.workboardDeskItemID,
-                        materialID: material.id
-                    ))
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .onGeometryChange(for: CGFloat.self) { proxy in
-            proxy.size.width
-        } action: { width in
-            boardWidth = width
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .strokeBorder(AppColors.brandAmber, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
-                .padding(-6)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.12)) { content in
-                    content.opacity(isDropTargeted ? 1 : 0)
+        VStack(alignment: .leading, spacing: 16) {
+            arrangementControls
+            boardContent
+                .frame(maxWidth: .infinity)
+                // A real trailing drop region makes appending possible even
+                // when the final row occupies every grid column.
+                .padding(.bottom, 24)
+                .contentShape(Rectangle())
+                .coordinateSpace(name: coordinateSpaceID)
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.size.width
+                } action: { width in
+                    boardWidth = width
                 }
-                .allowsHitTesting(false)
-        }
-        .dropDestination(for: WorkMaterialDragPayload.self) { payloads, location in
-            drop(payloads, at: location)
-        } isTargeted: { targeted in
-            isDropTargeted = targeted
+                .onPreferenceChange(WorkboardRowFramesKey.self) { rowFrames = $0 }
+                .overlay(alignment: .topLeading) { insertionMarker }
+                .onDrop(
+                    of: [.conduckWorkboardMaterial],
+                    delegate: WorkboardReorderDropDelegate(
+                        isEnabled: workbenchDestinationIsActive && !viewModel.isCapturingIntoDesk,
+                        onLocation: { dropLocation = $0 },
+                        onDrop: drop
+                    )
+                )
         }
         // A reflow is a frame change, not a leaf property, so it takes the
         // value form. It is scoped to the board container and never reaches the
         // navigation split view that hosts it.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: arrangement)
+        .onChange(of: layoutMode) { _, mode in
+            dropLocation = nil
+            rowFrames = [:]
+            mode.save()
+        }
+        .onChange(of: workbenchDestinationIsActive) { _, active in
+            if !active { dropLocation = nil }
+        }
+        .onDisappear { dropLocation = nil }
         .confirmationDialog(
             String(localized: LocalizedStringResource(
                 "workboard.material.remove.confirm.title",
@@ -1190,6 +1197,138 @@ private struct WorkboardMaterialBoard: View {
         }
     }
 
+    private var arrangementControls: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) {
+                arrangeHint
+                Spacer(minLength: 8)
+                layoutPicker
+            }
+            HStack {
+                Spacer(minLength: 0)
+                layoutPicker
+            }
+        }
+    }
+
+    private var arrangeHint: some View {
+        Label(LocalizedStringResource(
+            "workboard.arrange.hint",
+            defaultValue: "Drag to reorder"
+        ), systemImage: "hand.draw")
+        .font(.caption)
+        .foregroundStyle(AppColors.textSecondary)
+        .fixedSize()
+    }
+
+    private var layoutPicker: some View {
+        Picker(selection: $layoutMode) {
+            ForEach(WorkboardLayoutMode.allCases, id: \.self) { mode in
+                Label(mode.title, systemImage: mode.symbol).tag(mode)
+            }
+        } label: {
+            Text(LocalizedStringResource("workboard.layout.label", defaultValue: "Board view"))
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 184)
+        .disabled(!workbenchDestinationIsActive)
+        .accessibilityIdentifier("workboard-layout")
+    }
+
+    @ViewBuilder
+    private var boardContent: some View {
+        if layoutMode == .tiles {
+            WorkboardMosaicLayout(metrics: metrics, layoutDirection: layoutDirection) {
+                boardItems
+            }
+        } else {
+            VStack(spacing: 10) {
+                boardItems
+            }
+        }
+    }
+
+    private var boardItems: some View {
+        ForEach(Array(item.materials.enumerated()), id: \.element.id) { index, material in
+            card(for: material, at: index)
+                .workboardMosaicCardSize(material.cardSize)
+                .background {
+                    if layoutMode == .list {
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: WorkboardRowFramesKey.self,
+                                value: [material.id: proxy.frame(in: .named(coordinateSpaceID))]
+                            )
+                        }
+                    }
+                }
+                .onDrag {
+                    guard workbenchDestinationIsActive,
+                          !viewModel.isCapturingIntoDesk else { return NSItemProvider() }
+                    return WorkMaterialDragPayload(
+                        itemID: Constants.workboardDeskItemID,
+                        materialID: material.id
+                    ).itemProvider()
+                }
+                .accessibilityIdentifier("workboard-material-\(material.id.uuidString)")
+        }
+    }
+
+    private func insertionIndex(at point: CGPoint) -> Int {
+        if layoutMode == .list {
+            for (index, material) in item.materials.enumerated() {
+                if let frame = rowFrames[material.id], point.y < frame.midY { return index }
+            }
+            return item.materials.count
+        }
+        return WorkboardMosaicLayout.insertionIndex(
+            at: point,
+            in: placement,
+            containerWidth: boardWidth,
+            layoutDirection: layoutDirection
+        )
+    }
+
+    /// The marker describes a gap in the current order. Cards stay put while
+    /// hovering, so their moving targets cannot oscillate under a still finger.
+    @ViewBuilder
+    private var insertionMarker: some View {
+        if let dropLocation, let marker = markerFrame(at: insertionIndex(at: dropLocation)) {
+            Capsule()
+                .fill(AppColors.brandAmber)
+                .frame(width: marker.width, height: marker.height)
+                .position(x: marker.midX, y: marker.midY)
+                .shadow(color: AppColors.brandAmber.opacity(0.3), radius: 4)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func markerFrame(at index: Int) -> CGRect? {
+        guard !item.materials.isEmpty else { return nil }
+        let isEnd = index == item.materials.count
+        let targetIndex = min(index, item.materials.count - 1)
+        if layoutMode == .list {
+            guard let frame = rowFrames[item.materials[targetIndex].id] else { return nil }
+            return CGRect(x: frame.minX, y: (isEnd ? frame.maxY + 5 : frame.minY - 5) - 2,
+                          width: frame.width, height: 4)
+        }
+        let result = placement
+        guard targetIndex < result.placements.count else { return nil }
+        let frame = WorkboardMosaicLayout.presentedFrame(
+            result.placements[targetIndex].frame,
+            contentWidth: result.contentSize.width,
+            layoutDirection: layoutDirection
+        )
+        let inset = WorkboardMosaicLayout.horizontalInset(
+            containerWidth: boardWidth, contentWidth: result.contentSize.width
+        )
+        let leadingX = layoutDirection == .rightToLeft ? frame.maxX + 5 : frame.minX - 5
+        let trailingX = layoutDirection == .rightToLeft ? frame.minX - 5 : frame.maxX + 5
+        return CGRect(x: inset + (isEnd ? trailingX : leadingX) - 2,
+                      y: frame.minY, width: 4, height: frame.height)
+    }
+
     /// Which card one material draws. A voice note is a transport rather than a
     /// preview, so it draws the audio card; every other kind draws the source
     /// card. Both take the same board arguments and carry the same arrange
@@ -1210,7 +1349,19 @@ private struct WorkboardMaterialBoard: View {
         let onMoveLater: (() -> Void)? = index + 1 < item.materials.count
             ? { move(material, direction: .later) }
             : nil
-        if material.kind == .audio {
+        if layoutMode == .list {
+            WorkboardMaterialListRow(
+                material: material,
+                boardPosition: index + 1,
+                boardCount: item.materials.count,
+                onOpen: { onOpen(material) },
+                onShare: { onShare(material) },
+                onReattach: { onReattach(material) },
+                onMoveEarlier: onMoveEarlier,
+                onMoveLater: onMoveLater,
+                onRemove: { materialPendingRemoval = material }
+            )
+        } else if material.kind == .audio {
             WorkboardAudioCardView(
                 material: material,
                 size: material.cardSize,
@@ -1243,22 +1394,27 @@ private struct WorkboardMaterialBoard: View {
         }
     }
 
-    private func drop(_ payloads: [WorkMaterialDragPayload], at location: CGPoint) -> Bool {
+    private func drop(_ provider: NSItemProvider, at location: CGPoint) -> Bool {
         guard workbenchDestinationIsActive,
-              let moving = payloads.first,
-              moving.itemID == Constants.workboardDeskItemID,
-              item.materials.contains(where: { $0.id == moving.materialID }) else { return false }
-        let index = WorkboardMosaicLayout.insertionIndex(
-            at: location,
-            in: placement,
-            containerWidth: boardWidth,
-            layoutDirection: layoutDirection
-        )
-        Task {
-            await viewModel.reorderMaterial(
-                moving.materialID,
-                toInsertionIndex: index
-            )
+              !viewModel.isCapturingIntoDesk,
+              !item.materials.isEmpty else { return false }
+        let index = insertionIndex(at: location)
+        // Capture the visible neighbour, not an integer that an intervening
+        // import or sync could silently turn into a different destination.
+        let targetID = item.materials[min(index, item.materials.count - 1)].id
+        let position: WorkboardReorderPlacement = index == item.materials.count ? .after : .before
+        provider.loadDataRepresentation(forTypeIdentifier: UTType.conduckWorkboardMaterial.identifier) { data, _ in
+            guard let data,
+                  let moving = try? JSONDecoder().decode(WorkMaterialDragPayload.self, from: data),
+                  moving.itemID == Constants.workboardDeskItemID else { return }
+            Task { @MainActor in
+                guard workbenchDestinationIsActive else { return }
+                await viewModel.reorderMaterial(
+                    moving.materialID,
+                    relativeTo: targetID,
+                    placement: position
+                )
+            }
         }
         return true
     }

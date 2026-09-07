@@ -261,6 +261,9 @@ enum Constants {
     /// first visit on a second device earns its own showing.
     static let workboardTutorialSeenKey = "workboard_tutorial_seen"
 
+    /// Device-local board presentation; card order continues to sync normally.
+    static let workboardLayoutKey = "workboard_layout"
+
     /// macOS-only, device-local: the Diagnostics relevance gate for the Screen
     /// Recording capability row. Written by the capture preflight
     /// (`RegionCaptureController.preflightPermissions`) when Screen Recording
