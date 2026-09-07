@@ -192,6 +192,29 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
     /// nil-means-unknown; see `PendingRetryPublicationState`.
     let publicationState: PendingRetryPublicationState?
 
+    /// The desk id of the PICTURE this capture's recording belongs to, when one
+    /// press produced both — `WorkVoiceScreenshotCoordinator.materialID` of the
+    /// capture id. Nil for every capture that carried no picture, and for every
+    /// record written before this field existed.
+    ///
+    /// It is stored INDEPENDENTLY of `workImageData`. Those bytes are dropped
+    /// from the record the moment the inbox has taken them, and the link has to
+    /// outlive that: a recording republished a day later still belongs to the
+    /// picture that press produced, whether or not this entry is still
+    /// sheltering a copy of it. Nothing reconstructs the link from the
+    /// remaining bytes — an entry with no bytes is exactly the entry whose
+    /// picture already landed.
+    ///
+    /// It is NOT picture debt. The expiry clock, the exemption and the final
+    /// sweep read the destination, the publication state, `createdAt` and the
+    /// parked image FILE; a link is a fact about identity and buys this record
+    /// no extra life.
+    ///
+    /// Named for its lane rather than `attachedToMaterialID`, which is the desk
+    /// column's name, because this is a different field on a different type: it
+    /// is what the desk column is written FROM, not a copy of it.
+    let workAttachedToMaterialID: UUID?
+
     var resolvedDestination: PendingRetryDestination { destination ?? .chat }
 
     init(
@@ -203,7 +226,8 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
         lastErrorCode: Int?,
         destination: PendingRetryDestination? = nil,
         transcript: String? = nil,
-        publicationState: PendingRetryPublicationState? = nil
+        publicationState: PendingRetryPublicationState? = nil,
+        workAttachedToMaterialID: UUID? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -214,6 +238,7 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
         self.destination = destination
         self.transcript = transcript
         self.publicationState = publicationState
+        self.workAttachedToMaterialID = workAttachedToMaterialID
     }
 
     /// How long a capture may wait for a TRANSCRIPTION it can buy again.
@@ -266,7 +291,8 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
     /// other field is carried forward verbatim: dropping the words or the
     /// publication verdict here would silently cost a later recovery a provider
     /// round trip, or leave it unable to tell a refused publication from a
-    /// deleted card.
+    /// deleted card — and dropping the link would republish a recording as a
+    /// card of its own beside the picture it came from.
     func recordingAttempt(lastErrorCode: Int?) -> PendingRetryMetadata {
         PendingRetryMetadata(
             id: id,
@@ -277,7 +303,8 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
             lastErrorCode: lastErrorCode,
             destination: destination,
             transcript: transcript,
-            publicationState: publicationState
+            publicationState: publicationState,
+            workAttachedToMaterialID: workAttachedToMaterialID
         )
     }
 
@@ -297,7 +324,11 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
             lastErrorCode: lastErrorCode,
             destination: destination,
             transcript: newTranscript ?? transcript,
-            publicationState: newState ?? publicationState
+            publicationState: newState ?? publicationState,
+            // Carried verbatim. This restatement is taken by a process that
+            // observed a PUBLICATION, which learns nothing about the link and
+            // must not be able to erase it.
+            workAttachedToMaterialID: workAttachedToMaterialID
         )
     }
 }
@@ -1746,6 +1777,12 @@ actor PendingRetryStore: PendingRetryQueueWriting {
     /// file. Everything a recovery branches on is missing, which is why it is
     /// reached only where nothing else CAN describe the recording — a container
     /// the previous layout wrote, which had no records in it at all.
+    ///
+    /// `workAttachedToMaterialID` stays nil here for the same reason as
+    /// `publicationState`: a filename says nothing about whether that press
+    /// also took a picture, and a link INFERRED from the capture id would name
+    /// a screenshot card that may never have existed. An unlinked recording
+    /// renders as its own card, which is the truthful answer.
     private func adoptedMetadata(
         forID id: UUID,
         file: Inventory.AudioFile

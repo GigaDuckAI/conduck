@@ -413,6 +413,30 @@ final class InAppAudioRecorder {
         /// what keeps a capture whose words already landed from being retired.
         var owesScreenshot: Bool { screenshot != nil && !screenshotQueued }
 
+        #if !os(watchOS)
+        /// The picture card this capture's RECORDING belongs to, or nil when
+        /// this press took no picture at all.
+        ///
+        /// Two facts, not one: bytes still in hand, OR an envelope the inbox
+        /// has already taken. Either says a picture belongs to this press, and
+        /// neither on its own covers the whole flow — phase 0 runs before phase
+        /// one, so by the time the recording publishes the picture may already
+        /// have left for the queue. Testing only the bytes would still be true
+        /// today (nothing clears them), but it would make the link depend on a
+        /// field this file is free to clear; testing only the flag would lose
+        /// every capture whose picture never reached the queue at all, which is
+        /// exactly the failure the link is meant to survive.
+        ///
+        /// A PROMISE ABOUT IDENTITY. It is the id the picture takes, derived
+        /// from this capture's own id, whether or not the picture is a card
+        /// yet: a retry that lands the picture tomorrow needs no repair,
+        /// because the recording already names it.
+        var attachedPictureID: UUID? {
+            guard screenshot != nil || screenshotQueued else { return nil }
+            return WorkVoiceScreenshotCoordinator.materialID(forCapture: id)
+        }
+        #endif
+
         init(
             id: UUID,
             audio: Data,
@@ -1286,7 +1310,7 @@ final class InAppAudioRecorder {
 
         guard workCaptureFacts.screenshotStaged else { return }
         let pictureID = WorkVoiceScreenshotCoordinator.materialID(forCapture: capture.id)
-        if let present = await deskHoldsMaterial(pictureID) {
+        if let present = await deskHoldsEligibleImage(pictureID) {
             noteScreenshotPresence(present)
         }
     }
@@ -1421,8 +1445,11 @@ final class InAppAudioRecorder {
                 // …so whether it is ON THE DESK is a separate question with a
                 // separate answer, and it is asked of the desk rather than
                 // inferred. Only a card read back may be described to a person
-                // as saved.
-                noteScreenshotPresence(await deskHoldsMaterial(materialID) == true)
+                // as saved. Asked over BOTH ids the picture can land under —
+                // the drain that imports it escapes a kind collision once — and
+                // over the KIND, so the card that caused an escape is never
+                // mistaken for the picture that escaped it.
+                noteScreenshotPresence(await deskHoldsEligibleImage(materialID) == true)
                 // The picture is somewhere that survives this process now, so
                 // whatever it was owed of the quit window is settled. The
                 // recording's own declaration is separate and still standing,
@@ -1485,6 +1512,14 @@ final class InAppAudioRecorder {
                     // recovered after a relaunch is dated from its retry record,
                     // whose `createdAt` is the queue's expiry clock.
                     createdAt: capture.createdAt,
+                    // The picture this press also produced, named on the
+                    // RECORDING alone. Derived from the capture id, so it is
+                    // the same value phase 0 published under and the same one a
+                    // retry from the durable record will use — and it is set
+                    // even when phase 0 failed, because the link is a promise
+                    // about identity and the fold heals itself the moment the
+                    // picture lands.
+                    attachedTo: capture.attachedPictureID,
                     store: workStore
                 )
                 capture.materialID = card.id
@@ -1977,6 +2012,39 @@ final class InAppAudioRecorder {
         }
     }
 
+    /// Is this capture's PICTURE standing on the desk right now?
+    ///
+    /// Two candidates, in this order: the derived id the screenshot publishes
+    /// under, and that id's collision escape. The drainer republishes a card
+    /// under `WorkMaterialCollisionEscape.materialID(forCapture:)` when the
+    /// first id already names a card of another kind, so an id-only lookup
+    /// answers "not on your desk" for a picture that is sitting there under its
+    /// escape — and it answers "on your desk" for the wrong-kind card that
+    /// caused the escape in the first place. Both are receipts that lie.
+    ///
+    /// The KIND is what makes each candidate eligible. A row at the first id
+    /// that is not an image is precisely the collision, and it must not stop
+    /// the second candidate being examined.
+    ///
+    /// Nil for the same reason as `deskHoldsMaterial`: a store that could not
+    /// be read has said nothing, and callers move a fact only on a definite
+    /// answer.
+    private func deskHoldsEligibleImage(_ pictureID: UUID) async -> Bool? {
+        let candidates = [
+            pictureID,
+            WorkMaterialCollisionEscape.materialID(forCapture: pictureID)
+        ]
+        do {
+            let desk = try await workStore.fetchWorkItem(id: Constants.workboardDeskItemID)
+            guard let materials = desk?.materials else { return false }
+            return candidates.contains { candidate in
+                materials.contains { $0.id == candidate && $0.kind == .image }
+            }
+        } catch {
+            return nil
+        }
+    }
+
     /// Retire the parked copy of this capture's screenshot, now that a card
     /// owns the picture.
     ///
@@ -2221,6 +2289,20 @@ final class InAppAudioRecorder {
         let publicationState: PendingRetryPublicationState? = retryDestination == .work
             ? (capture.materialID == nil ? .phaseOneFailed : .published)
             : nil
+        // The link is recorded on its OWN terms, and the terms are not the
+        // picture's bytes. Those bytes are handed to `save` below only while no
+        // card holds them (`screenshotQueued ? nil : capture.screenshot`), so an
+        // entry armed after the queue took the picture parks no image at all —
+        // and a recovery that reconstructed the link from what is left would
+        // find nothing and publish the recording as a card of its own beside
+        // the picture it came from. A Chat capture never carries one.
+        #if !os(watchOS)
+        let workAttachedToMaterialID: UUID? = retryDestination == .work
+            ? capture.attachedPictureID
+            : nil
+        #else
+        let workAttachedToMaterialID: UUID? = nil
+        #endif
         let metadata = PendingRetryMetadata(
             id: capture.id,
             createdAt: Date(),
@@ -2230,7 +2312,8 @@ final class InAppAudioRecorder {
             lastErrorCode: error.errorCode,
             destination: retryDestination,
             transcript: capture.transcript,
-            publicationState: publicationState
+            publicationState: publicationState,
+            workAttachedToMaterialID: workAttachedToMaterialID
         )
         // The id is recorded only once the write LANDED. A save that threw
         // parked nothing, so there is no entry to reserve, nothing to clear, and

@@ -39,6 +39,11 @@ nonisolated struct WorkMaterialRowProbe: Sendable, Hashable {
     /// has to make impossible.
     let contentHash: String?
     let byteSize: Int64?
+    /// The picture this row's recording names. Per PHYSICAL row because the
+    /// link decides whether the desk draws one card or two, and a duplicate
+    /// that disagrees about it is the state the canonical ordering exists to
+    /// settle.
+    let attachedToMaterialID: UUID?
     let updatedAt: Date?
     /// Length of the presentation preview this row carries, never its bytes: a
     /// probe answers which rows got one, and a preview has no business crossing
@@ -291,8 +296,14 @@ private final class WorkMaterialThumbnailDigest: @unchecked Sendable {
 /// looking identical in the keys above it — the device-local lane names no blob,
 /// so `contentHash` ties for two vault rows holding DIFFERENT bytes and
 /// `localVaultKey` is what separates them; the lane, size, kind, text, address,
-/// filename, mime type, caption, card size and preview each drive availability
-/// or what the card draws.
+/// filename, mime type, caption, card size, companion link and preview each
+/// drive availability or what the card draws.
+///
+/// `attachedToMaterialID` is here for the same reason as every other synced key
+/// and one of its own: a duplicate pair that differs ONLY in the link would
+/// otherwise be decided by `rowKey`, and `rowKey` is device-local — so one
+/// device would draw the recording inside its picture while another drew two
+/// cards, from the same two rows.
 ///
 /// SYNCED VERSUS LOCAL. Every key except the last is a mirrored column, so two
 /// devices compute the same value and agree on the winner without talking.
@@ -323,9 +334,17 @@ nonisolated struct WorkMaterialCanonicalOrder: Comparable, Sendable {
     let mimeType: String?
     let caption: String?
     let cardSize: String?
+    /// The picture this row's recording names, if any.
+    let attachedToMaterialID: UUID?
     /// The physical row, as a value. Unique by construction, which is what makes
     /// this ordering total — and DEVICE-LOCAL, which is why it is last.
     let rowKey: String
+
+    /// `attachedToMaterialID` as an orderable, synced value. `UUID` states no
+    /// `Comparable` conformance to rely on, and its canonical string is a fixed
+    /// layout over `0-9A-F` — so two devices comparing this compare exactly the
+    /// same characters in the same positions and reach the same verdict.
+    private let attachedToKey: String?
 
     private let thumbnail: WorkMaterialThumbnailDigest
 
@@ -344,6 +363,7 @@ nonisolated struct WorkMaterialCanonicalOrder: Comparable, Sendable {
         mimeType: String?,
         caption: String?,
         cardSize: String?,
+        attachedToMaterialID: UUID? = nil,
         thumbnailData: Data?,
         rowKey: String
     ) {
@@ -361,6 +381,8 @@ nonisolated struct WorkMaterialCanonicalOrder: Comparable, Sendable {
         self.mimeType = mimeType
         self.caption = caption
         self.cardSize = cardSize
+        self.attachedToMaterialID = attachedToMaterialID
+        attachedToKey = attachedToMaterialID?.uuidString
         self.rowKey = rowKey
         thumbnail = WorkMaterialThumbnailDigest(data: thumbnailData)
     }
@@ -395,6 +417,11 @@ nonisolated struct WorkMaterialCanonicalOrder: Comparable, Sendable {
         if let decided = decide(lhs.mimeType, rhs.mimeType) { return decided }
         if let decided = decide(lhs.caption, rhs.caption) { return decided }
         if let decided = decide(lhs.cardSize, rhs.cardSize) { return decided }
+        // The companion link, compared as its canonical string. Two rows that
+        // agree on every key above and differ here are one recording imported
+        // with and without its picture; deciding that by `rowKey` would make
+        // the fold a device-local accident.
+        if let decided = decide(lhs.attachedToKey, rhs.attachedToKey) { return decided }
         // LAST of the synced keys, and the only one that costs anything to read
         // — which is why every cheap key is asked first, and why even this key
         // is asked in two steps.
@@ -2861,13 +2888,7 @@ extension ConversationStore {
             guard owners.count == 1, let owner = owners.first else {
                 throw WorkboardStoreError.invalidMaterialOwner
             }
-            if let expectedOwnerRevision {
-                guard let item = try Self.workItemRow(id: owner, in: context),
-                      let updatedAt = item.value(forKey: "updatedAt") as? Date,
-                      Self.workRevision(for: updatedAt) == expectedOwnerRevision else {
-                    throw WorkboardStoreError.staleRevision
-                }
-            }
+            try Self.requireOwnerRevision(expectedOwnerRevision, ownerID: owner, in: context)
             rows.forEach(context.delete)
             // PAIRED DELETE. The card and its payload leave in ONE save, across
             // both stores, so no device is left holding bytes for a card that
@@ -2884,6 +2905,223 @@ extension ConversationStore {
         }
         if let key = outcome.1 { try? await workAssetVault.remove(key) }
         if outcome.0 { await postDidChange() }
+    }
+
+    /// The desk's compare-and-swap, in ONE place.
+    ///
+    /// The token is the bit pattern of a `Date`, not a rounded timestamp
+    /// (`workRevision(for:)`), and an owner row that carries no `updatedAt` at
+    /// all refuses rather than matching: a token for a revision the row cannot
+    /// state is not a comparison anybody made. Nil is not a wildcard the caller
+    /// smuggles past a check — it means the caller holds no board state to
+    /// guard, which every headless publication lane genuinely does not.
+    ///
+    /// Shared by the two deletes so the pair mutation cannot drift into
+    /// comparing something subtly different from the single one; the group
+    /// delete's whole reason for existing is that two separate deletes cannot
+    /// share ONE such comparison.
+    private static func requireOwnerRevision(
+        _ expected: Int64?,
+        ownerID: UUID,
+        in context: NSManagedObjectContext
+    ) throws {
+        guard let expected else { return }
+        guard let item = try workItemRow(id: ownerID, in: context),
+              let updatedAt = item.value(forKey: "updatedAt") as? Date,
+              workRevision(for: updatedAt) == expected else {
+            throw WorkboardStoreError.staleRevision
+        }
+    }
+
+    /// Every PHYSICAL row of one logical material THIS owner holds.
+    ///
+    /// Owner-scoped on purpose: a group mutation is a statement about one
+    /// desk, and rows of the same logical id parked under a legacy owner are
+    /// not this desk's to delete — the same boundary `deleteWorkMaterial`
+    /// draws when it is given a `workItemID`. Sorted like every other
+    /// duplicate fetch so a reader that does not run the canonical selection
+    /// still sees a stable order.
+    private static func workMaterialRows(
+        id: UUID,
+        ownedBy workItemID: UUID,
+        in context: NSManagedObjectContext
+    ) throws -> [NSManagedObject] {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "id == %@", id as CVarArg),
+            NSPredicate(format: "workItemID == %@", workItemID as CVarArg),
+        ])
+        request.sortDescriptors = [
+            NSSortDescriptor(key: "updatedAt", ascending: false),
+            NSSortDescriptor(key: "createdAt", ascending: false),
+            NSSortDescriptor(key: "title", ascending: false),
+        ]
+        return try context.fetch(request)
+    }
+
+    /// The picture a recording's `attachedToMaterialID` actually resolves to on
+    /// this desk, or nil when it resolves to none.
+    ///
+    /// TWO CANDIDATES AND NO MORE, in this order: the id the recording names,
+    /// then the one escape a colliding publication may have taken
+    /// (`WorkMaterialCollisionEscape` — there is deliberately no second
+    /// escape, so there is no third candidate).
+    ///
+    /// FIRST ELIGIBLE, NEVER FIRST EXISTING. A row of the wrong kind standing
+    /// at the named id is precisely WHY the picture escaped, so a candidate
+    /// that fails the conditions is skipped rather than ending the search;
+    /// stopping at it would make collision recovery permanently unfoldable.
+    ///
+    /// A candidate is eligible when it is on THIS owner, is an `.image`, and
+    /// names no picture of its own — a chain is not a fold. The kind is read
+    /// from the CANONICAL row, the same one the board draws from, so the store
+    /// and the board cannot disagree about what a duplicate-merged card is.
+    ///
+    /// A RECORDING THAT NAMES ITSELF RESOLVES TO NOTHING, and this returns nil
+    /// before either candidate is looked up rather than merely skipping the
+    /// self-referential one: the escape of the child's OWN id is not the child,
+    /// so a skip would let whatever picture happens to sit at that derived id
+    /// validate a pair the board never folded and hand the group delete two
+    /// cards that were never a pair. No lane writes a self-link; the stored
+    /// value is raw, so a corrupt or synced row can carry one.
+    ///
+    /// The link is a promise about identity, not existence: a recording whose
+    /// picture never landed resolves to nil here and is a standalone card,
+    /// which is correct rather than a defect.
+    private static func eligibleCompanionPictureID(
+        link: UUID,
+        child: UUID,
+        workItemID: UUID,
+        in context: NSManagedObjectContext
+    ) throws -> UUID? {
+        guard link != child else { return nil }
+        let candidates = [link, WorkMaterialCollisionEscape.materialID(forCapture: link)]
+        for candidate in candidates {
+            guard candidate != child else { continue }
+            let rows = try workMaterialRows(id: candidate, ownedBy: workItemID, in: context)
+            guard let row = canonicalRow(among: rows) else { continue }
+            guard WorkMaterialKind(stored: row.value(forKey: "kind") as? String) == .image else {
+                continue
+            }
+            guard row.value(forKey: "attachedToMaterialID") as? UUID == nil else { continue }
+            return candidate
+        }
+        return nil
+    }
+
+    /// Delete a folded pair — a picture and the recording that names it — as
+    /// ONE mutation.
+    ///
+    /// WHY IT IS NOT TWO DELETES. `deleteWorkMaterial` advances the desk's
+    /// `updatedAt`, so a second call carrying the token the person's board was
+    /// holding is refused by the first call's own write. What that leaves is
+    /// the worst outcome the card has: the picture gone and its recording
+    /// standing alone on the desk, delivered by the one control that offered
+    /// to remove both. So the pair takes ONE transaction, ONE compare-and-swap,
+    /// ONE timestamp and ONE save, and either both cards go or neither does.
+    ///
+    /// THE PAIR IS THE CALLER'S, AND IT IS ONLY VALIDATED HERE. `childID` is
+    /// the companion the person was looking at; this call never re-picks a
+    /// different child, because the board's own selection rule (lowest child
+    /// UUID among several claimants) can move under a sync while a confirmation
+    /// alert is up, and deleting a recording nobody pointed at is unrecoverable.
+    /// What it does check is that the named pair IS a pair: the child is an
+    /// `.audio` on this desk, it names a picture, and that name resolves —
+    /// through `eligibleCompanionPictureID`, the same two candidates the board
+    /// folds by — to exactly `parentID`. Anything else is
+    /// `WorkboardStoreError.invalidMaterialCompanion` and nothing is deleted.
+    ///
+    /// EVERY PHYSICAL ROW of both materials goes, duplicates included: CloudKit
+    /// can merge one logical card into several, and a survivor would resurrect
+    /// the card the person removed. Both blob lanes are retired in the same
+    /// save (`deleteBlobRows(materialID:in:)`) — paired deletion is still the
+    /// only reclamation blobs have.
+    ///
+    /// VAULT KEYS ARE COLLECTED ACROSS BOTH MATERIALS AND ACROSS EVERY ROW,
+    /// distinct, never `.first`: two duplicate rows can name different leaves
+    /// holding different bytes, and a leaf nothing references is a payload no
+    /// card will ever reclaim. The files go AFTER the save, because a file
+    /// system is not part of the database transaction and bytes removed in
+    /// front of a refused save would be bytes taken from cards still standing.
+    ///
+    /// WHAT IT DOES NOT DO. It does not sweep: a child published on another
+    /// device concurrently with this deletion can still arrive afterwards and
+    /// render standalone, owning its own payload. The owner revision is a local
+    /// conflict check, not a distributed deletion marker.
+    ///
+    /// - Parameter parentID: The picture. Never re-derived.
+    /// - Parameter childID: The recording, exactly as displayed.
+    /// - Parameter workItemID: The desk both must sit on.
+    /// - Parameter expectedOwnerRevision: Compare-and-swap token, supplied by
+    ///   the board path that knows which revision the person saw. Nil skips the
+    ///   comparison, in the same sense it does for every other material
+    ///   mutation here.
+    func deleteWorkMaterialGroup(
+        parentID: UUID,
+        childID: UUID,
+        workItemID: UUID,
+        expectedOwnerRevision: Int64? = nil
+    ) async throws {
+        try await ensureLoaded()
+        let context = newWriteContext()
+        let vaultKeys = try await context.perform { [context] () -> [String] in
+            // A card is not its own companion. Unreachable through the kind
+            // checks below — one row cannot be both `.audio` and `.image` —
+            // and stated anyway, because the deletion that follows would
+            // otherwise be handed the same rows twice.
+            guard parentID != childID else {
+                throw WorkboardStoreError.invalidMaterialCompanion
+            }
+            let childRows = try Self.workMaterialRows(
+                id: childID, ownedBy: workItemID, in: context
+            )
+            guard let childRow = Self.canonicalRow(among: childRows) else {
+                throw WorkboardStoreError.materialNotFound
+            }
+            guard WorkMaterialKind(stored: childRow.value(forKey: "kind") as? String) == .audio
+            else {
+                throw WorkboardStoreError.invalidMaterialCompanion
+            }
+            guard let link = childRow.value(forKey: "attachedToMaterialID") as? UUID else {
+                throw WorkboardStoreError.invalidMaterialCompanion
+            }
+            let resolved = try Self.eligibleCompanionPictureID(
+                link: link, child: childID, workItemID: workItemID, in: context
+            )
+            guard resolved == parentID else {
+                throw WorkboardStoreError.invalidMaterialCompanion
+            }
+            // Non-empty by construction: the resolution above found a canonical
+            // row for exactly this id on exactly this desk.
+            let parentRows = try Self.workMaterialRows(
+                id: parentID, ownedBy: workItemID, in: context
+            )
+            guard !parentRows.isEmpty else {
+                throw WorkboardStoreError.materialNotFound
+            }
+
+            // The pair is proved before the token is compared, so a refusal
+            // says which of the two things was wrong.
+            try Self.requireOwnerRevision(
+                expectedOwnerRevision, ownerID: workItemID, in: context
+            )
+
+            let rows = parentRows + childRows
+            let keys = Set(rows.compactMap { $0.value(forKey: "localVaultKey") as? String })
+            rows.forEach(context.delete)
+            try Self.deleteBlobRows(materialID: parentID, in: context)
+            try Self.deleteBlobRows(materialID: childID, in: context)
+            // ONE timestamp for the pair. Two would be two revisions, and the
+            // board would have to be told twice that one card went.
+            if let item = try Self.workItemRow(id: workItemID, in: context) {
+                item.setValue(Date(), forKey: "updatedAt")
+            }
+            try context.save()
+            return keys.sorted()
+        }
+        for key in vaultKeys { try? await workAssetVault.remove(key) }
+        // ONE notification, after both cards and both payloads are gone.
+        await postDidChange()
     }
 
     /// Rank the board's cards through the SAME rewrite the editor's autosave
@@ -3542,6 +3780,7 @@ extension ConversationStore {
             mimeType: row.value(forKey: "mimeType") as? String,
             caption: row.value(forKey: "caption") as? String,
             cardSize: row.value(forKey: "cardSize") as? String,
+            attachedToMaterialID: row.value(forKey: "attachedToMaterialID") as? UUID,
             thumbnailData: row.value(forKey: "thumbnailData") as? Data,
             rowKey: row.objectID.uriRepresentation().absoluteString
         )
@@ -3699,6 +3938,13 @@ extension ConversationStore {
         // whatever blob happens to carry its id.
         row.setValue(storageMode == .syncedPayload ? contentHash : nil, forKey: "contentHash")
         row.setValue(draft.cardSize.storedValue, forKey: "cardSize")
+        // Straight off the draft, unconditionally — including the nil that
+        // every card but a companion recording carries. The lane that mints the
+        // draft is the ONE place that decides whether a capture produced a
+        // picture as well; this write may not second-guess it from columns
+        // (a kind, a mime type) that describe the recording rather than the
+        // press it came from.
+        row.setValue(draft.attachedToMaterialID, forKey: "attachedToMaterialID")
         row.setValue(draft.sourceDevice, forKey: "sourceDevice")
         row.setValue(draft.createdAt, forKey: "createdAt")
         row.setValue(updatedAt, forKey: "updatedAt")
@@ -3789,6 +4035,12 @@ extension ConversationStore {
         let sourceDevice: String?
         let sequence: Int
         let cardSize: WorkMaterialCardSize
+        /// The picture this recording named when it published. Projected raw —
+        /// nothing here checks that the named material exists, is an image or
+        /// even sits on this desk, because a link is a statement about the
+        /// press, not about what has landed yet. Resolution belongs to the
+        /// reader that draws the board.
+        let attachedToMaterialID: UUID?
         let createdAt: Date
         let updatedAt: Date
         /// Where this row sits in the one ordering both selectors use, built by
@@ -3825,6 +4077,7 @@ extension ConversationStore {
             sourceDevice = row.value(forKey: "sourceDevice") as? String
             sequence = (row.value(forKey: "sequence") as? NSNumber)?.intValue ?? 0
             cardSize = WorkMaterialCardSize(stored: row.value(forKey: "cardSize") as? String)
+            attachedToMaterialID = row.value(forKey: "attachedToMaterialID") as? UUID
             createdAt = row.value(forKey: "createdAt") as? Date ?? .distantPast
             updatedAt = ConversationStore.materialRevisionDate(
                 updatedAt: row.value(forKey: "updatedAt") as? Date,
@@ -3879,6 +4132,7 @@ extension ConversationStore {
                 sourceDevice: sourceDevice,
                 sequence: sequence,
                 cardSize: cardSize,
+                attachedToMaterialID: attachedToMaterialID,
                 createdAt: createdAt,
                 updatedAt: updatedAt
             )
@@ -3914,6 +4168,7 @@ extension ConversationStore {
                     localVaultKey: row.value(forKey: "localVaultKey") as? String,
                     contentHash: row.value(forKey: "contentHash") as? String,
                     byteSize: (row.value(forKey: "byteSize") as? NSNumber)?.int64Value,
+                    attachedToMaterialID: row.value(forKey: "attachedToMaterialID") as? UUID,
                     updatedAt: row.value(forKey: "updatedAt") as? Date,
                     thumbnailByteCount: (row.value(forKey: "thumbnailData") as? Data)?.count,
                     title: row.value(forKey: "title") as? String,
@@ -3951,13 +4206,20 @@ extension ConversationStore {
     ///   card differently before their orders converge, and rank is what decides
     ///   the BOARD's candidate order, so it is how a test makes the two
     ///   selectors see the same rows in different sequences.
+    /// - Parameter attachedToMaterialID: the picture the copy names. A recording
+    ///   that published on one device before its picture existed and on another
+    ///   after is imported as two rows differing in NOTHING ELSE, and the
+    ///   canonical ordering has to settle that from synced columns alone — this
+    ///   is the only way to build the pair. Like `contentHash` it cannot CLEAR
+    ///   the column; the source's own value is what a nil leaves standing.
     func _duplicateWorkMaterialRowForTesting(
         id: UUID,
         updatedAt: Date? = nil,
         contentHash: String? = nil,
         byteSize: Int64? = nil,
         localVaultKey: String? = nil,
-        sequence: Int? = nil
+        sequence: Int? = nil,
+        attachedToMaterialID: UUID? = nil
     ) async {
         do { try await ensureLoaded() } catch { return }
         let context = newWriteContext()
@@ -3979,6 +4241,9 @@ extension ConversationStore {
             if let localVaultKey { copy.setValue(localVaultKey, forKey: "localVaultKey") }
             if let sequence {
                 copy.setValue(NSNumber(value: Int32(clamping: sequence)), forKey: "sequence")
+            }
+            if let attachedToMaterialID {
+                copy.setValue(attachedToMaterialID, forKey: "attachedToMaterialID")
             }
             try? context.save()
         }

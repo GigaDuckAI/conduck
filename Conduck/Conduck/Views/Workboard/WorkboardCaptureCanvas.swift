@@ -1070,6 +1070,55 @@ private struct WorkboardPaneDropModifier: ViewModifier {
 
 // MARK: - The board
 
+/// What a folded card can do to the RECORDING drawn inside it.
+///
+/// Each route acts on one member and validates only that member — the recording
+/// plays and shares whether or not the picture's bytes are on this device, and
+/// the picture opens whether or not the recording's are. There is deliberately
+/// no "share both": the desk has one share coordinator, it prepares one file,
+/// and a second envelope would be a second definition of what leaving Work
+/// means.
+///
+/// Deleting is absent on purpose. A folded card is ONE card, so it has ONE
+/// Delete, and that Delete removes both members together through
+/// `WorkboardViewModel.removeGroupFromBoard`.
+struct WorkboardCompanionActions {
+    /// Quick Look on the recording. The same route the recording's own card
+    /// used before it folded.
+    var open: () -> Void
+    /// The system share sheet on the recording's file, not the picture's.
+    var share: () -> Void
+    /// Repair the recording's bytes on this device. A readable screenshot says
+    /// nothing about whether its recording arrived, so the two are repaired
+    /// separately — the card's own Reattach replaces the PICTURE, which is the
+    /// wrong file for a missing recording.
+    var reattach: () -> Void
+}
+
+/// Binds a card's companion to the board's own single-material seams.
+///
+/// Pure and separate from the view so the binding itself can be asserted: the
+/// failure this exists to prevent is a route that acts on the PICTURE while its
+/// menu row says "Recording". Every closure here is handed
+/// `companion.material` — the child as its own card — so the seams stay
+/// single-material and their availability gates answer for the recording.
+enum WorkboardCompanionRouting {
+    static func actions(
+        for material: WorkboardMaterialSnapshot,
+        onOpen: @escaping (WorkboardMaterialSnapshot) -> Void,
+        onShare: @escaping (WorkboardMaterialSnapshot) -> Void,
+        onReattach: @escaping (WorkboardMaterialSnapshot) -> Void
+    ) -> WorkboardCompanionActions? {
+        guard let companion = material.companion else { return nil }
+        let child = companion.material
+        return WorkboardCompanionActions(
+            open: { onOpen(child) },
+            share: { onShare(child) },
+            reattach: { onReattach(child) }
+        )
+    }
+}
+
 /// The free card board. Cards render in the item's OWN material order — the
 /// repository already sorts by `(sequence, createdAt, id)` — laid out by
 /// `WorkboardMosaicLayout`, and every drop resolves to an insertion slot read
@@ -1103,6 +1152,14 @@ private struct WorkboardMaterialBoard: View {
     /// got rather than which one it asked for.
     private var gridColumns: Int {
         WorkboardMosaicEngine(metrics: metrics).columnCount(forWidth: boardWidth)
+    }
+
+    /// The tile one grid unit is granted here. The smallest footprint IS one
+    /// unit, so a folded small card sizes its band and its row against the tile
+    /// it actually received — the same width that grants 81 points at 360
+    /// grants 64 at 292.
+    private var gridUnitHeight: CGFloat {
+        WorkboardMosaicEngine(metrics: metrics).unitSize(forWidth: boardWidth).height
     }
 
     /// Placement is recomputed from the same inputs the `Layout` memoises, so
@@ -1187,11 +1244,19 @@ private struct WorkboardMaterialBoard: View {
                 materialPendingRemoval = nil
             }
         } message: { material in
+            // A folded card is two materials, so the sentence names both. The
+            // person is looking at one card and would otherwise read a promise
+            // about the picture while the recording inside it goes too.
             Text(String.localizedStringWithFormat(
-                String(localized: LocalizedStringResource(
-                    "workboard.material.remove.confirm.message",
-                    defaultValue: "“%@” will be removed from your Work desk."
-                )),
+                material.companion == nil
+                    ? String(localized: LocalizedStringResource(
+                        "workboard.material.remove.confirm.message",
+                        defaultValue: "“%@” will be removed from your Work desk."
+                    ))
+                    : String(localized: LocalizedStringResource(
+                        "workboard.material.remove.confirm.message.pair",
+                        defaultValue: "“%@” and the recording inside it will be removed from your Work desk."
+                    )),
                 material.name
             ))
         }
@@ -1248,6 +1313,11 @@ private struct WorkboardMaterialBoard: View {
         }
     }
 
+    /// The cards, in DISPLAYED order. A folded recording is not one of them —
+    /// it rides inside its picture's snapshot — so the enumerated index is a
+    /// card position and stays the right thing to hand a mosaic, a drag payload
+    /// and an accessibility position count.
+    ///
     private var boardItems: some View {
         ForEach(Array(item.materials.enumerated()), id: \.element.id) { index, material in
             card(for: material, at: index)
@@ -1341,6 +1411,12 @@ private struct WorkboardMaterialBoard: View {
     /// not pre-filter by availability: a card that decided for itself which
     /// state may be repaired would be a second copy of that rule, and the two
     /// copies are what let a tile and its menu disagree about the same card.
+    ///
+    /// A folded card additionally carries the routes for the recording inside
+    /// it, bound ONCE here so the two card families that can draw a companion
+    /// cannot disagree about which material those routes act on. They are nil
+    /// for every card that folded nothing, which is what keeps the rows off a
+    /// card that has no recording to offer them for.
     @ViewBuilder
     private func card(for material: WorkboardMaterialSnapshot, at index: Int) -> some View {
         let onMoveEarlier: (() -> Void)? = index > 0
@@ -1349,6 +1425,12 @@ private struct WorkboardMaterialBoard: View {
         let onMoveLater: (() -> Void)? = index + 1 < item.materials.count
             ? { move(material, direction: .later) }
             : nil
+        let companionRoutes = WorkboardCompanionRouting.actions(
+            for: material,
+            onOpen: onOpen,
+            onShare: onShare,
+            onReattach: onReattach
+        )
         if layoutMode == .list {
             WorkboardMaterialListRow(
                 material: material,
@@ -1359,7 +1441,10 @@ private struct WorkboardMaterialBoard: View {
                 onReattach: { onReattach(material) },
                 onMoveEarlier: onMoveEarlier,
                 onMoveLater: onMoveLater,
-                onRemove: { materialPendingRemoval = material }
+                onRemove: { materialPendingRemoval = material },
+                onOpenCompanion: companionRoutes?.open,
+                onShareCompanion: companionRoutes?.share,
+                onReattachCompanion: companionRoutes?.reattach
             )
         } else if material.kind == .audio {
             WorkboardAudioCardView(
@@ -1381,6 +1466,7 @@ private struct WorkboardMaterialBoard: View {
                 material: material,
                 size: material.cardSize,
                 grantedColumns: gridColumns,
+                grantedUnitHeight: gridUnitHeight,
                 boardPosition: index + 1,
                 boardCount: item.materials.count,
                 onOpen: { onOpen(material) },
@@ -1389,7 +1475,10 @@ private struct WorkboardMaterialBoard: View {
                 onSetSize: { size in setSize(size, for: material) },
                 onMoveEarlier: onMoveEarlier,
                 onMoveLater: onMoveLater,
-                onRemove: { materialPendingRemoval = material }
+                onRemove: { materialPendingRemoval = material },
+                onOpenCompanion: companionRoutes?.open,
+                onShareCompanion: companionRoutes?.share,
+                onReattachCompanion: companionRoutes?.reattach
             )
         }
     }
@@ -1446,10 +1535,25 @@ private struct WorkboardMaterialBoard: View {
         }
     }
 
+    /// One card, one Delete. A folded card removes BOTH of its materials in one
+    /// store mutation, so the recording can never be left behind as an orphan
+    /// card the person never asked to keep.
+    ///
+    /// The companion id comes from the card that raised the menu — the pair the
+    /// person was looking at — and is passed through unchanged. Re-resolving the
+    /// fold here would let a sync that arrived mid-confirmation delete a
+    /// different recording from the one on screen.
     private func remove(_ material: WorkboardMaterialSnapshot) {
         guard workbenchDestinationIsActive else { return }
         Task {
-            await viewModel.removeMaterialFromBoard(material.id)
+            if let companion = material.companion {
+                await viewModel.removeGroupFromBoard(
+                    parentID: material.id,
+                    childID: companion.id
+                )
+            } else {
+                await viewModel.removeMaterialFromBoard(material.id)
+            }
         }
     }
 }
@@ -1489,6 +1593,341 @@ enum WorkboardCardArtworkMode: String, Equatable, Sendable {
     }
 }
 
+/// One row a folded card offers about the recording inside it. Named as
+/// actions rather than as strings so the menu, the VoiceOver actions and the
+/// transport cannot drift apart about what is offered, and so the set is
+/// decidable without mounting a card.
+enum WorkboardCompanionAction: String, Equatable, Sendable, CaseIterable {
+    case play
+    case pause
+    case cancelLoading
+    case openRecording
+    case shareRecording
+    /// The recording's own repair. A folded card that dropped this row would
+    /// take the only route back for a recording whose local bytes are gone —
+    /// the picture's Reattach answers for the picture.
+    case reattachRecording
+}
+
+/// What a picture's folded recording draws, and where.
+///
+/// Stated apart from the view, and pure, because the band appears in three
+/// different tiles — over the photograph's scrim, inside a standard/large tile
+/// with no thumbnail to fill itself with, and on the smallest footprint — and
+/// "a picture with a recording always shows it" must be ONE rule rather than
+/// three layout branches that can each forget it. `WorkboardCompanionFold`
+/// decides whether there is a companion at all; this decides only how the card
+/// that hid it draws it.
+///
+/// The band is drawn for ANY card carrying a companion, without re-checking the
+/// parent's kind: the fold only ever attaches a recording to a picture, and a
+/// card that hid a recording and then declined to draw it would be the one way
+/// a material could vanish from the desk.
+enum WorkboardCompanionBand {
+    /// How the band is drawn on one card.
+    enum Placement: String, Equatable, Sendable {
+        /// On the photograph's bottom scrim, where the colours are literals
+        /// because the surface underneath is an arbitrary picture.
+        case scrim
+        /// In the card's own text column, on the elevated card surface.
+        case inline
+        /// The transport alone, on a strip too short to hold words. The
+        /// smallest tile is ONE grid unit — as little as 64 points, and never
+        /// more than 81 on a compact board — and the strip band's own words
+        /// plus the stacked thumbnail-and-name body do not both fit inside it,
+        /// so the band gives up everything the card already says elsewhere: the
+        /// recording's name and transcript stay in the card's spoken label and
+        /// in its rows.
+        case compact
+    }
+
+    /// - Parameter footprint: the size the card was actually GRANTED, exactly
+    ///   as `WorkboardCardArtworkMode.resolve` takes it — a `large` card the
+    ///   mosaic clamped draws the standard tile, so it draws the standard band.
+    static func placement(
+        for material: WorkboardMaterialSnapshot,
+        footprint: WorkMaterialCardSize
+    ) -> Placement? {
+        guard material.companion != nil else { return nil }
+        // The smallest tile is compact whatever it draws inside itself: a
+        // single grid unit has no room for a strip band's words on TOP of the
+        // tile's own content, so the footprint decides before the artwork does.
+        guard footprint != .small else { return .compact }
+        switch WorkboardCardArtworkMode.resolve(
+            kind: material.kind,
+            hasThumbnail: material.thumbnailData != nil,
+            footprint: footprint
+        ) {
+        case .imageForward: return .scrim
+        case .inline: return .inline
+        }
+    }
+
+    /// The pieces of the smallest tile's vertical budget at the REFERENCE unit,
+    /// named here rather than left as literals in the view so the drawn sizes
+    /// and the mosaic engine's own unit are one arithmetic a test can add up.
+    /// The strip band (a 32-point transport, the recording's name and the
+    /// progress track) plus the stacked thumbnail-and-name body needs about 116
+    /// points — far more than the 64 to 81 a compact board's unit gives — which
+    /// is why the small footprint draws neither.
+    static let compactTransport: CGFloat = 26
+    static let compactBandPadding: CGFloat = 4
+    /// The thumbnail on a small folded card's single content row.
+    static let compactArtwork: CGFloat = 24
+    /// The inset the smallest tile draws its content in.
+    static let compactInset: CGFloat = 9
+    /// The tile the sizes above are drawn at: one grid unit at the compact
+    /// board width. The grid grants LESS than this whenever the board is
+    /// narrower — 71 points at 320, 64 points at the 292 where the four-column
+    /// grid gives way — so the sizes above are a ceiling, never a promise.
+    static let referenceUnitHeight: CGFloat = 81
+
+    /// The compact band and the row it stands on, sized for the tile the mosaic
+    /// actually granted.
+    ///
+    /// A single value rather than four call sites reading four statics, because
+    /// the ONE thing that matters about these numbers is their sum: the band is
+    /// drawn ON the tile, so a body that overflows is not merely clipped — it
+    /// ends up hidden BEHIND the band, taking the picture's name and its
+    /// availability glyph with it.
+    struct CompactMetrics: Equatable, Sendable {
+        let transport: CGFloat
+        let bandPadding: CGFloat
+        let artwork: CGFloat
+        let inset: CGFloat
+
+        /// A compact band is its transport and nothing else, so its height is
+        /// one number rather than whatever dynamic type does to a line of words.
+        var bandHeight: CGFloat { transport + 2 * bandPadding }
+        /// What a folded small card asks of its tile, top to bottom.
+        var foldedHeight: CGFloat { artwork + 2 * inset + bandHeight }
+    }
+
+    /// The compact sizes for a tile of `tileHeight` points.
+    ///
+    /// Everything scales with the granted tile below the reference unit and
+    /// nothing grows above it: the fit is then arithmetic rather than luck —
+    /// the pieces sum to at most `76/81` of whatever tile they are given, so a
+    /// folded small card fits every unit the grid can produce, at every width,
+    /// at every dynamic type size. Growing on a wide board would instead put a
+    /// 46-point transport on a tile whose neighbours are drawn at 26.
+    static func compactMetrics(forTileHeight tileHeight: CGFloat) -> CompactMetrics {
+        let scale = compactScale(forTileHeight: tileHeight)
+        // Rounded DOWN: half a point of slack per piece is invisible, and
+        // rounding the other way would spend a tile the grid never granted.
+        return CompactMetrics(
+            transport: (compactTransport * scale).rounded(.down),
+            bandPadding: (compactBandPadding * scale).rounded(.down),
+            artwork: (compactArtwork * scale).rounded(.down),
+            inset: (compactInset * scale).rounded(.down)
+        )
+    }
+
+    /// A tile no bigger than the reference unit shrinks the drawing in
+    /// proportion; a bigger one draws it as designed. A tile of no height at
+    /// all is a card that has not been measured yet, which draws the reference
+    /// rather than collapsing to nothing.
+    private static func compactScale(forTileHeight tileHeight: CGFloat) -> CGFloat {
+        guard tileHeight.isFinite, tileHeight > 0 else { return 1 }
+        return min(1, tileHeight / referenceUnitHeight)
+    }
+
+    /// The strip band every other placement draws: a 32-point transport inside
+    /// 8 points of padding.
+    static let stripBandHeight: CGFloat = 32 + 2 * 8
+    /// The stacked thumbnail-and-name body a card draws when no band is
+    /// standing on it: a 30-point thumbnail, 6 points of spacing and a line of
+    /// name, inside the compact inset.
+    static let stackedBodyHeight: CGFloat = 30 + 6 + 14 + 2 * compactInset
+
+    /// What a folded card asks of the tile it was granted, for the band that
+    /// card actually draws.
+    ///
+    /// Stated for every placement, and keyed on the placement rather than on
+    /// the footprint, so the question a test asks is the question the card
+    /// answered: a card that stopped drawing the compact band falls back to the
+    /// strip band standing on the stacked body, and that arrangement is
+    /// measurable here instead of only visible as clipping on a device.
+    static func foldedHeight(
+        drawing placement: Placement,
+        inTileOfHeight tileHeight: CGFloat
+    ) -> CGFloat {
+        switch placement {
+        case .compact: return compactMetrics(forTileHeight: tileHeight).foldedHeight
+        case .scrim, .inline: return stripBandHeight + stackedBodyHeight
+        }
+    }
+
+    /// The words the band names the recording with: the transcript's lead line,
+    /// which the publication lane already wrote onto the recording's title, and
+    /// the same "Voice note" placeholder that card carried while the words were
+    /// pending or after a transcription failed. Never a second derivation of
+    /// the title — the folded recording and a standalone one are named
+    /// identically.
+    static func title(for companion: WorkboardCompanionSnapshot) -> String {
+        let name = companion.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name.isEmpty else { return name }
+        return String(localized: LocalizedStringResource(
+            "workboard.voice.recording.untitled",
+            defaultValue: "Voice note"
+        ))
+    }
+
+    /// The words under the name, when there are any. A recording with no
+    /// transcript draws none rather than a placeholder: the recording is the
+    /// material and the words are an extra, exactly as on the audio card.
+    static func transcript(for companion: WorkboardCompanionSnapshot) -> String? {
+        guard let text = companion.textContent?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
+    }
+
+    /// How much of the transcript a footprint can carry. The smallest tile
+    /// carries none — its band is compact and draws no words at all, because a
+    /// single grid unit is already spending its height on the picture and its
+    /// name — and the large tile spends its extra height on the words.
+    static func transcriptLineLimit(for footprint: WorkMaterialCardSize) -> Int? {
+        switch footprint {
+        case .small: return nil
+        case .standard: return 2
+        case .large: return 6
+        }
+    }
+
+    /// The rows this card offers about the recording, in menu order.
+    ///
+    /// Each one asks the COMPANION's availability, never the picture's: a
+    /// screenshot that is readable here says nothing about whether its
+    /// recording's bytes arrived, and the two are separate materials with
+    /// separate lanes.
+    static func actions(
+        for companion: WorkboardCompanionSnapshot,
+        phase: WorkboardAudioPhase,
+        hasOpenRecording: Bool,
+        hasShareRecording: Bool,
+        hasReattachRecording: Bool = false
+    ) -> [WorkboardCompanionAction] {
+        var actions: [WorkboardCompanionAction] = []
+        if WorkboardCardActionPolicy.allows(.play, when: companion.availability) {
+            switch WorkboardAudioCardPresentation.transportAction(for: phase) {
+            case .play: actions.append(.play)
+            case .pause: actions.append(.pause)
+            case .cancelLoading: actions.append(.cancelLoading)
+            }
+        }
+        // Open and Share ride the SAME permission — both read the recording's
+        // bytes — so a recording that cannot be opened cannot be shared either.
+        if WorkboardCardActionPolicy.allows(.open, when: companion.availability) {
+            if hasOpenRecording { actions.append(.openRecording) }
+            if hasShareRecording { actions.append(.shareRecording) }
+        }
+        if hasReattachRecording,
+           WorkboardCardActionPolicy.allows(.reattach, when: companion.availability) {
+            actions.append(.reattachRecording)
+        }
+        return actions
+    }
+
+    static func title(for action: WorkboardCompanionAction) -> LocalizedStringResource {
+        switch action {
+        case .play:
+            return LocalizedStringResource("workboard.companion.play", defaultValue: "Play Recording")
+        case .pause:
+            return LocalizedStringResource("workboard.companion.pause", defaultValue: "Pause Recording")
+        case .cancelLoading:
+            return LocalizedStringResource(
+                "workboard.audio.cancelLoading",
+                defaultValue: "Cancel Loading"
+            )
+        case .openRecording:
+            return LocalizedStringResource(
+                "workboard.companion.open.recording",
+                defaultValue: "Open Recording"
+            )
+        case .shareRecording:
+            return LocalizedStringResource(
+                "workboard.companion.share.recording",
+                defaultValue: "Share Recording"
+            )
+        case .reattachRecording:
+            return LocalizedStringResource(
+                "workboard.companion.reattach",
+                defaultValue: "Reattach Recording"
+            )
+        }
+    }
+
+    static func symbol(for action: WorkboardCompanionAction) -> String {
+        switch action {
+        case .play: return "play.fill"
+        case .pause: return "pause.fill"
+        case .cancelLoading: return "xmark"
+        case .openRecording: return "arrow.up.forward.app"
+        case .shareRecording: return "square.and.arrow.up"
+        case .reattachRecording: return "paperclip"
+        }
+    }
+
+    /// What the card's own Share row is called. A folded card holds two files,
+    /// so the unqualified "Share" would not say which one leaves.
+    static func shareTitle(hasCompanion: Bool) -> LocalizedStringResource {
+        hasCompanion
+            ? LocalizedStringResource(
+                "workboard.companion.share.picture",
+                defaultValue: "Share Screenshot"
+            )
+            : LocalizedStringResource("workboard.material.share", defaultValue: "Share")
+    }
+
+    /// What the folded card SAYS the recording is doing, apart from what it is
+    /// called. Spoken as the card's accessibility VALUE, the same split the
+    /// audio card and the list row use: the label is what the card is, the
+    /// value is the state it is in, and only a value can be re-read after an
+    /// action without repeating the name and the transcript.
+    ///
+    /// Without it the band's state reaches VoiceOver nowhere at all — the band
+    /// is accessibility-hidden, because its transport is a control drawn beside
+    /// an element whose children are ignored — so a decode that failed, or an
+    /// output another capture already holds, would offer "Play Recording" again
+    /// with no explanation of the refusal.
+    ///
+    /// The RECORDING's own availability is asked, never the picture's, exactly
+    /// as its rows do: a screenshot readable here says nothing about whether
+    /// the audio's bytes arrived.
+    static func accessibilityValue(
+        for companion: WorkboardCompanionSnapshot,
+        phase: WorkboardAudioPhase,
+        elapsed: TimeInterval,
+        duration: TimeInterval
+    ) -> String {
+        var parts: [String] = []
+        if companion.availability != .available {
+            parts.append(String(localized: WorkboardCardAccessibility.availabilityLabel(
+                for: companion.availability
+            )))
+        }
+        if let status = WorkboardAudioTransport.statusLabel(for: phase) {
+            parts.append(String(localized: status))
+        }
+        // The clock is a fact only a decoded clip has. Announcing one before
+        // that would state a length nothing has measured.
+        if duration > 0 {
+            parts.append(WorkboardAudioTransport.clockText(elapsed: elapsed, duration: duration))
+        }
+        return parts.joined(separator: ". ")
+    }
+
+    /// What a folded card IS, in the one place it is said. It replaces the
+    /// kind's own title in the spoken card, because "Image" would describe half
+    /// of what the person is touching.
+    static var accessibilityKindLabel: LocalizedStringResource {
+        LocalizedStringResource(
+            "workboard.companion.card.label",
+            defaultValue: "Screenshot with voice note"
+        )
+    }
+}
+
 /// One material as a board card at one of three footprints. The card fills the
 /// frame the mosaic proposes — it never states its own height — so a size change
 /// is a single persisted attribute rather than a second layout system.
@@ -1499,6 +1938,11 @@ private struct WorkboardSourceCard: View {
     /// drives the menu and the label — while the layout keys off the footprint
     /// the card actually received, which is narrower whenever the grid clamps.
     var grantedColumns: Int = WorkboardMosaicSpan.large.columns
+    /// The height of one grid unit at this board width, which IS the tile a
+    /// small card is drawn in. The compact band and the row under it are sized
+    /// from it rather than from the compact board's unit, because the grid
+    /// grants as little as 64 points before it drops to two columns.
+    var grantedUnitHeight: CGFloat = WorkboardCompanionBand.referenceUnitHeight
     var boardPosition: Int = 0
     var boardCount: Int = 0
     let onOpen: () -> Void
@@ -1508,28 +1952,38 @@ private struct WorkboardSourceCard: View {
     var onMoveEarlier: (() -> Void)?
     var onMoveLater: (() -> Void)?
     var onRemove: (() -> Void)?
+    /// Quick Look the RECORDING folded into this picture — the route the
+    /// recording's own card had before it was folded away. Absent leaves the
+    /// row off rather than naming an action the card cannot perform.
+    var onOpenCompanion: (() -> Void)?
+    /// Hand the recording to the system's share UI, as its own single item.
+    /// The picture's `onShare` still shares the picture.
+    var onShareCompanion: (() -> Void)?
+    /// Repair the RECORDING whose local bytes are gone. Folding must not take
+    /// away the repair route the recording's own card had — the picture's
+    /// Reattach answers for the picture and would replace the wrong file.
+    var onReattachCompanion: (() -> Void)?
+    /// The band's only reach into storage, injected exactly as the audio card
+    /// injects its own: the recording's bytes are read on the first play rather
+    /// than on every board refresh.
+    var loadCompanionPayload: (UUID) async throws -> Data? = { id in
+        try await ConversationStore.shared.loadWorkMaterialPayload(id: id)
+    }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     @State private var isHovering = false
+    /// ONE player for the recording this card folded — the same ownership the
+    /// audio card has, so the process-wide exclusivity registry still has a
+    /// single holder and a band cannot play over a card.
+    @State private var companionPlayer = WorkboardAudioCardPlayer()
+    /// What the band actually measured, so the tile reserves exactly that much
+    /// and no layout has to guess a height that dynamic type decides.
+    @State private var bandHeight: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            // A card whose bytes are still arriving is not a control: it is NOT
-            // wrapped in a button, so it carries no button trait and offers no
-            // activation that would do nothing. Its availability line is the
-            // answer, and the arrange actions stay reachable either way.
-            if let primaryAction {
-                Button(action: primaryAction) { tile }
-                    .choiceCardButton(cornerRadius: 13)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(accessibilitySummary)
-                    .accessibilityActions { cardAccessibilityActions }
-            } else {
-                tile
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(accessibilitySummary)
-                    .accessibilityActions { cardAccessibilityActions }
-            }
+            cardSurface
 
             // Every action the menu carries is also an accessibility action on
             // the card itself, so the affordance is presentation only.
@@ -1545,6 +1999,85 @@ private struct WorkboardSourceCard: View {
         #if os(macOS)
         .onHover { hovering in isHovering = hovering }
         #endif
+        // A card that leaves the board takes its audio with it, and a recording
+        // that stops being this card's companion — because it unfolded, or
+        // because the card now holds a different one — is no longer this
+        // player's to hold.
+        .onDisappear { companionPlayer.deactivate() }
+        .onChange(of: material.companion?.id) { _, _ in companionPlayer.deactivate() }
+        .onChange(of: material.companion?.availability) { _, availability in
+            if let availability,
+               !WorkboardCardActionPolicy.allows(.play, when: availability) {
+                companionPlayer.deactivate()
+            }
+        }
+        // The workbench can hide this card without unmounting it, and a hidden
+        // card must not keep audio or a payload read alive.
+        .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            if !isActive { companionPlayer.deactivate() }
+        }
+    }
+
+    /// The tile, plus the recording folded into it.
+    ///
+    /// The band is a SIBLING of the tile rather than content inside it: the
+    /// tile is a button that opens the gallery, and a control nested in a
+    /// button's label never receives the tap. Both live under one clip so the
+    /// band ends where the card's corners do.
+    @ViewBuilder
+    private var cardSurface: some View {
+        if let companion = material.companion,
+           let placement = WorkboardCompanionBand.placement(for: material, footprint: layoutSize) {
+            ZStack(alignment: .bottom) {
+                tileControl
+                companionBand(companion, placement: placement)
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.height
+                    } action: { height in
+                        bandHeight = height
+                    }
+            }
+            .clipShape(cardShape)
+        } else {
+            tileControl
+        }
+    }
+
+    /// The tile, and the decision about whether it is a control.
+    ///
+    /// A card whose bytes are still arriving is not a control: it is NOT
+    /// wrapped in a button, so it carries no button trait and offers no
+    /// activation that would do nothing. Its availability line is the answer,
+    /// and the arrange actions stay reachable either way.
+    @ViewBuilder
+    private var tileControl: some View {
+        if let primaryAction {
+            Button(action: primaryAction) { tile }
+                .choiceCardButton(cornerRadius: 13)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibilitySummary)
+                .accessibilityValue(companionAccessibilityValue)
+                .accessibilityActions { cardAccessibilityActions }
+        } else {
+            tile
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibilitySummary)
+                .accessibilityValue(companionAccessibilityValue)
+                .accessibilityActions { cardAccessibilityActions }
+        }
+    }
+
+    /// The recording's state, on the card that hid its band. Empty for a card
+    /// with no companion, which has no second thing to be doing — the same
+    /// shape the list row uses, where an ordinary row's value is empty too.
+    private var companionAccessibilityValue: Text {
+        guard let companion = material.companion else { return Text(verbatim: "") }
+        return Text(verbatim: WorkboardCompanionBand.accessibilityValue(
+            for: companion,
+            phase: companionPlayer.phase,
+            elapsed: companionPlayer.elapsed,
+            duration: companionPlayer.duration
+        ))
     }
 
     /// The tile itself, without any decision about whether it is a control.
@@ -1568,7 +2101,11 @@ private struct WorkboardSourceCard: View {
 
     private var inlineTile: some View {
         cardBody
-            .padding(layoutSize == .small ? 9 : 12)
+            .padding(layoutSize == .small ? compactMetrics.inset : 12)
+            // The band is drawn over the bottom of this tile, so the content
+            // gives up exactly the height the band measured rather than sliding
+            // underneath it.
+            .padding(.bottom, bandReservation)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
             .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
@@ -1577,6 +2114,13 @@ private struct WorkboardSourceCard: View {
                     .strokeBorder(AppColors.borderSubtle, lineWidth: 1)
             }
             .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+    }
+
+    /// The compact drawing, sized for the tile this card was granted. Read by
+    /// the band, by the row it stands on and by the inset around both, so the
+    /// three cannot disagree about how much of one grid unit they are spending.
+    private var compactMetrics: WorkboardCompanionBand.CompactMetrics {
+        WorkboardCompanionBand.compactMetrics(forTileHeight: grantedUnitHeight)
     }
 
     /// What this card spends its tile on. `layoutSize` is deliberate: a `large`
@@ -1662,7 +2206,10 @@ private struct WorkboardSourceCard: View {
         // before the inset would make the block the tile's full width and THEN
         // add 20pt of padding outside it, pushing the caption under the clip.
         .padding(.horizontal, 10)
-        .padding(.bottom, 9)
+        // The band's height is claimed INSIDE the caption's own padding, so the
+        // gradient grows over the band too and the recording's words land on
+        // the scrim's darkest end rather than on the bare photograph.
+        .padding(.bottom, 9 + bandReservation)
         .padding(.top, 20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(alignment: .bottom) {
@@ -1675,6 +2222,122 @@ private struct WorkboardSourceCard: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
+        }
+    }
+
+    // MARK: Companion
+
+    /// How much of the tile the folded recording is standing on. Zero for a
+    /// card with no companion, so an ordinary picture's geometry is untouched.
+    private var bandReservation: CGFloat {
+        material.companion == nil ? 0 : bandHeight
+    }
+
+    /// The recording, drawn inside the picture that names it: transport, the
+    /// name the recording carries, and as much of the transcript as this
+    /// footprint can hold. It is one row of the SAME card — no second card, no
+    /// second tap target for the gallery — and it sits outside the tile's
+    /// button so its own control is reachable.
+    private func companionBand(
+        _ companion: WorkboardCompanionSnapshot,
+        placement: WorkboardCompanionBand.Placement
+    ) -> some View {
+        let onScrim = placement == .scrim
+        // The smallest tile keeps the control and gives up the words: they do
+        // not fit over the card's own content, they would be three characters
+        // wide beside a transport of at most 26 points, and the card already
+        // carries them in its spoken label and in its rows. The control itself
+        // is sized from the tile the grid granted, which on a narrow board is
+        // smaller than the one the constants are drawn at.
+        let isCompact = placement == .compact
+        return HStack(alignment: .top, spacing: 8) {
+            WorkboardAudioTransport(
+                materialID: companion.id,
+                player: companionPlayer,
+                isPlayable: companionIsPlayable,
+                isEnabled: workbenchDestinationIsActive,
+                activation: .control,
+                dimension: isCompact ? compactMetrics.transport : 32,
+                placement: onScrim ? .scrim : .card,
+                loadPayload: loadCompanionPayload
+            )
+            if !isCompact {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(verbatim: WorkboardCompanionBand.title(for: companion))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(onScrim ? Color.white : AppColors.textPrimary)
+                        .lineLimit(1)
+                    if let limit = WorkboardCompanionBand.transcriptLineLimit(for: layoutSize),
+                       let transcript = WorkboardCompanionBand.transcript(for: companion) {
+                        Text(verbatim: transcript)
+                            .font(.caption2)
+                            .foregroundStyle(onScrim ? Color.white.opacity(0.85) : AppColors.textSecondary)
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(limit)
+                    }
+                    WorkboardAudioProgressTrack(
+                        player: companionPlayer,
+                        placement: onScrim ? .scrim : .card
+                    )
+                }
+                // Only the transport is a control here. Everything else lets the
+                // touch through to the tile underneath, so a tap on the words still
+                // opens the gallery exactly as a tap on the picture does.
+                .allowsHitTesting(false)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, isCompact ? 8 : 10)
+        .padding(.vertical, isCompact ? compactMetrics.bandPadding : 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // On a photograph the caption's own gradient is already underneath, so
+        // the band adds nothing; inside a text card it is a recessed strip that
+        // says the recording is a second thing on this card. It is drawn behind
+        // and takes no hits: a strip that swallowed them would turn the bottom
+        // of every folded card into a dead zone.
+        .background {
+            (onScrim ? Color.clear : AppColors.backgroundSecondary)
+                .allowsHitTesting(false)
+        }
+        // The words belong to the card's own label, and the transport carries
+        // "Play Recording" as one of that card's custom actions.
+        .accessibilityHidden(true)
+    }
+
+    /// The recording's OWN availability decides whether it plays — the picture
+    /// being readable here says nothing about where the audio's bytes are.
+    private var companionIsPlayable: Bool {
+        guard let companion = material.companion else { return false }
+        return WorkboardCardActionPolicy.allows(.play, when: companion.availability)
+    }
+
+    /// The rows this card offers about the recording, asked once and consumed
+    /// by the menu and the VoiceOver actions alike.
+    private var companionActions: [WorkboardCompanionAction] {
+        guard let companion = material.companion else { return [] }
+        return WorkboardCompanionBand.actions(
+            for: companion,
+            phase: companionPlayer.phase,
+            hasOpenRecording: onOpenCompanion != nil,
+            hasShareRecording: onShareCompanion != nil,
+            hasReattachRecording: onReattachCompanion != nil
+        )
+    }
+
+    private func performCompanionAction(_ action: WorkboardCompanionAction) {
+        switch action {
+        case .play, .pause, .cancelLoading:
+            guard workbenchDestinationIsActive, companionIsPlayable,
+                  let companion = material.companion else { return }
+            let id = companion.id
+            let load = loadCompanionPayload
+            companionPlayer.toggle { try await load(id) }
+        case .openRecording:
+            onOpenCompanion?()
+        case .shareRecording:
+            onShareCompanion?()
+        case .reattachRecording:
+            onReattachCompanion?()
         }
     }
 
@@ -1733,6 +2396,25 @@ private struct WorkboardSourceCard: View {
     @ViewBuilder
     private var cardBody: some View {
         switch layoutSize {
+        case .small where material.companion != nil:
+            // One row, because the compact band is standing on the rest of the
+            // tile. The stacked layout below needs a 30-point thumbnail, a line
+            // of name and the spacing between them — more than a single grid
+            // unit has left once a band is on it — so a folded small card puts
+            // the same three things side by side instead of clipping them.
+            HStack(spacing: 6) {
+                artwork(
+                    dimension: compactMetrics.artwork,
+                    cornerRadius: 7
+                )
+                availabilityGlyph
+                Text(verbatim: material.name)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AppColors.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
         case .small:
             VStack(alignment: .leading, spacing: 6) {
                 artwork(dimension: 30, cornerRadius: 8)
@@ -1893,8 +2575,22 @@ private struct WorkboardSourceCard: View {
         if let shareAction {
             Button(action: shareAction) {
                 Label(
-                    LocalizedStringResource("workboard.material.share", defaultValue: "Share"),
+                    WorkboardCompanionBand.shareTitle(hasCompanion: material.companion != nil),
                     systemImage: "square.and.arrow.up"
+                )
+            }
+        }
+        // Each row acts on ONE of the card's two files, through the same
+        // single-material coordinators a standalone recording used: there is no
+        // multi-item share, so nothing has to decide what a half-available pair
+        // would mean.
+        ForEach(companionActions, id: \.self) { action in
+            Button {
+                performCompanionAction(action)
+            } label: {
+                Label(
+                    WorkboardCompanionBand.title(for: action),
+                    systemImage: WorkboardCompanionBand.symbol(for: action)
                 )
             }
         }
@@ -1957,13 +2653,22 @@ private struct WorkboardSourceCard: View {
     /// The ellipsis menu is hidden from VoiceOver — every action it carries has
     /// to be reachable here or it is not reachable at all. Open is absent on
     /// purpose: the tile ITSELF is the open control and already activates.
+    ///
+    /// The band's transport is hidden for the same reason the menu is: it is a
+    /// control drawn beside an element whose children are ignored, so playback
+    /// reaches VoiceOver as a named action here or not at all.
     @ViewBuilder
     private var cardAccessibilityActions: some View {
         if let shareAction {
             Button(
-                LocalizedStringResource("workboard.material.share", defaultValue: "Share"),
+                WorkboardCompanionBand.shareTitle(hasCompanion: material.companion != nil),
                 action: shareAction
             )
+        }
+        ForEach(companionActions, id: \.self) { action in
+            Button(WorkboardCompanionBand.title(for: action)) {
+                performCompanionAction(action)
+            }
         }
         if let reattachAction {
             Button(
@@ -2086,13 +2791,28 @@ enum WorkboardCardAccessibility {
     /// Kind, name, whatever preview there is, the availability the card is in,
     /// its footprint, and its place on the board — in that order, and
     /// independent of how the tile is drawn.
+    ///
+    /// A folded card says what it IS before it says its name: "Image" would
+    /// describe half of what the person is touching, and the recording's words
+    /// are the only thing on that card VoiceOver can carry — the transport is
+    /// hidden, the picture is a picture, and the words are why the pair exists.
     static func summary(
         material: WorkboardMaterialSnapshot,
         cardSize: WorkMaterialCardSize,
         boardPosition: Int,
         boardCount: Int
     ) -> String {
-        var parts = [String(localized: material.kind.title), material.name]
+        var parts: [String]
+        if let companion = material.companion {
+            parts = [
+                String(localized: WorkboardCompanionBand.accessibilityKindLabel),
+                material.name,
+                WorkboardCompanionBand.transcript(for: companion)
+                    ?? WorkboardCompanionBand.title(for: companion)
+            ]
+        } else {
+            parts = [String(localized: material.kind.title), material.name]
+        }
         if let preview = previewText(for: material)?
             .trimmingCharacters(in: .whitespacesAndNewlines), !preview.isEmpty {
             parts.append(preview)

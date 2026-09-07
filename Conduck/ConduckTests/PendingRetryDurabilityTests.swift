@@ -680,6 +680,144 @@ final class PendingRetryDurabilityTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyAudioURL().path))
     }
 
+    // MARK: - The picture a recording belongs to
+
+    /// The link survives the whole durable round trip — sidecar, index row and
+    /// the decode on the far side of a process death — and it survives the loss
+    /// of the picture's BYTES, which is the state it exists for.
+    ///
+    /// `discardWorkImage` runs the moment the queue has taken the picture, and
+    /// from then on the entry shelters no image at all. A recovery that
+    /// reconstructed the association from the remaining bytes would find
+    /// nothing exactly when the picture is safest.
+    func testTheLinkOutlivesThePictureBytesItWasArmedBeside() async throws {
+        let pictureID = UUID()
+        let armed = Self.metadata(
+            destination: .work,
+            publicationState: .published,
+            workAttachedToMaterialID: pictureID
+        )
+        try await store.save(
+            audioData: Data("the recording".utf8),
+            metadata: armed,
+            workImageData: Data("the picture".utf8)
+        )
+
+        let firstClaim = await store.claimNext()
+        let claimed = try XCTUnwrap(firstClaim, "the arm must be claimable")
+        XCTAssertEqual(
+            claimed.entry.metadata.workAttachedToMaterialID, pictureID,
+            "the link is on the record the surface reads back"
+        )
+        XCTAssertNotNil(claimed.entry.workImageData, "the premise: bytes are still parked")
+
+        let discarded = await store.discardWorkImage(claimed)
+        XCTAssertTrue(discarded, "the retirement must actually run")
+        await store.release(claimed)
+
+        // …and again from disk, the way another process would see it.
+        let reclaimed = await store.claimNext()
+        let afterDiscard = try XCTUnwrap(reclaimed)
+        XCTAssertNil(
+            afterDiscard.entry.workImageData,
+            "the premise: the parked picture is gone"
+        )
+        XCTAssertEqual(
+            afterDiscard.entry.metadata.workAttachedToMaterialID, pictureID,
+            """
+            MEASURED: the link is stored independently of the bytes and is still there when \
+            they are not. This is the only fact left in the entry that knows the recording \
+            belongs to a picture.
+            """
+        )
+    }
+
+    /// The control: the same round trip with no picture at all. Nothing names
+    /// anything, so the case above is about the link rather than about a value
+    /// the decoder always produces.
+    func testARecordArmedWithNoPictureCarriesNoLink() async throws {
+        let armed = Self.metadata(destination: .work, publicationState: .published)
+        try await store.save(
+            audioData: Data("the recording".utf8), metadata: armed, workImageData: nil
+        )
+
+        let onlyClaim = await store.claimNext()
+        let claimed = try XCTUnwrap(onlyClaim)
+        XCTAssertNil(
+            claimed.entry.metadata.workAttachedToMaterialID,
+            "NEGATIVE CONTROL: no picture was taken, so the record names none"
+        )
+    }
+
+    /// A record written before this field existed decodes to nil rather than
+    /// failing to decode at all. The queue's index is JSON in a defaults
+    /// domain, and a device updating into this build reads rows an older one
+    /// wrote — a decode that threw would silently empty the whole queue.
+    func testARecordEncodedWithoutTheLinkStillDecodesAndNamesNothing() async throws {
+        let legacy: [String: Any] = [
+            "id": UUID().uuidString,
+            "createdAt": 0,
+            "audioFileURL": "file:///dev/null",
+            "attemptCount": 1,
+            "destination": "work",
+            "publicationState": "published"
+        ]
+        let bytes = try JSONSerialization.data(withJSONObject: [legacy])
+
+        let decoded = try XCTUnwrap(
+            try? JSONDecoder().decode([PendingRetryMetadata].self, from: bytes),
+            """
+            MEASURED: a nine-field record still decodes. A non-optional link would throw here, \
+            and the queue reader answers a throw with an empty array — every parked recording \
+            on the device would vanish on first launch.
+            """
+        )
+        XCTAssertEqual(decoded.count, 1)
+        XCTAssertNil(decoded[0].workAttachedToMaterialID, "unknown, which is nil")
+        XCTAssertEqual(
+            decoded[0].publicationState, .published,
+            "the control: the fields that WERE encoded are still read"
+        )
+    }
+
+    /// The link is not picture debt. A published Work capture whose picture has
+    /// already landed waits the day it has always waited and is then retired —
+    /// the exemption reads the parked FILE, and a link is a fact about identity
+    /// that shelters no bytes.
+    func testALinkedRecordWithNoParkedPictureStillExpiresOnTheDayBudget() async throws {
+        let linked = Self.metadata(
+            at: Date().addingTimeInterval(-(PendingRetryMetadata.publishedWorkRetryTTL + 3_600)),
+            destination: .work,
+            publicationState: .published,
+            workAttachedToMaterialID: UUID()
+        )
+        try await store.save(
+            audioData: Data("the recording".utf8), metadata: linked, workImageData: nil
+        )
+        // The control that says the clock is running rather than stopped: the
+        // same age, the same lane, INSIDE the budget.
+        let young = Self.metadata(
+            at: Date(),
+            destination: .work,
+            publicationState: .published,
+            workAttachedToMaterialID: UUID()
+        )
+        try await store.save(
+            audioData: Data("the recording".utf8), metadata: young, workImageData: nil
+        )
+
+        let surviving = Set(await store.load().map(\.metadata.id))
+
+        XCTAssertEqual(
+            surviving, [young.id],
+            """
+            MEASURED: the day-old linked record was swept and the fresh one kept. A link that \
+            counted as unpublished-picture debt would exempt every folded capture from the \
+            clock for ever, and the queue would only ever grow.
+            """
+        )
+    }
+
     // MARK: - Fixtures
 
     private static func metadata(
@@ -689,7 +827,8 @@ final class PendingRetryDurabilityTests: XCTestCase {
         attemptCount: Int = 1,
         lastErrorCode: Int? = nil,
         transcript: String? = nil,
-        publicationState: PendingRetryPublicationState? = nil
+        publicationState: PendingRetryPublicationState? = nil,
+        workAttachedToMaterialID: UUID? = nil
     ) -> PendingRetryMetadata {
         PendingRetryMetadata(
             id: UUID(),
@@ -700,7 +839,8 @@ final class PendingRetryDurabilityTests: XCTestCase {
             lastErrorCode: lastErrorCode,
             destination: destination,
             transcript: transcript,
-            publicationState: publicationState
+            publicationState: publicationState,
+            workAttachedToMaterialID: workAttachedToMaterialID
         )
     }
 

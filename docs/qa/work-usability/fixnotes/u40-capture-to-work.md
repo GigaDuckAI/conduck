@@ -5,7 +5,9 @@ optional decoration on a private note — Return skips it, Esc abandons the whol
 press — and it lands on the desk as a card of its own beside the recording. A
 voice capture submits at its stop, publishing picture and recording
 independently, so a cancel before the stop leaves nothing and one after it keeps
-what is already durable. The three capture surfaces (`⌘⇧1` voice,
+what is already durable. The recording names the picture it was captured with,
+and the desk DRAWS that pair as one card — the mechanism, and the rules that
+decide it, are `u71-companion-card.md`. The three capture surfaces (`⌘⇧1` voice,
 `⌘⇧2` Screenshot & Ask, `⌃⌘W` Capture to Work) now draw one HUD, and the
 status-item menu separates its three capture commands from its two Open rows.
 

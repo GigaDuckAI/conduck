@@ -952,6 +952,28 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
                 picture, so the person is told about a recording that is standing fine.
                 """
             )
+
+            // …and both hand the RECORD's link on to the recovery. These two
+            // blocks are byte-identical twins on purpose, so the assertion is
+            // made against each rather than against one of them.
+            XCTAssertNotNil(
+                text.range(of: "attachedTo: pending.metadata.workAttachedToMaterialID"),
+                """
+                \(path) recovers without naming the picture this recording belongs to, so a \
+                republished recording lands as a card of its own beside the picture it came \
+                from — and nothing ever re-opens a published recording to add the link later.
+                """
+            )
+            XCTAssertNil(
+                text.range(
+                    of: #"attachedTo:[^\n]*workImageData"#, options: .regularExpression
+                ),
+                """
+                \(path) reconstructs the link from the parked image bytes. Those bytes are \
+                dropped from the record the moment the queue takes the picture, so the entry \
+                this reads from is exactly the one whose picture already landed.
+                """
+            )
         }
     }
 
@@ -1665,6 +1687,369 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
                     .appendingPathComponent(PendingRetryFiles.workImage(withPicture.id)).path
             ),
             "and the bytes are still there, which is the only reason keeping the entry matters"
+        )
+    }
+
+    // MARK: - One press, two cards, and the card that says so
+
+    /// The RECORDING names the picture that came with it. Two materials, two
+    /// ids, two payloads — unchanged — plus one column on the recording that
+    /// says they were one press.
+    @MainActor
+    func testTheRecordingNamesThePictureThatWasCapturedWithIt() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
+        recorder.capturedAudioForTesting = Self.recordingBytes
+        recorder.workScreenshotNormalizeForTesting = { _ in Self.jpegBytes }
+        recorder.transcriptionHopForTesting = { _ in .success("the ferry leaves at seven") }
+
+        recorder.stageWorkScreenshot(Self.rawScreenshot)
+        _ = await recorder._finishCaptureForTesting()
+
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let screenshotID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(
+            Set(desk.materials.map(\.id)), [captureID, screenshotID],
+            "still TWO rows: one kind, one payload and one blob each, exactly as before"
+        )
+
+        let recording = try XCTUnwrap(desk.materials.first { $0.id == captureID })
+        XCTAssertEqual(recording.kind, .audio)
+        XCTAssertEqual(
+            recording.attachedToMaterialID, screenshotID,
+            """
+            MEASURED: the recording names the picture's derived id, so the desk can show one \
+            card for what was one press. It is written on the recording because that is the \
+            annotation — a picture is a thing in its own right and belongs to nothing.
+            """
+        )
+
+        let picture = try XCTUnwrap(desk.materials.first { $0.id == screenshotID })
+        XCTAssertEqual(picture.kind, .image)
+        XCTAssertNil(
+            picture.attachedToMaterialID,
+            """
+            NEGATIVE CONTROL: the PICTURE names nothing. A link on both rows would make each \
+            the other's child, and the fold's "a parent carries no link itself" rule would then \
+            refuse the pair outright.
+            """
+        )
+    }
+
+    /// The control: ⌃⌘W → Return, no region dragged. One card, and it belongs
+    /// to nothing — which is what makes the case above about the picture rather
+    /// than about a value that is always written.
+    @MainActor
+    func testARecordingCapturedWithNoPictureNamesNothing() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
+        recorder.capturedAudioForTesting = Self.recordingBytes
+        recorder.transcriptionHopForTesting = { _ in .success("the ferry leaves at seven") }
+
+        _ = await recorder._finishCaptureForTesting()
+
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.count, 1, "one card, the recording")
+        XCTAssertNil(
+            desk.materials.first { $0.id == captureID }?.attachedToMaterialID,
+            "NEGATIVE CONTROL: no region was dragged, so this recording belongs to nothing"
+        )
+    }
+
+    /// A PROMISE ABOUT IDENTITY, NOT EXISTENCE. The picture's own publication
+    /// is refused — the queue cannot open its directories — and the recording
+    /// still names the card that picture will take. That is what lets the fold
+    /// heal itself: the retry lands the picture at exactly this id, and the
+    /// pair becomes one card with nothing repaired.
+    @MainActor
+    func testTheLinkIsWrittenEvenWhenThePicturesOwnPublicationFailed() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.workInboxForTesting = try Self.refusingInbox(under: inboxRoot)
+        recorder.retryLaneForTesting = RecordedScreenshotRetryLane()
+        recorder.capturedAudioForTesting = Self.recordingBytes
+        recorder.workScreenshotNormalizeForTesting = { _ in Self.jpegBytes }
+        recorder.transcriptionHopForTesting = { _ in .success("the ferry leaves at seven") }
+
+        recorder.stageWorkScreenshot(Self.rawScreenshot)
+        _ = await recorder._finishCaptureForTesting()
+
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let screenshotID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(
+            desk.materials.map(\.id), [captureID],
+            "the premise: the picture is NOT on the desk, so nothing stands at the linked id"
+        )
+        XCTAssertEqual(
+            desk.materials.first?.attachedToMaterialID, screenshotID,
+            """
+            MEASURED: the recording names a card that does not exist yet. A link written only \
+            on a picture that landed would leave every airplane-mode capture permanently two \
+            cards, because nothing re-opens a published recording to add one later.
+            """
+        )
+    }
+
+    /// The durable record keeps the link after its picture's BYTES are gone.
+    ///
+    /// This is the case the field exists for. The picture is queued, so `save`
+    /// is handed `workImageData: nil` and the entry shelters no image at all —
+    /// and the recording is still owed its words. A recovery that reconstructed
+    /// the link from what is left in the entry would find nothing and republish
+    /// the recording as a card of its own beside the picture it came from.
+    @MainActor
+    func testTheParkedRecordKeepsTheLinkAfterItsPictureBytesAreDropped() async throws {
+        let store = ConversationStore(inMemory: true)
+        let lane = RecordedScreenshotRetryLane()
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
+        recorder.retryLaneForTesting = lane
+        recorder.capturedAudioForTesting = Self.recordingBytes
+        recorder.workScreenshotNormalizeForTesting = { _ in Self.jpegBytes }
+        recorder.transcriptionHopForTesting = { _ in .failure(.sttProviderUnreachable) }
+
+        recorder.stageWorkScreenshot(Self.rawScreenshot)
+        _ = await recorder._finishCaptureForTesting()
+
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let screenshotID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
+        let latestSave = await lane.lastSave
+        let parked = try XCTUnwrap(latestSave, "the failure must actually park a record")
+        XCTAssertNil(
+            parked.workImageData,
+            "the premise: the queue took the picture, so the entry carries no image bytes"
+        )
+        XCTAssertEqual(
+            parked.metadata.workAttachedToMaterialID, screenshotID,
+            """
+            MEASURED: the link is stored on its own terms and outlives the bytes. It is the only \
+            thing left in this entry that knows the recording belongs to a picture.
+            """
+        )
+    }
+
+    /// The control for the record: the same failure with nothing dragged parks
+    /// a record that names nothing.
+    @MainActor
+    func testAParkedRecordForACaptureWithNoPictureNamesNothing() async throws {
+        let store = ConversationStore(inMemory: true)
+        let lane = RecordedScreenshotRetryLane()
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
+        recorder.retryLaneForTesting = lane
+        recorder.capturedAudioForTesting = Self.recordingBytes
+        recorder.transcriptionHopForTesting = { _ in .failure(.sttProviderUnreachable) }
+
+        _ = await recorder._finishCaptureForTesting()
+
+        let latestSave = await lane.lastSave
+        let parked = try XCTUnwrap(latestSave, "the failure must actually park a record")
+        XCTAssertNil(
+            parked.metadata.workAttachedToMaterialID,
+            "NEGATIVE CONTROL: no picture was taken, so the record names none"
+        )
+    }
+
+    /// PRESENCE, after a collision. The drain publishes a picture under
+    /// `WorkMaterialCollisionEscape.materialID(forCapture:)` when the derived
+    /// id already names a card of another kind — so a presence check that asks
+    /// about the derived id alone reports a picture standing under its escape
+    /// as missing, and (while the collision is still there) names the card that
+    /// caused the escape as the screenshot. Both are receipts that lie.
+    ///
+    /// Three passes, because the state this is about takes three to reach: a
+    /// refused queue hands the case the capture id, a collision planted at the
+    /// derived id sends the picture to its escape, and clearing that collision
+    /// leaves the derived id EMPTY with the picture standing beside it. That
+    /// last desk is the one an id-only lookup gets wrong in the direction that
+    /// costs something — it tells a person their screenshot did not save.
+    @MainActor
+    func testAPictureThatEscapedACollisionIsStillReportedAsOnTheDesk() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        // Pass 1. The queue is refused, so the capture ends owing its picture
+        // and hands this case the capture id the collision is planted against.
+        recorder.workInboxForTesting = try Self.refusingInbox(under: inboxRoot)
+        recorder.retryLaneForTesting = RecordedScreenshotRetryLane()
+        recorder.capturedAudioForTesting = Self.recordingBytes
+        recorder.workScreenshotNormalizeForTesting = { _ in Self.jpegBytes }
+        recorder.transcriptionHopForTesting = { _ in .failure(.sttProviderUnreachable) }
+
+        recorder.stageWorkScreenshot(Self.rawScreenshot)
+        _ = await recorder._finishCaptureForTesting()
+
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let pictureID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
+        let escapedID = WorkMaterialCollisionEscape.materialID(forCapture: pictureID)
+        XCTAssertFalse(
+            recorder.workCaptureFacts.screenshotOnDesk,
+            "the premise: nothing published the picture on the first pass"
+        )
+
+        // THE COLLISION, planted exactly where the picture is about to land.
+        _ = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                id: pictureID,
+                kind: .note,
+                title: "already here",
+                textContent: "already here",
+                storageMode: .metadataOnly
+            )
+        )
+        // Pass 2. The queue works; the words still do not, so the capture stays
+        // pending and the picture lands under its escape.
+        recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
+        _ = await recorder.retryWorkCapture()
+
+        let afterEscapeValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let afterEscape = try XCTUnwrap(afterEscapeValue)
+        XCTAssertEqual(
+            afterEscape.materials.first { $0.id == pictureID }?.kind, .note,
+            "the premise: the derived id was held by a card of another kind"
+        )
+        XCTAssertEqual(
+            afterEscape.materials.first { $0.id == escapedID }?.kind, .image,
+            "…so the picture really did land under its escape"
+        )
+
+        // The collision goes. Now NOTHING stands at the derived id and the
+        // picture stands beside it — the desk an id-only presence check reads
+        // as "your screenshot is not saved".
+        try await store.deleteWorkMaterial(id: pictureID)
+        // Pass 3. Nothing is owed but the words, so this is a plain re-read of
+        // the desk on the way out of another refused transcription.
+        _ = await recorder.retryWorkCapture()
+
+        let finalValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let final = try XCTUnwrap(finalValue)
+        XCTAssertNil(
+            final.materials.first { $0.id == pictureID },
+            "the premise: the derived id is empty"
+        )
+        XCTAssertEqual(
+            final.materials.first { $0.id == escapedID }?.kind, .image,
+            "…and the picture is still standing under its escape"
+        )
+        XCTAssertTrue(
+            recorder.workCaptureFacts.screenshotOnDesk,
+            """
+            MEASURED: the receipt says the screenshot is on the desk, because presence resolves \
+            [derived, escape(derived)] and asks for an IMAGE at each. An id-only lookup answers \
+            this desk with "not saved" over a picture the person can see.
+            """
+        )
+    }
+
+    /// The control the case above needs: the same wrong-kind card with NO
+    /// picture behind it. Presence must stay false, or the case above would
+    /// pass just as well on a check that had stopped asking about kinds.
+    @MainActor
+    func testAWrongKindCardAtTheDerivedIdIsNotMistakenForTheScreenshot() async throws {
+        let store = ConversationStore(inMemory: true)
+        let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.workStoreForTesting = store
+        recorder.workInboxForTesting = try Self.refusingInbox(under: inboxRoot)
+        recorder.retryLaneForTesting = RecordedScreenshotRetryLane()
+        recorder.capturedAudioForTesting = Self.recordingBytes
+        recorder.workScreenshotNormalizeForTesting = { _ in Self.jpegBytes }
+        recorder.transcriptionHopForTesting = { _ in .success("the ferry leaves at seven") }
+
+        recorder.stageWorkScreenshot(Self.rawScreenshot)
+        _ = await recorder._finishCaptureForTesting()
+
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let pictureID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
+        _ = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                id: pictureID,
+                kind: .note,
+                title: "already here",
+                textContent: "already here",
+                storageMode: .metadataOnly
+            )
+        )
+        // The queue works this time; the PIPELINE does not, so nothing is
+        // published and the only card at the picture's id is the foreign one.
+        recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
+        recorder.workScreenshotNormalizeForTesting = { _ in nil }
+        _ = await recorder.retryWorkCapture()
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(
+            desk.materials.first { $0.id == pictureID }?.kind, .note,
+            "the premise: something of another kind is standing at the derived id"
+        )
+        XCTAssertFalse(
+            desk.materials.contains { $0.kind == .image },
+            "…and no picture landed anywhere"
+        )
+        XCTAssertFalse(
+            recorder.workCaptureFacts.screenshotOnDesk,
+            """
+            NEGATIVE CONTROL: a card of the wrong kind at the picture's id is not the picture. \
+            Reporting it present is the untruth the kind check exists to stop.
+            """
+        )
+    }
+
+    /// The Shortcuts lane sets the link BEFORE it arms, and carries it through
+    /// the restatement that hands the capture to `recover`. It cannot be
+    /// mounted here — `perform()` needs an intent process, an App Group and a
+    /// speech provider — so what is asserted is the call-site policy.
+    func testTheShortcutsLaneDecidesTheLinkBeforeItArmsAndKeepsItThroughStamped() throws {
+        let path = "Conduck/Intents/ConverseIntent.swift"
+        let text = RefusalLaneSource.stripComments(try Self.source(path))
+
+        let decided = try XCTUnwrap(
+            text.range(of: "WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)"),
+            "\(path) no longer derives the picture's id for the recording at all."
+        )
+        let armed = try XCTUnwrap(
+            text.range(of: "PendingRetryGuard.arm("),
+            "\(path) no longer arms a durable record; this guard's anchor needs updating."
+        )
+        XCTAssertLessThan(
+            decided.lowerBound, armed.lowerBound,
+            """
+            \(path) decides the link after arming, so an OS kill between the two leaves a \
+            durable record that has forgotten the picture — and this lane publishes the audio \
+            FIRST, so that window covers the whole speech hop.
+            """
+        )
+        XCTAssertNotNil(
+            text.range(of: "workAttachedToMaterialID: workAttachedToMaterialID"),
+            "\(path) arms a record that does not carry the link."
+        )
+        XCTAssertNotNil(
+            text.range(of: "attachedTo: workAttachedToMaterialID"),
+            "\(path) publishes the recording without naming the picture that came with it."
+        )
+        XCTAssertNotNil(
+            text.range(of: "workAttachedToMaterialID: metadata.workAttachedToMaterialID"),
+            """
+            \(path)'s `stamped` restatement drops the link, so the capture handed to `recover` \
+            has forgotten it — and `PendingRetryMetadata` is a value of `let`s, so a field a \
+            restatement does not name is a field it erases.
+            """
+        )
+        XCTAssertNotNil(
+            text.range(of: "attachedTo: held.entry.metadata.workAttachedToMaterialID"),
+            "\(path) recovers without handing the link on."
         )
     }
 

@@ -471,6 +471,153 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         XCTAssertNil(desk.materials.first { $0.id == captureID }?.textContent)
     }
 
+    // MARK: - recover: the picture the recording belongs to
+
+    /// A republication names the picture of the ORIGINAL capture, and it says
+    /// so even when the RECORDING had to escape a colliding id.
+    ///
+    /// The two escapes are different derivations over different inputs. The
+    /// audio escapes to `WorkMaterialCollisionEscape.materialID(forCapture:)`
+    /// of the capture id; the picture's card is
+    /// `WorkVoiceScreenshotCoordinator.materialID(forCapture:)` of that same
+    /// capture id, and a collision on the audio side moves nothing about it.
+    /// Deriving the link inside `publishRecording` from its own `captureID`
+    /// parameter — which is the ESCAPED id on the second attempt — would name a
+    /// card nothing ever publishes.
+    func testAnEscapedRepublicationStillNamesThePictureOfTheOriginalCapture() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        _ = try await Self.foreignCard(at: captureID, in: store)
+        let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
+        let pictureID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            Self.claim(
+                id: captureID, publicationState: .phaseOneFailed, attachedTo: pictureID
+            ),
+            transcript: "the ferry leaves at seven",
+            store: store,
+            queue: queue
+        )
+
+        XCTAssertEqual(outcome, .republishedAndAttached)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        let recording = try XCTUnwrap(desk.materials.first { $0.id == escapeID })
+        XCTAssertEqual(
+            recording.attachedToMaterialID, pictureID,
+            """
+            MEASURED: the recording landed under its ESCAPE and still names the picture derived \
+            from the capture id it started from. The escape is the audio's, not the picture's.
+            """
+        )
+        XCTAssertNotEqual(
+            recording.attachedToMaterialID,
+            WorkVoiceScreenshotCoordinator.materialID(forCapture: escapeID),
+            """
+            NEGATIVE CONTROL: the id a derivation taken INSIDE `publishRecording` would produce \
+            on the escape attempt. Nothing publishes a card there, so a fold keyed to it would \
+            never find a parent.
+            """
+        )
+        XCTAssertNil(
+            desk.materials.first { $0.id == captureID }?.attachedToMaterialID,
+            "the card that was already standing is not a recording and gains no link"
+        )
+    }
+
+    /// The same republication for a capture that carried no picture. Nothing
+    /// names anything, which is what makes the case above about the link rather
+    /// than about a value that is always written.
+    func testARepublishedRecordingWithNoPictureNamesNothing() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            Self.claim(id: captureID, publicationState: .phaseOneFailed),
+            transcript: "the ferry leaves at seven",
+            store: store,
+            queue: queue
+        )
+
+        XCTAssertEqual(outcome, .republishedAndAttached)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let recording = try XCTUnwrap(
+            deskValue?.materials.first { $0.id == captureID }
+        )
+        XCTAssertNil(
+            recording.attachedToMaterialID,
+            "NEGATIVE CONTROL: no picture was ever taken, so there is nothing to belong to"
+        )
+    }
+
+    /// The DURABLE record is the authority. A retry surface that states no link
+    /// still republishes a linked recording, because the link was written when
+    /// the capture was parked and travels with the entry — not with the picture
+    /// bytes, which the surface has already published and discarded.
+    func testARepublicationTakesTheLinkFromTheRecordWhenTheCallerStatesNone() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        let pictureID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            Self.claim(
+                id: captureID, publicationState: .phaseOneFailed, attachedTo: pictureID
+            ),
+            transcript: "the ferry leaves at seven",
+            store: store,
+            queue: queue
+        )
+
+        XCTAssertEqual(outcome, .republishedAndAttached)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertEqual(
+            deskValue?.materials.first { $0.id == captureID }?.attachedToMaterialID,
+            pictureID,
+            """
+            MEASURED: no `attachedTo:` was passed and the recording is linked anyway. A recovery \
+            that could only read a caller's argument would silently unlink every capture \
+            recovered from a queue after a relaunch.
+            """
+        )
+    }
+
+    /// The FALLBACK NOTE never carries a link, however much the capture that
+    /// produced it did. A note folded into a picture's card would lose the
+    /// full-text route that is the only way to read it, and this iteration
+    /// leaves text and pictures as two cards.
+    func testTheFallbackNoteCarriesNoLinkEvenForACaptureThatTookAPicture() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
+        _ = try await Self.foreignCard(at: captureID, in: store)
+        _ = try await Self.foreignCard(at: escapeID, in: store)
+        let pictureID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            Self.claim(
+                id: captureID, publicationState: .phaseOneFailed, attachedTo: pictureID
+            ),
+            transcript: "the ferry leaves at seven",
+            store: store,
+            queue: queue
+        )
+
+        XCTAssertEqual(outcome, .fallbackNotePublished)
+        let noteID = WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let note = try XCTUnwrap(deskValue?.materials.first { $0.id == noteID })
+        XCTAssertEqual(note.kind, .note, "the fixture must actually reach the note branch")
+        XCTAssertNil(
+            note.attachedToMaterialID,
+            """
+            MEASURED: the link belongs to recordings alone. The very same claim republishes a \
+            LINKED recording when an id is free (see the escape case above), so this nil is a \
+            rule about the note's kind and not about the claim.
+            """
+        )
+    }
+
     // MARK: - recover: what it records about the capture it finished
 
     /// r5a#6. A republication with no words yet answers `.retryKept`, so the
@@ -1362,7 +1509,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         createdAt: Date = Date(timeIntervalSince1970: 1_700_000_000),
         destination: PendingRetryDestination = .work,
         transcript: String? = nil,
-        publicationState: PendingRetryPublicationState?
+        publicationState: PendingRetryPublicationState?,
+        attachedTo: UUID? = nil
     ) -> PendingRetryMetadata {
         PendingRetryMetadata(
             id: id,
@@ -1373,7 +1521,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             lastErrorCode: AppError.workDeskWriteFailed.errorCode,
             destination: destination,
             transcript: transcript,
-            publicationState: publicationState
+            publicationState: publicationState,
+            workAttachedToMaterialID: attachedTo
         )
     }
 
@@ -1389,7 +1538,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         destination: PendingRetryDestination = .work,
         transcript: String? = nil,
         publicationState: PendingRetryPublicationState?,
-        audio: Data = recordingBytes
+        audio: Data = recordingBytes,
+        attachedTo: UUID? = nil
     ) -> PendingRetryClaim {
         PendingRetryClaim(
             entry: PendingRetryEntry(
@@ -1398,7 +1548,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
                     id: id,
                     destination: destination,
                     transcript: transcript,
-                    publicationState: publicationState
+                    publicationState: publicationState,
+                    attachedTo: attachedTo
                 ),
                 workImageData: nil
             ),

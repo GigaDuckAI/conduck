@@ -610,6 +610,253 @@ extension WorkboardAudioCardPlayer: SpeechExclusivityParty {
     }
 }
 
+// MARK: - Transport
+
+/// What a transport is drawn ON, which is the only thing that changes about it.
+/// `card` uses the semantic palette; `scrim` is a transport over a photograph,
+/// where the surface underneath is arbitrary and the colours are literals — the
+/// same reason the image-forward caption draws white text on a gradient.
+enum WorkboardAudioTransportPlacement: Equatable, Sendable {
+    case card
+    case scrim
+}
+
+/// The desk's play/pause control, wherever a recording is drawn: the standalone
+/// audio card's tile, the companion band on the picture a recording named, and
+/// the list row. One statement of what the glyph means, so a phase added later
+/// cannot read one way on a card and another way on a band.
+///
+/// IT OWNS NO PLAYER. The surface that draws it holds exactly one
+/// `WorkboardAudioCardPlayer`, which is what keeps the process-wide
+/// `WorkboardAudioExclusivity` registry meaningful: a player constructed per
+/// transport would let one recording play over another, and a band and its card
+/// would each hold a copy of the same clip. Bytes are read on the first
+/// activation and never before — a desk of twenty recordings loads nothing
+/// until one is played, which is also why the clock and the progress track
+/// appear only once a clip has decoded.
+struct WorkboardAudioTransport: View {
+    /// Whether this transport is a control of its own.
+    enum Activation: Equatable, Sendable {
+        /// The tile around it IS the button — the standalone audio card, where
+        /// the whole card is the transport. The glyph is presentation only and
+        /// carries no accessibility of its own.
+        case tile
+        /// Its own button, because the tile around it does something else: a
+        /// tap on a folded card opens the gallery, so playback needs a control
+        /// the tile's button cannot swallow. It must therefore be drawn OUTSIDE
+        /// that button rather than inside its label.
+        case control
+    }
+
+    let materialID: UUID
+    /// The one player of the surface drawing this. Passed in, never created
+    /// here — see the type's note on exclusivity.
+    let player: WorkboardAudioCardPlayer
+    /// What the recording's OWN availability permits. A folded card asks about
+    /// the companion, never about the picture it sits on.
+    var isPlayable: Bool = true
+    /// A hidden-but-mounted workbench must not start audio.
+    var isEnabled: Bool = true
+    var activation: Activation = .tile
+    var dimension: CGFloat = 40
+    var placement: WorkboardAudioTransportPlacement = .card
+    var loadPayload: (UUID) async throws -> Data? = { id in
+        try await ConversationStore.shared.loadWorkMaterialPayload(id: id)
+    }
+
+    var body: some View {
+        switch activation {
+        case .tile:
+            glyph.accessibilityHidden(true)
+        case .control:
+            Button(action: toggle) { glyph }
+                .pointerIconButton(size: dimension, shape: .roundedRect)
+                // Not dimmed and not disabled: a recording whose bytes are not
+                // here states that in its glyph, exactly as the rest of the
+                // card family states availability instead of greying out.
+                .allowsHitTesting(isEnabled && isPlayable)
+                // The surrounding card carries "Play Recording" / "Pause
+                // Recording" as custom actions — the same arrangement as the
+                // ellipsis affordance, whose rows are all reachable there.
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var glyph: some View {
+        Image(systemName: Self.symbolName(phase: player.phase, isPlayable: isPlayable))
+            .font(.system(size: max(13, dimension * 0.44), weight: .semibold))
+            .foregroundStyle(glyphTint)
+            .frame(width: dimension, height: dimension)
+            .background(
+                glyphBackground,
+                in: RoundedRectangle(cornerRadius: dimension * 0.3, style: .continuous)
+            )
+    }
+
+    private var glyphTint: Color {
+        switch placement {
+        case .card: return isPlayable ? AppColors.brandAmber : AppColors.textTertiary
+        case .scrim: return isPlayable ? Color.white : Color.white.opacity(0.7)
+        }
+    }
+
+    private var glyphBackground: Color {
+        switch placement {
+        case .card: return AppColors.backgroundSecondary
+        case .scrim: return Color.black.opacity(0.45)
+        }
+    }
+
+    private func toggle() {
+        guard isEnabled, isPlayable else { return }
+        let id = materialID
+        let load = loadPayload
+        player.toggle { try await load(id) }
+    }
+
+    /// The glyph for a phase. Bytes this device cannot read are not a transport
+    /// at all, so they say what they are waiting for rather than offering play.
+    static func symbolName(phase: WorkboardAudioPhase, isPlayable: Bool) -> String {
+        guard isPlayable else { return "icloud.and.arrow.down" }
+        switch phase {
+        case .playing: return "pause.fill"
+        case .loading: return "hourglass"
+        case .failed: return "exclamationmark.triangle"
+        case .blocked: return "speaker.slash.fill"
+        case .idle, .paused: return "play.fill"
+        }
+    }
+
+    /// What the next activation DOES — including the loading phase, where it
+    /// cancels the payload read rather than starting playback.
+    static func actionTitle(for phase: WorkboardAudioPhase) -> LocalizedStringResource {
+        switch WorkboardAudioCardPresentation.transportAction(for: phase) {
+        case .play:
+            return LocalizedStringResource("workboard.audio.play", defaultValue: "Play")
+        case .pause:
+            return LocalizedStringResource("workboard.audio.pause", defaultValue: "Pause")
+        case .cancelLoading:
+            return LocalizedStringResource(
+                "workboard.audio.cancelLoading",
+                defaultValue: "Cancel Loading"
+            )
+        }
+    }
+
+    static func actionSymbol(for phase: WorkboardAudioPhase) -> String {
+        switch WorkboardAudioCardPresentation.transportAction(for: phase) {
+        case .play: return "play.fill"
+        case .pause: return "pause.fill"
+        case .cancelLoading: return "xmark"
+        }
+    }
+
+    /// What the transport is DOING, for the surfaces that speak it rather than
+    /// draw it. `nil` for an idle transport, which is doing nothing worth
+    /// saying.
+    ///
+    /// A refusal is the reason this exists: `failed` and `blocked` both leave
+    /// the same "Play" action offered again, so a surface that omits them tells
+    /// a VoiceOver user nothing about why the recording did not start.
+    static func statusLabel(for phase: WorkboardAudioPhase) -> LocalizedStringResource? {
+        switch phase {
+        case .idle:
+            return nil
+        case .loading:
+            return LocalizedStringResource("workboard.audio.loading", defaultValue: "Loading")
+        case .playing:
+            return LocalizedStringResource("workboard.audio.playing", defaultValue: "Playing")
+        case .paused:
+            return LocalizedStringResource("workboard.audio.paused", defaultValue: "Paused")
+        case .failed:
+            return LocalizedStringResource(
+                "workboard.audio.failed",
+                defaultValue: "This recording couldn’t be played"
+            )
+        case .blocked:
+            return LocalizedStringResource(
+                "workboard.audio.busy",
+                defaultValue: "Audio is in use right now"
+            )
+        }
+    }
+
+    /// The elapsed/duration clock, from the one key every surface reads it with.
+    static func clockText(elapsed: TimeInterval, duration: TimeInterval) -> String {
+        String.localizedStringWithFormat(
+            String(localized: LocalizedStringResource(
+                "workboard.audio.position",
+                defaultValue: "%1$@ of %2$@"
+            )),
+            WorkboardAudioTiming.label(elapsed),
+            WorkboardAudioTiming.label(duration)
+        )
+    }
+}
+
+/// The transport's other half: how far through the clip it is, and the clock.
+///
+/// Separate from the control because the two are placed differently on every
+/// surface — the audio card puts the glyph at the top of its tile and the track
+/// below the name, the companion band puts the glyph beside the words and the
+/// track under them — while saying the same thing in the same words.
+///
+/// It draws NOTHING until a clip has decoded: before that its length is
+/// genuinely unknown, and an empty track beside "0:00 of 0:00" would state a
+/// fact the surface does not have.
+struct WorkboardAudioProgressTrack: View {
+    let player: WorkboardAudioCardPlayer
+    var placement: WorkboardAudioTransportPlacement = .card
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if player.duration > 0 {
+            VStack(alignment: .leading, spacing: 3) {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule(style: .continuous)
+                            .fill(trackTint)
+                        Capsule(style: .continuous)
+                            .fill(fillTint)
+                            .frame(width: proxy.size.width * player.fraction)
+                    }
+                }
+                .frame(height: 4)
+                .animation(reduceMotion ? nil : .linear(duration: 0.1), value: player.fraction)
+                Text(verbatim: WorkboardAudioTransport.clockText(
+                    elapsed: player.elapsed,
+                    duration: player.duration
+                ))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(clockTint)
+                .lineLimit(1)
+            }
+        }
+    }
+
+    private var trackTint: Color {
+        switch placement {
+        case .card: return AppColors.backgroundSecondary
+        case .scrim: return Color.white.opacity(0.25)
+        }
+    }
+
+    private var fillTint: Color {
+        switch placement {
+        case .card: return AppColors.brandAmber
+        case .scrim: return Color.white
+        }
+    }
+
+    private var clockTint: Color {
+        switch placement {
+        case .card: return AppColors.textTertiary
+        case .scrim: return Color.white.opacity(0.85)
+        }
+    }
+}
+
 // MARK: - Card
 
 /// A voice note as a board card: transport, progress, and the transcript as a
@@ -784,66 +1031,28 @@ struct WorkboardAudioCardView: View {
     }
 
     /// The play/pause affordance. Not a control of its own — the card is the
-    /// button — so it is hidden from accessibility and the card's own label
-    /// carries the state.
+    /// button — so it is drawn in the transport's `tile` activation, which
+    /// carries no accessibility and lets the card's own label state the phase.
     private func transport(dimension: CGFloat) -> some View {
-        Image(systemName: transportSymbol)
-            .font(.system(size: max(13, dimension * 0.44), weight: .semibold))
-            .foregroundStyle(isPlayable ? AppColors.brandAmber : AppColors.textTertiary)
-            .frame(width: dimension, height: dimension)
-            .background(
-                AppColors.backgroundSecondary,
-                in: RoundedRectangle(cornerRadius: dimension * 0.3, style: .continuous)
-            )
-            .accessibilityHidden(true)
+        WorkboardAudioTransport(
+            materialID: material.id,
+            player: player,
+            isPlayable: isPlayable,
+            activation: .tile,
+            dimension: dimension,
+            loadPayload: loadPayload
+        )
     }
 
-    private var transportSymbol: String {
-        guard isPlayable else { return "icloud.and.arrow.down" }
-        switch player.phase {
-        case .playing: return "pause.fill"
-        case .loading: return "hourglass"
-        case .failed: return "exclamationmark.triangle"
-        case .blocked: return "speaker.slash.fill"
-        case .idle, .paused: return "play.fill"
-        }
-    }
-
-    /// The bar and the clock appear only once a clip has been decoded: before
-    /// that its length is genuinely unknown, and a zeroed track beside a
-    /// "0:00 of 0:00" clock would state a fact the card does not have.
-    @ViewBuilder
+    /// The same track the companion band draws, which is why it is not stated
+    /// here: a card and a band showing one recording must agree about how far
+    /// through it is.
     private var progressBar: some View {
-        if player.duration > 0 {
-            VStack(alignment: .leading, spacing: 3) {
-                GeometryReader { proxy in
-                    ZStack(alignment: .leading) {
-                        Capsule(style: .continuous)
-                            .fill(AppColors.backgroundSecondary)
-                        Capsule(style: .continuous)
-                            .fill(AppColors.brandAmber)
-                            .frame(width: proxy.size.width * player.fraction)
-                    }
-                }
-                .frame(height: 4)
-                .animation(reduceMotion ? nil : .linear(duration: 0.1), value: player.fraction)
-                Text(verbatim: clockText)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(AppColors.textTertiary)
-                    .lineLimit(1)
-            }
-        }
+        WorkboardAudioProgressTrack(player: player)
     }
 
     private var clockText: String {
-        String.localizedStringWithFormat(
-            String(localized: LocalizedStringResource(
-                "workboard.audio.position",
-                defaultValue: "%1$@ of %2$@"
-            )),
-            WorkboardAudioTiming.label(player.elapsed),
-            WorkboardAudioTiming.label(player.duration)
-        )
+        WorkboardAudioTransport.clockText(elapsed: player.elapsed, duration: player.duration)
     }
 
     /// The transcript, once one exists. A note that has not been transcribed —
@@ -1174,25 +1383,11 @@ struct WorkboardAudioCardView: View {
     /// What the next activation DOES — including the loading phase, where it
     /// cancels the payload read rather than starting playback.
     private var transportActionTitle: LocalizedStringResource {
-        switch WorkboardAudioCardPresentation.transportAction(for: player.phase) {
-        case .play:
-            return LocalizedStringResource("workboard.audio.play", defaultValue: "Play")
-        case .pause:
-            return LocalizedStringResource("workboard.audio.pause", defaultValue: "Pause")
-        case .cancelLoading:
-            return LocalizedStringResource(
-                "workboard.audio.cancelLoading",
-                defaultValue: "Cancel Loading"
-            )
-        }
+        WorkboardAudioTransport.actionTitle(for: player.phase)
     }
 
     private var transportActionSymbol: String {
-        switch WorkboardAudioCardPresentation.transportAction(for: player.phase) {
-        case .play: return "play.fill"
-        case .pause: return "pause.fill"
-        case .cancelLoading: return "xmark"
-        }
+        WorkboardAudioTransport.actionSymbol(for: player.phase)
     }
 
     private var showsOpenAction: Bool {

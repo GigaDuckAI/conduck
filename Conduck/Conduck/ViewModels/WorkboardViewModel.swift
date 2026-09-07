@@ -76,6 +76,83 @@ enum WorkboardMaterialAvailability: String, Codable, Hashable, Sendable {
     var isAvailable: Bool { self == .available || self == .localOnly }
 }
 
+/// The recording drawn INSIDE the picture it names, carrying everything its own
+/// card would have carried.
+///
+/// WHY A SEPARATE TYPE AND NOT A NESTED SNAPSHOT. A card that could hold a card
+/// is a recursive value type, which has no size; and the fold refuses chains, so
+/// a companion never has a companion of its own. This mirrors every field of
+/// `WorkboardMaterialSnapshot` instead, and `material` gives the child back as
+/// the card the board would have drawn standalone — which is what the routes
+/// that act on ONE material are handed. Nothing here is projected a second
+/// time: the fold builds this FROM the child's own snapshot, so the folded
+/// recording and a standalone one are named, sized and gated identically.
+///
+/// `revision`, `mimeType` and `availability` are carried rather than trimmed
+/// because Share and Open both re-read the store by id and then compare against
+/// what the card claimed: a companion missing them could be shared under a
+/// revision that no longer exists.
+struct WorkboardCompanionSnapshot: Identifiable, Hashable, Sendable {
+    let id: UUID
+    var kind: WorkboardMaterialKind
+    var name: String
+    var detail: String?
+    var textContent: String?
+    var urlString: String?
+    var mimeType: String?
+    var thumbnailData: Data?
+    var byteCount: Int64?
+    var availability: WorkboardMaterialAvailability
+    var sequence: Int
+    var cardSize: WorkMaterialCardSize
+    /// The picture this recording named. Kept after it resolves because it is
+    /// the only thing on the card that says why this recording is here.
+    var attachedToMaterialID: UUID?
+    var createdAt: Date
+    var revision: Int64
+
+    init(_ material: WorkboardMaterialSnapshot) {
+        self.id = material.id
+        self.kind = material.kind
+        self.name = material.name
+        self.detail = material.detail
+        self.textContent = material.textContent
+        self.urlString = material.urlString
+        self.mimeType = material.mimeType
+        self.thumbnailData = material.thumbnailData
+        self.byteCount = material.byteCount
+        self.availability = material.availability
+        self.sequence = material.sequence
+        self.cardSize = material.cardSize
+        self.attachedToMaterialID = material.attachedToMaterialID
+        self.createdAt = material.createdAt
+        self.revision = material.revision
+    }
+
+    /// The companion as its own card — the value Open, Share and Reattach take.
+    /// It carries no companion of its own, which is the fold's no-chain rule
+    /// stated in the type.
+    var material: WorkboardMaterialSnapshot {
+        WorkboardMaterialSnapshot(
+            id: id,
+            kind: kind,
+            name: name,
+            detail: detail,
+            textContent: textContent,
+            urlString: urlString,
+            mimeType: mimeType,
+            thumbnailData: thumbnailData,
+            byteCount: byteCount,
+            availability: availability,
+            sequence: sequence,
+            cardSize: cardSize,
+            attachedToMaterialID: attachedToMaterialID,
+            createdAt: createdAt,
+            revision: revision
+        )
+    }
+}
+
 struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
     let id: UUID
     var kind: WorkboardMaterialKind
@@ -93,8 +170,17 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
     /// resizing a card must never advance the owner revision, trip the
     /// card's own content revision.
     var cardSize: WorkMaterialCardSize
+    /// The picture this card names, exactly as the store holds it — RAW, and
+    /// resolved by nobody but `WorkboardCompanionFold`. A recording whose
+    /// picture never landed keeps naming it and draws as its own card, which is
+    /// correct rather than a defect.
+    var attachedToMaterialID: UUID?
     var createdAt: Date
     var revision: Int64
+    /// The recording folded into this picture, when one named it. Derived by
+    /// the board build and by nothing else: it is absent from every capture
+    /// draft and from the store, so it can never be written back.
+    var companion: WorkboardCompanionSnapshot?
 
     init(
         id: UUID = UUID(),
@@ -109,8 +195,10 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
         availability: WorkboardMaterialAvailability = .available,
         sequence: Int = 0,
         cardSize: WorkMaterialCardSize = .standard,
+        attachedToMaterialID: UUID? = nil,
         createdAt: Date = Date(),
-        revision: Int64 = 0
+        revision: Int64 = 0,
+        companion: WorkboardCompanionSnapshot? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -124,8 +212,10 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
         self.availability = availability
         self.sequence = sequence
         self.cardSize = cardSize
+        self.attachedToMaterialID = attachedToMaterialID
         self.createdAt = createdAt
         self.revision = revision
+        self.companion = companion
     }
 }
 
@@ -318,6 +408,70 @@ enum WorkboardMaterialOrdering {
     }
 }
 
+/// Where one material id actually LIVES on a folded board, and how a complete
+/// stored order is rebuilt from the cards the person can see.
+///
+/// A recording drawn inside its picture is NOT one of `materials` — it is that
+/// card's `companion` — so the two things that address materials BY ID have to
+/// account for it or folding silently breaks them:
+///
+/// - a route that resolves one id (open, share, reattach, a tap taken before the
+///   board reloaded) finds nothing and falls back to a stale snapshot;
+/// - a reorder omits the hidden recording, and the store refuses the whole
+///   permutation because every logical id must appear exactly once.
+///
+/// Both answers live here so they cannot drift apart.
+enum WorkboardDeskMember {
+    /// The card, or the recording inside a card, that `id` names — or nil when
+    /// the board carries neither.
+    ///
+    /// A companion comes back as `companion.material`: the child as its own
+    /// card. That is what keeps every route SINGLE-material — each one
+    /// validates and acts on exactly the member it was handed, and none of them
+    /// has to learn that a card can contain another.
+    /// Main-actor isolated, unlike its sibling below, only because
+    /// `WorkboardCompanionSnapshot.material` is: it is a computed member of a
+    /// board type. Nothing here needs an actor.
+    static func find(
+        _ id: UUID,
+        among cards: [WorkboardMaterialSnapshot]
+    ) -> WorkboardMaterialSnapshot? {
+        if let card = cards.first(where: { $0.id == id }) { return card }
+        for card in cards where card.companion?.id == id {
+            return card.companion?.material
+        }
+        return nil
+    }
+
+    /// A displayed order (card ids, as dragged) expanded into the STORED order:
+    /// each folded card becomes `[picture, recording]`, adjacent.
+    ///
+    /// `reorderWorkMaterials` rewrites dense ranks from a permutation that must
+    /// contain every logical id exactly once, and adjacency is what makes the
+    /// pair survive the rewrite as a pair. Expanding here — and never inserting
+    /// a companion into the rendered array — is the whole of the displayed /
+    /// persisted split: mosaic geometry, drag payloads and accessibility
+    /// position counts stay displayed-only, and only the store request is
+    /// complete.
+    nonisolated static func expandedOrder(
+        _ displayedIDs: [UUID],
+        among cards: [WorkboardMaterialSnapshot]
+    ) -> [UUID] {
+        var companionByCard: [UUID: UUID] = [:]
+        for card in cards {
+            if let companion = card.companion { companionByCard[card.id] = companion.id }
+        }
+        guard !companionByCard.isEmpty else { return displayedIDs }
+        var expanded: [UUID] = []
+        expanded.reserveCapacity(displayedIDs.count + companionByCard.count)
+        for id in displayedIDs {
+            expanded.append(id)
+            if let companionID = companionByCard[id] { expanded.append(companionID) }
+        }
+        return expanded
+    }
+}
+
 enum WorkboardWorkspaceCaptureLogic {
     nonisolated static func normalizedThought(_ rawValue: String) -> String {
         rawValue
@@ -368,6 +522,24 @@ final class WorkboardViewModel {
             @escaping @Sendable (Double) -> Void
         ) async throws -> WorkboardItemSnapshot
         var removeMaterial: @MainActor (Int64, UUID) async throws -> WorkboardItemSnapshot
+        /// `(expectedDeskRevision, pictureID, recordingID) -> refreshed desk`.
+        /// The ONE mutation behind a folded card's single Delete: two materials
+        /// removed under one compare-and-swap. Two `removeMaterial` calls could
+        /// not stand in for it — the first advances the very revision the second
+        /// is holding, so the recording would outlive the picture it was drawn
+        /// inside.
+        ///
+        /// `recordingID` is the companion the person was LOOKING at. Nothing
+        /// below re-picks it; the store validates that exact pair and refuses a
+        /// fold a sync has since undone.
+        ///
+        /// Defaulted to a refusal rather than declared optional: a board that
+        /// never folds does not have to state it, while a board that folds and
+        /// forgets to wire it fails where the person can see it instead of
+        /// silently leaving half a card standing.
+        var removeMaterialGroup: @MainActor (Int64, UUID, UUID) async throws -> WorkboardItemSnapshot = {
+            _, _, _ in throw WorkboardLiveRepositoryError.itemNotFound
+        }
         var replaceMaterial: @MainActor (
             Int64,
             UUID,
@@ -648,6 +820,12 @@ final class WorkboardViewModel {
     /// Reattaches a device-local source directly from the board. It resolves the
     /// desk's latest revision immediately before mutation, so a picker left open
     /// across a sync cannot write against a stale revision.
+    ///
+    /// The membership check reaches COMPANIONS as well as cards: a recording
+    /// drawn inside its picture is not one of `materials`, and repairing its
+    /// bytes is the one route a folded recording would otherwise lose. The
+    /// replacement still names the recording's own id, so the store replaces
+    /// that material and nothing else.
     func reattachMaterial(
         _ material: WorkboardMaterialSnapshot,
         with replacement: WorkboardMaterialImport
@@ -655,7 +833,7 @@ final class WorkboardViewModel {
         await acquireDeskMutation()
         defer { releaseDeskMutation() }
         guard let current = desk,
-              current.materials.contains(where: { $0.id == material.id }) else {
+              WorkboardDeskMember.find(material.id, among: current.materials) != nil else {
             presentCaptureFailure(WorkboardLiveRepositoryError.itemNotFound)
             return
         }
@@ -819,9 +997,58 @@ final class WorkboardViewModel {
         }
     }
 
+    /// Removes a folded card — the picture and the recording drawn inside it —
+    /// as ONE card, because that is what the person is deleting.
+    ///
+    /// `childID` is the companion the board DREW, handed down from the card the
+    /// menu belonged to. Nothing here re-picks it: re-resolving the fold at
+    /// confirmation time could delete a different recording from the one the
+    /// person saw. The store validates the exact pair and refuses when a sync
+    /// has undone the fold, which surfaces as the same notice any other refused
+    /// removal does.
+    ///
+    /// Like `removeMaterialFromBoard` this is not optimistic — the card leaves
+    /// the board when the store says both members are gone, so a refusal has
+    /// nothing to roll back.
+    @discardableResult
+    func removeGroupFromBoard(parentID: UUID, childID: UUID) async -> Bool {
+        await acquireDeskMutation()
+        defer { releaseDeskMutation() }
+        guard let current = desk,
+              current.materials.contains(where: { $0.id == parentID }) else { return false }
+        do {
+            let refreshed = try await dependencies.removeMaterialGroup(
+                current.revision,
+                parentID,
+                childID
+            )
+            adopt(refreshed)
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            notice = WorkboardNotice(
+                kind: .error,
+                title: LocalizedStringResource(
+                    "workboard.material.remove.failed.title",
+                    defaultValue: "Couldn’t remove material"
+                ),
+                message: error.localizedDescription
+            )
+            return false
+        }
+    }
+
     /// Reorder shares the capture lane with thoughts and drops: it rewrites
     /// canonical card order under the desk's optimistic revision, so a drag
     /// racing an import would otherwise be refused as stale.
+    ///
+    /// The plan is made from the cards the person DRAGGED — displayed order —
+    /// and expanded into the stored order immediately before the store call.
+    /// The store requires every logical material id exactly once, so a folded
+    /// recording that never entered the request would refuse an otherwise
+    /// ordinary drag; and planning over the stored order instead would let the
+    /// hidden recording occupy a slot the person cannot see.
     private func performMaterialReorder(
         plan: ([WorkboardMaterialSnapshot]) -> [UUID]?
     ) async -> Bool {
@@ -832,9 +1059,13 @@ final class WorkboardViewModel {
               let orderedIDs = plan(current.materials) else { return false }
 
         let previousMaterials = current.materials
+        let persistedIDs = WorkboardDeskMember.expandedOrder(
+            orderedIDs,
+            among: previousMaterials
+        )
         applyMaterialOrder(orderedIDs)
         do {
-            let refreshed = try await reorderMaterials(orderedIDs, current.revision)
+            let refreshed = try await reorderMaterials(persistedIDs, current.revision)
             adopt(refreshed)
             return true
         } catch {
@@ -843,7 +1074,7 @@ final class WorkboardViewModel {
             // read so a missing or older snapshot cannot leave the failed
             // move on screen. A sync can also arrive while that read awaits.
             if desk?.revision == current.revision {
-                applyMaterialOrder(previousMaterials.map(\.id))
+                restoreMaterialOrder(previousMaterials)
             }
             if let refreshed = try? await dependencies.loadDesk() {
                 adopt(refreshed)
@@ -862,6 +1093,13 @@ final class WorkboardViewModel {
 
     /// Mirrors the store's dense rank rewrite so the optimistic board and the
     /// persisted sequence agree before the round trip completes.
+    ///
+    /// `orderedIDs` is DISPLAYED order and the array it writes stays displayed:
+    /// a companion is never inserted as a card. The ranks are the EXPANDED
+    /// ones, though — a folded card takes its own rank and hands the next one
+    /// to the recording inside it — because that is exactly what the store
+    /// writes for the same permutation, and an optimistic board that disagreed
+    /// would flip cards around under the person when the real order arrived.
     private func applyMaterialOrder(_ orderedIDs: [UUID]) {
         guard let current = desk else { return }
         let byID = Dictionary(
@@ -870,10 +1108,46 @@ final class WorkboardViewModel {
         )
         var reordered = orderedIDs.compactMap { byID[$0] }
         guard reordered.count == current.materials.count else { return }
+        var rank = 0
         for position in reordered.indices {
-            reordered[position].sequence = position
+            reordered[position].sequence = rank
+            rank += 1
+            if reordered[position].companion != nil {
+                reordered[position].companion?.sequence = rank
+                rank += 1
+            }
         }
         desk?.materials = reordered
+    }
+
+    /// Puts a refused drag's board back the way it found it — the order AND the
+    /// ranks it was planned on.
+    ///
+    /// `applyMaterialOrder` recomputes dense ranks because that is what the
+    /// store is about to write. A rollback writes nothing, so the ranks to put
+    /// back are the SAVED ones: a recording published before its picture is
+    /// ranked before it, and reindexing the displayed cards would leave the
+    /// board claiming ranks no row on disk holds.
+    ///
+    /// The cards themselves are the CURRENT ones, matched by id, so a resize
+    /// that landed while the drag was in flight survives the rollback; only the
+    /// two rank fields come from the saved copy.
+    private func restoreMaterialOrder(_ saved: [WorkboardMaterialSnapshot]) {
+        guard let current = desk else { return }
+        let byID = Dictionary(
+            current.materials.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let restored: [WorkboardMaterialSnapshot] = saved.compactMap { previous in
+            guard var card = byID[previous.id] else { return nil }
+            card.sequence = previous.sequence
+            if let companion = previous.companion, card.companion?.id == companion.id {
+                card.companion?.sequence = companion.sequence
+            }
+            return card
+        }
+        guard restored.count == current.materials.count else { return }
+        desk?.materials = restored
     }
 
     func openMaterial(_ material: WorkboardMaterialSnapshot) {

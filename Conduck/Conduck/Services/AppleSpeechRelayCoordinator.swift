@@ -963,6 +963,11 @@ final class AppleSpeechRelayCoordinator {
                 mimeType: relayRecordingMIMEType,
                 createdAt: createdAt,
                 sourceDevice: relaySourceDevice,
+                // NO PICTURE ON THIS LANE. The wrist relays a clip and nothing
+                // else, so a relayed recording is never a companion to
+                // anything; stated rather than defaulted so a future picture
+                // arriving here has to be a deliberate edit.
+                attachedTo: nil,
                 store: store
             )
             return captureID
@@ -975,6 +980,11 @@ final class AppleSpeechRelayCoordinator {
                 mimeType: relayRecordingMIMEType,
                 createdAt: createdAt,
                 sourceDevice: relaySourceDevice,
+                // NO PICTURE ON THIS LANE. The wrist relays a clip and nothing
+                // else, so a relayed recording is never a companion to
+                // anything; stated rather than defaulted so a future picture
+                // arriving here has to be a deliberate edit.
+                attachedTo: nil,
                 store: store
             )
             return escapeID

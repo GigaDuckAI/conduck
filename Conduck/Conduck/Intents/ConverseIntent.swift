@@ -307,6 +307,17 @@ struct ConverseIntent: AppIntent {
         // record, so a retry an app launch later repairs that same card instead
         // of publishing the recovered words a second time beside it.
         let captureID = UUID()
+        // The picture this shortcut also carried, named on the RECORDING before
+        // anything is armed. This lane publishes the audio FIRST and the
+        // screenshot only after speech recognition, so the recording is a card
+        // for the whole length of the STT hop with nothing published at the id
+        // it names — which is exactly why the link is a promise about identity
+        // rather than about existence. Set here, ahead of `arm`, so an OS kill
+        // anywhere below leaves a durable record that still knows the two
+        // artifacts came from one press.
+        let workAttachedToMaterialID = pendingWorkImageData == nil
+            ? nil
+            : WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
         let pendingMetadata = PendingRetryMetadata(
             id: captureID,
             createdAt: Date(),
@@ -314,7 +325,8 @@ struct ConverseIntent: AppIntent {
             preferredLanguage: preferredLanguage,
             attemptCount: 1,
             lastErrorCode: nil,
-            destination: retryDestination
+            destination: retryDestination,
+            workAttachedToMaterialID: workAttachedToMaterialID
         )
         let guardToken = await PendingRetryGuard.arm(
             audio: uploadData,
@@ -350,7 +362,10 @@ struct ConverseIntent: AppIntent {
                     audio: uploadData,
                     fileExtension: audioFileExtension,
                     mimeType: workAudioMIMEType,
-                    createdAt: pendingMetadata.createdAt
+                    createdAt: pendingMetadata.createdAt,
+                    // Already decided above, so the picture published after the
+                    // speech hop needs nothing written back onto this card.
+                    attachedTo: workAttachedToMaterialID
                 )
                 workPublicationState = .published
                 await Self.recordRecoveryState(.published, on: guardToken)
@@ -634,7 +649,11 @@ struct ConverseIntent: AppIntent {
                 do {
                     outcome = try await WorkVoiceCaptureCoordinator.recover(
                         held,
-                        transcript: transcript
+                        transcript: transcript,
+                        // From the record, never from the bytes: the picture was
+                        // published a few lines above and this process holds no
+                        // copy of it any more.
+                        attachedTo: held.entry.metadata.workAttachedToMaterialID
                     )
                 } catch {
                     // The words exist only in this process, and the recording
@@ -799,7 +818,12 @@ struct ConverseIntent: AppIntent {
             lastErrorCode: metadata.lastErrorCode,
             destination: metadata.destination,
             transcript: transcript ?? metadata.transcript,
-            publicationState: publicationState ?? metadata.publicationState
+            publicationState: publicationState ?? metadata.publicationState,
+            // Carried forward verbatim, like every field this restatement does
+            // not name. It was decided before `arm` and nothing observed since
+            // can change it; dropping it here would hand `recover` a capture
+            // whose republished recording forgets the picture it came from.
+            workAttachedToMaterialID: metadata.workAttachedToMaterialID
         )
     }
 

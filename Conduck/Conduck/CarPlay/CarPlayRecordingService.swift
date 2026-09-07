@@ -1941,7 +1941,12 @@ final class CarPlayRecordingService {
                 // The surface the words were SPOKEN at, which the coordinator
                 // cannot derive: this process is an iPhone, and the note was
                 // dictated at the wheel.
-                sourceDevice: "carplay"
+                sourceDevice: "carplay",
+                // NO PICTURE AT THE WHEEL. A car note is a voice note and
+                // nothing else, so this recording is never a companion to a
+                // screenshot; stated rather than defaulted so the day a picture
+                // reaches this lane it has to be a deliberate edit.
+                attachedTo: nil
             )
             // `.published`, NOT cleared: the entry still covers the speech hop
             // and the attach, and the verdict is what stops a later recovery

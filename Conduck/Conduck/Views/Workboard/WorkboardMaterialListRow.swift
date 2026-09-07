@@ -15,6 +15,12 @@
 // removing it, so destination changes also cancel playback and pending reads.
 // Availability gates every action through the same policy as the mosaic, so a
 // thumbnail never stands in for missing bytes.
+//
+// A picture that folded a recording into it draws ONE row here too: the
+// thumbnail with a play badge over it, the recording's words as the row's text,
+// and the picture's own size and date underneath. The row's single player is
+// the one that plays it — a folded row is never also an audio row, so the two
+// can never both want it.
 
 import SwiftUI
 
@@ -28,6 +34,14 @@ struct WorkboardMaterialListRow: View {
     var onMoveEarlier: (() -> Void)?
     var onMoveLater: (() -> Void)?
     var onRemove: (() -> Void)?
+    /// Quick Look the recording folded into this picture, and hand that same
+    /// recording to the share UI. Both act on the companion alone, through the
+    /// single-material coordinators the recording's own card used.
+    var onOpenCompanion: (() -> Void)?
+    var onShareCompanion: (() -> Void)?
+    /// Repair the RECORDING, not the picture: the row's own Reattach replaces
+    /// the screenshot, which is the wrong file for a recording that is missing.
+    var onReattachCompanion: (() -> Void)?
 
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     @State private var player = WorkboardAudioCardPlayer()
@@ -63,15 +77,44 @@ struct WorkboardMaterialListRow: View {
             }
             .padding(.trailing, 8)
         }
+        // The recording's own control, over the picture it belongs to. It is a
+        // sibling of the row's button rather than content inside it, because a
+        // control nested in a button's label never receives the tap — and the
+        // row's own tap still opens the picture.
+        .overlay(alignment: .leading) { companionTransport }
         .contextMenu { menuContent }
         .onDisappear { player.deactivate() }
         .onChange(of: workbenchDestinationIsActive) { _, isActive in
             if !isActive { player.deactivate() }
         }
-        .onChange(of: material.availability) { _, availability in
+        .onChange(of: transportAvailability) { _, availability in
             if !WorkboardCardActionPolicy.allows(.play, when: availability) {
                 player.deactivate()
             }
+        }
+        // A row that stops being about this recording — it unfolded, or the
+        // card now holds a different one — stops holding its audio.
+        .onChange(of: material.companion?.id) { _, _ in player.deactivate() }
+    }
+
+    /// The play/pause badge a folded row draws over its thumbnail. Sized inside
+    /// the artwork column's own 48pt square so the picture still shows around
+    /// it: the row is about the screenshot, and the recording is a control on
+    /// it rather than a replacement for it.
+    @ViewBuilder
+    private var companionTransport: some View {
+        if let companion = material.companion {
+            WorkboardAudioTransport(
+                materialID: companion.id,
+                player: player,
+                isPlayable: isPlayable,
+                isEnabled: workbenchDestinationIsActive,
+                activation: .control,
+                dimension: 32,
+                placement: .scrim
+            )
+            .frame(width: 48, height: 48)
+            .padding(.leading, 12)
         }
     }
 
@@ -79,7 +122,7 @@ struct WorkboardMaterialListRow: View {
         HStack(alignment: .center, spacing: 12) {
             artwork
             VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: material.name)
+                Text(verbatim: rowTitle)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AppColors.textPrimary)
                     .multilineTextAlignment(.leading)
@@ -147,9 +190,9 @@ struct WorkboardMaterialListRow: View {
             Text(verbatim: previewText)
                 .font(.caption)
                 .foregroundStyle(AppColors.textSecondary)
-                .lineLimit(1)
+                .lineLimit(material.companion == nil ? 1 : 2)
         }
-        if material.kind == .audio, player.duration > 0 {
+        if hasTransport, player.duration > 0 {
             HStack(spacing: 8) {
                 ProgressView(value: player.fraction)
                     .tint(AppColors.brandAmber)
@@ -204,8 +247,8 @@ struct WorkboardMaterialListRow: View {
 
     @ViewBuilder
     private var menuContent: some View {
-        if isPlayable {
-            Button(action: toggleAudio) {
+        if isPlayable, material.companion == nil {
+            Button(action: toggleTransport) {
                 Label(transportTitle, systemImage: transportSymbol)
             }
         }
@@ -215,8 +258,23 @@ struct WorkboardMaterialListRow: View {
             }
             if let onShare {
                 Button(action: onShare) {
-                    Label(LocalizedStringResource("workboard.material.share", defaultValue: "Share"), systemImage: "square.and.arrow.up")
+                    Label(
+                        WorkboardCompanionBand.shareTitle(hasCompanion: material.companion != nil),
+                        systemImage: "square.and.arrow.up"
+                    )
                 }
+            }
+        }
+        // The folded row's two files, each named — the same rows the mosaic
+        // card offers, from the same one rule.
+        ForEach(companionActions, id: \.self) { action in
+            Button {
+                performCompanionAction(action)
+            } label: {
+                Label(
+                    WorkboardCompanionBand.title(for: action),
+                    systemImage: WorkboardCompanionBand.symbol(for: action)
+                )
             }
         }
         if WorkboardCardActionPolicy.allows(.reattach, when: material.availability), let onReattach {
@@ -252,7 +310,17 @@ struct WorkboardMaterialListRow: View {
                 Button(LocalizedStringResource("workboard.material.open", defaultValue: "Open"), action: onOpen)
             }
             if let onShare {
-                Button(LocalizedStringResource("workboard.material.share", defaultValue: "Share"), action: onShare)
+                Button(
+                    WorkboardCompanionBand.shareTitle(hasCompanion: material.companion != nil),
+                    action: onShare
+                )
+            }
+        }
+        // The badge over the thumbnail is hidden from VoiceOver, so playback
+        // and the recording's own routes reach the person here or not at all.
+        ForEach(companionActions, id: \.self) { action in
+            Button(WorkboardCompanionBand.title(for: action)) {
+                performCompanionAction(action)
             }
         }
         if WorkboardCardActionPolicy.allows(.reattach, when: material.availability), let onReattach {
@@ -269,8 +337,11 @@ struct WorkboardMaterialListRow: View {
         }
     }
 
+    /// A folded row's tap opens the PICTURE: the recording has its own badge,
+    /// and the row is a screenshot with a voice note on it rather than a
+    /// recording that happens to have a thumbnail.
     private var primaryAction: (() -> Void)? {
-        if isPlayable { return toggleAudio }
+        if material.kind == .audio, isPlayable { return toggleTransport }
         switch WorkboardCardActionPolicy.primaryAction(for: material.availability) {
         case .open: return onOpen
         case .reattach: return onReattach
@@ -278,66 +349,91 @@ struct WorkboardMaterialListRow: View {
         }
     }
 
-    private var isPlayable: Bool {
-        material.kind == .audio && WorkboardCardActionPolicy.allows(.play, when: material.availability)
+    /// Whether this row draws a transport at all — an audio row, or a picture
+    /// with a recording folded into it. Never both: the fold attaches a
+    /// recording only to a picture.
+    private var hasTransport: Bool {
+        material.kind == .audio || material.companion != nil
     }
 
-    private func toggleAudio() {
+    /// The recording this row's one player plays.
+    private var transportMaterialID: UUID {
+        material.companion?.id ?? material.id
+    }
+
+    /// Playback asks the RECORDING's availability. A screenshot that is
+    /// readable here says nothing about whether its recording's bytes arrived.
+    private var transportAvailability: WorkboardMaterialAvailability {
+        material.companion?.availability ?? material.availability
+    }
+
+    private var isPlayable: Bool {
+        hasTransport && WorkboardCardActionPolicy.allows(.play, when: transportAvailability)
+    }
+
+    private func toggleTransport() {
         guard workbenchDestinationIsActive, isPlayable else { return }
-        let id = material.id
+        let id = transportMaterialID
         player.toggle { try await ConversationStore.shared.loadWorkMaterialPayload(id: id) }
     }
 
+    private var companionActions: [WorkboardCompanionAction] {
+        guard let companion = material.companion else { return [] }
+        return WorkboardCompanionBand.actions(
+            for: companion,
+            phase: player.phase,
+            hasOpenRecording: onOpenCompanion != nil,
+            hasShareRecording: onShareCompanion != nil,
+            hasReattachRecording: onReattachCompanion != nil
+        )
+    }
+
+    private func performCompanionAction(_ action: WorkboardCompanionAction) {
+        switch action {
+        case .play, .pause, .cancelLoading: toggleTransport()
+        case .openRecording: onOpenCompanion?()
+        case .shareRecording: onShareCompanion?()
+        case .reattachRecording: onReattachCompanion?()
+        }
+    }
+
+    /// The row's own headline: the recording's words on a folded row, the
+    /// material's name everywhere else.
+    private var rowTitle: String {
+        guard let companion = material.companion else { return material.name }
+        return WorkboardCompanionBand.title(for: companion)
+    }
+
     private var previewText: String? {
-        (material.kind == .audio ? material.textContent : WorkboardCardAccessibility.previewText(for: material))?
+        if let companion = material.companion {
+            return WorkboardCompanionBand.transcript(for: companion)
+        }
+        return (material.kind == .audio ? material.textContent : WorkboardCardAccessibility.previewText(for: material))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var audioSymbol: String {
-        guard isPlayable else { return "icloud.and.arrow.down" }
-        switch player.phase {
-        case .playing: return "pause.fill"
-        case .loading: return "hourglass"
-        case .failed: return "exclamationmark.triangle"
-        case .blocked: return "speaker.slash.fill"
-        case .idle, .paused: return "play.fill"
-        }
+        WorkboardAudioTransport.symbolName(phase: player.phase, isPlayable: isPlayable)
     }
 
     private var transportTitle: LocalizedStringResource {
-        switch WorkboardAudioCardPresentation.transportAction(for: player.phase) {
-        case .play: return LocalizedStringResource("workboard.audio.play", defaultValue: "Play")
-        case .pause: return LocalizedStringResource("workboard.audio.pause", defaultValue: "Pause")
-        case .cancelLoading: return LocalizedStringResource("workboard.audio.cancelLoading", defaultValue: "Cancel Loading")
-        }
+        WorkboardAudioTransport.actionTitle(for: player.phase)
     }
 
     private var transportSymbol: String {
-        switch WorkboardAudioCardPresentation.transportAction(for: player.phase) {
-        case .play: return "play.fill"
-        case .pause: return "pause.fill"
-        case .cancelLoading: return "xmark"
-        }
+        WorkboardAudioTransport.actionSymbol(for: player.phase)
     }
 
+    /// One statement of what a transport is doing, shared with the audio card
+    /// and the folded tile: three surfaces saying a refusal in three sets of
+    /// words would be three chances to drift.
     private var audioStatus: LocalizedStringResource? {
-        guard material.kind == .audio else { return nil }
-        switch player.phase {
-        case .loading: return LocalizedStringResource("workboard.audio.loading", defaultValue: "Loading")
-        case .playing: return LocalizedStringResource("workboard.audio.playing", defaultValue: "Playing")
-        case .paused: return LocalizedStringResource("workboard.audio.paused", defaultValue: "Paused")
-        case .failed: return LocalizedStringResource("workboard.audio.failed", defaultValue: "This recording couldn’t be played")
-        case .blocked: return LocalizedStringResource("workboard.audio.busy", defaultValue: "Audio is in use right now")
-        case .idle: return nil
-        }
+        guard hasTransport else { return nil }
+        return WorkboardAudioTransport.statusLabel(for: player.phase)
     }
 
     private var clockText: String {
-        String.localizedStringWithFormat(
-            String(localized: LocalizedStringResource("workboard.audio.position", defaultValue: "%1$@ of %2$@")),
-            WorkboardAudioTiming.label(player.elapsed),
-            WorkboardAudioTiming.label(player.duration)
-        )
+        WorkboardAudioTransport.clockText(elapsed: player.elapsed, duration: player.duration)
     }
 
     private var availabilityLabel: LocalizedStringResource? {
@@ -364,10 +460,18 @@ struct WorkboardMaterialListRow: View {
         }
     }
 
+    /// A folded row says what it IS before it says the picture's name, then the
+    /// recording's words: "Image" would describe half of the row.
     private var accessibilityLabel: Text {
-        var parts = [String(localized: material.kind.title), material.name]
+        var parts = material.companion == nil
+            ? [String(localized: material.kind.title), material.name]
+            : [String(localized: WorkboardCompanionBand.accessibilityKindLabel), material.name]
         if isPlayable { parts.append(String(localized: transportTitle)) }
-        if let previewText, !previewText.isEmpty { parts.append(previewText) }
+        if let previewText, !previewText.isEmpty {
+            parts.append(previewText)
+        } else if material.companion != nil {
+            parts.append(rowTitle)
+        }
         if boardCount > 0, boardPosition > 0 {
             parts.append(WorkboardCardAccessibility.boardPositionLabel(position: boardPosition, count: boardCount))
         }
@@ -378,11 +482,14 @@ struct WorkboardMaterialListRow: View {
         var parts: [String] = []
         if let availabilityLabel { parts.append(String(localized: availabilityLabel)) }
         if let audioStatus { parts.append(String(localized: audioStatus)) }
-        if material.kind == .audio, player.duration > 0 { parts.append(clockText) }
+        if hasTransport, player.duration > 0 { parts.append(clockText) }
         return Text(verbatim: parts.joined(separator: ". "))
     }
 
+    /// The trait tells VoiceOver to fall silent for the activation, which is
+    /// right only where activating the ROW starts audio — never on a folded
+    /// row, where it opens the picture.
     private var playbackTraits: AccessibilityTraits {
-        isPlayable && player.willStartPlayback ? [.startsMediaSession] : []
+        material.kind == .audio && isPlayable && player.willStartPlayback ? [.startsMediaSession] : []
     }
 }

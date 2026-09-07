@@ -668,7 +668,13 @@ final class DictationService: RecordingExclusivityAuthority {
             }
             let outcome = try await WorkVoiceCaptureCoordinator.recover(
                 claim,
-                transcript: transcript
+                transcript: transcript,
+                // The picture this recording belongs to, read from the durable
+                // record and never reconstructed from the bytes above. Those
+                // bytes are gone by this line — the publication took them and
+                // the discard retired the parked copy — and an entry armed
+                // after the queue already held the picture never carried any.
+                attachedTo: pending.metadata.workAttachedToMaterialID
             )
             guard outcome.isTerminal else {
                 presentRetryOutcome(Self.workRetryFailureMessage, generation: generation)

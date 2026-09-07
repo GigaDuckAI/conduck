@@ -71,6 +71,13 @@ final class WorkboardLiveRepository {
             removeMaterial: { [self] revision, materialID in
                 try await removeMaterial(materialID, expectedRevision: revision)
             },
+            removeMaterialGroup: { [self] revision, parentID, childID in
+                try await removeMaterialGroup(
+                    parentID: parentID,
+                    childID: childID,
+                    expectedRevision: revision
+                )
+            },
             replaceMaterial: { [self] revision, materialID, material, onProgress in
                 try await replaceMaterial(
                     materialID,
@@ -219,17 +226,27 @@ final class WorkboardLiveRepository {
         WorkboardRevision.value(for: date)
     }
 
+    /// The desk as CARDS. Every stored material is projected first and the fold
+    /// runs over the projections, so a recording drawn inside its picture is the
+    /// same value it would be standing alone — the board never has a second,
+    /// thinner description of a companion.
+    ///
+    /// The result is DISPLAYED order, not the stored order: a folded recording
+    /// is absent from `materials` while its picture is present. Anything that
+    /// must address every stored id — a reorder above all — expands the pair
+    /// through `WorkboardCompanionFold` rather than reading this array.
     private static func snapshot(
         for record: WorkItemRecord,
         localThumbnails: [UUID: Data] = [:]
     ) -> WorkboardItemSnapshot {
-        WorkboardItemSnapshot(
+        let cards = record.materials
+            .sorted { ($0.sequence, $0.createdAt, $0.id.uuidString) < ($1.sequence, $1.createdAt, $1.id.uuidString) }
+            .map { materialSnapshot($0, transientThumbnail: localThumbnails[$0.id]) }
+        return WorkboardItemSnapshot(
             id: record.id,
             title: record.content.title,
             objective: record.content.objective,
-            materials: record.materials
-                .sorted { ($0.sequence, $0.createdAt, $0.id.uuidString) < ($1.sequence, $1.createdAt, $1.id.uuidString) }
-                .map { materialSnapshot($0, transientThumbnail: localThumbnails[$0.id]) },
+            materials: WorkboardCompanionFold.fold(cards).displayed,
             revision: revision(for: record.updatedAt)
         )
     }
@@ -281,6 +298,10 @@ final class WorkboardLiveRepository {
             availability: presentationAvailability(record),
             sequence: record.sequence,
             cardSize: record.cardSize,
+            // Carried RAW. Whether it names anything is the fold's question,
+            // and a single card read outside a board build has no desk to
+            // answer it against.
+            attachedToMaterialID: record.attachedToMaterialID,
             createdAt: record.createdAt,
             revision: revision(for: record.updatedAt)
         )
@@ -583,6 +604,58 @@ final class WorkboardLiveRepository {
         return await snapshot(for: refreshed)
     }
 
+    /// Removes a folded card — a screenshot and the recording that names it —
+    /// in ONE store mutation.
+    ///
+    /// The same shape as `removeMaterial` above and deliberately not a loop
+    /// over it: two single deletes cannot share one compare-and-swap, and the
+    /// first would advance the desk revision the second is holding, leaving the
+    /// recording standing alone. `ConversationStore.deleteWorkMaterialGroup`
+    /// owns the whole decision — this only carries the token, states which desk,
+    /// and re-projects.
+    ///
+    /// `childID` travels from the displayed card unchanged; nothing here or
+    /// below re-picks a companion. The pair itself is validated in the store,
+    /// so a card whose fold has been undone by a sync since the person opened
+    /// the menu refuses with `WorkboardStoreError.invalidMaterialCompanion`
+    /// rather than removing half of it.
+    func removeMaterialGroup(
+        parentID: UUID,
+        childID: UUID,
+        expectedRevision: Int64
+    ) async throws -> WorkboardItemSnapshot {
+        guard let item = try await store.fetchWorkItem(
+            id: Constants.workboardDeskItemID
+        ) else {
+            throw WorkboardLiveRepositoryError.itemNotFound
+        }
+        guard Self.revision(for: item.updatedAt) == expectedRevision else {
+            throw WorkboardLiveRepositoryError.staleDraft
+        }
+        // BOTH members, on this desk. The store proves they are a pair; this
+        // proves the board is talking about cards that are actually here.
+        guard item.materials.contains(where: { $0.id == parentID }),
+              item.materials.contains(where: { $0.id == childID }) else {
+            throw WorkboardStoreError.invalidMaterialOwner
+        }
+        do {
+            try await store.deleteWorkMaterialGroup(
+                parentID: parentID,
+                childID: childID,
+                workItemID: Constants.workboardDeskItemID,
+                expectedOwnerRevision: expectedRevision
+            )
+        } catch WorkboardStoreError.staleRevision {
+            throw WorkboardLiveRepositoryError.staleDraft
+        }
+        guard let refreshed = try await store.fetchWorkItem(
+            id: Constants.workboardDeskItemID
+        ) else {
+            throw WorkboardLiveRepositoryError.itemNotFound
+        }
+        return await snapshot(for: refreshed)
+    }
+
     private func replaceMaterial(
         _ materialID: UUID,
         expectedRevision: Int64,
@@ -670,6 +743,148 @@ enum WorkboardLiveRepositoryError: LocalizedError, Equatable {
                 defaultValue: "Write something before adding the note."
             )
         }
+    }
+}
+
+// MARK: - Companion fold
+
+/// The ONE rule by which a recording stops being its own card and becomes part
+/// of the picture it names.
+///
+/// One press of Capture to Work publishes two materials — a picture and a
+/// recording — and the recording carries the id of the picture from that same
+/// press (`WorkMaterialDraft.attachedToMaterialID`). This turns that link into
+/// what the person sees: one card, the picture, with the recording inside it.
+///
+/// A PROMISE ABOUT IDENTITY, NOT ABOUT EXISTENCE. The link is written whenever
+/// the press carried a picture, even when the picture's own publication failed,
+/// so a recording whose picture is not on the desk resolves to nothing here and
+/// draws as its own card. That is CORRECT, not a defect: a retry that lands the
+/// picture later needs no repair, because the recording already names it and the
+/// next board build folds them.
+///
+/// TWO CANDIDATES AND NO MORE, in this order: the id the recording names, then
+/// the one escape a colliding publication may have taken
+/// (`WorkMaterialCollisionEscape` — there is deliberately no second escape, so
+/// there is no third candidate).
+///
+/// FIRST ELIGIBLE, NEVER FIRST EXISTING. A row of another kind standing at the
+/// named id is precisely WHY the picture escaped, so a candidate that fails the
+/// conditions is skipped rather than ending the search. Stopping at it would
+/// leave every collision-escaped pair permanently unfoldable.
+///
+/// The conditions, and each one's reason:
+/// - the parent is on THIS desk (the array is the desk),
+/// - the parent is an `.image` — the fold draws a picture with a recording in
+///   it, and nothing else,
+/// - the parent names no picture of its own — a chain is not a fold,
+/// - the child is `.audio` — a typed note keeps its own card this iteration,
+///   because a folded note would lose its full-text route,
+/// - the recording names something OTHER than itself — a self-naming link
+///   resolves to nothing at all, the escape candidate included.
+///
+/// SEVERAL RECORDINGS NAMING ONE PICTURE: the one with the lowest `uuidString`
+/// folds and every other draws standalone. The choice is deliberately
+/// independent of the ARRANGEMENT — picking by rank would let a drag on an
+/// unrelated card hand the picture a different recording. NOTHING IS EVER
+/// DISCARDED: every material this is given comes back, either as a card or as
+/// exactly one picture's companion.
+///
+/// This mirrors `ConversationStore`'s own `eligibleCompanionPictureID`, which is
+/// what the group delete validates against; the two must agree, and both state
+/// the same five conditions in the same order.
+enum WorkboardCompanionFold {
+
+    /// The board's cards, in displayed order; the recordings that stopped being
+    /// cards; and which recording each picture drew.
+    ///
+    /// `displayed` is what the desk renders and what a mosaic, a drag payload
+    /// and an accessibility position count are computed from.
+    /// `hiddenChildIDs` and `childByParent` are what a caller that must address
+    /// every STORED material — a reorder — expands the pair with, so the store
+    /// still receives every logical id exactly once.
+    typealias Folded = (
+        displayed: [WorkboardMaterialSnapshot],
+        hiddenChildIDs: Set<UUID>,
+        childByParent: [UUID: UUID]
+    )
+
+    /// Fold one desk's cards. Pure: same input, same output, no store, no clock.
+    static func fold(_ materials: [WorkboardMaterialSnapshot]) -> Folded {
+        // The desk almost never holds a linked recording, and this is the whole
+        // board build's hot path: without this exit every load would derive an
+        // escape id per card for nothing.
+        guard materials.contains(where: { $0.kind == .audio && $0.attachedToMaterialID != nil })
+        else {
+            return (materials, [], [:])
+        }
+
+        // First occurrence wins. Duplicate physical rows arrive already unioned
+        // by the store, so this only decides a case that should not exist —
+        // deterministically rather than by whichever copy came last.
+        var byID: [UUID: WorkboardMaterialSnapshot] = [:]
+        for material in materials where byID[material.id] == nil {
+            byID[material.id] = material
+        }
+
+        // Gather every claimant before choosing one: the winner is the lowest
+        // child id, which is not knowable until the last claimant is seen.
+        var claimants: [UUID: [UUID]] = [:]
+        for child in materials {
+            guard child.kind == .audio, let link = child.attachedToMaterialID else { continue }
+            guard let parentID = eligibleParentID(link: link, child: child.id, among: byID)
+            else { continue }
+            claimants[parentID, default: []].append(child.id)
+        }
+
+        var childByParent: [UUID: UUID] = [:]
+        for (parentID, children) in claimants {
+            guard let winner = children.min(by: { $0.uuidString < $1.uuidString }) else { continue }
+            childByParent[parentID] = winner
+        }
+        let hiddenChildIDs = Set(childByParent.values)
+
+        // Displayed order is the INPUT order minus the folded recordings, so a
+        // pair sits at the picture's rank and a recording that did not fold
+        // keeps its own — including when it was published before its picture.
+        var displayed: [WorkboardMaterialSnapshot] = []
+        displayed.reserveCapacity(materials.count - hiddenChildIDs.count)
+        for material in materials {
+            guard !hiddenChildIDs.contains(material.id) else { continue }
+            guard let childID = childByParent[material.id], let child = byID[childID] else {
+                displayed.append(material)
+                continue
+            }
+            var parent = material
+            parent.companion = WorkboardCompanionSnapshot(child)
+            displayed.append(parent)
+        }
+        return (displayed, hiddenChildIDs, childByParent)
+    }
+
+    /// The picture one recording's link actually resolves to on this desk, or
+    /// nil when it resolves to none. The two candidates and the five conditions
+    /// are the type's own documentation above; this is the only place they run.
+    static func eligibleParentID(
+        link: UUID,
+        child: UUID,
+        among byID: [UUID: WorkboardMaterialSnapshot]
+    ) -> UUID? {
+        // A RECORDING THAT NAMES ITSELF RESOLVES TO NOTHING, and the search ends
+        // here rather than merely skipping that candidate: the escape of the
+        // child's OWN id is not the child, so a skip would let whatever picture
+        // happens to sit at that derived id become a parent — folding, and then
+        // authorising a group delete of, two cards that were never a pair. No
+        // lane writes a self-link; the stored value is raw, so a corrupt or
+        // synced row can carry one.
+        guard link != child else { return nil }
+        for candidate in [link, WorkMaterialCollisionEscape.materialID(forCapture: link)] {
+            guard candidate != child else { continue }
+            guard let parent = byID[candidate] else { continue }
+            guard parent.kind == .image, parent.attachedToMaterialID == nil else { continue }
+            return candidate
+        }
+        return nil
     }
 }
 

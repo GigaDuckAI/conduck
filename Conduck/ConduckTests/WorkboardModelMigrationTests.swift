@@ -12,7 +12,10 @@
 // CloudKit configurations so payload blobs live in a store the Watch never
 // mounts — a shipped default-configuration store must open as `Core` untouched
 // — and gives a material the hash of the blob it was published with, so a card
-// names its own payload rather than whatever blob carries its id.
+// names its own payload rather than whatever blob carries its id. v17 adds one
+// more optional column to the same entity: a recording published beside a
+// screenshot names that picture, so one press shows as one card without either
+// artifact losing its own id, kind or payload.
 
 import XCTest
 import CoreData
@@ -465,6 +468,176 @@ final class WorkboardModelMigrationTests: XCTestCase {
             let row = try XCTUnwrap(rows.first)
             XCTAssertEqual(row["contentHash"] as? String, "sha256-fixture")
             XCTAssertNil(row["payload"])
+        }
+        try unload(container)
+    }
+
+    func testV17AddsOnlyTheMaterialCompanionLinkColumn() throws {
+        let v16 = try requiredModel(named: "Conversations 16.mom")
+        let v17 = try requiredModel(named: "Conversations 17.mom")
+        XCTAssertEqual(
+            Set(v17.entitiesByName.keys), Set(v16.entitiesByName.keys),
+            "one card for two artifacts is a link between existing rows, not a new entity"
+        )
+
+        for entityName in v16.entitiesByName.keys {
+            let before = try XCTUnwrap(v16.entitiesByName[entityName])
+            let after = try XCTUnwrap(v17.entitiesByName[entityName])
+            let added = Set(after.attributesByName.keys)
+                .subtracting(before.attributesByName.keys)
+            XCTAssertEqual(
+                added, entityName == "WorkMaterial" ? ["attachedToMaterialID"] : [],
+                "v17 must not add columns to \(entityName)"
+            )
+            XCTAssertTrue(
+                Set(before.attributesByName.keys).isSubset(of: Set(after.attributesByName.keys)),
+                "v17 must not drop a shipped \(entityName) column"
+            )
+            XCTAssertEqual(
+                Set(after.relationshipsByName.keys), Set(before.relationshipsByName.keys),
+                "the link is a UUID column; a relationship would tie the two rows' deletion together"
+            )
+            if entityName == "WorkMaterial" {
+                XCTAssertNotEqual(
+                    after.versionHash, before.versionHash,
+                    "an added column is a migration; a matching hash would mean it is not there"
+                )
+            } else {
+                XCTAssertEqual(
+                    after.versionHash, before.versionHash,
+                    "\(entityName) is untouched by v17 and must stay migration-free"
+                )
+            }
+        }
+
+        let material = try XCTUnwrap(v17.entitiesByName["WorkMaterial"])
+        let link = try XCTUnwrap(material.attributesByName["attachedToMaterialID"])
+        XCTAssertEqual(link.attributeType, .UUIDAttributeType)
+        XCTAssertTrue(
+            link.isOptional,
+            "every card but a companion recording names no picture; that is the ordinary state"
+        )
+        XCTAssertNil(
+            link.defaultValue,
+            "a migrated recording belongs to no picture until a publication says so; nil is that state"
+        )
+        XCTAssertTrue(material.uniquenessConstraints.isEmpty,
+                      "CloudKit mirrored models cannot carry unique constraints")
+
+        // Both configurations survive verbatim: the Watch still excludes
+        // payloads by never mounting `Blobs`, and the link is Core-side
+        // metadata that mirrors with the card it belongs to.
+        XCTAssertEqual(
+            Set(v17.configurations).subtracting(["PF_DEFAULT_CONFIGURATION_NAME"]),
+            ["Core", "Blobs"]
+        )
+        XCTAssertEqual(
+            Set((v17.entities(forConfigurationName: "Core") ?? []).compactMap(\.name)),
+            Set((v16.entities(forConfigurationName: "Core") ?? []).compactMap(\.name))
+        )
+        XCTAssertEqual(
+            Set((v17.entities(forConfigurationName: "Blobs") ?? []).compactMap(\.name)),
+            ["WorkMaterialBlob"]
+        )
+        let blob16 = try XCTUnwrap(v16.entitiesByName["WorkMaterialBlob"])
+        let blob17 = try XCTUnwrap(v17.entitiesByName["WorkMaterialBlob"])
+        XCTAssertEqual(
+            blob17.versionHash, blob16.versionHash,
+            "the payload store is untouched: a link between cards is not a fact about bytes"
+        )
+    }
+
+    /// The real upgrade, on SQLite, in the production two-store topology: a
+    /// desk captured on model 16 opens on model 17 with its cards intact and
+    /// their links empty, and a link written afterwards survives a reopen.
+    func testV16SQLiteMigratesToV17LeavingExistingRecordingsUnattached() async throws {
+        let v16 = try requiredModel(named: "Conversations 16.mom")
+        let v17 = try requiredModel(named: "Conversations 17.mom")
+        let itemID = UUID()
+        let recordingID = UUID()
+        let pictureID = UUID()
+
+        do {
+            let container = try await loadCoreAndBlobStores(model: v16)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let item = NSEntityDescription.insertNewObject(forEntityName: "WorkItem", into: context)
+                item.setValue(itemID, forKey: "id")
+                item.setValue("Captured before the companion link", forKey: "title")
+                item.setValue(Date(timeIntervalSince1970: 1_800_000_000), forKey: "createdAt")
+                item.setValue(Date(timeIntervalSince1970: 1_800_000_000), forKey: "updatedAt")
+
+                let recording = NSEntityDescription.insertNewObject(
+                    forEntityName: "WorkMaterial", into: context
+                )
+                recording.setValue(recordingID, forKey: "id")
+                recording.setValue(itemID, forKey: "workItemID")
+                recording.setValue("audio", forKey: "kind")
+                recording.setValue("Ship the carrier review", forKey: "title")
+                recording.setValue("Ship the carrier review by Friday", forKey: "textContent")
+                recording.setValue("syncedPayload", forKey: "storageMode")
+                recording.setValue("sha256-recording", forKey: "contentHash")
+                recording.setValue(NSNumber(value: Int64(9_001)), forKey: "byteSize")
+                recording.setValue(NSNumber(value: Int32(1)), forKey: "sequence")
+                recording.setValue(Date(timeIntervalSince1970: 1_800_000_001), forKey: "createdAt")
+                recording.setValue(Date(timeIntervalSince1970: 1_800_000_001), forKey: "updatedAt")
+                try context.save()
+            }
+            try unload(container)
+        }
+
+        do {
+            let container = try await loadCoreAndBlobStores(model: v17)
+            XCTAssertEqual(
+                container.persistentStoreCoordinator.persistentStores.count, 2,
+                "a migration that mounted one store would strand every payload silently"
+            )
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+                request.predicate = NSPredicate(format: "id == %@", recordingID as CVarArg)
+                let recording = try XCTUnwrap(context.fetch(request).first)
+                XCTAssertEqual(recording.value(forKey: "title") as? String,
+                               "Ship the carrier review")
+                XCTAssertEqual(recording.value(forKey: "textContent") as? String,
+                               "Ship the carrier review by Friday",
+                               "the transcript stays on the recording it was spoken into")
+                XCTAssertEqual(recording.value(forKey: "contentHash") as? String,
+                               "sha256-recording")
+                XCTAssertNil(
+                    recording.value(forKey: "attachedToMaterialID"),
+                    "no backfill: a capture made before the link belongs to no picture"
+                )
+                XCTAssertEqual(
+                    recording.value(forKey: "updatedAt") as? Date,
+                    Date(timeIntervalSince1970: 1_800_000_001),
+                    "migration may not move a revision-bearing timestamp"
+                )
+
+                recording.setValue(pictureID, forKey: "attachedToMaterialID")
+                try context.save()
+            }
+            try unload(container)
+        }
+
+        let container = try await loadCoreAndBlobStores(model: v17)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            request.predicate = NSPredicate(format: "id == %@", recordingID as CVarArg)
+            let recording = try XCTUnwrap(context.fetch(request).first)
+            XCTAssertEqual(
+                recording.value(forKey: "attachedToMaterialID") as? UUID, pictureID,
+                "the link survives close and reopen; the fold is not rebuilt each launch"
+            )
+            // The link names an id, not a row. Nothing was inserted for the
+            // picture, and the store neither invents it nor refuses the link.
+            let pictureRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            pictureRequest.predicate = NSPredicate(format: "id == %@", pictureID as CVarArg)
+            XCTAssertEqual(
+                try context.count(for: pictureRequest), 0,
+                "a link is a promise about identity; the picture may not have landed yet"
+            )
         }
         try unload(container)
     }

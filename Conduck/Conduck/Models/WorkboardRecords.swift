@@ -230,6 +230,19 @@ nonisolated struct WorkMaterialDraft: Sendable {
     /// Carried so duplicating a card reproduces the arrangement the person
     /// built. Every fresh capture leaves it at `standard`.
     let cardSize: WorkMaterialCardSize
+    /// The picture this recording belongs to, when one capture produced both.
+    ///
+    /// A PROMISE ABOUT IDENTITY, NOT ABOUT EXISTENCE. It is written on the
+    /// RECORDING draft alone — never on a picture, never on a fallback note —
+    /// and it names the id the picture of that same capture would take, set
+    /// whenever the capture carried a picture when the recording published,
+    /// even if the picture's own publication failed. A picture that lands later
+    /// (a retry, a drain that escaped a collision) therefore needs no repair:
+    /// the recording already names it.
+    ///
+    /// The two artifacts stay two materials with two ids and two payloads —
+    /// this is the only thing that says they came from one press.
+    let attachedToMaterialID: UUID?
     let createdAt: Date
 
     init(
@@ -250,6 +263,7 @@ nonisolated struct WorkMaterialDraft: Sendable {
         storageMode: WorkMaterialStorageMode? = nil,
         sourceDevice: String? = nil,
         cardSize: WorkMaterialCardSize = .standard,
+        attachedToMaterialID: UUID? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -269,6 +283,7 @@ nonisolated struct WorkMaterialDraft: Sendable {
         self.storageMode = storageMode ?? (payload == nil ? .metadataOnly : .localVault)
         self.sourceDevice = sourceDevice
         self.cardSize = cardSize
+        self.attachedToMaterialID = attachedToMaterialID
         self.createdAt = createdAt
     }
 }
@@ -300,6 +315,13 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
     /// Board presentation only. It is defaulted rather than required so no
     /// caller that describes a material's content has to state a layout fact.
     let cardSize: WorkMaterialCardSize
+    /// The picture this recording belongs to — see
+    /// `WorkMaterialDraft.attachedToMaterialID`. Nil on every card that is not
+    /// a recording published beside a picture, and nil on every row written
+    /// before the link existed. The named material may not exist yet, or ever:
+    /// a reader resolves it, and renders the recording on its own when it
+    /// cannot.
+    let attachedToMaterialID: UUID?
     let createdAt: Date
     let updatedAt: Date
 
@@ -325,6 +347,7 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
         sourceDevice: String?,
         sequence: Int,
         cardSize: WorkMaterialCardSize = .standard,
+        attachedToMaterialID: UUID? = nil,
         createdAt: Date,
         updatedAt: Date
     ) {
@@ -349,6 +372,7 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
         self.sourceDevice = sourceDevice
         self.sequence = sequence
         self.cardSize = cardSize
+        self.attachedToMaterialID = attachedToMaterialID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -451,6 +475,15 @@ nonisolated enum WorkboardStoreError: Error, Sendable, Equatable {
     case materialPayloadUnavailable
     case invalidMaterialOwner
     case identifierCollision
+    /// The two materials a group mutation named are not a folded pair: the
+    /// child names no picture, names a DIFFERENT one, is not a recording, or
+    /// the id it names does not resolve to a picture that could hold it.
+    ///
+    /// Distinct from `invalidMaterialOwner`, which answers for the desk a
+    /// material sits on. This one answers for the relationship between two
+    /// materials on the SAME desk, and it is a refusal rather than a repair:
+    /// a caller that cannot prove the pair may not delete either half.
+    case invalidMaterialCompanion
 }
 
 /// Only the cases a PERSON can cause and can act on carry copy. The chat's
@@ -475,7 +508,8 @@ extension WorkboardStoreError: LocalizedError {
              .materialNotFound,
              .materialPayloadUnavailable,
              .invalidMaterialOwner,
-             .identifierCollision:
+             .identifierCollision,
+             .invalidMaterialCompanion:
             return nil
         }
     }

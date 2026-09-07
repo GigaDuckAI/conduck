@@ -543,11 +543,16 @@ final class PersonalWorkbenchRouter {
     /// wins — it is the state the person's other devices have already changed —
     /// and the fall back to the tapped card keeps a board that reloaded
     /// underneath the gesture from turning into a dead tap.
+    ///
+    /// The lookup reaches COMPANIONS too. A recording drawn inside its picture
+    /// is not one of the desk's cards, so searching only the top level would
+    /// send every Open Recording down the stale-snapshot fallback — the one path
+    /// that cannot answer for a card the desk has since refused.
     static func currentDeskCard(
         in desk: [WorkboardMaterialSnapshot],
         for tapped: WorkboardMaterialSnapshot
     ) -> WorkboardMaterialSnapshot {
-        desk.first { $0.id == tapped.id } ?? tapped
+        WorkboardDeskMember.find(tapped.id, among: desk) ?? tapped
     }
 
     /// The pages a tap on one image card opens, and where that tap landed.

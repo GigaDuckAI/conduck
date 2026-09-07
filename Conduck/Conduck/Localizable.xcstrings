@@ -22786,6 +22786,83 @@
         }
       }
     },
+    "workboard.companion.card.label" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Screenshot with voice note"
+          }
+        }
+      }
+    },
+    "workboard.companion.open.recording" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Recording"
+          }
+        }
+      }
+    },
+    "workboard.companion.pause" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Pause Recording"
+          }
+        }
+      }
+    },
+    "workboard.companion.play" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Play Recording"
+          }
+        }
+      }
+    },
+    "workboard.companion.reattach" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Reattach Recording"
+          }
+        }
+      }
+    },
+    "workboard.companion.share.picture" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Share Screenshot"
+          }
+        }
+      }
+    },
+    "workboard.companion.share.recording" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Share Recording"
+          }
+        }
+      }
+    },
     "workboard.desk.empty.message" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23387,6 +23464,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "“%@” will be removed from your Work desk."
+          }
+        }
+      }
+    },
+    "workboard.material.remove.confirm.message.pair" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "“%@” and the recording inside it will be removed from your Work desk."
           }
         }
       }

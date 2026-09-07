@@ -27,8 +27,8 @@
 // write is idempotent BY id and would answer a note published there with the
 // card that is already sitting on it.
 //
-// `recover(_:transcript:store:queue:)` is the third and last entry point, and
-// the one every retry surface uses. A capture recovered hours later, in another
+// `recover(_:transcript:attachedTo:store:queue:)` is the third and last entry
+// point, and the one every retry surface uses. A capture recovered hours later, in another
 // process, cannot see what this one saw, so the decision it has to make —
 // attach, republish then attach, or publish the words beside a card that is
 // gone — is made from the retry record's own `publicationState` rather than
@@ -195,6 +195,20 @@ enum WorkVoiceCaptureCoordinator {
     /// an iPhone note. Every surface that captures somewhere else passes its
     /// own value; the default keeps the in-app and intent lanes, which do run
     /// where the person spoke, spelling it exactly once.
+    ///
+    /// `attachedTo` is the PICTURE this recording belongs to, when one press
+    /// produced both. It is supplied by the CALLER and never derived here, and
+    /// that is the whole reason it is a parameter: `captureID` is not always
+    /// the capture's own id — the escape republication below passes
+    /// `WorkMaterialCollisionEscape.materialID(forCapture:)` through it — so a
+    /// derivation taken from this parameter would name a picture that does not
+    /// exist. Every caller derives it from the ORIGINAL capture id.
+    ///
+    /// A promise about IDENTITY, not existence: it is set whenever the capture
+    /// carried a picture at this moment, even if that picture's own
+    /// publication failed, so a retry that lands the picture later needs no
+    /// repair. Nil for every lane that captures no picture — the wrist relay,
+    /// CarPlay, a plain voice note.
     @discardableResult
     static func publishRecording(
         captureID: UUID,
@@ -203,6 +217,7 @@ enum WorkVoiceCaptureCoordinator {
         mimeType: String,
         createdAt: Date = Date(),
         sourceDevice: String = SourceDevice.current,
+        attachedTo: UUID? = nil,
         store: ConversationStore = .shared
     ) async throws -> WorkMaterialRecord {
         try await store.upsertDeskMaterial(
@@ -215,6 +230,7 @@ enum WorkVoiceCaptureCoordinator {
                 payload: audio,
                 byteSize: Int64(audio.count),
                 sourceDevice: sourceDevice,
+                attachedToMaterialID: attachedTo,
                 createdAt: createdAt
             )
         )
@@ -300,10 +316,22 @@ enum WorkVoiceCaptureCoordinator {
     /// the desk write answers rather than duplicates — so a capture recovered
     /// twice, or on two devices, still has exactly the cards it had after the
     /// first.
+    ///
+    /// `attachedTo` names the picture this capture's recording belongs to, for
+    /// the one branch that WRITES a recording: the republication. The durable
+    /// record is the authority — `PendingRetryMetadata.workAttachedToMaterialID`
+    /// is written when the capture is parked and survives the loss of the
+    /// picture's bytes — so a caller that states nothing gets the record's own
+    /// link rather than none, and a caller that states one is restating it.
+    /// Nothing else here takes it: the attachment writes words onto a card that
+    /// already carries its link, and the FALLBACK NOTE never carries one at all
+    /// — it is not a recording, and folding a note is a decision this iteration
+    /// did not take.
     @discardableResult
     static func recover(
         _ claim: PendingRetryClaim,
         transcript: String?,
+        attachedTo: UUID? = nil,
         store: ConversationStore = .shared,
         queue: PendingRetryStore = .shared
     ) async throws -> WorkVoiceRecoveryOutcome {
@@ -314,6 +342,7 @@ enum WorkVoiceCaptureCoordinator {
 
         let captureID = pending.id
         let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
+        let attachedPictureID = attachedTo ?? pending.workAttachedToMaterialID
 
         // The one state that licenses a republication: the desk is KNOWN never
         // to have held this recording, so there is nothing to resurrect and the
@@ -332,6 +361,7 @@ enum WorkVoiceCaptureCoordinator {
                 under: captureID,
                 escapingTo: escapeID,
                 createdAt: pending.createdAt,
+                attachedTo: attachedPictureID,
                 store: store
             )
             // The desk holds the recording again, so record that the moment it
@@ -415,11 +445,19 @@ enum WorkVoiceCaptureCoordinator {
     /// Only `invalidMaterialOwner` is caught. Every other failure is transient
     /// over a capture that still exists and must reach the caller as a throw,
     /// so the entry stays armed and the bytes stay the only copy of themselves.
+    ///
+    /// BOTH attempts carry the SAME `attachedTo`. What escapes here is the
+    /// RECORDING's id; the picture's is derived from the capture id and is not
+    /// affected by a collision on the audio side, so a recording that lands
+    /// under its escape names exactly the picture it would have named under its
+    /// own id. Deriving the link from `escapeID` — or from the `captureID`
+    /// parameter of the inner call — would name a card nothing ever publishes.
     private static func republishRecording(
         _ audio: Data,
         under captureID: UUID,
         escapingTo escapeID: UUID,
         createdAt: Date,
+        attachedTo: UUID?,
         store: ConversationStore
     ) async throws -> Republication {
         let container = SourceAudioContainer.sniff(audio)
@@ -430,6 +468,7 @@ enum WorkVoiceCaptureCoordinator {
                 fileExtension: container.fileExtension,
                 mimeType: container.mimeType,
                 createdAt: createdAt,
+                attachedTo: attachedTo,
                 store: store
             )
             return .landed(captureID)
@@ -441,6 +480,7 @@ enum WorkVoiceCaptureCoordinator {
                     fileExtension: container.fileExtension,
                     mimeType: container.mimeType,
                     createdAt: createdAt,
+                    attachedTo: attachedTo,
                     store: store
                 )
                 return .landed(escapeID)
@@ -460,6 +500,12 @@ enum WorkVoiceCaptureCoordinator {
     /// these words is the retry record the caller is still holding, so a
     /// refused write must reach that caller as a throw and not be absorbed by a
     /// second queue it would then have to be told to stop trusting.
+    ///
+    /// It carries NO `attachedToMaterialID`, deliberately. The link is written
+    /// on recordings alone: a note folded into a picture's card would lose the
+    /// full-text route that is the only way to read it, and this iteration
+    /// leaves text and pictures as two cards. A note that names a picture would
+    /// also be a second kind of child the board fold has to reason about.
     private static func publishFallbackNote(
         _ words: String,
         forCapture captureID: UUID,

@@ -286,6 +286,24 @@ nonisolated struct WorkboardMosaicEngine: Sendable {
         return min(max(raw, 1), metrics.maximumUnitWidth)
     }
 
+    /// The tile ONE grid unit is granted at this width. `place` frames every
+    /// card from it, and a card whose content has to fit inside a single unit —
+    /// the smallest footprint is exactly that — asks here rather than assuming
+    /// the compact board's unit, which the grid undercuts on every narrower
+    /// board.
+    func unitSize(forWidth width: CGFloat) -> CGSize {
+        let resolved = resolvedWidth(width)
+        return unitSize(columns: columnCount(forWidth: resolved), width: resolved)
+    }
+
+    private func unitSize(columns: Int, width: CGFloat) -> CGSize {
+        let gridUnitWidth = unitWidth(columns: columns, width: width)
+        return CGSize(
+            width: gridUnitWidth,
+            height: max(1, gridUnitWidth * metrics.unitAspectRatio)
+        )
+    }
+
     private func resolvedWidth(_ width: CGFloat) -> CGFloat {
         guard width.isFinite, width > 0 else { return metrics.fallbackWidth }
         return min(width, 100_000)
@@ -297,10 +315,10 @@ nonisolated struct WorkboardMosaicEngine: Sendable {
     ) -> Result {
         let boardWidth = resolvedWidth(availableWidth)
         let columns = columnCount(forWidth: boardWidth)
-        let gridUnitWidth = unitWidth(columns: columns, width: boardWidth)
-        let gridUnitHeight = max(1, gridUnitWidth * metrics.unitAspectRatio)
+        let unitSize = self.unitSize(columns: columns, width: boardWidth)
+        let gridUnitWidth = unitSize.width
+        let gridUnitHeight = unitSize.height
         let spacing = metrics.spacing
-        let unitSize = CGSize(width: gridUnitWidth, height: gridUnitHeight)
         let contentWidth = CGFloat(columns) * gridUnitWidth + CGFloat(columns - 1) * spacing
 
         guard !entries.isEmpty else {
