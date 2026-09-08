@@ -2260,6 +2260,20 @@ enum Constants {
     /// larger blobs export and import reliably, never on inference.
     nonisolated static let workboardSyncCeilingBytes: Int64 = 30 * 1024 * 1024
 
+    /// Long-edge cap, in pixels, of the copy an image card keeps. Every image
+    /// that lands on the desk is normalised to this size by the desk write
+    /// (`WorkMaterialImagePolicy`), so a card costs the person's iCloud quota
+    /// once at vision size rather than at a screenshot's full backing scale.
+    ///
+    /// Gateway parity on purpose: it equals `ImageProcessor.defaultMaxPixel`,
+    /// the size a chat turn sends inline, so Work holds exactly what an AI
+    /// would have been shown. Written as a literal rather than as that
+    /// reference because this file is compiled into the Watch target, where
+    /// `ImageProcessor` does not exist; `ConduckTests` pins the two equal.
+    /// Raising it is a storage-and-sync decision (every card's bytes ride the
+    /// person's own CloudKit), and this is the one place that decision lives.
+    nonisolated static let workboardImageMaxPixel = 1568
+
     // MARK: - KVS Schema (diagnostic only)
 
     /// KVS schema version key. Diagnostic-only forward-compat —

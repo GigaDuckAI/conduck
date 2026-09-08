@@ -9,6 +9,7 @@
 // board shows what has arrived instead of failing whole.
 
 import Foundation
+import UniformTypeIdentifiers
 
 /// Bit-exact optimistic-concurrency token derived from a persisted `Date`. A
 /// coarse millisecond floor can approve a different payload/metadata write that
@@ -285,6 +286,84 @@ nonisolated struct WorkMaterialDraft: Sendable {
         self.cardSize = cardSize
         self.attachedToMaterialID = attachedToMaterialID
         self.createdAt = createdAt
+    }
+
+    /// The same card, describing the JPEG the desk write normalised its
+    /// picture to instead of the bytes the capture handed over.
+    ///
+    /// Everything that names the payload's FORMAT follows the bytes: the mime
+    /// type, the filename's extension and — because the export names a shared
+    /// copy after the title before it consults anything else — the title's
+    /// extension too, when the title carried one that names an image. A title
+    /// that is a sentence, or ends in something the system cannot type, is left
+    /// alone: rewriting "Meeting v1.2" would invent an extension it never had.
+    /// Identity, rank, caption, provenance and the companion link are carried
+    /// verbatim; what changed is the representation, not the card.
+    func normalisedImage(jpeg: Data) -> WorkMaterialDraft {
+        describedAsJPEG(payload: jpeg, byteSize: Int64(jpeg.count))
+    }
+
+    /// The same card with every name that states a format saying JPEG, and its
+    /// bytes left exactly as they are — for a picture the desk write found
+    /// already the shape it keeps, whose capture may still have named it
+    /// `.png` or `.heic`.
+    func renamedAsJPEG() -> WorkMaterialDraft {
+        describedAsJPEG(payload: payload, byteSize: byteSize)
+    }
+
+    private func describedAsJPEG(payload: Data?, byteSize: Int64?) -> WorkMaterialDraft {
+        WorkMaterialDraft(
+            id: id,
+            kind: kind,
+            title: Self.renamingTypedExtension(of: title, to: "jpg") ?? title,
+            caption: caption,
+            textContent: textContent,
+            urlString: urlString,
+            filename: filename.map { Self.replacingExtension(of: $0, with: "jpg") },
+            mimeType: "image/jpeg",
+            payload: payload,
+            thumbnailData: thumbnailData,
+            width: width,
+            height: height,
+            byteSize: byteSize,
+            sequence: sequence,
+            storageMode: storageMode,
+            sourceDevice: sourceDevice,
+            cardSize: cardSize,
+            attachedToMaterialID: attachedToMaterialID,
+            createdAt: createdAt
+        )
+    }
+
+    /// `name` with its extension swapped for `ext`, whatever the old one was —
+    /// a filename always describes its bytes, so it always takes the new type.
+    /// An extension that already names the same type is kept as spelled:
+    /// `photo.jpeg` is not renamed `photo.jpg` for nothing.
+    static func replacingExtension(of name: String, with ext: String) -> String {
+        let current = (name as NSString).pathExtension
+        if !current.isEmpty,
+           let currentType = UTType(filenameExtension: current),
+           let newType = UTType(filenameExtension: ext),
+           !currentType.isDynamic,
+           currentType == newType {
+            return name
+        }
+        let stem = (name as NSString).deletingPathExtension
+        return stem.isEmpty ? "\(name).\(ext)" : "\(stem).\(ext)"
+    }
+
+    /// `name` with its extension swapped for `ext` ONLY when the current one
+    /// names a type the system knows — `.heic`, `.png`, but equally a
+    /// misnamed `.pdf`, since the export names a shared copy after the title
+    /// before it consults anything else and a JPEG must never leave as a
+    /// `.pdf`. Nil when it names nothing, so a title that merely ends in a
+    /// dot-something ("Meeting v1.2") keeps it.
+    static func renamingTypedExtension(of name: String, to ext: String) -> String? {
+        let current = (name as NSString).pathExtension
+        guard !current.isEmpty,
+              let type = UTType(filenameExtension: current),
+              !type.isDynamic else { return nil }
+        return replacingExtension(of: name, with: ext)
     }
 }
 

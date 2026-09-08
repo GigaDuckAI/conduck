@@ -10,6 +10,9 @@
 // drainer has no transport dependency, and every assertion stays inside
 // in-memory Core Data + temp files.
 
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 @testable import Conduck
 
@@ -128,6 +131,73 @@ final class WorkCaptureDrainerTests: XCTestCase {
         XCTAssertEqual(image.availability, .synced)
         let storedBytes = try await store.loadWorkMaterialPayload(id: imageID)
         XCTAssertEqual(storedBytes, payload)
+    }
+
+    /// A real picture shared to Work lands sized: the appex copies the bytes
+    /// as they are (it decodes nothing, by rule), and the desk write is what
+    /// shrinks them — so the card the drain produces is a JPEG within the desk
+    /// cap, named as one, and the queue copy is gone.
+    func testASharedPictureLandsOnTheDeskSizedAndNamedAsAJPEG() async throws {
+        let store = isolated.make()
+        let payload = try pngBytes(width: 3000, height: 2000)
+        let imageID = UUID()
+        let envelope = WorkCaptureEnvelope(
+            note: "",
+            source: .shareExtension,
+            entries: [
+                .init(
+                    id: imageID,
+                    kind: .image,
+                    sequence: 0,
+                    relativePath: "payload-000.png",
+                    displayName: "IMG_0001.PNG",
+                    mimeType: "image/png",
+                    byteCount: Int64(payload.count)
+                ),
+            ]
+        )
+        try publish(envelope, payloads: ["payload-000.png": payload])
+
+        _ = try await makeDrainer(store: store).drainAvailableCaptures()
+        let desk = try await unwrapDesk(store)
+
+        let image = try XCTUnwrap(desk.materials.first { $0.id == imageID })
+        XCTAssertEqual(image.kind, .image)
+        XCTAssertEqual(image.mimeType, "image/jpeg")
+        XCTAssertEqual(image.filename, "IMG_0001.jpg")
+        XCTAssertEqual(image.title, "IMG_0001.jpg")
+        XCTAssertEqual(image.availability, .synced)
+        XCTAssertLessThan(image.byteSize, Int64(payload.count))
+        let storedValue = try await store.loadWorkMaterialPayload(id: imageID)
+        let storedBytes = try XCTUnwrap(storedValue)
+        XCTAssertTrue(storedBytes.starts(with: [0xFF, 0xD8]), "the desk holds a JPEG")
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(storedBytes as CFData, nil))
+        XCTAssertEqual(ImageProcessor.inspect(source).longEdge, Constants.workboardImageMaxPixel)
+    }
+
+    /// Real encoded PNG bytes, synthesised so the drain exercises ImageIO.
+    private func pngBytes(width: Int, height: Int) throws -> Data {
+        let context = try XCTUnwrap(CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ))
+        context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(CGColor(red: 0.9, green: 0.5, blue: 0.1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width / 2, height: height / 2))
+        let image = try XCTUnwrap(context.makeImage())
+        let out = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+            out as CFMutableData, UTType.png.identifier as CFString, 1, nil
+        ))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return out as Data
     }
 
     /// `targetWorkItemID` survives in the envelope because the share extension

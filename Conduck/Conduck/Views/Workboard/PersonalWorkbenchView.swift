@@ -1309,10 +1309,13 @@ private struct WorkboardMaterialPreviewView: View {
                 loadFullBytes: { materialID in
                     try await PersonalWorkbenchRouter.imageBytes(materialID: materialID)
                 },
-                // Work stores originals verbatim, so a camera photo here is a
-                // 40+ megapixel decode. The bound is what makes a desk-wide
-                // gallery affordable; the STRICT path behind it reports failure
-                // rather than silently falling back to an unbounded decode.
+                // A card captured before the desk sized its pictures still
+                // holds its original bytes, so a camera photo there is a 40+
+                // megapixel decode; a newer card is already at
+                // `Constants.workboardImageMaxPixel` and the bound is a no-op.
+                // The bound is what makes a desk-wide gallery affordable; the
+                // STRICT path behind it reports failure rather than silently
+                // falling back to an unbounded decode.
                 fullDecodeMaxPixel: 4096
             ) { pageID in
                 // The ORIGINAL bytes, resolved by the coordinator from the card
