@@ -748,15 +748,6 @@ struct DiagnosticsContent: View {
                 )
             }
             ForEach(voiceCheckRows) { checkRow($0) }
-            if !healthyVoicePermissions.isEmpty {
-                DisclosureGroup {
-                    ForEach(healthyVoicePermissions) { DiagnosticCheckRow(check: $0) }
-                } label: {
-                    Text(LocalizedStringResource("diagnostics.voice.permissions", defaultValue: "Recording permissions"))
-                        .font(.subheadline)
-                }
-                .settingsCardPassiveRow()
-            }
             Button {
                 Task {
                     if let permission = runner.transcriptionTestPrerequisite {
@@ -903,13 +894,7 @@ struct DiagnosticsContent: View {
     /// `.voice` — every prerequisite for recording sits beside its test).
     private var voiceCheckRows: [DiagnosticCheck] {
         runner.checks.filter {
-            $0.category == .voice && $0.tier != .explicitPaid && !healthyVoicePermissions.contains($0)
-        }
-    }
-
-    private var healthyVoicePermissions: [DiagnosticCheck] {
-        runner.checks.filter {
-            ($0.id == "voice.mic.permission" || $0.id == "voice.speech.permission") && $0.status == .passed
+            $0.category == .voice && $0.tier != .explicitPaid
         }
     }
 
