@@ -1300,17 +1300,7 @@ struct DiagnosticsContent: View {
 
     private var capabilitySection: some View {
         Section {
-            ForEach(checks(in: .capability).filter { $0.status.needsAttention }) { checkRow($0) }
-            let supporting = checks(in: .capability).filter { !$0.status.needsAttention }
-            if !supporting.isEmpty {
-                DisclosureGroup {
-                    ForEach(supporting) { checkRow($0) }
-                } label: {
-                    Text(LocalizedStringResource("diagnostics.permissions.details", defaultValue: "Permission details"))
-                        .font(.subheadline)
-                }
-                .settingsCardPassiveRow()
-            }
+            ForEach(checks(in: .capability)) { checkRow($0) }
         } header: {
             Text(LocalizedStringResource(
                 "diagnostics.section.capability",
@@ -1323,25 +1313,13 @@ struct DiagnosticsContent: View {
 
     private var syncSection: some View {
         Section {
-            ForEach(checks(in: .sync).filter { $0.status.needsAttention || ($0.id == DiagnosticsRunner.watchCheckID && $0.status == .passed) }) { check in
+            ForEach(checks(in: .sync)) { check in
                 if check.id == DiagnosticsRunner.watchCheckID {
                     watchRow(check)
                 } else {
                     DiagnosticCheckRow(check: check)
                         .settingsCardPassiveRow()
                 }
-            }
-            let supporting = checks(in: .sync).filter {
-                !$0.status.needsAttention && !($0.id == DiagnosticsRunner.watchCheckID && $0.status == .passed)
-            }
-            if !supporting.isEmpty {
-                DisclosureGroup {
-                    ForEach(supporting) { DiagnosticCheckRow(check: $0) }
-                } label: {
-                    Text(LocalizedStringResource("diagnostics.sync.details", defaultValue: "Sync details"))
-                        .font(.subheadline)
-                }
-                .settingsCardPassiveRow()
             }
         } header: {
             Text(LocalizedStringResource("diagnostics.section.sync", defaultValue: "Sync"))
