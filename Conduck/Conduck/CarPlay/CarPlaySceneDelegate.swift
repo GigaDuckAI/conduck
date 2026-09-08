@@ -14,17 +14,17 @@
 // list refreshes on `.conversationsDidChange` and is disabled while a session
 // is active. No-gateway state = the "Set up your AI on iPhone first." row.
 //
-// The first section also carries a permanent "Add to Work" row — a ONE-SHOT
-// spoken note that lands on the driver's own desk and reaches no gateway, so it
-// is offered in the no-gateway state too. Work CARDS are never listed here:
+// The desk is a DESTINATION the driver picks from one place: the nav-bar
+// switcher (shown whenever a gateway is configured, one included) opens a
+// chooser of every gateway with "Add to Work" as its last row — a ONE-SHOT
+// spoken note that lands on the driver's own desk and reaches no gateway.
+// There it is an ACTION — it starts the note and is over — while every row
+// above it is a drive-long gateway pick. Work is never a mode: no state
+// outlives the tap, so the next "New voice chat" still goes to the gateway.
+// Only the no-gateway state, which has no switcher, draws that row on the root
+// itself — day one's only working row. Work CARDS are never listed here:
 // content on a car screen is what the voice-based-conversation entitlement
-// forbids, and this row only records.
-//
-// The desk has a SECOND door: the nav-bar destination chooser (shown with two
-// or more gateways) ends with the same "Add to Work" row. There it is an
-// ACTION — it starts the note and is over — while every row above it is a
-// drive-long gateway pick. Work is never a mode: no state outlives the tap, so
-// the next "New voice chat" still goes to the gateway.
+// forbids, and the row only records.
 //
 // NAV MODEL: the list picker is the permanent root (set ONCE in `didConnect`,
 // never removed); the `CPVoiceControlTemplate` is a modal-only template (SDK
@@ -666,11 +666,12 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// INSIDE the `presentTemplate` completion. This body has no suspension
     /// before that call, so — unlike `startSession` — it needs no `Task` hop.
     ///
-    /// Split in two because the note has TWO doors — the root row (one tap) and
-    /// the destination chooser's action row (which has to claim before it pops,
-    /// then present on the far side of the pop animation). The claim is taken
-    /// here, once, and `presentWorkNote` carries it; a second door that claimed
-    /// twice would hold its own claim shut.
+    /// Split in two because the note has TWO doors — the day-one root row (no
+    /// gateway configured, one tap) and the destination chooser's action row
+    /// (which has to claim before it pops, then present on the far side of the
+    /// pop animation). The claim is taken here, once, and `presentWorkNote`
+    /// carries it; a second door that claimed twice would hold its own claim
+    /// shut.
     private func startWorkNote(service: CarPlayRecordingService) {
         // Same synchronous claim the chat starter takes, and for the same
         // reason from the other side: a chat start suspended in its pre-flight
@@ -871,30 +872,36 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// `CPListTemplate.maximumItemCount` is a hard ceiling the framework
     /// enforces by TRUNCATING, so a row added to the first section without
     /// paying for it here silently costs the oldest conversation instead — a
-    /// loss nobody would see in a diff. Three claims on the budget, and each is
+    /// loss nobody would see in a diff. Two claims on the budget, and each is
     /// subtracted where it is decided:
     ///
     ///   • row 0, "New voice chat" — `CarPlayConversationLabel.recentCap`
     ///   • the one-shot mic-couldn't-start hint, only while it is shown
-    ///   • "Add to Work", which is permanent
+    ///
+    /// "Add to Work" costs nothing here: where a gateway exists it lives in the
+    /// chooser the nav-bar switcher opens, not in this list, and the no-gateway
+    /// state that does draw it on the root draws no recents at all.
     ///
     /// Pure arithmetic, extracted so the budget is unit-tested without a
     /// CarPlay scene (and `recentCap` itself is left untouched — it answers the
     /// narrower question of what row 0 costs, and other callers ask it).
     static func recentRowBudget(maximumItemCount: Int, showsStartFailureHint: Bool) -> Int {
         CarPlayConversationLabel.recentCap(
-            maximumItemCount: maximumItemCount - (showsStartFailureHint ? 1 : 0) - 1
+            maximumItemCount: maximumItemCount - (showsStartFailureHint ? 1 : 0)
         )
     }
 
-    /// The permanent "Add to Work" row: one tap, one spoken note, straight onto
+    /// The day-one "Add to Work" row: one tap, one spoken note, straight onto
     /// the driver's own desk.
     ///
-    /// Built here rather than inline because it appears in BOTH picker states —
-    /// with gateways configured and without — and the two must not drift into
-    /// different labels or different handlers for what is one affordance. It
-    /// carries no detail text for the same reason row 0 does not: a head unit's
-    /// row is read at a glance from the driver's seat.
+    /// Drawn on the ROOT only while no gateway is configured — the one state
+    /// with no switcher to open the destination chooser from, and the one where
+    /// this is the only row that does anything at all. Everywhere else the
+    /// desk is the last row of the "Choose AI" list, beside the gateways, so the
+    /// driver picks a destination from one place. Kept as a builder rather than
+    /// inline so its label and handler cannot drift from what that chooser row
+    /// starts. It carries no detail text for the same reason row 0 does not: a
+    /// head unit's row is read at a glance from the driver's seat.
     ///
     /// The desk is NEVER browsed here. Cards are content, and content on a car
     /// screen is what the voice-based-conversation entitlement forbids; this row
@@ -1011,10 +1018,13 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // nothing to talk to yet) PLUS "Add to Work", which needs no
             // gateway at all: a note goes to the driver's own desk, so the car
             // is useful before any AI is set up and this is the one state where
-            // it is the only working row. Multi-gateway: the gate is "is ANY
+            // it is the only working row. Any gateway: the gate is "is ANY
             // gateway configured?" so CarPlay offers a new chat as soon as ≥1
             // backend is set up; the per-conversation send routing already
-            // binds each chat to its own backend.
+            // binds each chat to its own backend. Once one exists the root
+            // draws no Work row — the desk is reached through the switcher's
+            // chooser, beside the gateways, which is why the switcher is drawn
+            // for a single gateway too.
             let configuredRefs = await SettingsManager.shared.configuredRemoteAgentRefs()
             // Custom roster (for labeling built-in vs custom refs in the
             // switcher + chooser). Fetched once per refresh.
@@ -1022,7 +1032,8 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // Effective CarPlay ref = session-local override (this drive) ?? the
             // iPhone's device-local default. NEVER reads the global default
             // directly so a CarPlay switch can't leak to the phone. Read only
-            // when there is a switcher to title with it.
+            // when there is a switcher to title with it — any configured
+            // gateway, since the chooser it opens is where "Add to Work" lives.
             var current: RemoteAgentRef?
             var recents: [ConversationStore.RecentConversation] = []
             // Badge visibility spans the WHOLE store, not `recents` — that slice
@@ -1033,9 +1044,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             var allBackends: Set<String> = []
             if !configuredRefs.isEmpty {
                 customs = await SettingsManager.shared.gatewayBadgeRoster()
-                if configuredRefs.count >= 2 {
-                    current = await self.effectiveCarPlayRef()
-                }
+                current = await self.effectiveCarPlayRef()
                 recents = (try? await ConversationStore.shared.fetchRecentForPicker(limit: cap)) ?? []
                 if !recents.isEmpty {
                     allBackends = (try? await ConversationStore.shared.distinctBackends())
@@ -1098,10 +1107,12 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             }
 
             // Default-gateway switcher (idle list ONLY — the picker is the root
-            // and no voice modal is up while idle). Shown only when ≥2 gateways
-            // (built-ins + customs) are configured (with one there is nothing to
-            // switch). Titled with the current default's display name; tapping
-            // pushes a chooser. List templates render nav-bar buttons reliably.
+            // and no voice modal is up while idle). Shown whenever a gateway is
+            // configured, one included: the list it opens is the destination
+            // chooser — every gateway, then "Add to Work" — so with a single
+            // gateway it is still the only door to the desk from this state.
+            // Titled with the current default's display name; tapping pushes
+            // that chooser. List templates render nav-bar buttons reliably.
             if let current {
                 // The SHORT form: this is a nav-bar button on a head unit, read
                 // at a glance from the driver's seat, and a custom gateway's name
@@ -1135,9 +1146,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // wedged session; no CPAlertTemplate, which races the voice-modal
             // dismiss animation). Informational: tapping it does nothing.
             //
-            // The sentence names the row that FAILED. This state draws both
-            // rows, so a failed Work start told to "Tap New voice chat" would
-            // route the repeated private thought to an AI.
+            // The sentence names the row that FAILED. A Work note can start
+            // from this state too (the chooser's last row), so a failed Work
+            // start told to "Tap New voice chat" would route the repeated
+            // private thought to an AI.
             if oneShotStartFailureHint {
                 let detail = self.lastStartDestination == .work
                     ? String(localized: "carplay.hint.captureStartFailed.detail.work", defaultValue: "Tap Add to Work to try again.")  // xcstrings
@@ -1151,10 +1163,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 firstSectionItems.insert(hint, at: 0)
             }
 
-            // "Add to Work" LAST in the first section: conversations are what
-            // the driver came for, and the budget for this row is already paid
-            // in `recentRowBudget` above.
-            firstSectionItems.append(self.makeWorkNoteItem(service: service))
+            // No "Add to Work" row here: with a gateway configured the desk is
+            // the last row of the chooser the switcher above opens, beside the
+            // gateways, so the root stays the conversation list the driver came
+            // for — and `recentRowBudget` prices no Work row for the same reason.
             let newSection = CPListSection(items: firstSectionItems)
 
             // "Recent" section — conversations to continue (label + date only).
@@ -1318,10 +1330,13 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// their bound `Conversation.backend` — no routing change.
     ///
     /// The list ends with the desk: one **ACTION** row, "Add to Work", after
-    /// every gateway row. It is the SECOND door to the note the root row already
-    /// offers in one tap — the destination picker the driver is looking at
-    /// should name every destination, including the one that is not an AI — and
-    /// it is an action precisely because the rows above it are not: a gateway
+    /// every gateway row. Wherever a gateway exists this is THE door to the
+    /// note — the root draws the same row only while no gateway is configured
+    /// and there is no switcher to open this list from — so the destination
+    /// picker the driver is looking at names every destination, including the
+    /// one that is not an AI. That is also why the switcher is drawn for a
+    /// single gateway: without it the desk would be unreachable from the car.
+    /// It is an action precisely because the rows above it are not: a gateway
     /// row stores this drive's target, and a Work row that did the same would be
     /// a drive-long mode that survives the note, resets silently on the next
     /// reconnect, and one day answers a private thought with an AI. So it never
@@ -1377,8 +1392,8 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             defer { completion() }
             guard let self, let service else { return }
             guard service === self.recordingService, !service.sessionActive else { return }
-            // CLAIMED BEFORE THE POP, synchronously, exactly as the root row
-            // claims before its present: the pop is a suspension, and "New voice
+            // CLAIMED BEFORE THE POP, synchronously, exactly as the day-one root
+            // row claims before its present: the pop is a suspension, and "New voice
             // chat" is one tap away on the list underneath this one. A claim
             // taken on the far side would let that tap's chat start win the
             // guard and answer this note with an AI.
