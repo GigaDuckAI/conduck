@@ -837,6 +837,45 @@ extension ConversationStore {
         return record
     }
 
+    /// The draft and bytes the desk actually publishes: the picture sized for
+    /// the desk by `WorkMaterialImagePolicy`, or exactly what the caller handed
+    /// over when the policy leaves it alone. On a normalisation the JPEG
+    /// travels as `payload` and the file source is dropped, so staging measures
+    /// the bytes it will store rather than comparing them with a length the
+    /// capture declared for a file that is no longer the payload. Static so the
+    /// policy's `@concurrent` work is awaited off this actor.
+    private static func sizedForDesk(
+        _ draft: WorkMaterialDraft,
+        repairPayload: Data?,
+        sourceFileURL: URL?,
+        sourceFileByteSize: Int64?,
+        existing: WorkMaterialRecord?
+    ) async throws -> (
+        draft: WorkMaterialDraft,
+        payload: Data?,
+        sourceFileURL: URL?,
+        sourceFileByteSize: Int64?
+    ) {
+        let payload = repairPayload ?? draft.payload
+        switch try await WorkMaterialImagePolicy.prepare(
+            kind: draft.kind,
+            payload: payload,
+            sourceFileURL: sourceFileURL,
+            declaredByteCount: sourceFileByteSize ?? draft.byteSize,
+            existing: existing
+        ) {
+        case .normalised(let jpeg, _, _):
+            return (draft.normalisedImage(jpeg: jpeg), jpeg, nil, nil)
+        case .unchanged(.alreadyConforming):
+            // The bytes ARE a JPEG of the desk's shape; only the capture's
+            // names may still say otherwise. They follow the bytes, the bytes
+            // stay exactly where they are.
+            return (draft.renamedAsJPEG(), payload, sourceFileURL, sourceFileByteSize)
+        case .unchanged:
+            return (draft, payload, sourceFileURL, sourceFileByteSize)
+        }
+    }
+
     // MARK: - Materials
 
     /// Payload bytes made durable before any row is written. Exactly one lane
@@ -899,6 +938,12 @@ extension ConversationStore {
         /// Vault key the surviving material row names, which decides whether
         /// bytes staged by this call are referenced or garbage.
         let existingVaultKey: String?
+        /// Whether a physical row of the card names the synced bytes this call
+        /// staged, read after the transaction repointed what it may. False only
+        /// for a stale replay against rows that were all newer and all kept
+        /// their own pairing — the one case in which a blob this call inserted
+        /// is named by nothing and is taken back.
+        let stagedPayloadIsNamed: Bool
     }
 
     /// The shared write behind `upsertDeskMaterial`. Bytes are staged before
@@ -921,9 +966,9 @@ extension ConversationStore {
     /// so there is no cycle. Serializing costs a wait; a card that loses its
     /// payload cannot be undone.
     private func publishWorkMaterial(
-        _ draft: WorkMaterialDraft,
-        sourceFileURL: URL?,
-        sourceFileByteSize: Int64?,
+        _ incoming: WorkMaterialDraft,
+        sourceFileURL incomingSourceFileURL: URL?,
+        sourceFileByteSize incomingSourceFileByteSize: Int64?,
         repairPayload: Data?,
         legacyProvenance: WorkMaterialLegacyProvenance?,
         expectedOwnerRevision: Int64?,
@@ -937,11 +982,11 @@ extension ConversationStore {
         workInitialMaterialClaims.insert(ownerID)
         defer { workInitialMaterialClaims.remove(ownerID) }
 
-        while workMaterialPublicationClaims.contains(draft.id) {
+        while workMaterialPublicationClaims.contains(incoming.id) {
             try await Task.sleep(for: .milliseconds(40))
         }
-        workMaterialPublicationClaims.insert(draft.id)
-        defer { workMaterialPublicationClaims.remove(draft.id) }
+        workMaterialPublicationClaims.insert(incoming.id)
+        defer { workMaterialPublicationClaims.remove(incoming.id) }
 
         try await ensureLoaded()
 
@@ -952,13 +997,11 @@ extension ConversationStore {
         // between the app and the headless intent process, which share this
         // store and mint the same deterministic capture ids.
         let publicationHold = try await workMaterialPublicationLock?.acquire(
-            materialID: draft.id
+            materialID: incoming.id
         )
         defer { publicationHold?.release() }
 
-        let carriedPayload = repairPayload ?? draft.payload
-        let carriesBytes = carriedPayload != nil || sourceFileURL != nil
-        let existing = try await fetchWorkMaterial(id: draft.id)
+        let existing = try await fetchWorkMaterial(id: incoming.id)
         // A material id names ONE card, and a capture whose id already names a
         // card of another KIND is a collision, not a replay of it — wherever
         // that card sits, the desk included. Refused here, before anything is
@@ -968,9 +1011,30 @@ extension ConversationStore {
         // publish these bytes over that card's payload and retire the blob it
         // was using. Every PHYSICAL row is checked again inside the
         // transaction, which is where the answer is authoritative.
-        if let existing, existing.kind != draft.kind {
+        if let existing, existing.kind != incoming.kind {
             throw WorkboardStoreError.invalidMaterialOwner
         }
+        // THE ONE PLACE A PICTURE IS SIZED FOR THE DESK. Every lane's image
+        // lands here, so the cap is enforced by construction on the lanes that
+        // have no UI to shrink from — the share inbox, the Shortcut, a paste.
+        // Decided AFTER the existing card is known and BEFORE anything is
+        // staged, because the policy's one data-safety rule needs the card: a
+        // replay must reproduce the representation the row already names, or
+        // the hash pairing below would retire a healthy blob as superseded.
+        // Everything downstream — the repair lane, staging, the preview, the
+        // transaction — reads the sized values and never the caller's.
+        let sized = try await Self.sizedForDesk(
+            incoming,
+            repairPayload: repairPayload,
+            sourceFileURL: incomingSourceFileURL,
+            sourceFileByteSize: incomingSourceFileByteSize,
+            existing: existing
+        )
+        let draft = sized.draft
+        let sourceFileURL = sized.sourceFileURL
+        let sourceFileByteSize = sized.sourceFileByteSize
+        let carriedPayload = sized.payload
+        let carriesBytes = carriedPayload != nil || sourceFileURL != nil
         // Repair restores the bytes a row already claims, in the lane it claims
         // them. It never changes the claim: a `.metadataOnly` card gaining
         // bytes is a reattach, not a repair, and a card whose payload outgrew
@@ -1208,6 +1272,7 @@ extension ConversationStore {
                     // just landed, or a later merge picks a row that still
                     // points at nothing.
                     var repaired = false
+                    var stagedPayloadIsNamed = true
                     if let staged, let repairLane {
                         switch repairLane {
                         case .localVault:
@@ -1234,10 +1299,30 @@ extension ConversationStore {
                                 // complete blob carrying different bytes for
                                 // this material is a superseded attempt, and it
                                 // goes in the same save that repoints the card.
+                                //
+                                // EXCEPT the blob a row this publication may NOT
+                                // repoint still names. A replay that is older
+                                // than a reattach on this card carries bytes the
+                                // person has since replaced, and staging them
+                                // must not retire the replacement: the newer row
+                                // keeps naming it (below), so the blob it names
+                                // has to survive this sweep too, or the card
+                                // ends up pointing at nothing.
+                                let pairingsNewerRowsName = materialRows
+                                    .filter { !rowsNotNewerThanThisPublication.contains($0) }
+                                    .compactMap { row -> (contentHash: String, byteSize: Int64)? in
+                                        guard row.value(forKey: "storageMode") as? String
+                                                == WorkMaterialStorageMode.syncedPayload.rawValue,
+                                              let hash = row.value(forKey: "contentHash") as? String,
+                                              let size = (row.value(forKey: "byteSize") as? NSNumber)?.int64Value
+                                        else { return nil }
+                                        return (hash, size)
+                                    }
                                 let superseded = try Self.deleteSupersededBlobRows(
                                     materialID: draft.id,
                                     keepingContentHash: contentHash,
                                     byteSize: staged.byteSize,
+                                    protecting: pairingsNewerRowsName,
                                     in: context
                                 )
                                 // WHAT THE ROWS SAY DECIDES, NOT WHAT THIS CALL
@@ -1288,6 +1373,20 @@ extension ConversationStore {
                                         )
                                     }
                                 }
+                                // Read AFTER the repoint: whether any physical
+                                // row of this card now names the bytes this
+                                // call staged. When none does — every row was
+                                // newer than the replay and kept its own
+                                // pairing — the blob this call inserted is
+                                // named by nothing, and the caller takes it
+                                // back rather than leaving a stray.
+                                stagedPayloadIsNamed = materialRows.contains { row in
+                                    Self.namesSyncedPayload(
+                                        row: row,
+                                        contentHash: contentHash,
+                                        byteSize: staged.byteSize
+                                    )
+                                }
                             }
                         case .metadataOnly:
                             break
@@ -1301,7 +1400,8 @@ extension ConversationStore {
                         createdOwner: createdOwner,
                         existingVaultKey: materialRows.compactMap {
                             $0.value(forKey: "localVaultKey") as? String
-                        }.first
+                        }.first,
+                        stagedPayloadIsNamed: stagedPayloadIsNamed
                     )
                 }
 
@@ -1356,7 +1456,8 @@ extension ConversationStore {
                     repairedMaterial: false,
                     adoptedMaterial: false,
                     createdOwner: createdOwner,
-                    existingVaultKey: staged.vaultKey
+                    existingVaultKey: staged.vaultKey,
+                    stagedPayloadIsNamed: true
                 )
             }
         } catch {
@@ -1370,6 +1471,15 @@ extension ConversationStore {
                 await deleteBlobRow(rowID)
             }
             throw error
+        }
+
+        if case .inserted(let rowID) = publishedBlob, !outcome.stagedPayloadIsNamed {
+            // A stale replay: every row of this card was newer than the capture
+            // being replayed and kept the bytes the person put there last, so
+            // the blob this call wrote a moment ago is named by nothing. The
+            // same rule as a refusal — this call inserted that exact row and
+            // knows no card took it, which a sweep never could.
+            await deleteBlobRow(rowID)
         }
 
         // STEP 3 of the publication protocol: the row naming this leaf has
@@ -1879,12 +1989,23 @@ extension ConversationStore {
         materialID: UUID,
         keepingContentHash contentHash: String,
         byteSize: Int64,
+        protecting: [(contentHash: String, byteSize: Int64)] = [],
         in context: NSManagedObjectContext
     ) throws -> Int {
         var deleted = 0
         for row in try blobRows(materialID: materialID, in: context) {
             guard let record = blobRecord(of: row), record.isComplete else { continue }
             guard record.contentHash != contentHash || record.byteSize != byteSize else {
+                continue
+            }
+            // A blob a NEWER row still names is not superseded by the bytes a
+            // stale replay carries — it is the payload the person put on the
+            // card last, and the row naming it is exactly the row this
+            // publication may not repoint. Deleting it would leave that row
+            // pointing at nothing, for ever.
+            if protecting.contains(where: {
+                $0.contentHash == record.contentHash && $0.byteSize == record.byteSize
+            }) {
                 continue
             }
             context.delete(row)
@@ -2362,15 +2483,59 @@ extension ConversationStore {
         guard let existing = try await fetchWorkMaterial(id: id) else {
             throw WorkboardStoreError.materialNotFound
         }
+        // A reattach REPLACES the card's bytes by design, so the picked
+        // picture is sized for the desk against no existing pairing: what the
+        // row named before is exactly what this call is retiring. Every name
+        // that states a format — filename, mime type, and the title when it
+        // carried an image extension — follows the bytes, or the export would
+        // hand a JPEG out under the picked file's name.
+        let replacement: (
+            payload: Data?, sourceURL: URL?, byteSize: Int64,
+            filename: String?, mimeType: String?, title: String?
+        )
+        switch try await WorkMaterialImagePolicy.prepare(
+            kind: existing.kind,
+            payload: nil,
+            sourceFileURL: sourceURL,
+            declaredByteCount: byteSize,
+            existing: nil
+        ) {
+        case .normalised(let jpeg, _, _):
+            replacement = (
+                payload: jpeg,
+                sourceURL: nil,
+                byteSize: Int64(jpeg.count),
+                filename: filename.map { WorkMaterialDraft.replacingExtension(of: $0, with: "jpg") },
+                mimeType: "image/jpeg",
+                title: WorkMaterialDraft.renamingTypedExtension(of: existing.title, to: "jpg")
+            )
+        case .unchanged(.alreadyConforming):
+            // Already a JPEG of the desk's shape: staged from the file as it
+            // is, but named for what it is — the card's title may still carry
+            // the extension of the picture this one replaces.
+            replacement = (
+                payload: nil,
+                sourceURL: sourceURL,
+                byteSize: byteSize,
+                filename: filename.map { WorkMaterialDraft.replacingExtension(of: $0, with: "jpg") },
+                mimeType: "image/jpeg",
+                title: WorkMaterialDraft.renamingTypedExtension(of: existing.title, to: "jpg")
+            )
+        case .unchanged:
+            replacement = (
+                payload: nil, sourceURL: sourceURL, byteSize: byteSize,
+                filename: filename, mimeType: mimeType, title: nil
+            )
+        }
         let staged = try await stageWorkMaterialBytes(
             id: id,
             kind: existing.kind,
-            filename: filename,
-            payload: nil,
-            declaredByteSize: byteSize,
+            filename: replacement.filename,
+            payload: replacement.payload,
+            declaredByteSize: replacement.byteSize,
             declaredStorageMode: .localVault,
-            sourceFileURL: sourceURL,
-            sourceFileByteSize: byteSize,
+            sourceFileURL: replacement.sourceURL,
+            sourceFileByteSize: replacement.sourceURL == nil ? nil : replacement.byteSize,
             vaultKeyID: UUID(),
             onProgress: onProgress
         )
@@ -2392,8 +2557,8 @@ extension ConversationStore {
         let replacementThumbnail: Data?
         if existing.kind == .image, staged.storageMode == .syncedPayload {
             replacementThumbnail = await Self.imagePresentationThumbnail(
-                payload: nil,
-                sourceFileURL: sourceURL
+                payload: replacement.payload,
+                sourceFileURL: replacement.sourceURL
             )
         } else {
             replacementThumbnail = nil
@@ -2491,8 +2656,9 @@ extension ConversationStore {
                 }
                 for row in rows {
                     row.setValue(sourceDevice, forKey: "sourceDevice")
-                    if let filename { row.setValue(filename, forKey: "filename") }
-                    if let mimeType { row.setValue(mimeType, forKey: "mimeType") }
+                    if let filename = replacement.filename { row.setValue(filename, forKey: "filename") }
+                    if let mimeType = replacement.mimeType { row.setValue(mimeType, forKey: "mimeType") }
+                    if let title = replacement.title { row.setValue(title, forKey: "title") }
                     // An extract describes the bytes that were here before, and
                     // this call is handed none for the bytes replacing them.
                     row.setValue(nil, forKey: "textContent")

@@ -133,13 +133,14 @@ final class WorkboardThumbnailTests: XCTestCase {
         )
     }
 
-    func testAVaultLaneImageKeepsNoPersistedThumbnail() async throws {
+    func testAnOversizedPictureIsSizedOntoTheSyncedLane() async throws {
         let store = isolated.make()
         let png = try imageBytes(width: 320, height: 240)
         // Decodable image bytes with a tail that pushes the payload past the
-        // sync ceiling: PNG readers stop at IEND, so ImageIO still makes a
-        // preview of this — which is exactly the point. A nil on the card has
-        // to be the LANE refusing to persist it, never a decode that failed.
+        // sync ceiling: PNG readers stop at IEND, so ImageIO still decodes it.
+        // Before the desk sized its pictures this was the vault-lane fixture;
+        // now the whole point is that a decodable picture never reaches the
+        // vault on size alone — it is shrunk first, and the shrunk copy syncs.
         let oversized = png + Data(count: Int(Constants.workboardSyncCeilingBytes) + 1)
         XCTAssertNotNil(
             ImageProcessor.thumbnailOnly(from: oversized),
@@ -156,11 +157,64 @@ final class WorkboardThumbnailTests: XCTestCase {
             )
         )
 
+        XCTAssertEqual(material.storageMode, .syncedPayload,
+                       "a picture is sized before the lane is chosen, so it syncs")
+        XCTAssertLessThan(material.byteSize, Constants.workboardSyncCeilingBytes)
+        XCTAssertEqual(material.mimeType, "image/jpeg")
+        XCTAssertEqual(material.filename, "huge.jpg")
+        XCTAssertNotNil(material.thumbnailData, "a synced image card carries its preview")
+    }
+
+    func testAVaultLaneImageKeepsNoPersistedThumbnail() async throws {
+        let store = isolated.make()
+        // An animation is stored as received, so a decodable oversized GIF is
+        // what still reaches the vault: GIF readers stop at the trailer, so
+        // ImageIO still makes a preview of this — which is exactly the point.
+        // A nil on the card has to be the LANE refusing to persist it, never a
+        // decode that failed.
+        let oversized = try animatedGIFBytes() + Data(count: Int(Constants.workboardSyncCeilingBytes) + 1)
+        XCTAssertNotNil(
+            ImageProcessor.thumbnailOnly(from: oversized),
+            "the fixture must stay decodable, or this case proves nothing about the lane"
+        )
+
+        let material = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                kind: .image,
+                title: "Huge capture",
+                filename: "huge.gif",
+                mimeType: "image/gif",
+                payload: oversized
+            )
+        )
+
         XCTAssertEqual(material.storageMode, .localVault)
+        XCTAssertEqual(material.mimeType, "image/gif", "bytes left alone keep the name they came with")
         XCTAssertNil(
             material.thumbnailData,
             "a device-local image must persist no preview: the row is CloudKit-mirrored"
         )
+    }
+
+    /// A two-frame GIF, synthesised like `imageBytes` — the one picture the
+    /// desk write leaves exactly as it came.
+    private func animatedGIFBytes() throws -> Data {
+        let out = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+            out as CFMutableData, UTType.gif.identifier as CFString, 2, nil
+        ))
+        for _ in 0..<2 {
+            let context = try XCTUnwrap(CGContext(
+                data: nil, width: 32, height: 32, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ))
+            context.setFillColor(CGColor(red: 0.3, green: 0.5, blue: 0.7, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+            CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), nil)
+        }
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return out as Data
     }
 
     func testANonImageCardGetsNoThumbnail() async throws {
@@ -331,6 +385,13 @@ final class WorkboardThumbnailTests: XCTestCase {
             )
         )
         XCTAssertEqual(material.storageMode, .syncedPayload)
+        // The row names the bytes the desk write STORED — the PNG sized to a
+        // JPEG by `WorkMaterialImagePolicy` — read NOW, while this row is still
+        // the canonical one: once the peer row below lands, the payload read
+        // answers from the peer, which is the whole point of the case.
+        let storedOwnValue = try await store.loadWorkMaterialPayload(id: material.id)
+        let storedOwn = try XCTUnwrap(storedOwnValue)
+        XCTAssertNotEqual(storedOwn, ownBytes, "the desk keeps the sized JPEG, not the PNG handed over")
         let originalRows = await store._workMaterialRowsForTesting(id: material.id)
         let ownHash = try XCTUnwrap(originalRows.first?.contentHash)
         let ownSize = try XCTUnwrap(originalRows.first?.byteSize)
@@ -363,7 +424,7 @@ final class WorkboardThumbnailTests: XCTestCase {
         XCTAssertEqual(report.examined, 1)
         XCTAssertEqual(report.filled, 1, "the row still names complete bytes, so it is repairable")
 
-        let expectedOwn = try XCTUnwrap(ImageProcessor.thumbnailOnly(from: ownBytes))
+        let expectedOwn = try XCTUnwrap(ImageProcessor.thumbnailOnly(from: storedOwn))
         let expectedPeer = try XCTUnwrap(ImageProcessor.thumbnailOnly(from: peerBytes))
         XCTAssertNotEqual(
             expectedOwn.count, expectedPeer.count,
