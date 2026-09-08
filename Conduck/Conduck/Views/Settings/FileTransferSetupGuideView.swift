@@ -42,6 +42,8 @@ import SwiftUI
 enum FileTransferSetupContext {
     case settings
     case composer
+    /// A standalone editor sheet with Cancel/Save, without composer auto-dismiss.
+    case diagnostics
 }
 
 /// Shared treatment for the secondary, bordered ACTION buttons across the gateway
@@ -228,7 +230,7 @@ struct FileTransferSetupContent: View {
             // dirty editor (external readiness must not eat unsaved edits).
             if eligible { dismiss() }
         }
-        .interactiveDismissDisabled(context == .composer && isDirty)
+        .interactiveDismissDisabled(context != .settings && isDirty)
         // The ONE title site for both hosts (iOS nav bar; the macOS chrome
         // header reads the same `resolvedTitle` via the chrome param below).
         .navigationTitle(Text(verbatim: resolvedTitle))
@@ -250,7 +252,7 @@ struct FileTransferSetupContent: View {
             // ROOT of its own sheet, where there is no screen behind it to point
             // at and this control is the sole exit (the sheet also disables
             // interactive dismissal while dirty) → "Cancel".
-            exit: context == .composer ? .cancel : .back,
+            exit: context == .settings ? .back : .cancel,
             // Save and Test stay mutually exclusive: a Save while a probe runs
             // (or vice versa) would interleave the commit chain with the
             // probe's verdict landing over the same shared state.

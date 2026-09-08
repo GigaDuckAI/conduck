@@ -86,6 +86,7 @@ struct DiagnosticsView: View {
 struct DiagnosticsContent: View {
     @State private var runner: DiagnosticsRunner
     @State private var copied = false
+    @State private var preparingCopy = false
     @State private var copyResetTask: Task<Void, Never>?
     /// The Fix sheet behind "Choose Gateway" — the default-vs-reality row's only
     /// action. A SHEET rather than a push because it works identically from all
@@ -93,6 +94,8 @@ struct DiagnosticsContent: View {
     /// with no plumbing: `DiagnosticsContent` has no `SettingsViewModel`, and
     /// `TroubleshootButton` has none to give it.
     @State private var showingDefaultPicker = false
+    @State private var editingFileLane: FileLaneState?
+    @State private var expandedFileResults: Set<RemoteAgentRef> = []
     @Environment(\.scenePhase) private var scenePhase
     /// Drives the per-row action layout: inline-trailing at normal text sizes,
     /// stacked below at accessibility sizes (where a trailing button would crush
@@ -138,6 +141,11 @@ struct DiagnosticsContent: View {
         // section tree — on macOS `Group(sections:)` decomposes that tree section by
         // section, so a sheet attached inside it would ride one card.
         .sheet(isPresented: $showingDefaultPicker) { defaultPickerSheet }
+        .sheet(item: $editingFileLane, onDismiss: {
+            Task { await runner.refreshConfig() }
+        }) { lane in
+            DiagnosticsFileSettingsSheet(lane: lane)
+        }
         .task { await runner.runAutoReads() }
         // Live re-derive on (re)appear + foreground: re-read the provider config +
         // permissions AND re-probe connectivity so a provider the user just
@@ -255,7 +263,9 @@ struct DiagnosticsContent: View {
                         "diagnostics.action.checking", defaultValue: "Checking…")))
             } else {
                 Label(
-                    LocalizedStringResource("diagnostics.action.recheckGateway", defaultValue: "Check Again"),
+                    gatewayHasNotBeenTested(ref)
+                        ? LocalizedStringResource("diagnostics.action.checkGateway", defaultValue: "Check connection")
+                        : LocalizedStringResource("diagnostics.action.recheckGateway", defaultValue: "Check again"),
                     systemImage: "arrow.clockwise"
                 )
                 .font(.subheadline.weight(.semibold))
@@ -264,6 +274,11 @@ struct DiagnosticsContent: View {
         }
         .buttonStyle(.bordered)
         .disabled(runner.gatewayRecheckRunning.contains(ref) || runner.isRunningAllTests)
+    }
+
+    private func gatewayHasNotBeenTested(_ ref: RemoteAgentRef) -> Bool {
+        guard let id = runner.gatewayDisplayOrder.first(where: { $0.ref == ref })?.connectionCheckID else { return true }
+        return runner.checks.first(where: { $0.id == id })?.status == .notRun
     }
 
     // MARK: Test everything
@@ -296,7 +311,7 @@ struct DiagnosticsContent: View {
             // servers → the clause simply covers nothing), so one footer fits both.
             Text(LocalizedStringResource(
                 "diagnostics.footer.testEverything",
-                defaultValue: "Runs every check, writes and reads back a small file on each set-up file server, and tests your voice providers."
+                defaultValue: "Checks saved connections and file servers, plus transcription when set up. File tests upload and remove a small sample. Cloud tests may incur charges. Voice playback is tested separately."
             ))
         }
     }
@@ -320,7 +335,7 @@ struct DiagnosticsContent: View {
                 }
             } else {
                 Label(
-                    LocalizedStringResource("diagnostics.action.testEverything", defaultValue: "Test everything"),
+                    LocalizedStringResource("diagnostics.action.testEverything", defaultValue: "Run diagnostic checks"),
                     systemImage: "stethoscope"
                 )
                 .labelStyle(AccentGlyphActionLabelStyle())
@@ -343,8 +358,8 @@ struct DiagnosticsContent: View {
                 // red they are looking at is a second ago, not ten minutes ago.
                 VStack(alignment: .leading, spacing: 2) {
                     Text(runner.attentionCount == 1
-                        ? LocalizedStringResource("diagnostics.summary.attention.one", defaultValue: "1 item needs attention")
-                        : LocalizedStringResource("diagnostics.summary.attention.many", defaultValue: "\(runner.attentionCount) items need attention"))
+                        ? LocalizedStringResource("diagnostics.summary.attention.one", defaultValue: "1 issue needs attention")
+                        : LocalizedStringResource("diagnostics.summary.attention.many", defaultValue: "\(runner.attentionCount) issues need attention"))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(AppColors.textPrimary)
                     scopedCheckLine
@@ -361,7 +376,7 @@ struct DiagnosticsContent: View {
         } else if runner.checksSettledGreen {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(LocalizedStringResource("diagnostics.summary.passed", defaultValue: "Checks passed"))
+                    Text(LocalizedStringResource("diagnostics.summary.passed", defaultValue: "Diagnostic checks passed"))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(AppColors.textPrimary)
                     lastCheckedLine
@@ -369,6 +384,17 @@ struct DiagnosticsContent: View {
             } icon: {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(AppColors.success)
+            }
+            .settingsCardPassiveRow()
+        } else if !runner.isBusy, runner.untestedCheckCount > 0 {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(LocalizedStringResource("diagnostics.summary.untested", defaultValue: "This setup hasn't been fully checked"))
+                        .font(.subheadline.weight(.semibold))
+                    scopedCheckLine
+                }
+            } icon: {
+                Image(systemName: "info.circle").foregroundStyle(AppColors.textSecondary)
             }
             .settingsCardPassiveRow()
         }
@@ -500,7 +526,7 @@ struct DiagnosticsContent: View {
                     }
                     .settingsCardPassiveRow()
                 }
-                if let lane = runner.fileLanes.first(where: { $0.ref == entry.ref }) {
+                if let lane = runner.fileLanes.first(where: { $0.ref == entry.ref }), lane.configured {
                     fileServerSubRow(lane)
                 }
             }
@@ -722,11 +748,28 @@ struct DiagnosticsContent: View {
                 )
             }
             ForEach(voiceCheckRows) { checkRow($0) }
+            if !healthyVoicePermissions.isEmpty {
+                DisclosureGroup {
+                    ForEach(healthyVoicePermissions) { DiagnosticCheckRow(check: $0) }
+                } label: {
+                    Text(LocalizedStringResource("diagnostics.voice.permissions", defaultValue: "Recording permissions"))
+                        .font(.subheadline)
+                }
+                .settingsCardPassiveRow()
+            }
             Button {
-                Task { await runner.runTranscriptionTest() }
+                Task {
+                    if let permission = runner.transcriptionTestPrerequisite {
+                        if let action = runner.permissionAction(for: permission) {
+                            performPermissionAction(action, for: permission)
+                        }
+                    } else {
+                        await runner.runTranscriptionTest()
+                    }
+                }
             } label: {
                 Label(
-                    LocalizedStringResource("diagnostics.action.testTranscription", defaultValue: "Test transcription"),
+                    transcriptionActionTitle,
                     systemImage: "waveform"
                 )
                 .labelStyle(AccentGlyphActionLabelStyle())
@@ -741,7 +784,8 @@ struct DiagnosticsContent: View {
             #else
             .buttonStyle(.bordered)
             #endif
-            .disabled(runner.isTranscribing || runner.isRunningAllTests)
+            .disabled(runner.isTranscribing || runner.isRunningAllTests || runner.permissionRequestInFlight != nil
+                      || (runner.transcriptionTestPrerequisite != nil && runner.permissionAction(for: .speechRecognition) == nil))
             transcriptionTestResult
         } header: {
             Text(LocalizedStringResource("diagnostics.section.voice", defaultValue: "Voice"))
@@ -761,7 +805,7 @@ struct DiagnosticsContent: View {
                 Task { await runner.runVoicePreview() }
             } label: {
                 Label(
-                    LocalizedStringResource("diagnostics.action.previewVoice", defaultValue: "Preview voice"),
+                    LocalizedStringResource("diagnostics.action.previewVoice", defaultValue: "Test voice playback"),
                     systemImage: "speaker.wave.2"
                 )
                 .labelStyle(AccentGlyphActionLabelStyle())
@@ -780,6 +824,15 @@ struct DiagnosticsContent: View {
                 defaultValue: "Uses your selected providers. Cloud providers may charge for these tests."
             ))
         }
+    }
+
+    private var transcriptionActionTitle: LocalizedStringResource {
+        guard let permission = runner.transcriptionTestPrerequisite else {
+            return LocalizedStringResource("diagnostics.action.testTranscription", defaultValue: "Test with sample audio")
+        }
+        return runner.permissionAction(for: permission) == .openSettings
+            ? LocalizedStringResource("diagnostics.action.openSpeechSettings", defaultValue: "Open speech settings")
+            : LocalizedStringResource("diagnostics.action.allowSpeech", defaultValue: "Allow speech recognition")
     }
 
     private func voiceSetupRow(
@@ -849,7 +902,15 @@ struct DiagnosticsContent: View {
     /// Includes the Microphone + Speech-Recognition permission rows (category
     /// `.voice` — every prerequisite for recording sits beside its test).
     private var voiceCheckRows: [DiagnosticCheck] {
-        runner.checks.filter { $0.category == .voice && $0.tier != .explicitPaid }
+        runner.checks.filter {
+            $0.category == .voice && $0.tier != .explicitPaid && !healthyVoicePermissions.contains($0)
+        }
+    }
+
+    private var healthyVoicePermissions: [DiagnosticCheck] {
+        runner.checks.filter {
+            ($0.id == "voice.mic.permission" || $0.id == "voice.speech.permission") && $0.status == .passed
+        }
     }
 
     /// Shared row dispatcher — routes the actionable permission rows to
@@ -959,7 +1020,11 @@ struct DiagnosticsContent: View {
     private var voicePreviewStatus: some View {
         switch runner.voicePreview {
         case .idle:
-            EmptyView()
+            if runner.voicePreviewNeedsTest {
+                Text(LocalizedStringResource("diagnostics.voice.playback.notTested", defaultValue: "Playback hasn't been tested for this setup. This test speaks aloud."))
+                    .font(.caption).foregroundStyle(AppColors.textSecondary)
+                    .settingsCardPassiveRow()
+            }
         case .preparing, .playing:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -1016,8 +1081,24 @@ struct DiagnosticsContent: View {
                     }
                 }
             }
+            Button {
+                editingFileLane = lane
+            } label: {
+                Label(LocalizedStringResource("diagnostics.files.settings", defaultValue: "File server settings"), systemImage: "slider.horizontal.3")
+                    .font(.subheadline)
+            }
+            .buttonStyle(.bordered)
+            .padding(.leading, 30)
             if let result = runner.fileTransferResults[lane.ref] {
-                FileTransferStageChecklist(result: result)
+                DisclosureGroup(isExpanded: Binding(
+                    get: { expandedFileResults.contains(lane.ref) },
+                    set: { if $0 { expandedFileResults.insert(lane.ref) } else { expandedFileResults.remove(lane.ref) } }
+                )) {
+                    FileTransferStageChecklist(result: result)
+                } label: {
+                    Text(LocalizedStringResource("diagnostics.files.testDetails", defaultValue: "Test details"))
+                        .font(.subheadline)
+                }
             }
         }
         .padding(.vertical, 2)
@@ -1142,7 +1223,7 @@ struct DiagnosticsContent: View {
         if routingEnabled {
             switch caveat {
             case .uploadsOnly:
-                return ("exclamationmark.triangle.fill", AppColors.warning,
+                return ("info.circle", AppColors.textSecondary,
                         LocalizedStringResource(
                             "diagnostics.files.badge.enabled.uploadsOnly",
                             defaultValue: "Uploads enabled — server can't list folders"))
@@ -1151,7 +1232,7 @@ struct DiagnosticsContent: View {
                 // could not check" as much as for "it cannot", because the user is
                 // on this screen asking why files are not coming back and an
                 // unqualified green answers that question wrongly either way.
-                return ("exclamationmark.triangle.fill", AppColors.warning,
+                return ("info.circle", AppColors.textSecondary,
                         LocalizedStringResource(
                             "diagnostics.files.badge.enabled.returnUnchecked",
                             defaultValue: "Uploads enabled — returns unchecked"))
@@ -1191,13 +1272,9 @@ struct DiagnosticsContent: View {
             return ("ellipsis.circle", AppColors.textSecondary,
                     LocalizedStringResource("diagnostics.files.badge.testing", defaultValue: "Testing…"))
         case .configuredNotTested:
-            // Amber, not the resting grey it used to wear, and `needsAttention`
-            // counts it: a set-up server that silently receives nothing is a
-            // half-finished setup, not a neutral state. "Test required", never "not
-            // tested yet" — a lane whose test FAILED in a previous session derives
-            // exactly this state after a relaunch (session results gone,
-            // availability false), so the app cannot claim nothing was ever tried.
-            return ("exclamationmark.triangle.fill", AppColors.warning,
+            // Optional setup is neutral. The summary records the missing test,
+            // while this row states the consequence and offers both Test and Settings.
+            return ("info.circle", AppColors.textSecondary,
                     LocalizedStringResource("diagnostics.files.badge.disabled.testRequired",
                                             defaultValue: "Uploads disabled — test required"))
         case .notSetUp:
@@ -1216,14 +1293,24 @@ struct DiagnosticsContent: View {
         guard badge == .configuredNotTested else { return nil }
         return LocalizedStringResource(
             "diagnostics.files.detail.testRequired",
-            defaultValue: "Conduck won't upload files to this server until a server test passes.")
+            defaultValue: "Run the test to enable uploads, or remove the server in File server settings.")
     }
 
     // MARK: Capabilities and permissions
 
     private var capabilitySection: some View {
         Section {
-            ForEach(checks(in: .capability)) { checkRow($0) }
+            ForEach(checks(in: .capability).filter { $0.status.needsAttention }) { checkRow($0) }
+            let supporting = checks(in: .capability).filter { !$0.status.needsAttention }
+            if !supporting.isEmpty {
+                DisclosureGroup {
+                    ForEach(supporting) { checkRow($0) }
+                } label: {
+                    Text(LocalizedStringResource("diagnostics.permissions.details", defaultValue: "Permission details"))
+                        .font(.subheadline)
+                }
+                .settingsCardPassiveRow()
+            }
         } header: {
             Text(LocalizedStringResource(
                 "diagnostics.section.capability",
@@ -1236,13 +1323,25 @@ struct DiagnosticsContent: View {
 
     private var syncSection: some View {
         Section {
-            ForEach(checks(in: .sync)) { check in
+            ForEach(checks(in: .sync).filter { $0.status.needsAttention || ($0.id == DiagnosticsRunner.watchCheckID && $0.status == .passed) }) { check in
                 if check.id == DiagnosticsRunner.watchCheckID {
                     watchRow(check)
                 } else {
                     DiagnosticCheckRow(check: check)
                         .settingsCardPassiveRow()
                 }
+            }
+            let supporting = checks(in: .sync).filter {
+                !$0.status.needsAttention && !($0.id == DiagnosticsRunner.watchCheckID && $0.status == .passed)
+            }
+            if !supporting.isEmpty {
+                DisclosureGroup {
+                    ForEach(supporting) { DiagnosticCheckRow(check: $0) }
+                } label: {
+                    Text(LocalizedStringResource("diagnostics.sync.details", defaultValue: "Sync details"))
+                        .font(.subheadline)
+                }
+                .settingsCardPassiveRow()
             }
         } header: {
             Text(LocalizedStringResource("diagnostics.section.sync", defaultValue: "Sync"))
@@ -1331,7 +1430,7 @@ struct DiagnosticsContent: View {
             case .unsupported:
                 Text(LocalizedStringResource("diagnostics.watch.unsupported", defaultValue: "The watch responded, but its Conduck version doesn't support health checks yet — update the app on the watch."))
                     .font(.caption)
-                    .foregroundStyle(AppColors.warning)
+                    .foregroundStyle(AppColors.textSecondary)
                 if let last = runner.watchHealth { watchHealthFacts(last, stale: true) }
             case .noResponse:
                 Text(LocalizedStringResource("diagnostics.watch.noResponse", defaultValue: "Watch didn't respond. Open Conduck on your Watch, then check again."))
@@ -1399,10 +1498,10 @@ struct DiagnosticsContent: View {
             Label {
                 Text(LocalizedStringResource("diagnostics.watch.notifDenied", defaultValue: "Notifications are off on the watch — replies to wrist asks won't alert there."))
                     .font(.caption)
-                    .foregroundStyle(AppColors.warning)
+                    .foregroundStyle(AppColors.textSecondary)
             } icon: {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(AppColors.warning)
+                Image(systemName: "info.circle")
+                    .foregroundStyle(AppColors.textSecondary)
             }
         }
         if let version = state.appVersion, let build = state.appBuild {
@@ -1418,13 +1517,18 @@ struct DiagnosticsContent: View {
     private var copySection: some View {
         Section {
             Button {
-                Pasteboard.copy(runner.copyBlock())
-                copyResetTask?.cancel()
-                withAnimation { copied = true }
-                copyResetTask = Task {
-                    try? await Task.sleep(for: .seconds(2))
-                    guard !Task.isCancelled else { return }
-                    withAnimation { copied = false }
+                guard !preparingCopy else { return }
+                preparingCopy = true
+                Task {
+                    defer { preparingCopy = false }
+                    Pasteboard.copy(await runner.prepareCopyBlock())
+                    copyResetTask?.cancel()
+                    withAnimation { copied = true }
+                    copyResetTask = Task {
+                        try? await Task.sleep(for: .seconds(2))
+                        guard !Task.isCancelled else { return }
+                        withAnimation { copied = false }
+                    }
                 }
             } label: {
                 Label(
@@ -1446,6 +1550,7 @@ struct DiagnosticsContent: View {
             #else
             .buttonStyle(.bordered)
             #endif
+            .disabled(preparingCopy)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets())
         } header: {
@@ -1468,6 +1573,39 @@ struct DiagnosticsContent: View {
 
     private func checks(in category: DiagnosticCategory) -> [DiagnosticCheck] {
         runner.checks.filter { $0.category == category }
+    }
+}
+
+/// Reuses the buffered file editor, including its existing Save and Forget
+/// safeguards. It loads only after the user asks to edit this server.
+private struct DiagnosticsFileSettingsSheet: View {
+    let lane: FileLaneState
+    @State private var viewModel = SettingsViewModel()
+    @State private var loaded = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if loaded {
+                    FileTransferSetupGuideView(
+                        viewModel: viewModel,
+                        ref: lane.ref,
+                        titleOverride: lane.displayName,
+                        context: .diagnostics
+                    )
+                } else {
+                    ProgressView()
+                }
+            }
+            .task {
+                guard !loaded else { return }
+                await viewModel.loadSettings()
+                loaded = true
+            }
+        }
+        #if os(macOS)
+        .frame(width: 660, height: 680)
+        #endif
     }
 }
 

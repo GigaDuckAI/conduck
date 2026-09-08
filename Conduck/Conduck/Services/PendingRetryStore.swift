@@ -395,6 +395,115 @@ nonisolated struct PendingRetrySidecar: Codable, Sendable {
     }
 }
 
+/// A metadata-only account of the whole recovery queue. A saved capture is not
+/// evidence of a failure: headless lanes save before starting and hold a lease
+/// while they work. The counts distinguish those holds from recordings another
+/// surface may recover, and a Work transcript that already exists needs saving,
+/// not another speech-provider call.
+///
+/// No capture identity, path, transcript, or error text leaves this reduction.
+/// Expiring counts include only available captures whose actual retention policy
+/// has a deadline. A live lease, an unpublished Work recording, or a parked screenshot
+/// protects the capture from the clock exactly as it does in the store's sweep.
+nonisolated struct PendingRetryDiagnosticSnapshot: Sendable, Equatable {
+    /// The file/lease facts read under the store lock, also the pure derivation
+    /// seam used by tests. Audio bytes are never read to produce these facts.
+    struct Capture: Sendable {
+        let metadata: PendingRetryMetadata
+        let audioFileExists: Bool
+        let isActivelyLeased: Bool
+        let leaseStateKnown: Bool
+        let holdsWorkImage: Bool
+
+        init(
+            metadata: PendingRetryMetadata,
+            audioFileExists: Bool = true,
+            isActivelyLeased: Bool = false,
+            leaseStateKnown: Bool = true,
+            holdsWorkImage: Bool = false
+        ) {
+            self.metadata = metadata
+            self.audioFileExists = audioFileExists
+            self.isActivelyLeased = isActivelyLeased
+            self.leaseStateKnown = leaseStateKnown
+            self.holdsWorkImage = holdsWorkImage
+        }
+    }
+
+    let totalCount: Int
+    let availableCount: Int
+    let processingCount: Int
+    let missingAudioCount: Int
+    let accessUnavailableCount: Int
+    /// Available captures only. These sum to `availableCount`.
+    let transcriptionCount: Int
+    let finishSavingCount: Int
+    /// Available captures with a deadline; other available captures have none.
+    let expiringCount: Int
+
+    /// Unindexed captures with unreadable sidecars have no metadata to reduce.
+    /// Count their presence without inventing a destination, lease or deadline.
+    init(captures: [Capture], now: Date, unreadableUnindexedCount: Int = 0) {
+        var available = 0
+        var processing = 0
+        var missing = 0
+        var unavailable = unreadableUnindexedCount
+        var transcription = 0
+        var saving = 0
+        var expiring = 0
+
+        for capture in captures {
+            // An unreadable sidecar may hide a live reservation. The store
+            // defers it; Diagnostics must not invent either an active holder or
+            // a recording the user is free to take.
+            guard capture.leaseStateKnown else {
+                unavailable += 1
+                continue
+            }
+            if capture.isActivelyLeased {
+                processing += 1
+                continue
+            }
+            // Mirror the actual expiry policy, including a screenshot whose
+            // only remaining copy is protected independently of the recording.
+            if capture.metadata.isExpired(at: now), !capture.holdsWorkImage {
+                continue
+            }
+            guard capture.audioFileExists else {
+                missing += 1
+                continue
+            }
+
+            available += 1
+            if capture.metadata.resolvedDestination == .work,
+               let transcript = capture.metadata.transcript,
+               !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                saving += 1
+            } else {
+                transcription += 1
+            }
+            if !capture.holdsWorkImage, capture.metadata.retryTTL != nil {
+                expiring += 1
+            }
+        }
+
+        totalCount = available + processing + missing + unavailable
+        availableCount = available
+        processingCount = processing
+        missingAudioCount = missing
+        accessUnavailableCount = unavailable
+        transcriptionCount = transcription
+        finishSavingCount = saving
+        expiringCount = expiring
+    }
+
+    /// Anonymous counts only: copied support context, never a screen verdict.
+    var reportFact: String {
+        "queued(total \(totalCount), available \(availableCount), processing \(processingCount), transcription \(transcriptionCount), finish-saving \(finishSavingCount), missing-audio \(missingAudioCount), unreadable \(accessUnavailableCount), with-deadline \(expiringCount))"
+    }
+
+}
+
 /// One queued capture, reserved for the caller that will finish it.
 ///
 /// Every operation that ends or restates a capture takes the claim rather than
@@ -1217,24 +1326,44 @@ actor PendingRetryStore: PendingRetryQueueWriting {
         }
     }
 
-    /// Metadata-only Diagnostics snapshot of the newest pending capture —
-    /// `createdAt`, the arming `lastErrorCode`, and whether the audio file
-    /// still EXISTS (metadata can orphan if the file is deleted out from under
-    /// us; the row must not promise a retry that would immediately fail). No
-    /// audio load. Mirrors `hasPending()`'s expiry purge; nil = nothing
-    /// pending.
-    func diagnosticSnapshot() async -> (createdAt: Date, lastErrorCode: Int?, audioFileExists: Bool)? {
+    /// Snapshot of the whole queue, taken in one transaction. The current-format
+    /// inspection reads metadata and file presence only, never claims a capture
+    /// or loads its audio. It inherits the store's reconciliation and expiry
+    /// maintenance: expired files can be deleted, and a legacy migration can
+    /// copy or compare recording bytes before the metadata reduction runs.
+    func diagnosticSnapshot() async -> PendingRetryDiagnosticSnapshot? {
         guard let container = containerURL else { return nil }
         let defaults = defaults
-        return try? withExclusiveLock(in: container) {
-            guard let metadata = liveQueueLocked(from: defaults, in: container).first else {
-                return nil
+        return try? withExclusiveLock(in: container) { () -> PendingRetryDiagnosticSnapshot? in
+            let entries = liveQueueLocked(from: defaults, in: container)
+            let now = Date()
+            let captures = entries.map { metadata in
+                let sidecarExists = FileManager.default.fileExists(
+                    atPath: sidecarURL(for: metadata.id, in: container).path
+                )
+                let sidecar = readSidecar(for: metadata.id, in: container)
+                return PendingRetryDiagnosticSnapshot.Capture(
+                    metadata: metadata,
+                    audioFileExists: readableAudioURL(for: metadata, in: container) != nil,
+                    isActivelyLeased: sidecar?.lease?.isLive(at: now) == true,
+                    leaseStateKnown: !sidecarExists || sidecar != nil,
+                    holdsWorkImage: holdsWorkImage(metadata.id, in: container)
+                )
             }
-            return (
-                metadata.createdAt,
-                metadata.lastErrorCode,
-                readableAudioURL(for: metadata, in: container) != nil
+            // An interrupted arm can leave a recording and sidecar before its
+            // index commits. Reconciliation correctly defers an unreadable
+            // sidecar instead of fabricating metadata; count that deferred
+            // presence as unavailable rather than reporting an empty queue.
+            let indexedIDs = Set(entries.map(\.id))
+            let files = inventory(in: container)
+            let unreadableUnindexedCount = files.sidecars.filter { id in
+                !indexedIDs.contains(id) && files.audio[id] != nil
+                    && readSidecar(for: id, in: container) == nil
+            }.count
+            let snapshot = PendingRetryDiagnosticSnapshot(
+                captures: captures, now: now, unreadableUnindexedCount: unreadableUnindexedCount
             )
+            return snapshot.totalCount > 0 ? snapshot : nil
         }
     }
 

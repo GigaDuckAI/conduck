@@ -1329,7 +1329,7 @@ struct RemoteAgentConfigBody: View {
             } else {
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.model.suggestions.empty.v2",
-                    defaultValue: "No models yet — run the connection test to load them."
+                    defaultValue: "Model suggestions haven’t been loaded. Test the connection to load them."
                 ))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)

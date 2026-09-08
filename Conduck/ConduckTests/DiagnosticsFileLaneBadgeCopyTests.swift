@@ -90,7 +90,7 @@ final class DiagnosticsFileLaneBadgeCopyTests: XCTestCase {
         XCTAssertEqual(text(routing: false, .configuredNotTested), "Uploads disabled — test required")
         let detail = try XCTUnwrap(DiagnosticsContent.fileLaneFallbackDetail(.configuredNotTested))
         XCTAssertEqual(String(localized: detail),
-                       "Conduck won't upload files to this server until a server test passes.")
+                       "Run the test to enable uploads, or remove the server in File server settings.")
     }
 
     /// "Test required", never "not tested yet". A lane whose staged test FAILED derives
@@ -171,7 +171,7 @@ final class DiagnosticsFileLaneBadgeCopyTests: XCTestCase {
     func testTheUploadOnlyLaneIsQualifiedRatherThanSealed() {
         XCTAssertEqual(text(routing: true, .verified, caveat: .uploadsOnly),
                        "Uploads enabled — server can't list folders")
-        XCTAssertEqual(tint(routing: true, .verified, caveat: .uploadsOnly), AppColors.warning)
+        XCTAssertEqual(tint(routing: true, .verified, caveat: .uploadsOnly), AppColors.textSecondary)
         XCTAssertNotEqual(text(routing: true, .verified, caveat: .uploadsOnly),
                           text(routing: true, .verified),
                           "a half lane and a whole lane must never render the same sentence")
@@ -180,8 +180,8 @@ final class DiagnosticsFileLaneBadgeCopyTests: XCTestCase {
     func testAnUncheckedReturnDirectionLosesTheSeal() {
         XCTAssertEqual(text(routing: true, .verified, caveat: .returnUnchecked),
                        "Uploads enabled — returns unchecked")
-        XCTAssertEqual(tint(routing: true, .verified, caveat: .returnUnchecked), AppColors.warning,
-                       "'couldn't check' has to come off the green as much as 'it cannot'")
+        XCTAssertEqual(tint(routing: true, .verified, caveat: .returnUnchecked), AppColors.textSecondary,
+                       "an unchecked capability is informational, not a passing capability")
     }
 
     /// A caveat can never put the word "enabled" over a lane that is not routing —
@@ -200,16 +200,15 @@ final class DiagnosticsFileLaneBadgeCopyTests: XCTestCase {
         }
     }
 
-    // MARK: - The disabled lane is a finding, not a resting state
+    // MARK: - Optional setup is neutral
 
-    /// Amber and a warning glyph, not the resting grey it used to wear. A set-up file
-    /// server that silently receives nothing is a half-finished setup; dressing it as
-    /// neutral is what let the summary say "Checks passed" over it.
-    func testTheDisabledLaneIsStyledAsSomethingToActOn() {
-        XCTAssertEqual(tint(routing: false, .configuredNotTested), AppColors.warning)
+    /// A saved file server needs a test before uploads, but optional setup is
+    /// not a failure. The main summary separately withholds a passing verdict.
+    func testTheDisabledLaneIsStyledAsOptionalSetup() {
+        XCTAssertEqual(tint(routing: false, .configuredNotTested), AppColors.textSecondary)
         XCTAssertEqual(DiagnosticsContent.fileLaneBadgeDisplay(
             routingEnabled: false, badge: .configuredNotTested, caveat: nil).glyph,
-            "exclamationmark.triangle.fill")
+            "info.circle")
 
         // A gateway with no file server at all stays neutral — nothing is broken.
         XCTAssertEqual(tint(routing: false, .notSetUp), AppColors.textTertiary)

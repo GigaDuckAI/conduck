@@ -413,11 +413,11 @@ final class PendingRetryOwnershipHandoffTests: XCTestCase {
         )
         XCTAssertEqual(
             Self.collapsed(host).components(
-                separatedBy: "handlePendingRetryQueueChange()"
+                separatedBy: "NotificationCenter.default.publisher(for: PendingRetryStore.queueDidChangeNotification) ) { _ in handlePendingRetryQueueChange()"
             ).count - 1,
-            3,
-            "Both layouts — the iPad split and the phone stack — must subscribe, beside the one "
-            + "declaration; a branch left out is a whole device class that never learns."
+            2,
+            "Both layouts — the iPad split and the phone stack — must subscribe to queue changes; "
+            + "unrelated refresh calls must not stand in for either subscription."
         )
         XCTAssertTrue(
             host.contains(

@@ -270,6 +270,11 @@ struct ContentView: View {
                 onOpenGuidedSetup: { openGuidedSetupFromEmptyState() },
                 settingsVM: settingsVM
             )
+            // The same queue and actions as the phone, visible even while the
+            // regular-width library owns the conversation columns.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                pendingRetryCard
+            }
             // iPad — full-screen two-column Settings (sidebar + detail) instead
             // of the accidental centered form sheet `.sheet` renders at the
             // regular size class. `.fullScreenCover` has no swipe-to-dismiss, so
@@ -553,6 +558,29 @@ struct ContentView: View {
         }
     }
 
+    /// Both layouts operate on this host's one queue reservation and retry state.
+    @ViewBuilder
+    private var pendingRetryCard: some View {
+        if hasPendingRetry {
+            PendingRetryCard(
+                isRetrying: isRetrying,
+                retryErrorMessage: retryErrorMessage,
+                onRetry: retryButtonTapped,
+                errorIsRetryable: pendingRetryIsRetryable,
+                troubleshootFocus: DiagnosticsFocus(errorCode: pendingRetryErrorCode, ref: nil),
+                pendingCount: pendingRetryCount,
+                onDiscard: discardButtonTapped,
+                confirmingDiscard: $confirmingPendingRetryDiscard,
+                discardKeepsRecordingInWork: pendingRetryDiscardKeepsRecording,
+                onDiscardConfirmed: discardConfirmed,
+                onDiscardCancelled: discardCancelled
+            )
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
     // MARK: - iPhone layout
 
     private var phoneLayout: some View {
@@ -561,24 +589,7 @@ struct ContentView: View {
                 backgroundGradient.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    if hasPendingRetry {
-                        PendingRetryCard(
-                            isRetrying: isRetrying,
-                            retryErrorMessage: retryErrorMessage,
-                            onRetry: retryButtonTapped,
-                            errorIsRetryable: pendingRetryIsRetryable,
-                            troubleshootFocus: DiagnosticsFocus(errorCode: pendingRetryErrorCode, ref: nil),
-                            pendingCount: pendingRetryCount,
-                            onDiscard: discardButtonTapped,
-                            confirmingDiscard: $confirmingPendingRetryDiscard,
-                            discardKeepsRecordingInWork: pendingRetryDiscardKeepsRecording,
-                            onDiscardConfirmed: discardConfirmed,
-                            onDiscardCancelled: discardCancelled
-                        )
-                        .padding(.horizontal, 16)
-                        .padding(.top, 12)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
+                    pendingRetryCard
 
                     if showSyncedBanner {
                         syncedBanner

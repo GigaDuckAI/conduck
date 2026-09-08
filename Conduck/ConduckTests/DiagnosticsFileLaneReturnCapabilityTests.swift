@@ -168,12 +168,17 @@ final class DiagnosticsFileLaneReturnCapabilityTests: XCTestCase {
     /// The runner's own published mirror follows the commit, so the badge is
     /// right the instant the test finishes and not only after the next rebuild.
     func testADiagnosticsTestUpdatesTheScreensUploadOnlyMirror() async throws {
-        let ref = RemoteAgentRef.custom(UUID())
+        let ref = RemoteAgentRef.builtin(.openclaw)
+        // A visible Diagnostics lane belongs to a configured gateway. Seed the
+        // same lifecycle as the screen, not detached file settings for an absent ref.
+        await SettingsManager.shared.setRemoteAgentURL(URL(string: "https://gateway.example.test")!, for: ref)
+        await SettingsManager.shared.setRemoteAgentAuthScheme(.none, for: ref)
         try await configureLane(ref)
         scriptStagedTest(propfind: { _ in 405 })
 
         let session = makeMockSession()
         let runner = DiagnosticsRunner()
+        await runner.runAutoReads()
         await runner.runFileTransferTest(for: ref, session: session)
         session.invalidateAndCancel()
 

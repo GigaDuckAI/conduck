@@ -70,9 +70,9 @@ final class DiagnosticsWatchHealthTests: XCTestCase {
     /// the recency only enriches the detail. "Never" gets the end-to-end nudge,
     /// a known turn gets a relative date.
     func testWatchRowStateMatrix() {
-        // Not installed → the one warning state, regardless of turn history.
+        // Not installed → an optional capability, regardless of turn history.
         let notInstalled = DiagnosticsRunner.watchRowState(installed: false, reachable: false, lastTurn: Date())
-        XCTAssertEqual(notInstalled.status, .warning)
+        XCTAssertEqual(notInstalled.status, .notApplicable)
 
         // Installed + reachable + never a turn → green, with the nudge.
         let neverTurn = DiagnosticsRunner.watchRowState(installed: true, reachable: true, lastTurn: nil)
@@ -294,14 +294,6 @@ final class DiagnosticsWatchHealthTests: XCTestCase {
         XCTAssertNil(DiagnosticsRunner.customSTTOrdinal(activePresetID: e1.sttPresetID, roster: []))
     }
 
-    /// Remaining-TTL math: fresh → the full 10; near-expiry → 1; expired → 0.
-    func testPendingRetryRemainingMinutes() {
-        let now = Date()
-        XCTAssertEqual(DiagnosticsRunner.pendingRetryRemainingMinutes(createdAt: now, now: now), 10)
-        XCTAssertEqual(DiagnosticsRunner.pendingRetryRemainingMinutes(createdAt: now.addingTimeInterval(-570), now: now), 1)
-        XCTAssertEqual(DiagnosticsRunner.pendingRetryRemainingMinutes(createdAt: now.addingTimeInterval(-700), now: now), 0)
-    }
-
     /// Storage thresholds: nil = unknown (hidden, NEVER healthy-green); ≥500 MB
     /// hidden; <500 low; <100 critical — amber both tiers.
     func testStorageRowStateAndBuckets() {
@@ -322,19 +314,5 @@ final class DiagnosticsWatchHealthTests: XCTestCase {
         XCTAssertEqual(critical?.status, .warning, "critical stays amber — never over-bubbles to red")
         XCTAssertTrue(critical?.detail.contains("critically") ?? false)
         XCTAssertEqual(DiagnosticsRunner.storageBucket(freeBytes: mb(50)), "critical")
-    }
-
-    /// The pending-retry presence force-shows the Voice section (its row lives
-    /// there; a recording waiting to expire must never hide).
-    func testPendingRetryForceShowsVoiceSection() {
-        XCTAssertFalse(DiagnosticsRunner.shouldShowVoiceSection(
-            hasStoredKeys: false, sttInProcess: true, ttsIsApple: true,
-            micGranted: false, micDenied: false, speechDeniedOrRestricted: false,
-            hasPendingRetry: false))
-        XCTAssertTrue(DiagnosticsRunner.shouldShowVoiceSection(
-            hasStoredKeys: false, sttInProcess: true, ttsIsApple: true,
-            micGranted: false, micDenied: false, speechDeniedOrRestricted: false,
-            hasPendingRetry: true),
-            "a parked retry must reveal the Voice section")
     }
 }

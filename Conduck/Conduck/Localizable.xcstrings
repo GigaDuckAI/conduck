@@ -1,6 +1,182 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "diagnostics.sync.details" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync details"
+          }
+        }
+      }
+    },
+    "diagnostics.permissions.details" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permission details"
+          }
+        }
+      }
+    },
+    "diagnostics.files.testDetails" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Test details"
+          }
+        }
+      }
+    },
+    "diagnostics.files.settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File server settings"
+          }
+        }
+      }
+    },
+    "diagnostics.voice.playback.notTested" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Playback hasn't been tested for this setup. This test speaks aloud."
+          }
+        }
+      }
+    },
+    "diagnostics.action.allowSpeech" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow speech recognition"
+          }
+        }
+      }
+    },
+    "diagnostics.action.openSpeechSettings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open speech settings"
+          }
+        }
+      }
+    },
+    "diagnostics.voice.permissions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recording permissions"
+          }
+        }
+      }
+    },
+    "diagnostics.summary.untested" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This setup hasn't been fully checked"
+          }
+        }
+      }
+    },
+    "diagnostics.action.checkGateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check connection"
+          }
+        }
+      }
+    },
+    "diagnostics.check.notTested" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not tested"
+          }
+        }
+      }
+    },
+    "diagnostics.sync.events.history.mixed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld recorded sync events, including %lld failures. The last recorded attempt succeeded; earlier failures may concern a different sync operation."
+          }
+        }
+      }
+    },
+    "diagnostics.sync.events.history.latestFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld recorded sync events; the last recorded attempt failed. This history does not establish current sync health."
+          }
+        }
+      }
+    },
+    "diagnostics.notifications.alertsOff.info" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alerts are off. Shortcut and background replies arrive silently; enable alerts if you want them."
+          }
+        }
+      }
+    },
+    "diagnostics.notifications.disabled.info" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications are off. Shortcut and background replies arrive silently; enable notifications if you want alerts."
+          }
+        }
+      }
+    },
+    "popover.retry.savedRecording.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retry saved recording"
+          }
+        }
+      }
+    },
     "" : {
 
     },
@@ -2277,8 +2453,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Preview voice"
+            "state" : "translated",
+            "value" : "Test voice playback"
           }
         }
       }
@@ -2288,8 +2464,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Check Again"
+            "state" : "translated",
+            "value" : "Check again"
           }
         }
       }
@@ -2310,8 +2486,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Test everything"
+            "state" : "translated",
+            "value" : "Run diagnostic checks"
           }
         }
       }
@@ -2354,8 +2530,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Test transcription"
+            "state" : "translated",
+            "value" : "Test with sample audio"
           }
         }
       }
@@ -2827,8 +3003,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck won't upload files to this server until a server test passes."
+            "state" : "translated",
+            "value" : "Run the test to enable uploads, or remove the server in File server settings."
           }
         }
       }
@@ -2915,8 +3091,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Runs every check, writes and reads back a small file on each set-up file server, and tests your voice providers."
+            "state" : "translated",
+            "value" : "Checks saved connections and file servers, plus transcription when set up. File tests upload and remove a small sample. Cloud tests may incur charges. Voice playback is tested separately."
           }
         }
       }
@@ -3124,8 +3300,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld items need attention"
+            "state" : "translated",
+            "value" : "%lld issues need attention"
           }
         }
       }
@@ -3135,8 +3311,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "1 item needs attention"
+            "state" : "translated",
+            "value" : "1 issue needs attention"
           }
         }
       }
@@ -3168,8 +3344,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Checks passed"
+            "state" : "translated",
+            "value" : "Diagnostic checks passed"
           }
         }
       }
@@ -3401,50 +3577,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Microphone access is controlled by Screen Time or device management."
-          }
-        }
-      }
-    },
-    "diagnostics.voice.pendingRetry" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Recording waiting to retry"
-          }
-        }
-      }
-    },
-    "diagnostics.voice.pendingRetry.ios" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A recording from a failed transcription is waiting — retry it from the composer within the next %lld min."
-          }
-        }
-      }
-    },
-    "diagnostics.voice.pendingRetry.mac" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A recording from a failed transcription is waiting — retry it from the menu-bar voice window within the next %lld min."
-          }
-        }
-      }
-    },
-    "diagnostics.voice.pendingRetry.orphaned" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "A failed transcription left a retry behind, but its recording file is missing — record again."
           }
         }
       }
@@ -13340,8 +13472,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "No models yet — run the connection test to load them."
+            "state" : "translated",
+            "value" : "Model suggestions haven’t been loaded. Test the connection to load them."
           }
         }
       }

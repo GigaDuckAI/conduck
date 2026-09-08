@@ -1652,26 +1652,23 @@ struct DictationPopoverView: View {
         // The gate lives HERE, not at the call site: a control whose condition
         // is one scope up can be drawn without it by the next edit, and this
         // one dead-ends in "No saved recording to retry" the moment it is.
-        if service.canRecoverPendingQueue {
+        let availability = SavedRecordingRecoveryAvailability.resolve(
+            isBusy: service.state == .recording || isWorking || coordinator.workCaptureIsActive,
+            waitingCount: service.pendingRetryCount,
+            hasUnsentRequest: coordinator.hasPendingFailedTurn
+        )
+        if service.canRecoverPendingQueue, availability == .ready {
             HStack(spacing: 12) {
                 Button(action: { service.retryLast() }) {
-                    Text(String(localized: LocalizedStringResource(
-                        "popover.retry",
-                        defaultValue: "Retry"
-                    )))
+                    Text(LocalizedStringResource(
+                        "popover.retry.savedRecording.action",
+                        defaultValue: "Retry saved recording"
+                    ))
                     .font(.system(size: 12, weight: .medium))
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(AppColors.brandAmber)
                 .controlSize(.small)
-                // The word alone is ambiguous beside a retained reply's
-                // controls, and this is the one place to say what it acts on
-                // without adding a line of chrome to a footer that has none.
-                .help(String(localized: LocalizedStringResource(
-                    "popover.retry.savedRecording.help",
-                    defaultValue: "Try the saved recording again"
-                )))
-
                 Spacer(minLength: 0)
             }
         }
