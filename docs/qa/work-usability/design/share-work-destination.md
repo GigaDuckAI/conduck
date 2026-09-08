@@ -2,6 +2,12 @@
 
 Lane: the iOS and macOS share extensions (`Conduck/ConduckShareExtension/`, `Conduck/ConduckShareExtensionMac/`). Tip read: `a278c7b`. Author: designer agent (reads code and docs; writes this file and the Codex reports only). Codex rounds: `verify/codex-design-share-r1.md`, `r2.md`, `r3.md`; §11 records what was accepted, refused and left open.
 
+## Current design (supersedes the layout below)
+
+The destination list holds **gateways and recent chats only**. It opens with a new conversation on the app's default gateway ringed — or, where no default is set or that gateway cannot send, the first configured gateway; where the app has published no roster at all, nothing is ringed and the legacy "New conversation" row stays clickable. **Work is an ACTION on the floor beside Send, never a row in the list:** **Add to Work** leading, secondary look, `⌘⇧↩`, with the caption "Nothing is sent to AI" under it; **"Send to <gateway or chat name>"** trailing, amber, `⌘↩`. The Send button names its target, so a ring is not a decision — nothing leaves the device until the person presses the button that names where it goes. The picked gateway is written into the manifest explicitly rather than through the nil default lane, so a default that moves between the share and the drain cannot reroute the item. Nothing is remembered between shares. Founder call, reversing the no-pre-selection design that the rest of this file argues for; accepted cost: `⌘↩` on open sends to the named default.
+
+**Everything below records the earlier rounds' reasoning** — the tip survey, the pattern judgement, the three Codex design reviews and the decisions they settled. It is the account of how the sheet got here, not a description of what it does. Where the two disagree, the paragraph above is the design.
+
 ## The founder's ask, verbatim
 
 > what about the share extension? should also be included there.

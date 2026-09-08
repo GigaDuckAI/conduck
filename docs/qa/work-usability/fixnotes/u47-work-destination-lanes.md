@@ -1,6 +1,20 @@
 # U-47 — Work as a destination: the wrist, the car, the Mac's third
 capture, and the share sheet's last row
 
+## Current design — the share sheet (supersedes every share-sheet passage in this file, its title included)
+
+The share sheet's destination list holds **gateways and recent chats only**, and
+**Add to Work is an ACTION on the floor beside Send, never a row in the list**.
+The list opens with a destination already ringed, and the Send button names it.
+Decision 21 in `../handoff.md` is the binding statement of that shape, its founder
+call and its accepted cost. The wrist, the car and the Mac are unaffected: on
+those three, Work is still a row the person names.
+
+**Everything below is historical** — the opening summary, the rounds, the
+reasoning and the "Nobody undo" list record how each lane got here, including the
+share sheet's Work-last, nothing-pre-selected layout and the guards written for
+it. Where they disagree with decision 21, decision 21 is the design.
+
 Work is reached by NAMING it, on every surface that can reach it. The wrist's
 Ask opens a destination chooser on every press — every configured gateway, then
 **Add to Work** last — and the launchpad's separate button is gone. The car has

@@ -40,6 +40,12 @@ nonisolated struct ShareTargetsSnapshot: Codable, Sendable {
     /// Open Work items the user can append an inert capture to, most-recent-first.
     /// May be empty; readers of the original schema default this field to `[]`.
     let recentWorkItems: [RecentWorkItem]
+    /// The ref string (same form as `Gateway.ref`) of the gateway the app has as
+    /// its default for new chats, published ONLY when that gateway is in
+    /// `gateways`; `nil` otherwise. The extension highlights the matching row on
+    /// open — a highlight, not a decision, so nothing is sent until the person
+    /// presses the button naming it.
+    let defaultGatewayRef: String?
 
     /// One gateway the picker offers for a NEW conversation. Every render value is
     /// pre-resolved main-app-side (the appex can't reach the palette enum).
@@ -166,6 +172,7 @@ nonisolated struct ShareTargetsSnapshot: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, generatedAt, gateways, recentConversations, recentWorkItems
+        case defaultGatewayRef
     }
 
     nonisolated init(
@@ -173,13 +180,15 @@ nonisolated struct ShareTargetsSnapshot: Codable, Sendable {
         generatedAt: Date,
         gateways: [Gateway],
         recentConversations: [RecentConversation],
-        recentWorkItems: [RecentWorkItem] = []
+        recentWorkItems: [RecentWorkItem] = [],
+        defaultGatewayRef: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.generatedAt = generatedAt
         self.gateways = gateways
         self.recentConversations = recentConversations
         self.recentWorkItems = recentWorkItems
+        self.defaultGatewayRef = defaultGatewayRef
     }
 
     /// Nothing is hard-required at the top level — a snapshot with no targets is a
@@ -188,6 +197,8 @@ nonisolated struct ShareTargetsSnapshot: Codable, Sendable {
     ///   - `schemaVersion` → 1 (assume the original schema)
     ///   - `generatedAt` → epoch (a missing stamp reads as maximally stale)
     ///   - target arrays → [] (empty picker, not a throw)
+    ///   - `defaultGatewayRef` → nil (no published default; the picker applies
+    ///     its configured-gateway fallback, not a throw)
     nonisolated init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
@@ -195,6 +206,7 @@ nonisolated struct ShareTargetsSnapshot: Codable, Sendable {
         self.gateways = try c.decodeIfPresent([Gateway].self, forKey: .gateways) ?? []
         self.recentConversations = try c.decodeIfPresent([RecentConversation].self, forKey: .recentConversations) ?? []
         self.recentWorkItems = try c.decodeIfPresent([RecentWorkItem].self, forKey: .recentWorkItems) ?? []
+        self.defaultGatewayRef = try c.decodeIfPresent(String.self, forKey: .defaultGatewayRef)
     }
 }
 

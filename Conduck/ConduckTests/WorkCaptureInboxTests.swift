@@ -300,9 +300,8 @@ final class WorkCaptureInboxTests: XCTestCase {
         let expectedWorkKeys = [
             "share.addToWork",
             "share.addToWork.progress",
-            "share.section.work",
-            "share.destination.choose",
-            "share.destination.noAI",
+            "share.send.to",
+            "share.destination.noAI.work",
             "share.work.error.empty",
             "share.work.error.title",
             "share.work.error.tooLarge",
@@ -310,11 +309,16 @@ final class WorkCaptureInboxTests: XCTestCase {
             "share.work.error.invalidContent",
             "share.work.error.unsupportedItem",
         ]
-        // Work is ONE desk: the Add to Work row names no card, so neither appex
+        // Work is ONE desk: the Add to Work button names no card, so neither appex
         // may carry a Work target list, a "New Work" row or an untitled-card
-        // placeholder. And Work is a DESTINATION ROW, not a mode: the segmented
-        // Work/Send picker, the panel that replaced the list in Work mode, and
-        // the two mode-dependent titles are gone with it. Guarded positively so
+        // placeholder. And Work is an ACTION on the floor beside Send — not a row
+        // in the destination list, and not a mode: there is no Work section
+        // header, no segmented Work/Send picker, no panel that replaces the list
+        // in Work mode, and no mode-dependent title. The Send button NAMES the
+        // destination it would send to, so the sheet never asks the person to
+        // "choose a destination"; and where the roster holds no gateway, the line
+        // that stands in for the rows points at Work — still one press away on the
+        // floor — rather than at a send that cannot happen. Guarded positively so
         // a revert shows up here first.
         let retiredWorkKeys = [
             "share.work.new",
@@ -329,6 +333,9 @@ final class WorkCaptureInboxTests: XCTestCase {
             "share.work.title",
             "share.title",
             "share.send",
+            "share.section.work",
+            "share.destination.choose",
+            "share.destination.noAI",
         ]
         for relativePath in [
             "ConduckShareExtension/ShareView.swift",
@@ -353,7 +360,7 @@ final class WorkCaptureInboxTests: XCTestCase {
             for key in retiredWorkKeys {
                 XCTAssertFalse(
                     source.contains("String(localized: \"\(key)\""),
-                    "\(relativePath) must not reintroduce the Work destination key \(key)"
+                    "\(relativePath) must not reintroduce the retired share key \(key)"
                 )
             }
             XCTAssertFalse(source.contains("String(localized: \"share.addToWorkboard"), relativePath)
@@ -381,7 +388,7 @@ final class WorkCaptureInboxTests: XCTestCase {
             for key in retiredWorkKeys {
                 XCTAssertFalse(
                     catalog.contains("\"\(key)\" :"),
-                    "\(relativePath) must not keep the retired Work destination key \(key)"
+                    "\(relativePath) must not keep the retired share key \(key)"
                 )
             }
             XCTAssertFalse(catalog.contains("\"share.addToWorkboard\" :"), relativePath)
@@ -401,7 +408,6 @@ final class WorkCaptureInboxTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertTrue(iosShareView.contains("String(localized: \"share.destination.title\""))
-        XCTAssertTrue(iosShareView.contains("defaultValue: \"Where to?\""))
         XCTAssertFalse(macShareView.contains("String(localized: \"share.destination.title\""))
         let iosCatalog = try String(
             contentsOf: projectDirectory.appendingPathComponent("ConduckShareExtension/Localizable.xcstrings"),
@@ -415,32 +421,49 @@ final class WorkCaptureInboxTests: XCTestCase {
         XCTAssertFalse(macCatalog.contains("\"share.destination.title\" :"))
     }
 
-    // MARK: - The share sheet picks nothing, and remembers nothing
+    // MARK: - The share sheet sends only on a press, and remembers nothing
 
-    /// The names of the rules `shareSheetPicksNothing` can report, so a negative
-    /// control names the rule it expects rather than an index.
+    /// The names of the rules `shareSheetSendsOnlyOnAPress` can report, so a
+    /// negative control names the rule it expects rather than an index.
     private enum ShareSheetRule {
-        static let noInitializer = "a (the destination state carries no initializer)"
+        static let seededOnce = "a (one snapshot-derived seed, no initializer on the declaration)"
         static let rowScoped = "b (every destination assignment is a row's action)"
-        static let fiveAssignments = "b (exactly five destination assignment sites)"
-        static let notOnAppear = "c (no destination inside onAppear / task)"
-        static let noModeNoMemory = "d (no mode picker, no stored pick)"
-        static let targetHasNoWork = "e (ShareTarget carries no work case)"
-        static let dispatchIsBound = "f (commit dispatches to inbox-bound helpers)"
+        static let fourAssignments = "b (exactly four destination assignment sites)"
+        static let noActionOffAPress = "c (no pick or dispatch in a lifecycle hook or a row action)"
+        static let noModeNoMemory = "d (no mode picker, no stored pick, no destination enum)"
+        static let targetHasNoWork = "e (ShareTarget lives in the filter and carries no work case)"
+        static let dispatchIsBound = "f (commit sends, each helper is inbox-bound, each button binds to one)"
         static let retryIsWork = "g (Try Again is a Work retry)"
-        static let lockedWhileCommitting = "h (the button and the rows lock)"
-        static let disabledLooksDisabled = "i (the disabled button is drawn disabled)"
+        static let lockedWhileCommitting = "h (both buttons and the rows lock)"
+        static let disabledLooksDisabled = "i (a disabled button is drawn disabled)"
+        static let shortcutsAreDistinct = "j (Send and Work carry their own shortcuts)"
     }
 
-    /// Every way the forbidden mechanisms — a pre-selection, a remembered pick, a
-    /// retry that follows whatever row is lit, a refusing button drawn as a live
-    /// one — were written at the tip or could plausibly be re-written, as ONE pure
-    /// predicate over the source. Returns the rules the source violates; `[]` is a
-    /// pass.
+    /// The boundary this sheet keeps: NOTHING is sent without a press on a button
+    /// that names where it goes; nothing survives from one share to the next; the
+    /// Work button never reads the pick; and a retry is a Work retry. The sheet
+    /// opens with the default gateway's new conversation HIGHLIGHTED — a
+    /// highlight, not a decision, derived from the published snapshot alone — so
+    /// the rules below police the difference between highlighting a row and
+    /// acting on it. Expressed as ONE pure predicate over the view's source and
+    /// the `ShareTargetFilter` mirror beside it, which owns the target type;
+    /// returns the rules the pair violates, `[]` is a pass.
     ///
-    /// Each rule is evaluated on the source AFTER collapsing every run of
-    /// whitespace (newlines included) to a single space, so a line break cannot
-    /// split a token a rule looks for.
+    /// Each rule is evaluated AFTER normalizing the source: comments are replaced
+    /// by a space and every run of whitespace collapses to one. So a line break
+    /// cannot split a token a rule looks for, a comment cannot weld two tokens
+    /// together, and a comment parked between a modifier and its closure —
+    /// `.task /* resolve */ { commit() }` — cannot hide the closure from the
+    /// scanner that reads it.
+    ///
+    /// Where a rule can be satisfied in more than one shape it pins the WHOLE
+    /// body rather than a token inside it — the two commit bodies, the two
+    /// helpers, the two predicates, the retry closure. A token check answers
+    /// "does the right call appear"; a whole-body check also answers "and nothing
+    /// else, in that order", which is what stops a dispatch being reordered ahead
+    /// of the guard that makes it exactly-once. Modifiers that belong to one
+    /// button are read only inside that button's own stretch of source, so the
+    /// two floor actions cannot swap their locks, their mutes or their shortcuts.
     ///
     /// What this proves, stated honestly: these are TARGETED REGRESSION CHECKS on
     /// the source's shape. They do not execute the view and they do not prove
@@ -448,117 +471,304 @@ final class WorkCaptureInboxTests: XCTestCase {
     /// which is why the negative controls in the test below sit beside them and
     /// are extended whenever a new dodge is found. The invocation-lifetime
     /// property (a fresh appex process per share) is the system's, not ours.
-    private static func shareSheetPicksNothing(source raw: String) -> [String] {
-        let source = raw.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    private static func shareSheetSendsOnlyOnAPress(source raw: String, filter rawFilter: String) -> [String] {
+        let source = normalized(raw)
+        let filter = normalized(rawFilter)
         var violations: [String] = []
 
-        // (a) The pick starts nil: the declaration is followed by no `=`.
-        let declaration = "@State private var destination: ShareDestination? "
+        // (a) The highlight has exactly ONE origin: the pure, unit-tested
+        //     `ShareTargetFilter.preselectedTarget` adapter, read off the snapshot
+        //     the app published and seeded once into the backing store. The
+        //     declaration carries no initializer of its own, and no second
+        //     `State(initialValue:` exists to smuggle a different opening pick
+        //     past that one call.
+        let declaration = "@State private var destination: ShareTarget? "
+        var seededOnce = true
         if let declared = source.range(of: declaration) {
-            if source[declared.upperBound...].first == "=" {
-                violations.append(ShareSheetRule.noInitializer)
-            }
+            if source[declared.upperBound...].first == "=" { seededOnce = false }
         } else {
-            violations.append(ShareSheetRule.noInitializer)
+            seededOnce = false
         }
+        let seed = "_destination = State(initialValue: ShareTargetFilter.preselectedTarget(snapshot: snapshot))"
+        if occurrences(of: seed, in: source) != 1 { seededOnce = false }
+        if occurrences(of: "State(initialValue", in: source) != 1 { seededOnce = false }
+        if !seededOnce { violations.append(ShareSheetRule.seededOnce) }
 
-        // (b) Every assignment sits in a row's OWN action closure, and there are
-        //     exactly five sites: the Work row, the collapsed single-gateway row,
-        //     the per-gateway row, the recent row, and the legacy row. An
-        //     assignment anywhere else — an onAppear, a task, an init, a didSet,
-        //     however it is wrapped or line-broken — breaks the prefix or the count.
+        // (b) The highlight moves only when a row is pressed. Every assignment
+        //     that is not that one seed — which writes the backing store and is
+        //     rule (a)'s business — sits in a row's OWN action closure, and there
+        //     are exactly four: the collapsed single-gateway row, the per-gateway
+        //     row, the recent row, and the legacy row. An assignment anywhere else
+        //     — an onAppear, a task, an init, a didSet, however it is wrapped or
+        //     line-broken — breaks the prefix or the count.
         var assignments = 0
         var everyAssignmentIsARowAction = true
         var cursor = source.startIndex
         while let assignment = source.range(of: "destination = ", range: cursor..<source.endIndex) {
+            cursor = assignment.upperBound
+            if let before = source.index(assignment.lowerBound, offsetBy: -1,
+                                         limitedBy: source.startIndex),
+               source[before] == "_" {
+                continue
+            }
             assignments += 1
             let prefixStart = source.index(assignment.lowerBound, offsetBy: -10,
                                            limitedBy: source.startIndex)
             if prefixStart == nil || String(source[prefixStart!..<assignment.lowerBound]) != "action: { " {
                 everyAssignmentIsARowAction = false
             }
-            cursor = assignment.upperBound
         }
         if !everyAssignmentIsARowAction { violations.append(ShareSheetRule.rowScoped) }
-        if assignments != 5 { violations.append(ShareSheetRule.fiveAssignments) }
+        if assignments != 4 { violations.append(ShareSheetRule.fourAssignments) }
 
-        // (c) Neither lifecycle hook touches the pick.
-        let lifecycleBodies = bracedBodies(in: source, after: ".onAppear {")
-            + bracedBodies(in: source, after: ".task {")
-        if lifecycleBodies.contains(where: { $0.contains("destination") }) {
-            violations.append(ShareSheetRule.notOnAppear)
+        // (c) A press on a named button is the ONLY thing that acts.
+        //
+        //     A lifecycle hook is read WITH ITS ARGUMENTS, not just its trailing
+        //     closure: `.task(id: includePageText) { commit() }` and
+        //     `.onAppear(perform: commit)` are hooks too, and the second passes
+        //     the dispatcher as a value, so the tokens here are bare identifiers
+        //     rather than call sites. `.onChange` counts as one: with
+        //     `initial: true` it fires on the first render, which is an appearance
+        //     hook wearing another name. A row's action likewise only SELECTS — a row
+        //     that dispatched, whether in its closure or by taking the helper as
+        //     its action, would send on a single tap, past the button that names
+        //     where the share goes.
+        let dispatchNames = ["send", "commit", "addToWorkboard", "onSend", "onAddToWorkboard"]
+        let lifecycleRegions = attachedRegions(in: source, after: ".onAppear")
+            + attachedRegions(in: source, after: ".task")
+            + attachedRegions(in: source, after: ".onChange")
+        let lifecycleIsQuiet = !lifecycleRegions.contains { region in
+            region.contains("destination") || dispatchNames.contains(where: { region.contains($0) })
+        }
+        let rowsOnlySelect = !bracedBodies(in: source, after: "action: {").contains { body in
+            dispatchNames.contains(where: { body.contains($0) })
+        }
+        // A row may not take a dispatcher AS its action either. The two floor
+        // buttons do exactly that and are pinned by (f), so they are the only
+        // `action:` bindings allowed to name one.
+        var everyDispatcherActionIsAFloorButton = true
+        var actionCursor = source.startIndex
+        while let bound = source.range(of: "action: ", range: actionCursor..<source.endIndex) {
+            actionCursor = bound.upperBound
+            let rest = source[bound.upperBound...]
+            guard dispatchNames.contains(where: { rest.hasPrefix($0) }) else { continue }
+            let prefixStart = source.index(bound.lowerBound, offsetBy: -7,
+                                           limitedBy: source.startIndex)
+            if prefixStart == nil || String(source[prefixStart!..<bound.lowerBound]) != "Button(" {
+                everyDispatcherActionIsAFloorButton = false
+            }
+        }
+        if !lifecycleIsQuiet || !rowsOnlySelect || !everyDispatcherActionIsAFloorButton {
+            violations.append(ShareSheetRule.noActionOffAPress)
         }
 
         // (d) No mode control, and nothing that could hold a pick between shares.
         //     The view reads the snapshot through the host; a view that opens
-        //     files is a view that could read a remembered pick.
+        //     files is a view that could read a remembered pick. `ShareDestination`
+        //     is the retired pick-or-desk enum — the pick is a `ShareTarget` now
+        //     that Work is a button rather than a row, so nothing routes through a
+        //     type that can carry either.
         let forbidden = ["ShareDisposition", ".pickerStyle(.segmented)", "UserDefaults",
                          "@AppStorage", "@SceneStorage", "NSUbiquitousKeyValueStore",
-                         "FileManager"]
+                         "FileManager", "ShareDestination"]
         if forbidden.contains(where: { source.contains($0) }) {
             violations.append(ShareSheetRule.noModeNoMemory)
         }
 
-        // (e) The send manifest's target type never learns about the desk.
-        if let target = bracedBodies(in: source, after: "enum ShareTarget").first {
-            if target.contains("case work") { violations.append(ShareSheetRule.targetHasNoWork) }
+        // (e) The send manifest's target type lives in the filter file, beside the
+        //     pure route rule that seeds it and the tests that cover both — not in
+        //     the view — and it never learns about the desk.
+        var targetIsClean = !source.contains("enum ShareTarget:")
+        if let target = bracedBodies(in: filter, after: "enum ShareTarget:").first {
+            if target.contains("case work") { targetIsClean = false }
         } else {
-            violations.append(ShareSheetRule.targetHasNoWork)
+            targetIsClean = false
         }
+        if !targetIsClean { violations.append(ShareSheetRule.targetHasNoWork) }
 
-        // (f) One read of the pick, then two helpers each bound to ONE inbox.
-        let commitBody = bracedBodies(in: source, after: "private func commit()").first ?? ""
-        let workHelper = bracedBodies(in: source, after: "private func addToWorkboard()").first ?? ""
-        let sendHelper = bracedBodies(in: source, after: "private func send(_ target: ShareTarget)").first ?? ""
-        let dispatchIsBound = commitBody.contains("case .work: addToWorkboard()")
-            && commitBody.contains("case .send(let target): send(target)")
-            && workHelper.contains("onAddToWorkboard(") && !workHelper.contains("destination")
-            && sendHelper.contains("onSend(") && !sendHelper.contains("destination")
+        // (f) Commit reads the pick ONCE and hands it to the send helper; the two
+        //     helpers are each bound to ONE inbox by construction; and each button
+        //     names the helper it fires. All three bodies are pinned WHOLE, so a
+        //     second call added beside the right one, or a dispatch moved ahead of
+        //     the `begin(…)` guard that makes it exactly-once, fails here.
+        let commitBody = bracedBodies(in: source, after: "private func commit()")
+            .first?
+            .trimmingCharacters(in: .whitespaces)
+        let permittedCommits = [
+            // iOS: read the pick once, hand it to the one send helper.
+            "guard let destination else { return } send(destination)",
+            // macOS: the same, behind the whole-share attachment-limit refusal.
+            "guard !attachmentLimitExceeded else { return } guard let destination else { return } send(destination)",
+        ]
+        let workHelper = bracedBodies(in: source, after: "private func addToWorkboard()")
+            .first?
+            .trimmingCharacters(in: .whitespaces)
+        let permittedWorkHelpers = [
+            "guard submissionState.begin(.addingToWorkboard) else { return } onAddToWorkboard(caption, includePageText)",
+            "guard !attachmentLimitExceeded else { return } guard submissionState.begin(.addingToWorkboard) else { return } onAddToWorkboard(caption, includePageText)",
+        ]
+        let sendHelper = bracedBodies(in: source, after: "private func send(_ target: ShareTarget)")
+            .first?
+            .trimmingCharacters(in: .whitespaces)
+        let permittedSendHelpers = [
+            "guard submissionState.begin(.sending) else { return } onSend(caption, target, includePageText)",
+            "guard !attachmentLimitExceeded else { return } guard submissionState.begin(.sending) else { return } onSend(caption, target, includePageText)",
+        ]
+        let dispatchIsBound = permittedCommits.contains(commitBody ?? "")
+            && permittedWorkHelpers.contains(workHelper ?? "")
+            && permittedSendHelpers.contains(sendHelper ?? "")
+            && source.contains("Button(action: addToWorkboard)")
+            && source.contains("Button(action: commit)")
         if !dispatchIsBound { violations.append(ShareSheetRule.dispatchIsBound) }
 
-        // (g) The retry replays what the person approved, not the current row.
+        // (g) The retry replays what the person approved. Only a Work capture can
+        //     fail into this alert, so Try Again is a Work retry and NOTHING else
+        //     — not a send, not the highlighted row, which may have moved while
+        //     the alert stood, and not a direct call on the host's send closure.
         let retryClosure = bracedBodies(in: source,
-                                        after: "primaryButton: .default(Text(Strings.retry))").first ?? ""
-        if !retryClosure.contains("addToWorkboard()") || retryClosure.contains("commit()") {
+                                        after: "primaryButton: .default(Text(Strings.retry))")
+            .first?
+            .trimmingCharacters(in: .whitespaces)
+        let retryDispatches = ["send(", "onSend(", "commit("]
+        if retryClosure != "addToWorkboard()"
+            || retryDispatches.contains(where: { (retryClosure ?? "").contains($0) }) {
             violations.append(ShareSheetRule.retryIsWork)
         }
 
-        // (h) Nothing commits without a pick, and no tap moves the pick under a
-        //     commit already running. The button's predicate is pinned by its
-        //     SHAPE, not by a prefix: a `.disabled(destination == nil` check
-        //     passed whatever operator came next, so an `&&` — which leaves the
-        //     button live with no pick — read as a pass (Codex S-R1-4). The two
-        //     permitted bodies are the whole predicate, so a flipped operator, a
-        //     dropped clause and an added escape hatch all fail here.
+        // (h) Nothing sends without a pick, Work needs none, and no press moves
+        //     anything under a commit already running. Each button's predicate is
+        //     pinned by its SHAPE, not by a prefix: a `.disabled(destination == nil`
+        //     check passed whatever operator came next, so an `&&` — which leaves
+        //     the button live with no pick — read as a pass (Codex S-R1-4). The
+        //     permitted bodies are the WHOLE predicate, so a flipped operator, a
+        //     dropped clause and an added escape hatch all fail here. Each
+        //     `.disabled(…)` is read inside its own button's stretch of source, so
+        //     the two cannot be swapped onto each other, and the Work stretch
+        //     names the pick nowhere at all.
+        let sendSegment = buttonSegment(in: source, action: "commit")
+        let workSegment = buttonSegment(in: source, action: "addToWorkboard")
         let primaryPredicate = bracedBodies(in: source, after: "private var isPrimaryDisabled: Bool")
             .first?
             .trimmingCharacters(in: .whitespaces)
-        let permittedPredicates = [
-            // iOS: a pick is made, and no commit is already running.
+        let permittedPrimaryPredicates = [
+            // iOS: a pick is highlighted, and no commit is already running.
             "destination == nil || submissionState.isCommitting",
             // macOS: the same, plus the whole-share attachment-limit refusal.
             "destination == nil || submissionState.isCommitting || attachmentLimitExceeded",
         ]
-        let buttonLocked = permittedPredicates.contains(primaryPredicate ?? "")
-            && source.contains(".disabled(isPrimaryDisabled)")
-            // Nothing may disable the button on its own reading of the pick: the
-            // one predicate is the only source, or the look and the behaviour can
+        let workPredicate = bracedBodies(in: source, after: "private var isWorkDisabled: Bool")
+            .first?
+            .trimmingCharacters(in: .whitespaces)
+        let permittedWorkPredicates = [
+            // Work asks nothing of the list — one desk, named on the button.
+            "submissionState.isCommitting",
+            "submissionState.isCommitting || attachmentLimitExceeded",
+        ]
+        let buttonsLocked = permittedPrimaryPredicates.contains(primaryPredicate ?? "")
+            && permittedWorkPredicates.contains(workPredicate ?? "")
+            && sendSegment.contains(".disabled(isPrimaryDisabled)")
+            && workSegment.contains(".disabled(isWorkDisabled)")
+            // Work needs no pick, so its whole stretch names none: a second
+            // `.disabled(…)` appended beside the first, written the other way
+            // round, would otherwise lock the desk behind the highlight.
+            && !workSegment.contains("destination")
+            // Nothing may disable a button on its own reading of the pick: the two
+            // predicates are the only sources, or the look and the behaviour can
             // drift apart again.
             && !source.contains(".disabled(destination")
-        if !buttonLocked
+        if !buttonsLocked
             || !source.contains(".disabled(!selectable || submissionState.isCommitting)") {
             violations.append(ShareSheetRule.lockedWhileCommitting)
         }
 
-        // (i) A disabled primary button LOOKS disabled. `.buttonStyle(.plain)` over
-        //     an explicit amber fill and an explicit foreground dims neither, so
-        //     the mute has to be drawn — and it reads the SAME property as the
-        //     `.disabled(…)` above, which is the whole point of that property.
-        if !source.contains(".opacity(isPrimaryDisabled ? 0.45 : 1)") {
+        // (i) A disabled button LOOKS disabled — both of them, each reading its
+        //     OWN predicate. `.buttonStyle(.plain)` over an explicit fill and an
+        //     explicit foreground dims neither, so the mute has to be drawn, and
+        //     it reads the same property as that button's `.disabled(…)` above,
+        //     which is the whole point of those two properties.
+        if !sendSegment.contains(".opacity(isPrimaryDisabled ? 0.45 : 1)")
+            || !workSegment.contains(".opacity(isWorkDisabled ? 0.45 : 1)") {
             violations.append(ShareSheetRule.disabledLooksDisabled)
         }
 
+        // (j) The keyboard reaches both floor actions, and reaches them apart:
+        //     ⌘-Return sends, ⌘⇧-Return files to Work. Read per button, so the two
+        //     shortcuts cannot be swapped onto each other's action — which would
+        //     be the same keypress with the other destination.
+        let sendShortcut = ".keyboardShortcut(.return, modifiers: .command)"
+        let workShortcut = ".keyboardShortcut(.return, modifiers: [.command, .shift])"
+        if !sendSegment.contains(sendShortcut) || sendSegment.contains(workShortcut)
+            || !workSegment.contains(workShortcut) || workSegment.contains(sendShortcut) {
+            violations.append(ShareSheetRule.shortcutsAreDistinct)
+        }
+
         return violations
+    }
+
+    /// The source as every rule sees it: each comment replaced by a single space
+    /// — a space, not nothing, so a block comment between two tokens cannot weld
+    /// them into one — and then every run of whitespace collapsed to one space.
+    /// String literals are tracked, so a `//` inside one is never read as a
+    /// comment. Idempotent: a mutant built from an already-normalized source
+    /// normalizes to itself, which is what lets the controls below mutate the
+    /// normalized text directly.
+    private static func normalized(_ raw: String) -> String {
+        var output = ""
+        var index = raw.startIndex
+        var insideString = false
+        while index < raw.endIndex {
+            let character = raw[index]
+            if insideString {
+                output.append(character)
+                if character == "\\" {
+                    let escaped = raw.index(after: index)
+                    if escaped < raw.endIndex {
+                        output.append(raw[escaped])
+                        index = raw.index(after: escaped)
+                        continue
+                    }
+                } else if character == "\"" {
+                    insideString = false
+                }
+                index = raw.index(after: index)
+                continue
+            }
+            if character == "\"" {
+                insideString = true
+                output.append(character)
+                index = raw.index(after: index)
+                continue
+            }
+            let following = raw.index(after: index)
+            if character == "/", following < raw.endIndex, raw[following] == "/" {
+                while index < raw.endIndex, raw[index] != "\n" { index = raw.index(after: index) }
+                output.append(" ")
+                continue
+            }
+            if character == "/", following < raw.endIndex, raw[following] == "*" {
+                var depth = 0
+                while index < raw.endIndex {
+                    let next = raw.index(after: index)
+                    if raw[index] == "/", next < raw.endIndex, raw[next] == "*" {
+                        depth += 1
+                        index = raw.index(after: next)
+                        continue
+                    }
+                    if raw[index] == "*", next < raw.endIndex, raw[next] == "/" {
+                        depth -= 1
+                        index = raw.index(after: next)
+                        if depth == 0 { break }
+                        continue
+                    }
+                    index = raw.index(after: index)
+                }
+                output.append(" ")
+                continue
+            }
+            output.append(character)
+            index = raw.index(after: index)
+        }
+        return output.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     /// Every `{ … }` body that follows an occurrence of `marker`, brace-matched.
@@ -568,23 +778,77 @@ final class WorkCaptureInboxTests: XCTestCase {
         while let found = source.range(of: marker, range: cursor..<source.endIndex) {
             cursor = found.upperBound
             guard let open = source[found.lowerBound...].firstIndex(of: "{") else { break }
-            var depth = 0
-            var index = open
-            var close: String.Index?
-            while index < source.endIndex {
-                if source[index] == "{" {
-                    depth += 1
-                } else if source[index] == "}" {
-                    depth -= 1
-                    if depth == 0 { close = index; break }
-                }
-                index = source.index(after: index)
-            }
-            guard let close else { break }
+            guard let close = balancedEnd(in: source, from: open) else { break }
             bodies.append(String(source[source.index(after: open)..<close]))
             cursor = source.index(after: close)
         }
         return bodies
+    }
+
+    /// The argument list and/or trailing closure attached to each occurrence of
+    /// `marker`, as one string per occurrence — so `.task { … }`,
+    /// `.task(id: x) { … }` and `.onAppear(perform: f)` are all read, arguments
+    /// included. An occurrence with neither attached (a mention in a comment)
+    /// contributes an empty string.
+    private static func attachedRegions(in source: String, after marker: String) -> [String] {
+        var regions: [String] = []
+        var cursor = source.startIndex
+        while let found = source.range(of: marker, range: cursor..<source.endIndex) {
+            cursor = found.upperBound
+            var index = found.upperBound
+            var region = ""
+            for opener in ["(", "{"] {
+                var scan = index
+                while scan < source.endIndex, source[scan] == " " { scan = source.index(after: scan) }
+                guard scan < source.endIndex, String(source[scan]) == opener,
+                      let end = balancedEnd(in: source, from: scan) else { continue }
+                region += String(source[scan...end])
+                index = source.index(after: end)
+            }
+            regions.append(region)
+            if index > cursor { cursor = index }
+        }
+        return regions
+    }
+
+    /// The stretch of source one floor button owns: from its `Button(action: …)`
+    /// to the next `Button(`, or the end. A modifier is then only ever read for
+    /// the button it actually sits on.
+    private static func buttonSegment(in source: String, action: String) -> String {
+        guard let start = source.range(of: "Button(action: \(action))") else { return "" }
+        guard let next = source.range(of: "Button(", range: start.upperBound..<source.endIndex) else {
+            return String(source[start.upperBound...])
+        }
+        return String(source[start.upperBound..<next.lowerBound])
+    }
+
+    /// The index of the `)` or `}` that closes the group opening at `open`.
+    private static func balancedEnd(in source: String, from open: String.Index) -> String.Index? {
+        let opener = source[open]
+        let closer: Character = opener == "(" ? ")" : "}"
+        var depth = 0
+        var index = open
+        while index < source.endIndex {
+            if source[index] == opener {
+                depth += 1
+            } else if source[index] == closer {
+                depth -= 1
+                if depth == 0 { return index }
+            }
+            index = source.index(after: index)
+        }
+        return nil
+    }
+
+    /// How many times `needle` appears in `source` — non-overlapping.
+    private static func occurrences(of needle: String, in source: String) -> Int {
+        var count = 0
+        var cursor = source.startIndex
+        while let found = source.range(of: needle, range: cursor..<source.endIndex) {
+            count += 1
+            cursor = found.upperBound
+        }
+        return count
     }
 
     /// Replace the first occurrence of `needle` (optionally, the first one after
@@ -604,106 +868,299 @@ final class WorkCaptureInboxTests: XCTestCase {
         return source.replacingCharacters(in: found, with: replacement)
     }
 
-    /// The share sheet picks NOTHING for the person and remembers NOTHING between
-    /// invocations, and a button that refuses a commit says so on screen. Both
-    /// `ShareView` copies are read off disk and run through the one predicate
-    /// above; then seven negative controls mutate that same real source into
-    /// shapes the rules exist to reject, and each must be reported — without them
-    /// a predicate could pass by being vacuous.
+    /// The share sheet sends only on a press of a button that names where the
+    /// share goes, and it remembers nothing between invocations: the one thing it
+    /// starts with is a HIGHLIGHT derived from the snapshot the app published.
+    /// Both `ShareView` copies are read off disk with the `ShareTargetFilter`
+    /// mirror beside them and run through the one predicate above; then
+    /// thirty negative controls mutate that same real source into shapes the rules
+    /// exist to reject, and each must report EXACTLY the rules named for it —
+    /// without the controls a predicate could pass by being vacuous, and without
+    /// the exactness a control could be passing for the wrong reason.
     ///
-    /// The fifth control reconstructs the shape this branch replaced (a mode
-    /// enum, a pre-selected mode, a pick-reading dispatch). It is a mutation
-    /// rather than the tip's file itself because an iOS test host cannot run
-    /// `git show`; the tip's real `ShareView` was additionally run through these
-    /// same rules from the command line while they were written, and is red on
-    /// (a), (d) and (f) there for exactly the reasons the control names.
-    func testTheShareSheetPicksNoDestinationAndRemembersNone() throws {
+    /// The controls mutate the NORMALIZED source — comments stripped, whitespace
+    /// collapsed — rather than the file's own formatting, because the contract
+    /// they encode is a set of normalized literals: a view whose row action is
+    /// split over three lines, or carries a comment mid-expression, is the same
+    /// shape to every rule here, and a control anchored on the raw text would
+    /// silently mutate nothing and pass. Two controls put a line break and a
+    /// comment back in, which is the property that makes that safe: the predicate
+    /// normalizes whatever it is handed.
+    func testTheShareSheetSendsOnlyOnAPressAndRemembersNothing() throws {
         let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let projectDirectory = testsDirectory.deletingLastPathComponent()
+        let sendShortcut = ".keyboardShortcut(.return, modifiers: .command)"
+        let workShortcut = ".keyboardShortcut(.return, modifiers: [.command, .shift])"
 
-        for relativePath in [
-            "ConduckShareExtension/ShareView.swift",
-            "ConduckShareExtensionMac/ShareView.swift",
+        for (relativePath, filterPath) in [
+            ("ConduckShareExtension/ShareView.swift", "ConduckShareExtension/ShareTargetFilter.swift"),
+            ("ConduckShareExtensionMac/ShareView.swift", "ConduckShareExtensionMac/ShareTargetFilter.swift"),
         ] {
             let source = try String(
                 contentsOf: projectDirectory.appendingPathComponent(relativePath),
                 encoding: .utf8
             )
-            XCTAssertEqual(
-                Self.shareSheetPicksNothing(source: source), [],
-                "\(relativePath) broke a rule that keeps the share sheet from picking, remembering or rerouting a destination"
+            let filterSource = try String(
+                contentsOf: projectDirectory.appendingPathComponent(filterPath),
+                encoding: .utf8
             )
+            XCTAssertEqual(
+                Self.shareSheetSendsOnlyOnAPress(source: source, filter: filterSource), [],
+                "\(relativePath) broke a rule that keeps the share sheet from sending, remembering or rerouting a share without a press"
+            )
+            let collapsed = Self.normalized(source)
+            let collapsedFilter = Self.normalized(filterSource)
 
-            // 1. A pre-selection restored on appear — the mechanism this branch
-            //    deleted, and the one Codex round 1 showed the first draft missed.
-            let onAppearPreselect = Self.replacingFirst(
-                ".task {", with: ".onAppear { destination = .work }\n        .task {", in: source)
-            let onAppearViolations = Self.shareSheetPicksNothing(source: onAppearPreselect)
-            XCTAssertTrue(onAppearViolations.contains(ShareSheetRule.rowScoped), relativePath)
-            XCTAssertTrue(onAppearViolations.contains(ShareSheetRule.notOnAppear), relativePath)
+            /// One control: the mutated source (and optionally a mutated filter)
+            /// must report EXACTLY `expected`.
+            func control(
+                _ name: String,
+                _ mutant: String,
+                filter mutantFilter: String? = nil,
+                _ expected: [String],
+                line: UInt = #line
+            ) {
+                XCTAssertNotEqual(
+                    [mutant, mutantFilter ?? collapsedFilter], [collapsed, collapsedFilter],
+                    "\(relativePath) — control \(name) changed nothing, so it proves nothing",
+                    line: line
+                )
+                XCTAssertEqual(
+                    Set(Self.shareSheetSendsOnlyOnAPress(source: mutant,
+                                                        filter: mutantFilter ?? collapsedFilter)),
+                    Set(expected),
+                    "\(relativePath) — control \(name)",
+                    line: line
+                )
+            }
 
-            // 2. The same thing LINE-BROKEN inside a `.task` — Codex round 2's
+            // 1. A dispatch in a lifecycle hook — the share leaves before the sheet
+            //    is even on screen. It names no destination, so only the dispatch
+            //    half of (c) can catch it.
+            control("a send on appearance", Self.replacingFirst(
+                ".task {", with: ".task { send(.newConversation(gatewayRef: nil)) } .task {",
+                in: collapsed), [ShareSheetRule.noActionOffAPress])
+
+            // 2. A pick written on appear — a highlight that came from somewhere
+            //    other than the one snapshot-derived seed.
+            control("a highlight written on appear", Self.replacingFirst(
+                ".task {", with: ".onAppear { destination = .newConversation(gatewayRef: nil) } .task {",
+                in: collapsed),
+                [ShareSheetRule.rowScoped, ShareSheetRule.fourAssignments,
+                 ShareSheetRule.noActionOffAPress])
+
+            // 3. The same thing LINE-BROKEN inside a `.task` — Codex round 2's
             //    dodge of an unnormalised line rule.
-            let taskPreselect = Self.replacingFirst(
+            control("a line-broken highlight in a task", Self.replacingFirst(
                 ".task {",
-                with: ".task {\n            destination =\n                .work\n        }\n        .task {",
-                in: source)
-            let taskViolations = Self.shareSheetPicksNothing(source: taskPreselect)
-            XCTAssertTrue(taskViolations.contains(ShareSheetRule.rowScoped), relativePath)
-            XCTAssertTrue(taskViolations.contains(ShareSheetRule.notOnAppear), relativePath)
+                with: ".task {\n            destination =\n                .newConversation(gatewayRef: nil)\n        }\n        .task {",
+                in: collapsed),
+                [ShareSheetRule.rowScoped, ShareSheetRule.fourAssignments,
+                 ShareSheetRule.noActionOffAPress])
 
-            // 3. A default written straight onto the state.
-            let initializedState = Self.replacingFirst(
-                "destination: ShareDestination?", with: "destination: ShareDestination? = .work",
-                in: source)
-            XCTAssertTrue(
-                Self.shareSheetPicksNothing(source: initializedState).contains(ShareSheetRule.noInitializer),
-                relativePath)
+            // 4. A row that selects AND sends — one tap on the list and the share
+            //    is gone, past the button that would have named where it went.
+            control("a row that also sends", Self.replacingFirst(
+                "action: { destination = ",
+                with: "action: { send(.newConversation(gatewayRef: nil)); destination = ",
+                in: collapsed),
+                [ShareSheetRule.rowScoped, ShareSheetRule.noActionOffAPress])
 
-            // 4. A retry that follows whatever row is lit when the alert closes.
-            let reroutingRetry = Self.replacingFirst(
-                "addToWorkboard()", with: "commit()", in: source,
-                after: "primaryButton: .default(Text(Strings.retry))")
-            XCTAssertTrue(
-                Self.shareSheetPicksNothing(source: reroutingRetry).contains(ShareSheetRule.retryIsWork),
-                relativePath)
+            // 5. A Work helper that also sends — the button says Work, the share
+            //    reaches a gateway too.
+            control("a Work helper that also sends", Self.replacingFirst(
+                "onAddToWorkboard(caption, includePageText)",
+                with: "send(.newConversation(gatewayRef: nil)); onAddToWorkboard(caption, includePageText)",
+                in: collapsed), [ShareSheetRule.dispatchIsBound])
 
-            // 5. The shape this branch replaced: a mode enum, a mode pre-selected
-            //    to Work, and a dispatch that reads the mode instead of the pick.
-            let tipShape = Self.replacingFirst(
-                "@State private var destination: ShareDestination?",
-                with: "@State private var disposition: ShareDisposition = .work\n    @State private var selection: ShareTarget?",
-                in: Self.replacingFirst("addToWorkboard()", with: "break", in: source,
-                                        after: "switch destination {"))
-            let tipViolations = Self.shareSheetPicksNothing(source: tipShape)
-            XCTAssertTrue(tipViolations.contains(ShareSheetRule.noInitializer), relativePath)
-            XCTAssertTrue(tipViolations.contains(ShareSheetRule.noModeNoMemory), relativePath)
-            XCTAssertTrue(tipViolations.contains(ShareSheetRule.dispatchIsBound), relativePath)
+            // 6. A retry that sends as well as files — and keeps the Work call, so
+            //    a rule that only looked for `addToWorkboard()` would pass it.
+            control("a retry that also sends", Self.replacingFirst(
+                "addToWorkboard()", with: "send(destination!); addToWorkboard()", in: collapsed,
+                after: "primaryButton: .default(Text(Strings.retry))"),
+                [ShareSheetRule.retryIsWork])
 
-            // 6. The full-strength amber pill this branch shipped with: the button
-            //    still refuses every tap, and still looks exactly like the one that
-            //    commits (U-66).
-            let undimmedButton = Self.replacingFirst(
-                ".opacity(isPrimaryDisabled ? 0.45 : 1)", with: "", in: source)
-            XCTAssertTrue(
-                Self.shareSheetPicksNothing(source: undimmedButton)
-                    .contains(ShareSheetRule.disabledLooksDisabled),
-                relativePath)
+            // 7. A retry that follows whatever row is highlighted when the alert
+            //    closes — which, since commit sends, is a send off a Work failure.
+            control("a retry that follows the highlight", Self.replacingFirst(
+                "addToWorkboard()", with: "commit()", in: collapsed,
+                after: "primaryButton: .default(Text(Strings.retry))"),
+                [ShareSheetRule.retryIsWork])
 
-            // 7. The operator the old prefix rule could not see: `&&` leaves the
-            //    button live — and, bound to the same property, drawn live — with
-            //    no destination picked (Codex S-R1-4).
-            let flippedPredicate = Self.replacingFirst(
-                "destination == nil ||", with: "destination == nil &&", in: source,
-                after: "private var isPrimaryDisabled: Bool")
-            XCTAssertTrue(
-                Self.shareSheetPicksNothing(source: flippedPredicate)
-                    .contains(ShareSheetRule.lockedWhileCommitting),
-                relativePath)
+            // 8. A pick remembered from the last share, read back out of defaults.
+            control("a remembered pick", Self.replacingFirst(
+                "@State private var destination: ShareTarget?",
+                with: "@State private var destination: ShareTarget? = UserDefaults.standard.string(forKey: \"share.lastPick\").map { ShareTarget.newConversation(gatewayRef: $0) }",
+                in: collapsed),
+                [ShareSheetRule.seededOnce, ShareSheetRule.noModeNoMemory])
+
+            // 9. A default written straight onto the declaration, bypassing the
+            //    one adapter that decides what opens highlighted.
+            control("an initializer on the declaration", Self.replacingFirst(
+                "@State private var destination: ShareTarget?",
+                with: "@State private var destination: ShareTarget? = .newConversation(gatewayRef: nil)",
+                in: collapsed), [ShareSheetRule.seededOnce])
+
+            // 10. A SECOND seed beside the first — here pre-picking the legacy
+            //     nil-ref route when the roster is unknown, which is exactly the
+            //     case `preselectedRoute` refuses to decide.
+            control("a second seed", Self.replacingFirst(
+                "_destination = State(initialValue: ShareTargetFilter.preselectedTarget(snapshot: snapshot))",
+                with: "_destination = State(initialValue: ShareTargetFilter.preselectedTarget(snapshot: snapshot)); if snapshot == nil { _destination = State(initialValue: .newConversation(gatewayRef: nil)) }",
+                in: collapsed), [ShareSheetRule.seededOnce])
+
+            // 11. A flipped Send predicate: the button goes live precisely when
+            //     there is nothing to send to.
+            control("a flipped Send predicate", Self.replacingFirst(
+                "destination == nil ||", with: "destination != nil ||", in: collapsed,
+                after: "private var isPrimaryDisabled: Bool"),
+                [ShareSheetRule.lockedWhileCommitting])
+
+            // 12. The operator the old prefix rule could not see: `&&` leaves the
+            //     button live — and, bound to the same property, drawn live — with
+            //     no destination picked (Codex S-R1-4).
+            control("an && in the Send predicate", Self.replacingFirst(
+                "destination == nil ||", with: "destination == nil &&", in: collapsed,
+                after: "private var isPrimaryDisabled: Bool"),
+                [ShareSheetRule.lockedWhileCommitting])
+
+            // 13. The Work button drawn at full strength while it refuses every
+            //     press — the U-66 shape, now on the second button.
+            control("an undimmed Work button", Self.replacingFirst(
+                ".opacity(isWorkDisabled ? 0.45 : 1)", with: "", in: collapsed),
+                [ShareSheetRule.disabledLooksDisabled])
+
+            // 14. The same on the Send button.
+            control("an undimmed Send button", Self.replacingFirst(
+                ".opacity(isPrimaryDisabled ? 0.45 : 1)", with: "", in: collapsed),
+                [ShareSheetRule.disabledLooksDisabled])
+
+            // 15. A Work button wired to the send path — the label says Work and
+            //     the press dispatches to the highlighted gateway. Every modifier
+            //     the Work button owned goes with it, which is why this one control
+            //     reports five rules rather than one.
+            control("a Work button wired to send", Self.replacingFirst(
+                "Button(action: addToWorkboard)", with: "Button(action: { send(destination!) })",
+                in: collapsed),
+                [ShareSheetRule.noActionOffAPress, ShareSheetRule.dispatchIsBound,
+                 ShareSheetRule.lockedWhileCommitting, ShareSheetRule.disabledLooksDisabled,
+                 ShareSheetRule.shortcutsAreDistinct])
+
+            // 16. One keypress for both floor actions — with the Work shortcut
+            //     gone the keyboard can only reach the desk by way of the highlight
+            //     it is supposed to be independent of.
+            control("a missing Work shortcut", Self.replacingFirst(
+                workShortcut, with: "", in: collapsed),
+                [ShareSheetRule.shortcutsAreDistinct])
+
+            // 17. The desk taught to the send manifest's target type, in the filter
+            //     file that now owns it — the one thing that would let a Work
+            //     capture reach the gateway writer.
+            control("a work case on the target",
+                collapsed,
+                filter: Self.replacingFirst("enum ShareTarget: Equatable {",
+                                            with: "enum ShareTarget: Equatable { case work;",
+                                            in: collapsedFilter),
+                [ShareSheetRule.targetHasNoWork])
+
+            // 18. The retired pick-or-desk enum brought back — a type that can
+            //     carry either inbox, which is what made the two confusable.
+            control("the retired pick-or-desk enum", Self.replacingFirst(
+                "struct ShareView: View {",
+                with: "enum ShareDestination: Equatable { case work; case send(ShareTarget) } struct ShareView: View {",
+                in: collapsed), [ShareSheetRule.noModeNoMemory])
+
+            // 19. A hook with ARGUMENTS — a rule that only read `.task {` bodies
+            //     saw nothing here, and the share leaves whenever the toggle moves.
+            control("a parameterised task that commits", Self.replacingFirst(
+                ".task {", with: ".task(id: includePageText) { commit() } .task {", in: collapsed),
+                [ShareSheetRule.noActionOffAPress])
+
+            // 20. The dispatcher passed as a VALUE rather than called — no call
+            //     parentheses anywhere, which is why the tokens for a hook are bare
+            //     identifiers.
+            control("a hook that performs the dispatcher", Self.replacingFirst(
+                ".task {", with: ".onAppear(perform: commit) .task {", in: collapsed),
+                [ShareSheetRule.noActionOffAPress])
+
+            // 21. The host's send closure called STRAIGHT from the Work helper,
+            //     skipping the send helper entirely — `send(` is case-sensitive and
+            //     never sees `onSend(`.
+            control("onSend inside the Work helper", Self.replacingFirst(
+                "onAddToWorkboard(caption, includePageText)",
+                with: "onSend(caption, .newConversation(gatewayRef: nil), includePageText); onAddToWorkboard(caption, includePageText)",
+                in: collapsed), [ShareSheetRule.dispatchIsBound])
+
+            // 22. The same trick in the retry closure.
+            control("onSend inside the retry", Self.replacingFirst(
+                "addToWorkboard()",
+                with: "onSend(caption, destination!, includePageText); addToWorkboard()",
+                in: collapsed, after: "primaryButton: .default(Text(Strings.retry))"),
+                [ShareSheetRule.retryIsWork])
+
+            // 23. The dispatch moved AHEAD of the guard that makes it
+            //     exactly-once: every token a rule looked for is still present, in
+            //     the wrong order, and a double press sends twice.
+            control("a send ahead of its guard", Self.replacingFirst(
+                "guard submissionState.begin(.sending) else { return } onSend(caption, target, includePageText)",
+                with: "onSend(caption, target, includePageText); guard submissionState.begin(.sending) else { return }",
+                in: collapsed), [ShareSheetRule.dispatchIsBound])
+
+            // 24. The two shortcuts SWAPPED — both still present, so a file-wide
+            //     check passed, and ⌘-Return now files to Work while ⌘⇧-Return
+            //     sends.
+            control("swapped shortcuts", Self.replacingFirst(
+                workShortcut, with: sendShortcut,
+                in: Self.replacingFirst(sendShortcut, with: workShortcut, in: collapsed)),
+                [ShareSheetRule.shortcutsAreDistinct])
+
+            // 25. A row handed the dispatcher as its action rather than calling it
+            //     — here as an accessibility action, so VoiceOver sends without the
+            //     button that names the destination ever being reached.
+            control("a row action bound to a dispatcher", Self.replacingFirst(
+                ".disabled(!selectable || submissionState.isCommitting)",
+                with: ".disabled(!selectable || submissionState.isCommitting) .accessibilityAction(action: commit)",
+                in: collapsed), [ShareSheetRule.noActionOffAPress])
+
+            // 26. The two mutes SWAPPED onto one predicate: both `.opacity(…)`
+            //     literals still appear in the file, and the Work button now dims
+            //     for a missing pick it does not need.
+            control("swapped mutes", Self.replacingFirst(
+                ".opacity(isWorkDisabled ? 0.45 : 1)", with: ".opacity(isPrimaryDisabled ? 0.45 : 1)",
+                in: collapsed), [ShareSheetRule.disabledLooksDisabled])
+
+            // 27. The target type moved back into the view, away from the pure
+            //     route rule and the tests that cover it together.
+            control("the target type back in the view", Self.replacingFirst(
+                "struct ShareView: View {",
+                with: "enum ShareTarget: Equatable { case newConversation(gatewayRef: String?) } struct ShareView: View {",
+                in: collapsed), [ShareSheetRule.targetHasNoWork])
+
+            // 28. A second lock appended beside the Work button's own, written the
+            //     other way round so the file-wide `.disabled(destination` check
+            //     never sees it: Work then refuses every press until a row is
+            //     highlighted, which is the one thing the desk never needs.
+            control("a Work lock that reads the pick", Self.replacingFirst(
+                ".disabled(isWorkDisabled)", with: ".disabled(isWorkDisabled) .disabled(nil == destination)",
+                in: collapsed), [ShareSheetRule.lockedWhileCommitting])
+
+            // 29. An appearance hook under another name: `.onChange` with
+            //     `initial: true` runs on the first render, so the share leaves
+            //     before anyone has pressed anything.
+            control("an initial onChange that commits", Self.replacingFirst(
+                ".task {", with: ".onChange(of: includePageText, initial: true) { commit() } .task {",
+                in: collapsed), [ShareSheetRule.noActionOffAPress])
+
+            // 30. A comment parked between the modifier and its closure — the
+            //     scanner skips whitespace, not commentary, so without the
+            //     normalizer stripping it first this hook reads as a bare mention.
+            control("a comment between a hook and its closure", Self.replacingFirst(
+                ".task {", with: ".task /* Resolve the preview */ { commit() } .task {",
+                in: collapsed), [ShareSheetRule.noActionOffAPress])
         }
 
         // The send manifest writer takes a gateway target BY TYPE in both hosts,
-        // so a Work pick cannot reach it however either view is edited.
+        // so a Work capture cannot reach it however either view is edited.
         for relativePath in [
             "ConduckShareExtension/ShareViewController.swift",
             "ConduckShareExtensionMac/ShareViewController.swift",

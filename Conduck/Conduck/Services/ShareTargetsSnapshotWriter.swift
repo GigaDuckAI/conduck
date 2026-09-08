@@ -9,9 +9,20 @@
 // value (display name, badge color "#RRGGBB", monogram) is RESOLVED here and
 // frozen into the flat `ShareTargetsSnapshot` contract.
 //
-// WORK TARGETS: none. Work is ONE desk, so the appex's Add to Work row names no
-// card, and `recentWorkItems` is published EMPTY. The field itself stays in the
-// contract because its three source copies must stay byte-identical.
+// WORK TARGETS: none. Add to Work is an ACTION on the sheet's floor beside Send,
+// never an entry in the destination list, and Work is ONE desk, so there is no
+// card to pick between: `recentWorkItems` is published EMPTY. The field itself
+// stays in the contract because its three source copies must stay byte-identical.
+//
+// DEFAULT POINTER: the snapshot also carries `defaultGatewayRef`, the gateway the
+// appex opens with highlighted. It is read RAW (`storedDefaultRemoteAgentRefRaw`)
+// and published only when it is in the configured set. This writer runs on hot
+// notification paths and from a background regenerate, so it must have NO side
+// effect on the pointer it reports — the resolvers repair, migrate, and can retire
+// a parked marker even when told not to repair, which would let a background
+// snapshot rewrite the user's default. Reporting and deciding are different
+// questions, and this writer only reports — what actually routes a turn is
+// resolved on the send path, never here.
 //
 // WRITE LOCATION (load-bearing): `<AppGroup>/Application Support/share-targets.json`
 // — the appex reads the SAME literal path. The write is ATOMIC (sibling temp +
@@ -131,11 +142,14 @@ actor ShareTargetsSnapshotWriter {
     ///     RecentConversation (id / label / backendRef / lastActivityAt).
     ///   - recentWorkItems: always empty — Work is one desk, so the appex has
     ///     nothing to pick between and the store is never read for it.
+    ///   - defaultGatewayRef: the raw stored default pointer, published only when
+    ///     it is in the configured set (see `publishedDefaultRef`).
     private func buildSnapshot() async -> ShareTargetsSnapshot {
         // One customs roster read drives both the metadata + palette resolution
         // (built-in refs ignore it; customs key on it).
         let customs = await settings.customGateways()
         let configuredRefs = await settings.configuredRemoteAgentRefs()
+        let storedDefault = await settings.storedDefaultRemoteAgentRefRaw()
 
         // Badge colors and display metadata are UI-owned helpers under the app's
         // default MainActor isolation. Resolve the complete render projection in
@@ -173,8 +187,22 @@ actor ShareTargetsSnapshotWriter {
             generatedAt: Date(),
             gateways: gateways,
             recentConversations: recentConversations,
-            recentWorkItems: recentWorkItems
+            recentWorkItems: recentWorkItems,
+            defaultGatewayRef: Self.publishedDefaultRef(
+                stored: storedDefault,
+                configured: configuredRefs
+            )
         )
+    }
+
+    /// The default the snapshot may advertise: the stored pointer, ONLY when it is
+    /// in the configured set. Membership is exactly the "usable" verdict, computed
+    /// here from a raw read so this background writer has no side effect on the
+    /// pointer it reports (the resolvers repair, migrate, and can retire a parked
+    /// marker even when told not to repair).
+    nonisolated static func publishedDefaultRef(stored: RemoteAgentRef?, configured: [RemoteAgentRef]) -> String? {
+        guard let stored, configured.contains(stored) else { return nil }
+        return stored.rawString
     }
 
     /// PURE filter+map: keep only recents whose bound `backend` is still in

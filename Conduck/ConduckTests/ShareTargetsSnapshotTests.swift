@@ -6,7 +6,9 @@
 // Share-Extension "Send to" picker contract `ShareTargetsSnapshot` (main-app writer
 // ↔ appex reader): a full encode/decode round-trip, the TOLERANT decode (an empty /
 // minimal snapshot default-fills + a malformed one → nil), the PINNED cross-process
-// wire shape (ISO-8601 dates · frozen field names · `.sortedKeys` ordering), and a
+// wire shape (ISO-8601 dates · frozen field names · `.sortedKeys` ordering), the
+// additive `defaultGatewayRef` pointer (round-trips, and absent or null reads as
+// `nil` so a file written by an older build still decodes), and a
 // byte-identical-mirror guard that reads BOTH source files off disk and asserts the
 // appex copy is identical to the canonical below their header blocks.
 //
@@ -59,7 +61,8 @@ final class ShareTargetsSnapshotTests: XCTestCase {
                     title: "Launch brief",
                     modifiedAt: workModified
                 )
-            ]
+            ],
+            defaultGatewayRef: "openclaw"
         )
 
         let data = try original.encoded()
@@ -90,6 +93,9 @@ final class ShareTargetsSnapshotTests: XCTestCase {
         XCTAssertEqual(w0.id, workID)
         XCTAssertEqual(w0.title, "Launch brief")
         XCTAssertEqual(w0.modifiedAt.timeIntervalSince1970, workModified.timeIntervalSince1970, accuracy: 0.001)
+
+        XCTAssertEqual(decoded.defaultGatewayRef, "openclaw",
+                       "the published default pointer must survive the pinned round-trip")
     }
 
     // MARK: - Tolerant decode (forward-compat)
@@ -103,6 +109,25 @@ final class ShareTargetsSnapshotTests: XCTestCase {
         XCTAssertEqual(decoded.gateways, [], "missing gateways defaults to empty")
         XCTAssertEqual(decoded.recentConversations, [], "missing recents defaults to empty")
         XCTAssertEqual(decoded.recentWorkItems, [], "an older snapshot defaults Work targets to empty")
+        XCTAssertNil(decoded.defaultGatewayRef,
+                     "no published default; the picker applies its configured-gateway fallback")
+    }
+
+    func testTolerantDecodeOfTheDefaultPointerReadsAbsentAndNullAsNil() throws {
+        // The pointer is ADDITIVE: a snapshot written before it existed carries no
+        // key at all, and one written by a build with no publishable default may
+        // carry an explicit null. Both are the same state — no published default,
+        // so the picker applies its configured-gateway fallback — and neither may
+        // throw.
+        let missing = try XCTUnwrap(ShareTargetsSnapshot.decode(
+            Data("{\"schemaVersion\":2,\"gateways\":[]}".utf8)
+        ))
+        XCTAssertNil(missing.defaultGatewayRef, "a missing key reads as no published default")
+
+        let explicitNull = try XCTUnwrap(ShareTargetsSnapshot.decode(
+            Data("{\"schemaVersion\":2,\"defaultGatewayRef\":null,\"gateways\":[]}".utf8)
+        ))
+        XCTAssertNil(explicitNull.defaultGatewayRef, "an explicit null reads as no published default")
     }
 
     func testTolerantGatewayDecodeDefaultsRenderFields() throws {
@@ -188,7 +213,8 @@ final class ShareTargetsSnapshotTests: XCTestCase {
                     title: "Launch brief",
                     modifiedAt: Date(timeIntervalSince1970: 1_700_000_750)
                 )
-            ]
+            ],
+            defaultGatewayRef: "openclaw"
         )
         let wire = String(decoding: try snapshot.encoded(), as: UTF8.self)
 
@@ -205,18 +231,22 @@ final class ShareTargetsSnapshotTests: XCTestCase {
 
         // 2. Every field name is frozen — a rename on either mirror breaks decode.
         for key in ["\"schemaVersion\"", "\"generatedAt\"", "\"gateways\"", "\"recentConversations\"", "\"recentWorkItems\"",
+                    "\"defaultGatewayRef\"",
                     "\"ref\"", "\"displayName\"", "\"colorHex\"", "\"monogram\"", "\"configured\"",
                     "\"id\"", "\"label\"", "\"backendRef\"", "\"lastActivityAt\"", "\"title\"", "\"modifiedAt\""] {
             XCTAssertTrue(wire.contains(key), "wire contract missing key \(key) — wire: \(wire)")
         }
 
-        // 3. `.sortedKeys` → deterministic bytes. Top-level `gateways` precedes
-        //    `recentConversations` precedes `recentWorkItems` precedes
-        //    `schemaVersion` (alphabetical).
+        // 3. `.sortedKeys` → deterministic bytes. Top-level `defaultGatewayRef`
+        //    precedes `gateways` precedes `recentConversations` precedes
+        //    `recentWorkItems` precedes `schemaVersion` (alphabetical).
+        let defaultRefAt = try XCTUnwrap(wire.range(of: "\"defaultGatewayRef\""))
         let gatewaysAt = try XCTUnwrap(wire.range(of: "\"gateways\""))
         let recentsAt = try XCTUnwrap(wire.range(of: "\"recentConversations\""))
         let workAt = try XCTUnwrap(wire.range(of: "\"recentWorkItems\""))
         let schemaAt = try XCTUnwrap(wire.range(of: "\"schemaVersion\""))
+        XCTAssertTrue(defaultRefAt.lowerBound < gatewaysAt.lowerBound,
+                      "top-level keys must be sorted (.sortedKeys) for deterministic wire bytes")
         XCTAssertTrue(gatewaysAt.lowerBound < recentsAt.lowerBound,
                       "top-level keys must be sorted (.sortedKeys) for deterministic wire bytes")
         XCTAssertTrue(recentsAt.lowerBound < workAt.lowerBound,
@@ -238,6 +268,7 @@ final class ShareTargetsSnapshotTests: XCTestCase {
         XCTAssertEqual(back.recentConversations.first?.backendRef, "hermes")
         XCTAssertEqual(back.recentConversations.first?.label, "Trip planning")
         XCTAssertEqual(back.recentWorkItems.first?.title, "Launch brief")
+        XCTAssertEqual(back.defaultGatewayRef, "openclaw")
     }
 
     // MARK: - Byte-identical mirror guard

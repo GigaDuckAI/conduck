@@ -3774,6 +3774,12 @@ actor SettingsManager {
             .flatMap(RemoteAgentRef.init(rawString:))
     }
 
+    /// The stored default pointer exactly as written — no repair, no migration, no
+    /// adoption, no writes. For readers that must REPORT the pointer without ever
+    /// touching it (the share-targets snapshot writer). Everything that decides
+    /// where a turn goes keeps using `resolveDefaultGateway()`.
+    func storedDefaultRemoteAgentRefRaw() -> RemoteAgentRef? { storedDefaultRef() }
+
     /// Whether the Keychain is PROVEN readable right now — the discriminator
     /// that makes every repair in this file blackout-safe.
     ///

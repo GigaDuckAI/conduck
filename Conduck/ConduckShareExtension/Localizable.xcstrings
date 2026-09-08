@@ -112,32 +112,20 @@
         }
       }
     },
-    "share.destination.choose" : {
-      "comment" : "Disabled primary button label until a destination row is picked",
+    "share.destination.noAI.work" : {
+      "comment" : "Shown in place of the gateway rows when the snapshot lists no configured gateway and no recent chat; Add to Work stays available on the floor",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Choose a destination"
-          }
-        }
-      }
-    },
-    "share.destination.noAI" : {
-      "comment" : "Shown in place of the gateway rows when the snapshot lists no configured gateway and no recent chat",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No personal AI available."
+            "value" : "No personal AI available. You can still add this to Work."
           }
         }
       }
     },
     "share.destination.title" : {
-      "comment" : "Share Extension navigation title over the destination list (gateways, recent chats, Add to Work)",
+      "comment" : "Share Extension navigation title over the destination list (gateways and recent chats)",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
@@ -304,18 +292,6 @@
         }
       }
     },
-    "share.section.work" : {
-      "comment" : "Picker section header above the Add to Work row",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Work"
-          }
-        }
-      }
-    },
     "share.send.progress" : {
       "comment" : "Progress label while the Share Extension queues a conversation send",
       "extractionState" : "extracted_with_value",
@@ -324,6 +300,18 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Sending…"
+          }
+        }
+      }
+    },
+    "share.send.to" : {
+      "comment" : "Primary share button naming the picked destination (a gateway's name for a new conversation, or a chat's title)",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Send to %@"
           }
         }
       }
@@ -461,7 +449,7 @@
       }
     },
     "share.work.inert" : {
-      "comment" : "Subtitle of the Add to Work row — privacy reassurance for an inert Work capture",
+      "comment" : "Caption under the Add to Work button on the share sheet's floor, and that button's accessibility hint — privacy reassurance for an inert Work capture",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {

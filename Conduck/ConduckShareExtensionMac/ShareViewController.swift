@@ -184,13 +184,15 @@ final class ShareViewController: NSViewController {
         super.viewDidLoad()
 
         // Load the tiny destination snapshot the main app published (gateways +
-        // recent conversations). Missing / malformed → nil, and `ShareView` keeps
-        // the legacy "New conversation" row (the share never dead-ends). The view
-        // offers ONE destination list — every gateway, the recent chats, then Add
-        // to Work as the last row — and pre-selects nothing: `onSend` is reached
-        // only by a gateway pick, `onAddToWorkboard` only by the Work row. The
-        // manifest's `shouldAutosend` is stamped `true` at commit time, so a
-        // gateway pick still sends (share-and-go).
+        // recent conversations + the app's default gateway). Missing / malformed
+        // → nil, and `ShareView` keeps the legacy "New conversation" row (the
+        // share never dead-ends). The view's list names conversations only —
+        // every gateway, then the recent chats — and opens with the published
+        // default highlighted, which is a highlight and not a decision. The two
+        // inboxes are the two buttons on its floor: `onSend` is reached only by
+        // Send, `onAddToWorkboard` only by Add to Work, and neither fires without
+        // a press. The manifest's `shouldAutosend` is stamped `true` at commit
+        // time, so a Send still sends (share-and-go).
         let rootView = ShareView(
             attachmentCount: extractedAttachmentCount(),
             attachmentLimitExceeded: rawProviders.count > Self.maxAttachments,
