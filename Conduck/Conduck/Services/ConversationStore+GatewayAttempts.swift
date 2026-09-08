@@ -241,6 +241,47 @@ extension ConversationStore {
         }
     }
 
+    /// Earlier attempts for turns present in a bounded dashboard range. These
+    /// provide retry context only; they do not belong to that range's totals.
+    /// Query the scalar turn IDs so deleting a conversation cannot erase the
+    /// context, and apply the same clear cutoff as the visible ledger reads.
+    func gatewayAttempts(
+        forTurnIDs turnIDs: Set<UUID>,
+        before: Date,
+        clearedThrough: Date? = nil
+    ) async throws -> [GatewayAttemptRecord] {
+        guard !turnIDs.isEmpty else { return [] }
+        try await ensureLoaded()
+        let context = newReadContext()
+        let ids = Array(turnIDs)
+        return try await context.perform { [context] in
+            var records: [GatewayAttemptRecord] = []
+            // Bound each IN predicate independently of the size of the range.
+            for start in stride(from: 0, to: ids.count, by: Self.gatewayAttemptHistoryTurnBatchSize) {
+                let end = min(start + Self.gatewayAttemptHistoryTurnBatchSize, ids.count)
+                let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
+                var clauses = [
+                    NSPredicate(format: "userMessageID IN %@", ids[start..<end].map { $0 as NSUUID }),
+                    NSPredicate(format: "startedAt < %@", before as NSDate)
+                ]
+                if let clearedThrough {
+                    clauses.append(Self.notClearedPredicate(through: clearedThrough))
+                }
+                request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: clauses)
+                records.append(contentsOf: try context.fetch(request).map {
+                    GatewayAttemptRecord(managedObject: $0)
+                })
+            }
+            return records.sorted {
+                let left = $0.startedAt ?? .distantPast
+                let right = $1.startedAt ?? .distantPast
+                return left == right ? $0.id.uuidString < $1.id.uuidString : left < right
+            }
+        }
+    }
+
+    static let gatewayAttemptHistoryTurnBatchSize = 500
+
     /// When measurement began: the earliest `startedAt` still retained. One
     /// fetch of one row, because nothing about the row's parent can disqualify
     /// it any more.

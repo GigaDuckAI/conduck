@@ -73,6 +73,12 @@ protocol UsageDashboardSource: Sendable {
     /// Rows at or below `clearedThrough` are excluded by the store.
     func attempts(from: Date?, to: Date?, clearedThrough: Date?) async throws -> [GatewayAttemptRecord]
 
+    /// Earlier attempts for turns represented in the selected window. Supplies
+    /// retry history without adding those rows to the window's activity.
+    func priorAttempts(
+        forTurnIDs ids: Set<UUID>, before: Date, clearedThrough: Date?
+    ) async throws -> [GatewayAttemptRecord]
+
     /// Earliest VISIBLE attempt start — when measurement began, as far as the
     /// clear cutoff still lets the ledger show it.
     func measurementStart(clearedThrough: Date?) async throws -> Date?
@@ -111,6 +117,14 @@ nonisolated struct LiveUsageDashboardSource: UsageDashboardSource {
             from: from,
             to: to,
             clearedThrough: clearedThrough
+        )
+    }
+
+    func priorAttempts(
+        forTurnIDs ids: Set<UUID>, before: Date, clearedThrough: Date?
+    ) async throws -> [GatewayAttemptRecord] {
+        try await ConversationStore.shared.gatewayAttempts(
+            forTurnIDs: ids, before: before, clearedThrough: clearedThrough
         )
     }
 
@@ -164,6 +178,7 @@ nonisolated struct LiveUsageDashboardSource: UsageDashboardSource {
 /// the background hop that produces it.
 private nonisolated struct UsageDashboardLoad: Sendable {
     let records: [GatewayAttemptRecord]
+    let priorAttempts: [GatewayAttemptRecord]
     let summary: GatewayUsageSummary
     let measurementStart: Date?
     let liveAttemptIDs: Set<UUID>
@@ -223,8 +238,28 @@ final class UsageDashboardModel {
     var range: Range = .month {
         didSet {
             guard oldValue != range, hasStarted else { return }
+            // Invalidate now, even if the new load queues behind an existing
+            // one. Waiting until that load begins lets the superseded range
+            // publish during the gap.
+            loadGeneration += 1
+            isLoading = true
+            loadError = nil
             scheduleReload()
         }
+    }
+
+    /// The selection belonging to the last successfully published snapshot.
+    /// Kept separate from the requested picker value so a failed range switch
+    /// cannot relabel old figures as a different period.
+    private(set) var displayedRange: Range = .month
+
+    /// A previous snapshot may remain visible only while both its range and
+    /// clear cutoff match the user's current selection. A failed reread after
+    /// a clear must never expose the figures that were just erased.
+    var hasVisibleSummary: Bool {
+        rangeEnd != nil && range == displayedRange
+            && snapshotClearedThrough == clearedThrough
+            && !isClearingUsageHistory && !isCheckingClearCutoff
     }
 
     /// Everything the cards draw. `.empty` until the first load resolves, so
@@ -234,6 +269,11 @@ final class UsageDashboardModel {
     /// The records behind `summary`, kept so a drill-down can re-slice the
     /// range it is already showing instead of re-reading the store.
     private(set) var records: [GatewayAttemptRecord] = []
+
+    /// Earlier retained history supplies retry identity only. Drill-downs also
+    /// receive the whole selected range so a retry on another device still
+    /// knows about the turn's first attempt.
+    @ObservationIgnored private var priorAttempts: [GatewayAttemptRecord] = []
 
     /// Attempt ids this device holds a live task for, as of the last load.
     /// Republished so a drill-down summarizes under the same derived states the
@@ -246,8 +286,8 @@ final class UsageDashboardModel {
 
     private(set) var isLoading = false
 
-    /// Set when a fetch threw. The screen keeps the previous summary on screen
-    /// beneath it — a transient store error should not blank the dashboard.
+    /// Set when a fetch threw. A previous snapshot remains available beneath
+    /// the error only while it matches the requested range.
     private(set) var loadError: String?
 
     /// False until the first load resolves. The empty state must not flash
@@ -263,8 +303,14 @@ final class UsageDashboardModel {
     /// and nil after a clear that emptied the ledger.
     private(set) var measurementStart: Date?
 
-    /// The synced clear cutoff in force for the numbers on screen.
+    /// Latest known synced clear cutoff. Advances before a fallible ledger
+    /// read so a failed refresh cannot keep pre-clear figures visible.
     private(set) var clearedThrough: Date?
+
+    /// The cutoff used by the published snapshot, distinct from a newer clear
+    /// that has invalidated it. Observed because it gates every summary surface.
+    private var snapshotClearedThrough: Date?
+    private var isCheckingClearCutoff = false
 
     /// True while "Clear usage history" is advancing the cutoff and purging.
     /// The destructive row disables itself on it.
@@ -334,10 +380,10 @@ final class UsageDashboardModel {
     /// have rows for.
     @ObservationIgnored private var chartRange: ClosedRange<Date>?
 
-    /// The cutoff the convergence purge has already been fired for. Stops the
-    /// purge's own `postDidChange` from driving an endless reload → purge →
-    /// reload loop, and stops an import storm from stacking purges.
-    @ObservationIgnored private var purgedCutoff: Date?
+    /// Serialize convergence passes, remembering a load/import that arrives
+    /// while deletion is still running. A previously successful purge does not
+    /// cover rows imported later, so no cutoff is permanently marked finished.
+    @ObservationIgnored private var pendingConvergenceCutoff: Date?
     @ObservationIgnored private var isConvergencePurging = false
 
     init(
@@ -369,6 +415,15 @@ final class UsageDashboardModel {
                 ) { [weak self] _ in
                     Task { @MainActor [weak self] in
                         guard let self, self.hasStarted else { return }
+                        if name == .settingsDidChangeRemotely {
+                            // The setting may be a clear arriving from another
+                            // device. Invalidate before a queued read can start,
+                            // and hide the snapshot until its cutoff is checked.
+                            self.loadGeneration += 1
+                            self.isCheckingClearCutoff = true
+                            self.isLoading = true
+                            self.loadError = nil
+                        }
                         self.scheduleReload()
                     }
                 }
@@ -418,12 +473,23 @@ final class UsageDashboardModel {
         isLoading = true
         loadError = nil
 
+        let requestedRange = range
         let now = clock()
-        let window = Self.window(for: range, now: now, calendar: calendar)
+        let window = Self.window(for: requestedRange, now: now, calendar: calendar)
+
+        // Resolve the non-failing settings read first, on the model's actor.
+        // The cutoff must invalidate an older snapshot even if the ledger read
+        // below fails and there is no replacement snapshot to publish.
+        let observedCutoff = await source.clearedThrough()
+        guard generation == loadGeneration else { return }
+        rememberClearCutoff(observedCutoff)
+        isCheckingClearCutoff = false
+        let cutoff = clearedThrough
 
         do {
             let loaded = try await Self.load(
                 source: source,
+                clearedThrough: cutoff,
                 from: window.from,
                 to: window.to,
                 now: now,
@@ -431,12 +497,11 @@ final class UsageDashboardModel {
                 grace: grace
             )
             guard generation == loadGeneration else { return }
-            publish(loaded, window: window, now: now)
+            publish(loaded, range: requestedRange, window: window, now: now)
         } catch {
             guard generation == loadGeneration else { return }
-            // The previous summary stays on screen underneath the message: a
-            // transient Core Data failure is a worse reason to blank a chart
-            // than to leave one that is a few seconds stale.
+            // Preserve the last valid snapshot. `hasVisibleSummary` exposes
+            // it only for its own range, so a failed switch cannot mislabel it.
             loadError = String(
                 localized: "settings.usage.error.load",
                 defaultValue: "Couldn't load your usage. Try again."
@@ -456,19 +521,25 @@ final class UsageDashboardModel {
     @concurrent
     private nonisolated static func load(
         source: any UsageDashboardSource,
+        clearedThrough cutoff: Date?,
         from: Date?,
         to: Date,
         now: Date,
         calendar: Calendar,
         grace: TimeInterval
     ) async throws -> UsageDashboardLoad {
-        // The cutoff gates the reads, so it is resolved before them rather than
-        // beside them.
-        let cutoff = await source.clearedThrough()
-
         async let liveAttemptsTask = source.liveAttemptIDs()
         async let liveThreadsTask = source.liveConversationIDs()
         let records = try await source.attempts(from: from, to: to, clearedThrough: cutoff)
+        let priorAttempts: [GatewayAttemptRecord]
+        let turnIDs = Set(records.compactMap(\.userMessageID))
+        if let from, !turnIDs.isEmpty {
+            priorAttempts = try await source.priorAttempts(
+                forTurnIDs: turnIDs, before: from, clearedThrough: cutoff
+            )
+        } else {
+            priorAttempts = []
+        }
         let measured = try? await source.measurementStart(clearedThrough: cutoff)
         let liveAttempts = await liveAttemptsTask
         let liveThreads = await liveThreadsTask
@@ -481,6 +552,7 @@ final class UsageDashboardModel {
 
         let summary = GatewayUsageAggregator.summarize(
             attempts: records,
+            priorAttempts: priorAttempts,
             liveAttemptIDs: liveAttempts,
             now: now,
             activityRange: chartRange,
@@ -490,6 +562,7 @@ final class UsageDashboardModel {
 
         return UsageDashboardLoad(
             records: records,
+            priorAttempts: priorAttempts,
             summary: summary,
             measurementStart: measured,
             liveAttemptIDs: liveAttempts,
@@ -499,12 +572,19 @@ final class UsageDashboardModel {
         )
     }
 
-    private func publish(_ loaded: UsageDashboardLoad, window: (from: Date?, to: Date), now: Date) {
+    private func publish(
+        _ loaded: UsageDashboardLoad,
+        range: Range,
+        window: (from: Date?, to: Date),
+        now: Date
+    ) {
+        displayedRange = range
         measurementStart = loaded.measurementStart
-        clearedThrough = loaded.clearedThrough
+        snapshotClearedThrough = loaded.clearedThrough
         liveAttemptIDs = loaded.liveAttemptIDs
         liveConversationIDs = loaded.liveConversationIDs
         records = loaded.records
+        priorAttempts = loaded.priorAttempts
         rangeStart = window.from
         rangeEnd = now
         chartRange = loaded.chartRange
@@ -548,6 +628,7 @@ final class UsageDashboardModel {
         let subset = source.filter(predicate)
         let value = GatewayUsageAggregator.summarize(
             attempts: subset,
+            priorAttempts: priorAttempts + source,
             liveAttemptIDs: liveAttemptIDs,
             now: rangeEnd ?? clock(),
             activityRange: chartRange,
@@ -596,15 +677,15 @@ final class UsageDashboardModel {
         guard !isClearingUsageHistory else { return }
         isClearingUsageHistory = true
         clearUsageHistoryError = nil
+        loadGeneration += 1
+        isLoading = true
+        loadError = nil
 
         let cutoff = await source.advanceClearedThrough(to: clock())
-        clearedThrough = cutoff
-        // Claim the cutoff so the convergence pass does not fire for it again
-        // after this reload publishes. A convergence pass still running under an
-        // OLDER cutoff is harmless — it deletes a subset of what this one does,
-        // and the primitive is idempotent.
-        purgedCutoff = cutoff
-
+        // A load can start while the settings write is awaited. Invalidate that
+        // one too before recording the new cutoff; no pre-clear load may land.
+        loadGeneration += 1
+        rememberClearCutoff(cutoff)
         do {
             _ = try await source.purgeAttempts(through: cutoff)
         } catch {
@@ -612,8 +693,6 @@ final class UsageDashboardModel {
                 localized: "settings.usage.error.clear",
                 defaultValue: "Couldn't remove every record. Conduck will finish next time you open this screen."
             )
-            // Let the next load retry the deletion rather than stranding it.
-            purgedCutoff = nil
         }
 
         isClearingUsageHistory = false
@@ -621,18 +700,39 @@ final class UsageDashboardModel {
         scheduleReload()
     }
 
-    /// Opportunistic, fail-open convergence: a cutoff this device has not
-    /// purged under yet means another device cleared and the rows are still
-    /// sitting here, excluded but stored. Detached from the load so a slow
-    /// purge never delays the numbers, and silent on failure because the
-    /// exclusion already made the screen correct.
+    /// A stale settings read or a delayed snapshot may never undo a clear.
+    private func rememberClearCutoff(_ cutoff: Date?) {
+        guard let cutoff else { return }
+        if clearedThrough == nil || cutoff > clearedThrough! {
+            clearedThrough = cutoff
+        }
+    }
+
+    /// Retry convergence on every successful load. The store posts only when
+    /// it actually deletes rows: its resulting reload may run one empty purge,
+    /// and that empty pass posts nothing, naturally ending the feedback chain.
+    /// A failure waits for another load, while an import during a running pass
+    /// queues one follow-up instead of being forgotten.
     private func scheduleConvergencePurge(through cutoff: Date) {
-        guard !isClearingUsageHistory, !isConvergencePurging, purgedCutoff != cutoff else { return }
-        purgedCutoff = cutoff
+        guard !isClearingUsageHistory else { return }
+        pendingConvergenceCutoff = max(pendingConvergenceCutoff ?? cutoff, cutoff)
+        guard !isConvergencePurging else { return }
         isConvergencePurging = true
         Task { [weak self, source] in
-            _ = try? await source.purgeAttempts(through: cutoff)
-            self?.isConvergencePurging = false
+            guard let self else { return }
+            while let cutoff = self.pendingConvergenceCutoff {
+                self.pendingConvergenceCutoff = nil
+                do {
+                    _ = try await source.purgeAttempts(through: cutoff)
+                    if !self.isClearingUsageHistory, cutoff >= (self.clearedThrough ?? cutoff) {
+                        self.clearUsageHistoryError = nil
+                    }
+                } catch {
+                    // Still excluded from reads. A subsequent load retries;
+                    // an immediate retry on failure would spin on a bad store.
+                }
+            }
+            self.isConvergencePurging = false
         }
     }
 

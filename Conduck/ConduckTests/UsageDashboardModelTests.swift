@@ -237,6 +237,102 @@ final class UsageDashboardModelTests: XCTestCase {
         XCTAssertFalse(model.isLoading, "The newest load lowered the flag; the stale one left it.")
     }
 
+    /// A picker change made while a scheduled refresh is held must invalidate
+    /// that refresh immediately, before the queued replacement can begin.
+    func testQueuedRangeChangeDoesNotPublishTheSupersededRefresh() async {
+        let source = FakeUsageDashboardSource()
+        let recent = attempt(startedAt: now.addingTimeInterval(-60))
+        let old = attempt(startedAt: now.addingTimeInterval(-10 * 86_400))
+        source.rows = [recent]
+        let model = makeModel(source)
+        await model.start()
+
+        let staleRefresh = Gate()
+        let selectedFetch = Gate()
+        source.rows = [old, recent]
+        source.onAttempts { call in
+            if call == 2 { await staleRefresh.wait() }
+            if call == 3 { await selectedFetch.wait() }
+        }
+        model.refresh()
+        await waitUntil("the scheduled refresh") { source.attemptsCallCount == 2 }
+        model.range = .week
+        XCTAssertFalse(model.hasVisibleSummary)
+        staleRefresh.open()
+        await waitUntil("the queued week fetch") { source.attemptsCallCount == 3 }
+
+        XCTAssertEqual(model.records.map(\.id), [recent.id],
+                       "The superseded month refresh must not replace the last valid snapshot.")
+        XCTAssertEqual(model.displayedRange, .month)
+        XCTAssertTrue(model.isLoading)
+        XCTAssertFalse(model.hasVisibleSummary)
+
+        selectedFetch.open()
+        await waitUntil("the selected range to publish") { !model.isLoading }
+        XCTAssertEqual(model.displayedRange, .week)
+        XCTAssertTrue(model.hasVisibleSummary)
+        XCTAssertEqual(model.records.map(\.id), [recent.id])
+    }
+
+    func testFailedRangeSwitchKeepsTheSnapshotUnderItsOriginalRangeUntilRetry() async {
+        let source = FakeUsageDashboardSource()
+        let old = attempt(startedAt: now.addingTimeInterval(-10 * 86_400))
+        let recent = attempt(startedAt: now.addingTimeInterval(-60))
+        source.rows = [old, recent]
+        let model = makeModel(source)
+        await model.start()
+        let previousStart = model.rangeStart
+        _ = model.summary(forGateway: "openclaw")
+
+        source.attemptsFailure = TestPurgeError.failed
+        model.range = .week
+        await waitUntil("the failed range switch") { model.loadError != nil }
+
+        XCTAssertEqual(model.range, .week)
+        XCTAssertEqual(model.displayedRange, .month)
+        XCTAssertFalse(model.hasVisibleSummary,
+                       "The week picker cannot expose a month of figures after a failed read.")
+        XCTAssertEqual(model.rangeStart, previousStart)
+        XCTAssertEqual(model.summary.recordedAttempts, 2)
+        XCTAssertEqual(model.summary(forGateway: "openclaw").recordedAttempts, 2)
+        XCTAssertFalse(model.isLoading)
+
+        source.attemptsFailure = nil
+        model.refresh()
+        await waitUntil("the range retry") { model.displayedRange == .week }
+        XCTAssertTrue(model.hasVisibleSummary)
+        XCTAssertNil(model.loadError)
+        XCTAssertEqual(model.records.map(\.id), [recent.id])
+        XCTAssertEqual(model.summary(forGateway: "openclaw").recordedAttempts, 1)
+    }
+
+    func testInitialReadFailureDoesNotExposeAnUnloadedSnapshot() async {
+        let source = FakeUsageDashboardSource()
+        source.attemptsFailure = TestPurgeError.failed
+        let model = makeModel(source)
+        await model.start()
+
+        XCTAssertNotNil(model.loadError)
+        XCTAssertTrue(model.hasLoaded)
+        XCTAssertFalse(model.hasVisibleSummary)
+        XCTAssertNil(model.rangeEnd)
+    }
+
+    func testSameRangeReadFailureLeavesItsSnapshotVisible() async {
+        let source = FakeUsageDashboardSource()
+        source.rows = [attempt()]
+        let model = makeModel(source)
+        await model.start()
+
+        source.attemptsFailure = TestPurgeError.failed
+        model.refresh()
+        await waitUntil("the failed same-range refresh") { model.loadError != nil }
+
+        XCTAssertTrue(model.hasVisibleSummary)
+        XCTAssertEqual(model.displayedRange, model.range)
+        XCTAssertEqual(model.summary.recordedAttempts, 1)
+    }
+
     // MARK: - 3. The clear cutoff
 
     /// The cutoff has to reach BOTH reads — the attempts fetch and the
@@ -269,6 +365,8 @@ final class UsageDashboardModelTests: XCTestCase {
         XCTAssertEqual(
             source.attemptsCalls.map(\.clearedThrough), [cutoff],
             "The attempts read must carry the cutoff.")
+        XCTAssertEqual(source.priorAttemptsCalls.map(\.clearedThrough), [cutoff],
+                       "Retry context must not resurrect attempts the user cleared.")
         XCTAssertEqual(
             source.measurementStartCalls, [cutoff],
             "The measurement-start read must carry the same cutoff — a caption computed without "
@@ -324,8 +422,8 @@ final class UsageDashboardModelTests: XCTestCase {
             source.attemptsCalls.last?.clearedThrough, now,
             "The reload reads under the new cutoff.")
         XCTAssertEqual(
-            source.purgeCutoffs, [now],
-            "The clear claims its own cutoff, so the convergence pass must not fire for it again.")
+            source.purgeCutoffs, [now, now],
+            "The post-clear load checks convergence once; the empty pass emits no change post.")
         XCTAssertEqual(model.summary.recordedAttempts, 0, "Everything was at or before the cutoff.")
     }
 
@@ -340,13 +438,16 @@ final class UsageDashboardModelTests: XCTestCase {
         source.rows = [attempt()]
         let model = makeModel(source)
         await model.start()
+        await waitUntil("initial convergence to finish") { source.completedPurgeCount == 1 }
 
         await model.clearUsageHistory()
+        await waitUntil("post-clear convergence to finish") { source.completedPurgeCount == 3 }
 
         XCTAssertEqual(
             model.clearedThrough, newerCutoff,
             "The cutoff never regresses, and the model publishes the value that took effect.")
-        XCTAssertEqual(source.purgeCutoffs, [newerCutoff], "The purge runs under the kept cutoff.")
+        XCTAssertEqual(source.purgeCutoffs, [newerCutoff, newerCutoff, newerCutoff],
+                       "Both explicit deletion and convergence use the kept cutoff.")
     }
 
     /// A purge that throws leaves CORRECT numbers behind it — the rows are
@@ -372,31 +473,141 @@ final class UsageDashboardModelTests: XCTestCase {
         }
         XCTAssertEqual(
             source.purgeCutoffs, [now, now],
-            "The failed clear released its claim on the cutoff so the next load retries it.")
+            "The next load retries the same cutoff after the failed clear.")
     }
 
-    /// A cutoff this device has not purged under yet means ANOTHER device
-    /// cleared. The convergence pass runs once for it and then stops: the purge
-    /// posts its own change notification, and a pass that re-fired on every
-    /// publish would be an endless reload → purge → reload loop.
-    func testTheConvergencePurgeFiresOncePerCutoffAndNotOnEveryLoad() async {
+    func testFailedConvergenceRetriesTheSameCutoffOnTheNextLoad() async {
         let cutoff = now.addingTimeInterval(-7_200)
+        let recent = attempt(startedAt: now.addingTimeInterval(-60))
         let source = FakeUsageDashboardSource()
         source.cutoff = cutoff
-        source.rows = [attempt(startedAt: now.addingTimeInterval(-60))]
+        source.rows = [attempt(startedAt: cutoff), recent]
+        source.purgeFailure = TestPurgeError.failed
         let model = makeModel(source)
 
         await model.start()
-        await waitUntil("the convergence purge") { source.purgeCutoffs == [cutoff] }
-
-        model.refresh()
-        await waitUntil("the second load") { source.attemptsCallCount == 2 }
+        await waitUntil("the failed convergence pass") { source.completedPurgeCount == 1 }
         await settle()
+        XCTAssertEqual(source.purgeCutoffs, [cutoff], "Failure must not trigger a tight retry loop.")
+        XCTAssertEqual(source.rows.count, 2)
+        XCTAssertEqual(model.records.map(\.id), [recent.id], "Cutoff exclusion works despite failure.")
 
-        XCTAssertEqual(
-            source.purgeCutoffs, [cutoff],
-            "One purge per cutoff. Re-firing it on every publish would loop against the purge's "
-                + "own change post.")
+        source.purgeFailure = nil
+        model.refresh()
+        await waitUntil("the successful retry") { source.completedPurgeCount == 2 }
+        XCTAssertEqual(source.purgeCutoffs, [cutoff, cutoff])
+        XCTAssertEqual(source.rows.map(\.id), [recent.id])
+    }
+
+    func testLateImportedClearedRowsArePurgedWithoutAFeedbackLoop() async {
+        let cutoff = now.addingTimeInterval(-7_200)
+        let recent = attempt(startedAt: now.addingTimeInterval(-60))
+        let source = FakeUsageDashboardSource()
+        source.cutoff = cutoff
+        source.rows = [recent]
+        source.purgePostsChanges = true
+        let model = makeModel(source)
+
+        await model.start()
+        await waitUntil("the initially empty convergence pass") { source.completedPurgeCount == 1 }
+        source.rows = [attempt(startedAt: cutoff), recent]
+        NotificationCenter.default.post(name: .conversationsDidChange, object: nil)
+
+        await waitUntil("late-row deletion and its empty verification pass") {
+            source.completedPurgeCount == 3
+        }
+        await settle()
+        XCTAssertEqual(source.rows.map(\.id), [recent.id])
+        XCTAssertEqual(model.records.map(\.id), [recent.id])
+        XCTAssertEqual(source.attemptsCallCount, 3,
+                       "One import reload and one deletion reload; the empty purge ends the chain.")
+        XCTAssertEqual(source.purgeCutoffs, [cutoff, cutoff, cutoff])
+    }
+
+    func testNewerCutoffArrivingDuringConvergenceIsNotLost() async {
+        let firstCutoff = now.addingTimeInterval(-7_200)
+        let laterCutoff = now.addingTimeInterval(-3_600)
+        let source = FakeUsageDashboardSource()
+        source.cutoff = firstCutoff
+        source.rows = [attempt(startedAt: laterCutoff)]
+        let firstPurge = Gate()
+        source.onPurge { cutoff in
+            if cutoff == firstCutoff { await firstPurge.wait() }
+        }
+        let model = makeModel(source)
+        await model.start()
+        await waitUntil("the held first purge") { source.purgeCutoffs == [firstCutoff] }
+
+        source.cutoff = laterCutoff
+        model.refresh()
+        await waitUntil("the new cutoff to publish") { model.clearedThrough == laterCutoff }
+        firstPurge.open()
+        await waitUntil("the queued newer purge") { source.completedPurgeCount == 2 }
+
+        XCTAssertEqual(source.purgeCutoffs, [firstCutoff, laterCutoff])
+        XCTAssertTrue(source.rows.isEmpty)
+    }
+
+    func testClearHidesPreClearSnapshotWhenTheReplacementReadFails() async {
+        let source = FakeUsageDashboardSource()
+        source.rows = [attempt()]
+        let model = makeModel(source)
+        await model.start()
+        XCTAssertTrue(model.hasVisibleSummary)
+
+        source.attemptsFailure = TestPurgeError.failed
+        await model.clearUsageHistory()
+        await waitUntil("the failed post-clear read") { model.loadError != nil }
+
+        XCTAssertTrue(source.rows.isEmpty, "Deletion itself succeeded.")
+        XCTAssertEqual(model.clearedThrough, now)
+        XCTAssertFalse(model.hasVisibleSummary,
+                       "A failed reread must not expose the snapshot the user just cleared.")
+    }
+
+    func testAnOldCutoffLoadCannotRepublishAfterClearWhenTheReplacementFails() async {
+        let source = FakeUsageDashboardSource()
+        source.rows = [attempt()]
+        let model = makeModel(source)
+        await model.start()
+
+        let oldRead = Gate()
+        source.captureAttemptsBeforeHook = true
+        source.onAttempts { call in
+            if call == 2 { await oldRead.wait() }
+        }
+        model.refresh()
+        await waitUntil("the captured pre-clear read") { source.attemptsCallCount == 2 }
+        source.attemptsFailure = TestPurgeError.failed
+
+        await model.clearUsageHistory()
+        XCTAssertEqual(model.clearedThrough, now)
+        XCTAssertFalse(model.hasVisibleSummary, "Cutoff advancement invalidates the visible snapshot.")
+        oldRead.open()
+        await waitUntil("the failed replacement after the old read") { model.loadError != nil }
+
+        XCTAssertEqual(source.attemptsCallCount, 3)
+        XCTAssertEqual(model.clearedThrough, now,
+                       "The captured nil cutoff cannot overwrite the user's newer clear.")
+        XCTAssertFalse(model.hasVisibleSummary,
+                       "Neither the old load nor the failed replacement may expose cleared figures.")
+    }
+
+    func testRemoteClearHidesThePreviousSnapshotWhenReloadFails() async {
+        let source = FakeUsageDashboardSource()
+        source.rows = [attempt()]
+        let model = makeModel(source)
+        await model.start()
+
+        source.cutoff = now
+        source.attemptsFailure = TestPurgeError.failed
+        NotificationCenter.default.post(name: .settingsDidChangeRemotely, object: nil)
+        await waitUntil("the failed read after the remote clear") { model.loadError != nil }
+
+        XCTAssertEqual(model.clearedThrough, now,
+                       "The remote cutoff must take effect even when loading the ledger fails.")
+        XCTAssertFalse(model.hasVisibleSummary,
+                       "Last known figures cannot remain visible after another device clears them.")
     }
 
     // MARK: - 5. Thread navigation
@@ -520,6 +731,40 @@ final class UsageDashboardModelTests: XCTestCase {
             "And the re-derived value describes the NEW range.")
     }
 
+    func testWindowAndDeviceSlicesKeepEarlierRetryHistoryOutOfTheirActivityCounts() async {
+        let turn = UUID()
+        let first = attempt(turn: turn, startedAt: now.addingTimeInterval(-10 * 86_400),
+                            outcome: .failed, deviceClass: "iphone")
+        let retry = attempt(turn: turn, startedAt: now.addingTimeInterval(-60), deviceClass: "mac")
+        let unrelated = attempt(startedAt: now.addingTimeInterval(-12 * 86_400), outcome: .failed)
+        let source = FakeUsageDashboardSource()
+        source.rows = [unrelated, first, retry]
+        let model = makeModel(source)
+        model.range = .week
+        await model.start()
+
+        XCTAssertEqual(model.records.map(\.id), [retry.id])
+        XCTAssertEqual(model.summary.recordedAttempts, 1)
+        XCTAssertEqual(model.summary.retriedTurns, 1)
+        XCTAssertEqual(model.summary.firstAttemptDeliveredTurns, 0)
+        XCTAssertEqual(model.summary.retriedTurnsRecovered, 1)
+        XCTAssertEqual(source.priorAttemptsCalls.first?.ids, [turn])
+
+        let mac = model.summary(forDevice: .mac)
+        XCTAssertEqual(mac.recordedAttempts, 1)
+        XCTAssertEqual(mac.retriedTurns, 1)
+        XCTAssertEqual(mac.retriedTurnsRecovered, 1)
+        XCTAssertEqual(mac.firstAttemptDeliveredTurns, 0)
+
+        model.range = .month
+        await waitUntil("the month range") { model.displayedRange == .month && !model.isLoading }
+        let macInMonth = model.summary(forDevice: .mac)
+        XCTAssertEqual(macInMonth.recordedAttempts, 1)
+        XCTAssertEqual(macInMonth.retriedTurns, 1,
+                       "The first attempt is now inside the range but outside the device slice.")
+        XCTAssertEqual(macInMonth.firstAttemptDeliveredTurns, 0)
+    }
+
     // MARK: - 7. Deep link
 
     /// The hosts already close Settings on this notification, so the model's
@@ -608,6 +853,7 @@ private final class FakeUsageDashboardSource: UsageDashboardSource, @unchecked S
     enum Event: Equatable {
         case readCutoff
         case attempts(from: Date?, to: Date?, clearedThrough: Date?)
+        case priorAttempts(ids: Set<UUID>, before: Date, clearedThrough: Date?)
         case measurementStart(clearedThrough: Date?)
         case liveAttemptIDs
         case liveConversationIDs
@@ -622,6 +868,10 @@ private final class FakeUsageDashboardSource: UsageDashboardSource, @unchecked S
     private var storedLiveAttempts: Set<UUID> = []
     private var storedEvents: [Event] = []
     private var storedPurgeFailure: Error?
+    private var storedAttemptsFailure: Error?
+    private var storedCaptureAttemptsBeforeHook = false
+    private var storedPurgePostsChanges = false
+    private var completedPurges = 0
     private var attemptsHook: (@Sendable (Int) async -> Void)?
     private var purgeHook: (@Sendable (Date) async -> Void)?
     private var attempts = 0
@@ -651,6 +901,23 @@ private final class FakeUsageDashboardSource: UsageDashboardSource, @unchecked S
     var purgeFailure: Error? {
         get { lock.lock(); defer { lock.unlock() }; return storedPurgeFailure }
         set { lock.lock(); storedPurgeFailure = newValue; lock.unlock() }
+    }
+
+    var attemptsFailure: Error? {
+        get { lock.lock(); defer { lock.unlock() }; return storedAttemptsFailure }
+        set { lock.lock(); storedAttemptsFailure = newValue; lock.unlock() }
+    }
+
+    /// Models a store read that materialized rows before its continuation is
+    /// delivered back to the screen model.
+    var captureAttemptsBeforeHook: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return storedCaptureAttemptsBeforeHook }
+        set { lock.lock(); storedCaptureAttemptsBeforeHook = newValue; lock.unlock() }
+    }
+
+    var purgePostsChanges: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return storedPurgePostsChanges }
+        set { lock.lock(); storedPurgePostsChanges = newValue; lock.unlock() }
     }
 
     /// Runs inside `attempts`, with the 1-based call index — the seam the race
@@ -690,6 +957,20 @@ private final class FakeUsageDashboardSource: UsageDashboardSource, @unchecked S
         }
     }
 
+    var priorAttemptsCalls: [(ids: Set<UUID>, before: Date, clearedThrough: Date?)] {
+        events.compactMap {
+            if case let .priorAttempts(ids, before, clearedThrough) = $0 {
+                return (ids, before, clearedThrough)
+            }
+            return nil
+        }
+    }
+
+    var completedPurgeCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return completedPurges
+    }
+
     var measurementStartCalls: [Date?] {
         events.compactMap {
             if case let .measurementStart(clearedThrough) = $0 { return clearedThrough }
@@ -714,12 +995,29 @@ private final class FakeUsageDashboardSource: UsageDashboardSource, @unchecked S
         let call = attempts
         storedEvents.append(.attempts(from: from, to: to, clearedThrough: clearedThrough))
         let hook = attemptsHook
+        let failure = storedAttemptsFailure
+        let captureBeforeHook = storedCaptureAttemptsBeforeHook
         lock.unlock()
+        let capturedRows = captureBeforeHook
+            ? visibleRows(from: from, to: to, clearedThrough: clearedThrough) : nil
 
         if let hook { await hook(call) }
+        if let failure { throw failure }
 
-        return visibleRows(from: from, to: to, clearedThrough: clearedThrough)
+        return (capturedRows ?? visibleRows(from: from, to: to, clearedThrough: clearedThrough))
             .sorted { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }
+    }
+
+    func priorAttempts(
+        forTurnIDs ids: Set<UUID>, before: Date, clearedThrough: Date?
+    ) async throws -> [GatewayAttemptRecord] {
+        lock.withLock {
+            storedEvents.append(.priorAttempts(ids: ids, before: before, clearedThrough: clearedThrough))
+        }
+        return visibleRows(from: nil, to: before, clearedThrough: clearedThrough).filter { row in
+            guard let turn = row.userMessageID, let started = row.startedAt else { return false }
+            return ids.contains(turn) && started < before
+        }
     }
 
     func measurementStart(clearedThrough: Date?) async throws -> Date? {
@@ -769,6 +1067,7 @@ private final class FakeUsageDashboardSource: UsageDashboardSource, @unchecked S
 
         lock.lock()
         if let failure = storedPurgeFailure {
+            completedPurges += 1
             lock.unlock()
             throw failure
         }
@@ -778,7 +1077,14 @@ private final class FakeUsageDashboardSource: UsageDashboardSource, @unchecked S
         }
         let removed = storedRows.count - kept.count
         storedRows = kept
+        let postsChanges = storedPurgePostsChanges
+        completedPurges += 1
         lock.unlock()
+        if postsChanges && removed > 0 {
+            await MainActor.run {
+                NotificationCenter.default.post(name: .conversationsDidChange, object: nil)
+            }
+        }
         return removed
     }
 

@@ -42,7 +42,12 @@ struct UsageAllThreadsView: View {
 
     var body: some View {
         PlatformSettingsForm {
-            if ranking.threads.isEmpty {
+            if let loadError = model.loadError {
+                UsageLoadSections.error(loadError, retry: model.refresh)
+            }
+            if !model.hasVisibleSummary {
+                if model.loadError == nil { UsageLoadSections.loading }
+            } else if ranking.threads.isEmpty {
                 emptySection
             } else {
                 threadsSection
@@ -74,7 +79,7 @@ struct UsageAllThreadsView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .settingsCardPassiveRow()
         } footer: {
-            Text(UsageDetailFormat.rangeCaption(for: model.range))
+            Text(UsageDetailFormat.rangeCaption(for: model.displayedRange))
         }
     }
 
@@ -89,7 +94,7 @@ struct UsageAllThreadsView: View {
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text(UsageDetailFormat.threadBasisFooter(ranking.basis))
-                Text(UsageDetailFormat.rangeCaption(for: model.range))
+                Text(UsageDetailFormat.rangeCaption(for: model.displayedRange))
             }
         }
     }

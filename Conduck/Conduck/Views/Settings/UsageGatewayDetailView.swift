@@ -14,9 +14,9 @@
 // the overview obeys holds here for free and nothing can drift between the two
 // screens.
 //
-// THE RANGE IS NOT RE-PICKABLE HERE. A second picker on a pushed screen invites
-// two different windows to be on screen at once; the active one is stated as a
-// caption instead, and changing it is a trip back to the overview.
+// The range picker is shared with the overview. A changed range shows its
+// loading/error state until its own snapshot arrives; retained figures always
+// carry the range under which they were measured.
 //
 // A REPORTED MODEL IS NEVER A MISMATCH. When a gateway names the model it
 // actually served, that row is informational and carries its own coverage. A
@@ -95,7 +95,12 @@ struct UsageGatewayDetailView: View {
             // an empty range is escaped in place, not by walking back.
             UsageRangeSection(model: model)
 
-            if summary.isEmpty {
+            if let loadError = model.loadError {
+                UsageLoadSections.error(loadError, retry: model.refresh)
+            }
+            if !model.hasVisibleSummary {
+                if model.loadError == nil { UsageLoadSections.loading }
+            } else if summary.isEmpty {
                 emptySection
             } else {
                 activitySection
@@ -139,7 +144,7 @@ struct UsageGatewayDetailView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .settingsCardPassiveRow()
         } footer: {
-            Text(UsageDetailFormat.rangeCaption(for: model.range))
+            Text(UsageDetailFormat.rangeCaption(for: model.displayedRange))
         }
     }
 
@@ -296,7 +301,7 @@ struct UsageGatewayDetailView: View {
                 }
                 .settingsCardPassiveRow()
 
-                Text(UsageDetailFormat.sampleCaption(count: timing.sampleCount, range: model.range))
+                Text(UsageDetailFormat.sampleCaption(count: timing.sampleCount, range: model.displayedRange))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
                     .settingsCardPassiveRow()

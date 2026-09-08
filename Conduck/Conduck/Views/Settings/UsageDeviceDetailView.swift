@@ -13,10 +13,9 @@
 // lives once in the aggregator and this screen only reads it — see
 // `UsageDeviceBucket`.
 //
-// NO TOKENS HERE, and that is deliberate rather than an omission. Tokens are a
-// property of the conversation and the gateway that answered it, not of the
-// keyboard it was typed on; a per-device token total invites a comparison
-// ("the Mac costs more than the phone") that says nothing about either device.
+// The shared chart can show recorded tokens for this device's attempts; there
+// is no separate token-detail card. Neither that volume nor the device split
+// claims a monetary cost or a property of the hardware itself.
 //
 // CONTENT-FREE, AND THAT IS RELEASE-BLOCKING. The device names on this screen
 // are the app's own words for a hardware CLASS — never the name the user gave a
@@ -49,7 +48,12 @@ struct UsageDeviceDetailView: View {
             // an empty range is escaped in place, not by walking back.
             UsageRangeSection(model: model)
 
-            if summary.isEmpty {
+            if let loadError = model.loadError {
+                UsageLoadSections.error(loadError, retry: model.refresh)
+            }
+            if !model.hasVisibleSummary {
+                if model.loadError == nil { UsageLoadSections.loading }
+            } else if summary.isEmpty {
                 emptySection
             } else {
                 activitySection
@@ -86,7 +90,7 @@ struct UsageDeviceDetailView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .settingsCardPassiveRow()
         } footer: {
-            Text(UsageDetailFormat.rangeCaption(for: model.range))
+            Text(UsageDetailFormat.rangeCaption(for: model.displayedRange))
         }
     }
 
@@ -233,7 +237,7 @@ struct UsageDeviceDetailView: View {
                 }
                 .settingsCardPassiveRow()
 
-                Text(UsageDetailFormat.sampleCaption(count: timing.sampleCount, range: model.range))
+                Text(UsageDetailFormat.sampleCaption(count: timing.sampleCount, range: model.displayedRange))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
                     .settingsCardPassiveRow()

@@ -1222,6 +1222,57 @@ final class GatewayAttemptStoreTests: XCTestCase {
 
     // MARK: - Range reads
 
+    func testPriorAttemptsRespectTurnIDsExclusiveRangeStartAndClearCutoff() async throws {
+        let store = makeStore()
+        let seed = try await seedTurn(in: store)
+        let boundary = Date(timeIntervalSince1970: 1_800_000_000)
+        let cutoff = boundary.addingTimeInterval(-100)
+        var starts: [UUID: Date] = [:]
+        var expected: [UUID] = []
+        for offset in [-101.0, -100, -99, -1, 0, 1] {
+            let draft = makeDraft(conversationID: seed.conversationID, userMessageID: seed.userMessageID)
+            _ = try await openAttempt(store, draft)
+            starts[draft.attemptID] = boundary.addingTimeInterval(offset)
+            if offset > -100 && offset < 0 { expected.append(draft.attemptID) }
+        }
+        let unrelated = makeDraft(conversationID: seed.conversationID, userMessageID: UUID())
+        _ = try await openAttempt(store, unrelated)
+        starts[unrelated.attemptID] = boundary.addingTimeInterval(-10)
+        let undated = makeDraft(conversationID: seed.conversationID, userMessageID: seed.userMessageID)
+        _ = try await openAttempt(store, undated)
+        try await store.debugClearGatewayAttemptStart(attemptID: undated.attemptID)
+        await store.debugBackdateGatewayAttemptStarts(starts)
+
+        // Scalar correlation must still work after the conversation is deleted.
+        try await store.deleteConversation(id: seed.conversationID)
+        let context = try await store.gatewayAttempts(
+            forTurnIDs: [seed.userMessageID], before: boundary, clearedThrough: cutoff)
+        XCTAssertEqual(context.map(\.id), expected)
+        let empty = try await store.gatewayAttempts(forTurnIDs: [], before: boundary)
+        XCTAssertTrue(empty.isEmpty, "An empty turn selection must not fetch the entire ledger.")
+    }
+
+    func testPriorAttemptLookupIncludesEveryTurnAcrossQueryBatches() async throws {
+        let store = makeStore()
+        var turnIDs: Set<UUID> = []
+        var attemptIDs: Set<UUID> = []
+        var starts: [UUID: Date] = [:]
+        let boundary = Date(timeIntervalSince1970: 1_800_000_000)
+        for _ in 0...ConversationStore.gatewayAttemptHistoryTurnBatchSize {
+            let turn = UUID()
+            let draft = makeDraft(conversationID: UUID(), userMessageID: turn)
+            _ = try await openAttempt(store, draft)
+            turnIDs.insert(turn)
+            attemptIDs.insert(draft.attemptID)
+            starts[draft.attemptID] = boundary.addingTimeInterval(-1)
+        }
+        await store.debugBackdateGatewayAttemptStarts(starts)
+
+        let context = try await store.gatewayAttempts(forTurnIDs: turnIDs, before: boundary)
+        XCTAssertEqual(Set(context.map(\.id)), attemptIDs)
+        XCTAssertEqual(context.count, attemptIDs.count, "Batching must neither omit nor duplicate an attempt.")
+    }
+
     func testFetchBoundsAttemptsOnTheirStartInstant() async throws {
         let store = makeStore()
         let seed = try await seedTurn(in: store)

@@ -134,7 +134,7 @@ enum UsageRoute: Hashable {
 /// be laid out three different ways without the tiles being written three
 /// times. `id` is a stable slug rather than the position: a conditional tile
 /// changes the count, and index identity would then re-key every tile after it.
-private struct UsageActivityStat: Identifiable {
+struct UsageActivityStat: Identifiable {
     let id: String
     let value: String
     let label: LocalizedStringResource
@@ -173,6 +173,47 @@ struct UsageRangeSection: View {
             // the stack.
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
+        }
+    }
+}
+
+// The same transient rows on every screen that can change the range. Keeping
+// these as section builders preserves the Mac form's section/row structure.
+enum UsageLoadSections {
+    /// A fetch that threw. Each host keeps the previous figures only while
+    /// their range and clear cutoff still match the requested snapshot.
+    static func error(_ message: String, retry: @escaping () -> Void) -> some View {
+        Section {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(AppColors.warning)
+                Text(message)
+                    .foregroundStyle(AppColors.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 12)
+                Button {
+                    retry()
+                } label: {
+                    Text(LocalizedStringResource(
+                        "settings.usage.error.retry", defaultValue: "Try Again"))
+                }
+                .buttonStyle(.bordered)
+            }
+            .settingsCardPassiveRow()
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    static var loading: some View {
+        Section {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(LocalizedStringResource(
+                    "settings.usage.loading", defaultValue: "Reading your history…"))
+                    .foregroundStyle(AppColors.textSecondary)
+            }
+            .settingsCardPassiveRow()
         }
     }
 }
@@ -233,11 +274,11 @@ struct UsageDashboardContent: View {
             UsageRangeSection(model: model)
 
             if let loadError = model.loadError {
-                errorSection(loadError)
+                UsageLoadSections.error(loadError, retry: model.refresh)
             }
 
-            if !model.hasLoaded {
-                loadingSection
+            if !model.hasVisibleSummary {
+                if model.loadError == nil { UsageLoadSections.loading }
             } else if !model.hasAnyRecordedAttempts {
                 // A LOAD THAT THREW MAY NOT MAKE THIS CLAIM. `hasAnyRecordedAttempts`
                 // is assigned from the fetch, so it is still at its initial `false`
@@ -279,7 +320,7 @@ struct UsageDashboardContent: View {
                 }
             }
 
-            if model.hasLoaded {
+            if model.hasVisibleSummary, model.loadError == nil || model.hasAnyRecordedAttempts {
                 coverageSection
             }
         }
@@ -309,44 +350,6 @@ struct UsageDashboardContent: View {
     }
 
     // MARK: - Transient states
-
-    /// A fetch that threw. The previous summary stays on screen underneath: a
-    /// transient Core Data failure is a worse reason to blank a chart than to
-    /// leave one a few seconds stale.
-    private func errorSection(_ message: String) -> some View {
-        Section {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(AppColors.warning)
-                Text(message)
-                    .foregroundStyle(AppColors.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 12)
-                Button {
-                    model.refresh()
-                } label: {
-                    Text(LocalizedStringResource(
-                        "settings.usage.error.retry", defaultValue: "Try Again"))
-                }
-                .buttonStyle(.bordered)
-            }
-            .settingsCardPassiveRow()
-            .accessibilityElement(children: .combine)
-        }
-    }
-
-    private var loadingSection: some View {
-        Section {
-            HStack(spacing: 10) {
-                ProgressView()
-                    .controlSize(.small)
-                Text(LocalizedStringResource(
-                    "settings.usage.loading", defaultValue: "Reading your history…"))
-                    .foregroundStyle(AppColors.textSecondary)
-            }
-            .settingsCardPassiveRow()
-        }
-    }
 
     /// Nothing has EVER been recorded. Distinct from an empty range, and the
     /// distinction matters: this user has no measurement to look at yet, rather
@@ -419,17 +422,17 @@ struct UsageDashboardContent: View {
     }
 
     private var statRow: some View {
-        statTileLayout(activityStats)
+        statTileLayout(Self.activityStats(for: model.summary))
             .settingsCardPassiveRow()
     }
 
     /// Turns · Completed · Conversations · Tokens. The fourth tile is
     /// CONDITIONAL, matching how every other absent figure on this screen is
     /// handled: a gateway that reports no usage leaves the tile out rather than
-    /// standing an em dash where a number belongs, which would read as a broken
-    /// measurement rather than a gateway that never promised one.
-    private var activityStats: [UsageActivityStat] {
-        let summary = model.summary
+    /// standing an em dash where a number belongs. The token figure uses the
+    /// same per-attempt evidence as the chart: a reported total, or both input
+    /// and output when no total was supplied.
+    static func activityStats(for summary: GatewayUsageSummary) -> [UsageActivityStat] {
         var tiles: [UsageActivityStat] = [
             UsageActivityStat(
                 id: "turns",
@@ -463,38 +466,22 @@ struct UsageDashboardContent: View {
                     defaultValue: "\(summary.threadsWithUsage) conversations with recorded usage")
             )
         ]
-        if let tokens = activityTokenTotal {
+        if let tokens = summary.usableTokenTotal {
             tiles.append(UsageActivityStat(
                 id: "tokens",
                 // COMPACT on the face, exact in the label a screen reader
                 // speaks: four columns cannot hold "1,284,930", and a tile is
-                // an at-a-glance figure — the Tokens card below carries the
-                // full number and its coverage.
-                value: tokens.value.formatted(.number.notation(.compactName)),
+                // an at-a-glance figure. The Tokens card separately details
+                // the provider-reported fields and their coverage.
+                value: tokens.formatted(.number.notation(.compactName)),
                 label: LocalizedStringResource(
                     "settings.usage.stat.tokens", defaultValue: "Tokens"),
-                accessibility: tokens.isReported
-                    ? LocalizedStringResource(
-                        "settings.usage.stat.tokens.a11y.reported",
-                        defaultValue: "\(tokens.value.formatted(.number)) tokens, reported by your gateway")
-                    : LocalizedStringResource(
-                        "settings.usage.stat.tokens.a11y.components",
-                        defaultValue: "\(tokens.value.formatted(.number)) tokens, input plus output added up")
+                accessibility: LocalizedStringResource(
+                    "settings.usage.stat.tokens.a11y.usable",
+                    defaultValue: "\(tokens.formatted(.number)) tokens, using reported totals or input plus output")
             ))
         }
         return tiles
-    }
-
-    /// THE SAME RULE THE TOKENS CARD USES, because the tile and the card sit on
-    /// one screen showing one range: a gateway-reported total wins, and only
-    /// where there is none does the client's own sum of the components stand in
-    /// — flagged as such in the accessibility label, never presented as the
-    /// gateway's own number.
-    private var activityTokenTotal: (value: Int64, isReported: Bool)? {
-        let tokens = model.summary.tokens
-        if let total = tokens.reportedTotal.sum { return (total, true) }
-        if let components = tokens.calculatedKnownComponents { return (components, false) }
-        return nil
     }
 
     /// Three layouts for one row of tiles: stacked at accessibility sizes, two
@@ -1906,7 +1893,7 @@ struct UsageDashboardContent: View {
     }
 
     private var rangeCaption: String {
-        switch model.range {
+        switch model.displayedRange {
         case .week:
             return String(localized: "settings.usage.rangeCaption.week",
                           defaultValue: "last \(UsageDashboardModel.Range.weekDays) days")

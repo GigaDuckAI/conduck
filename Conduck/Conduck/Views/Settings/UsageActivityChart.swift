@@ -1244,8 +1244,8 @@ enum UsageActivitySentence {
 /// The x axis is CATEGORICAL over period names rather than numeric over dates:
 /// the periods are discrete bars, and a continuous date axis would invite
 /// VoiceOver to interpolate between two weeks that have nothing between them.
-private struct UsageActivityChartDescriptor: AXChartDescriptorRepresentable {
-    struct Point {
+struct UsageActivityChartDescriptor: AXChartDescriptorRepresentable {
+    private struct Point {
         let category: String
         let value: Double
         let label: String
@@ -1287,16 +1287,6 @@ private struct UsageActivityChartDescriptor: AXChartDescriptorRepresentable {
             title: axisName,
             categoryOrder: points.map(\.category)
         )
-        // A zero-height upper bound would make every point sit on the floor of
-        // an axis with no extent; one keeps the range non-degenerate for a
-        // metric that measured nothing.
-        let upper = max(points.map(\.value).max() ?? 0, 1)
-        let yAxis = AXNumericDataAxisDescriptor(
-            title: valueName,
-            range: 0...upper,
-            gridlinePositions: [],
-            valueDescriptionProvider: { $0.formatted(.number.precision(.fractionLength(0))) }
-        )
         let series = AXDataSeriesDescriptor(
             name: seriesName,
             isContinuous: false,
@@ -1308,7 +1298,7 @@ private struct UsageActivityChartDescriptor: AXChartDescriptorRepresentable {
             title: title,
             summary: nil,
             xAxis: xAxis,
-            yAxis: yAxis,
+            yAxis: valueAxis(for: points),
             additionalAxes: [],
             series: [series]
         )
@@ -1321,6 +1311,10 @@ private struct UsageActivityChartDescriptor: AXChartDescriptorRepresentable {
             title: axisName,
             categoryOrder: points.map(\.category)
         )
+        // SwiftUI reuses this descriptor when the measure or range changes.
+        // Its units and bounds must follow the new points, including when a
+        // smaller range lowers the maximum or leaves only measured zeroes.
+        descriptor.yAxis = valueAxis(for: points)
         descriptor.series = [
             AXDataSeriesDescriptor(
                 name: seriesName,
@@ -1330,5 +1324,18 @@ private struct UsageActivityChartDescriptor: AXChartDescriptorRepresentable {
                 }
             )
         ]
+    }
+
+    private func valueAxis(for points: [Point]) -> AXNumericDataAxisDescriptor {
+        // A zero-height upper bound would make every point sit on the floor of
+        // an axis with no extent; one keeps the range non-degenerate for a
+        // metric that measured nothing. Creation and updates use the same rule.
+        let upper = max(points.map(\.value).max() ?? 0, 1)
+        return AXNumericDataAxisDescriptor(
+            title: valueName,
+            range: 0...upper,
+            gridlinePositions: [],
+            valueDescriptionProvider: { $0.formatted(.number.precision(.fractionLength(0))) }
+        )
     }
 }

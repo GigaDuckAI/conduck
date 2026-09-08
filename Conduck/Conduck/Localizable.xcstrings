@@ -17669,6 +17669,17 @@
         }
       }
     },
+    "settings.usage.stat.tokens.a11y.usable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ tokens, using reported totals or input plus output"
+          }
+        }
+      }
+    },
     "settings.usage.stat.turns" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {

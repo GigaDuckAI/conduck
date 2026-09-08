@@ -290,7 +290,12 @@ struct UsageIncidentListView: View {
 
     var body: some View {
         PlatformSettingsForm {
-            if groups.isEmpty {
+            if let loadError = model.loadError {
+                UsageLoadSections.error(loadError, retry: model.refresh)
+            }
+            if !model.hasVisibleSummary {
+                if model.loadError == nil { UsageLoadSections.loading }
+            } else if groups.isEmpty {
                 emptySection
             } else {
                 listSection
@@ -321,7 +326,7 @@ struct UsageIncidentListView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .settingsCardPassiveRow()
         } footer: {
-            Text(UsageDetailFormat.rangeCaption(for: model.range))
+            Text(UsageDetailFormat.rangeCaption(for: model.displayedRange))
         }
     }
 
@@ -372,7 +377,7 @@ struct UsageIncidentListView: View {
                         \(UsageGatewayLabel.name(for: ref, roster: gatewayRoster)).
                         """))
             }
-            Text(UsageDetailFormat.rangeCaption(for: model.range))
+            Text(UsageDetailFormat.rangeCaption(for: model.displayedRange))
         }
     }
 

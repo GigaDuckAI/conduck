@@ -39,6 +39,10 @@
 // stored terminal outcome. First-try delivery and retry recovery divide by it,
 // because a turn still being retried has not yet delivered or failed to, and
 // leaving it in either denominator would report an outcome it has not had.
+// Prior attempts can supply the beginning of a turn whose retry is inside the
+// selected range or device. That context informs retry metrics only: it never
+// contributes activity, token volume or outcomes to the selected slice, and an
+// attempt after the slice's latest try never rewrites that slice's ending.
 //
 // THE ACTIVITY BARS FOLD BY SPAN, AND EVERY FOLDED FIGURE IS RECOMPUTED FROM
 // THE RECORDS. Ninety daily bars is a grey smear on a phone, so a wide window
@@ -87,8 +91,8 @@ import Foundation
 /// once. Value type, `Equatable`, so a recompute that changes nothing can be
 /// dropped rather than repainting the screen.
 nonisolated struct GatewayUsageSummary: Sendable, Equatable {
-    /// Attempts whose ledger insert SUCCEEDED and whose conversation is still
-    /// retained. Never called "all dispatches": capture is fail-open, so a
+    /// Attempts whose ledger insert SUCCEEDED, including deleted conversations.
+    /// Never called "all dispatches": capture is fail-open, so a
     /// dispatch that could not be recorded still happened.
     let recordedAttempts: Int
     /// Distinct user turns with at least one recorded attempt. Retries do not
@@ -96,7 +100,8 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
     let attemptedTurns: Int
     /// Distinct user turns with at least one SUCCEEDED attempt.
     let completedTurns: Int
-    /// Distinct user turns with more than one recorded attempt.
+    /// Distinct scoped turns with more than one recorded attempt by their
+    /// latest scoped try, including earlier attempts outside this slice.
     let retriedTurns: Int
     /// `retriedTurns / attemptedTurns`, nil when no turn was attempted.
     let retryRate: Double?
@@ -139,6 +144,11 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
     let truncatedReplies: Int
     /// The chart's bars, plus the period unit they were cut on.
     let activity: GatewayUsageActivity
+    /// The same per-attempt usable volume the activity bars draw: a reported
+    /// total, else input + output when both exist, for terminal attempts only.
+    /// Nil means none reported a usable figure; a reported zero remains zero.
+    /// Provider fields in `tokens` retain their independent sums and coverage.
+    let usableTokenTotal: Int64?
     /// Attempts in range carrying a usable token figure — a gateway-reported
     /// total, else both components. THE RANGE'S OWN COUNT, over every attempt
     /// including the ones no bar can draw: an attempt with no start instant
@@ -247,6 +257,7 @@ nonisolated struct GatewayUsageSummary: Sendable, Equatable {
         responseTime: .empty,
         truncatedReplies: 0,
         activity: .empty,
+        usableTokenTotal: nil,
         tokenMeasuredAttempts: 0,
         byGateway: [],
         byRequestedModel: [],
@@ -825,6 +836,9 @@ nonisolated enum GatewayUsageAggregator {
     /// - Parameters:
     ///   - attempts: Recorded attempts already filtered to the range by the
     ///     store fetch. Order is irrelevant.
+    ///   - priorAttempts: Additional retained attempts used only to establish
+    ///     retry history for scoped turns. Duplicates of `attempts`, unrelated
+    ///     turns and attempts later than a turn's latest scoped try are ignored.
     ///   - liveAttemptIDs: Attempt ids THIS device currently holds a live task
     ///     for. Local, process-visible evidence only; its absence never means
     ///     an attempt is dead.
@@ -837,6 +851,7 @@ nonisolated enum GatewayUsageAggregator {
     ///     attempt timing. The shared stale-send grace, not a second constant.
     static func summarize(
         attempts: [GatewayAttemptRecord],
+        priorAttempts: [GatewayAttemptRecord] = [],
         liveAttemptIDs: Set<UUID>,
         now: Date,
         activityRange: ClosedRange<Date>? = nil,
@@ -847,10 +862,15 @@ nonisolated enum GatewayUsageAggregator {
             Classified(record: record, liveAttemptIDs: liveAttemptIDs, now: now, grace: grace)
         }
 
-        let turns = turnCounts(for: items)
+        let histories = turnHistories(
+            for: items, priorAttempts: priorAttempts,
+            liveAttemptIDs: liveAttemptIDs, now: now, grace: grace
+        )
+        let turns = turnCounts(for: items, histories: histories)
         let mix = outcomeMix(for: items)
-        let reliability = turnReliability(for: items)
+        let reliability = turnReliability(for: histories)
         let ranking = threadRanking(for: items)
+        let tokenVolume = usableTokenVolume(for: items)
 
         return GatewayUsageSummary(
             recordedAttempts: items.count,
@@ -871,7 +891,8 @@ nonisolated enum GatewayUsageAggregator {
             responseTime: responseTime(for: items),
             truncatedReplies: items.count(where: { $0.isTruncated }),
             activity: activity(for: items, range: activityRange, calendar: calendar),
-            tokenMeasuredAttempts: items.count(where: { bestAvailableTokens($0) != nil }),
+            usableTokenTotal: tokenVolume.total,
+            tokenMeasuredAttempts: tokenVolume.measured,
             byGateway: gatewayGroups(for: items),
             byRequestedModel: modelGroups(for: items),
             deviceGroups: deviceGroups(for: items),
@@ -1028,25 +1049,57 @@ nonisolated enum GatewayUsageAggregator {
 
     // MARK: - Turn arithmetic
 
+    /// Chronological histories for ONLY the turns present in this slice. The
+    /// latest scoped attempt fixes each history's endpoint: a later iPhone
+    /// recovery must not make the Mac's earlier failure look successful. The
+    /// scoped record wins a duplicate id because it is the snapshot counted by
+    /// every other figure in the summary.
+    private static func turnHistories(
+        for items: [Classified],
+        priorAttempts: [GatewayAttemptRecord],
+        liveAttemptIDs: Set<UUID>,
+        now: Date,
+        grace: TimeInterval
+    ) -> [UUID: [Classified]] {
+        var histories: [UUID: [Classified]] = [:]
+        var latest: [UUID: Classified] = [:]
+        var seen = Set(items.map { $0.record.id })
+        for item in items {
+            guard let turn = item.record.userMessageID else { continue }
+            histories[turn, default: []].append(item)
+            if let previous = latest[turn], !chronological(previous, item) { continue }
+            latest[turn] = item
+        }
+        for record in priorAttempts {
+            guard let turn = record.userMessageID, let last = latest[turn],
+                  seen.insert(record.id).inserted
+            else { continue }
+            let item = Classified(
+                record: record, liveAttemptIDs: liveAttemptIDs, now: now, grace: grace)
+            guard chronological(item, last) else { continue }
+            histories[turn, default: []].append(item)
+        }
+        return histories.mapValues { $0.sorted(by: chronological) }
+    }
+
     /// Turn counts, all over DISTINCT `userMessageID`. An attempt that recorded
     /// no user message is counted as an attempt and belongs to no turn — it can
     /// never be matched to one, and inventing a turn for it would inflate
     /// exactly the number retries are kept out of.
     private static func turnCounts(
-        for items: [Classified]
+        for items: [Classified],
+        histories: [UUID: [Classified]]
     ) -> (attempted: Int, completed: Int, retried: Int, attemptsOnCompletedTurns: Int) {
-        var attemptsPerTurn: [UUID: Int] = [:]
         var completed: Set<UUID> = []
         for item in items {
             guard let turn = item.record.userMessageID else { continue }
-            attemptsPerTurn[turn, default: 0] += 1
             if item.isSucceeded { completed.insert(turn) }
         }
-        let attemptsOnCompletedTurns = completed.reduce(0) { $0 + (attemptsPerTurn[$1] ?? 0) }
+        let attemptsOnCompletedTurns = completed.reduce(0) { $0 + (histories[$1]?.count ?? 0) }
         return (
-            attempted: attemptsPerTurn.count,
+            attempted: histories.count,
             completed: completed.count,
-            retried: attemptsPerTurn.count(where: { $0.value > 1 }),
+            retried: histories.count(where: { $0.value.count > 1 }),
             attemptsOnCompletedTurns: attemptsOnCompletedTurns
         )
     }
@@ -1060,17 +1113,10 @@ nonisolated enum GatewayUsageAggregator {
     /// being retried as a retry that failed to recover, and the figure would
     /// improve on its own as unrelated rows landed.
     private static func turnReliability(
-        for items: [Classified]
+        for histories: [UUID: [Classified]]
     ) -> (firstAttemptDelivered: Int, resolved: Int, retried: Int, recovered: Int) {
-        var byTurn: [UUID: [Classified]] = [:]
-        for item in items {
-            guard let turn = item.record.userMessageID else { continue }
-            byTurn[turn, default: []].append(item)
-        }
-
         var firstAttemptDelivered = 0, resolved = 0, retried = 0, recovered = 0
-        for (_, rows) in byTurn {
-            let ordered = rows.sorted(by: chronological)
+        for ordered in histories.values {
             guard let first = ordered.first, let last = ordered.last, last.isResolved
             else { continue }
             resolved += 1
@@ -1501,6 +1547,19 @@ nonisolated enum GatewayUsageAggregator {
     private static func bestAvailableTokens(_ item: Classified) -> Int64? {
         tokenContribution(item, basis: .reportedTotals)
             ?? tokenContribution(item, basis: .calculatedComponents)
+    }
+
+    /// Range-wide counterpart of each activity bucket's volume. It uses the
+    /// same contribution rule, including rows with no date that no bar can draw.
+    private static func usableTokenVolume(for items: [Classified]) -> (total: Int64?, measured: Int) {
+        var total: Int64?
+        var measured = 0
+        for item in items {
+            guard let value = bestAvailableTokens(item) else { continue }
+            total = saturatingSum(total ?? 0, value)
+            measured += 1
+        }
+        return (total, measured)
     }
 
     /// ONE basis for the whole range, or nil when nothing can be ranked.
