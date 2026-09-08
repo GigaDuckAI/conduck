@@ -17,9 +17,12 @@
 // Four things are pinned, and each one held, or would have held, a real defect:
 //
 // (1) THE ROW BUDGET. `CPListTemplate.maximumItemCount` is a ceiling the
-//     framework enforces by TRUNCATING. "Add to Work" is a permanent row in the
-//     first section, so a budget that does not pay for it silently costs the
-//     oldest conversation instead — a loss that appears in no diff.
+//     framework enforces by TRUNCATING. The first section draws row 0 and the
+//     one-shot hint and nothing else where a gateway exists — "Add to Work"
+//     lives in the chooser there — so a budget that charges a row the list does
+//     not draw hides a conversation for nothing, and one that misses a row the
+//     list does draw silently costs the oldest conversation instead. Neither
+//     loss appears in a diff.
 // (2) THE DESTINATION DEFAULT. A Work note that left `sessionDestination` set
 //     would aim the NEXT session — started from "New voice chat" — at the desk,
 //     and a conversation the driver expects an answer to would become a silent
@@ -47,18 +50,21 @@ final class CarPlayWorkNoteTests: XCTestCase {
 
     // MARK: - (1) The picker's row budget
 
-    func testTheWorkRowCostsExactlyOneRecentConversation() {
+    func testTheRootListPaysForNoWorkRow() {
         // `recentCap` answers the narrower question — what row 0 costs — and is
-        // deliberately untouched by this feature. The budget the picker uses is
-        // that answer minus the permanent Work row.
+        // deliberately untouched by this feature. With a gateway configured the
+        // first section draws row 0 and nothing else that is permanent: the
+        // desk is the chooser's last row, not the root's, so the budget the
+        // picker uses IS that answer. A `- 1` here hides one conversation on
+        // every busy drive for a row the driver cannot see.
         XCTAssertEqual(
             CarPlaySceneDelegate.recentRowBudget(maximumItemCount: 12, showsStartFailureHint: false),
-            CarPlayConversationLabel.recentCap(maximumItemCount: 12) - 1,
-            "the Work row is permanent, so it is paid for out of the recent list every refresh"
+            CarPlayConversationLabel.recentCap(maximumItemCount: 12),
+            "the root list draws no Work row where a gateway exists, so the recent list must not pay for one"
         )
     }
 
-    func testTheStartFailureHintCostsAnotherOneOnTopOfIt() {
+    func testTheStartFailureHintCostsExactlyOneOnTopOfRowZero() {
         let withoutHint = CarPlaySceneDelegate.recentRowBudget(
             maximumItemCount: 12, showsStartFailureHint: false
         )
@@ -67,25 +73,27 @@ final class CarPlayWorkNoteTests: XCTestCase {
         )
         XCTAssertEqual(withHint, withoutHint - 1,
                        "the one-shot hint occupies a row while it is shown, exactly as it did before")
-        XCTAssertEqual(withoutHint, 10)
-        XCTAssertEqual(withHint, 9)
+        XCTAssertEqual(withoutHint, 11)
+        XCTAssertEqual(withHint, 10)
     }
 
     /// The property the arithmetic exists for, stated as the framework states
-    /// it: everything the first section draws, plus the recent list, fits.
+    /// it: everything the first section draws, plus the recent list, fits —
+    /// and fills. A budget can be wrong in BOTH directions, so the second
+    /// assertion pins that no row is charged the list does not draw.
     func testTheFirstSectionAndTheRecentListAlwaysFitTheTemplateCeiling() {
         for ceiling in 0...16 {
             for hint in [false, true] {
                 let recents = CarPlaySceneDelegate.recentRowBudget(
                     maximumItemCount: ceiling, showsStartFailureHint: hint
                 )
-                // Row 0 ("New voice chat") + the hint while shown + "Add to Work".
-                let fixedRows = 1 + (hint ? 1 : 0) + 1
+                // Row 0 ("New voice chat") + the hint while shown. Nothing else.
+                let fixedRows = 1 + (hint ? 1 : 0)
                 XCTAssertGreaterThanOrEqual(recents, 0, "a budget is never negative")
                 if ceiling >= fixedRows {
-                    XCTAssertLessThanOrEqual(
+                    XCTAssertEqual(
                         fixedRows + recents, ceiling,
-                        "ceiling \(ceiling), hint \(hint): the picker would be truncated by CarPlay"
+                        "ceiling \(ceiling), hint \(hint): the picker would be truncated by CarPlay, or leaves a row empty for a Work row it no longer draws"
                     )
                 }
             }
@@ -93,8 +101,9 @@ final class CarPlayWorkNoteTests: XCTestCase {
     }
 
     func testATinyCeilingRefusesRecentsRatherThanGoingNegative() {
-        XCTAssertEqual(CarPlaySceneDelegate.recentRowBudget(maximumItemCount: 2, showsStartFailureHint: false), 0)
+        XCTAssertEqual(CarPlaySceneDelegate.recentRowBudget(maximumItemCount: 2, showsStartFailureHint: false), 1)
         XCTAssertEqual(CarPlaySceneDelegate.recentRowBudget(maximumItemCount: 1, showsStartFailureHint: false), 0)
+        XCTAssertEqual(CarPlaySceneDelegate.recentRowBudget(maximumItemCount: 1, showsStartFailureHint: true), 0)
         XCTAssertEqual(CarPlaySceneDelegate.recentRowBudget(maximumItemCount: 0, showsStartFailureHint: true), 0)
     }
 
@@ -755,15 +764,27 @@ final class CarPlayWorkNoteTests: XCTestCase {
         )
     }
 
-    func testTheWorkRowIsOfferedInBothPickerStatesAndTheDeskIsNeverBrowsed() throws {
+    func testTheWorkRowStandsOnTheRootOnlyWhereNoGatewayDoesAndTheDeskIsNeverBrowsed() throws {
         let source = try Self.sceneDelegateSource()
         let picker = try RefusalLaneSource.body(
             ofFunction: "refreshPicker", in: source, path: Self.sceneDelegatePath
         )
+        // ONE root door, and it is the day-one one. Where a gateway exists the
+        // desk is the last row of the chooser the switcher opens, beside the
+        // gateways — a second root row would be a second name for the same
+        // destination on the same screen, and the driver would not know which
+        // of the two the "Choose AI" list is the picker for.
         let offers = picker.components(separatedBy: "makeWorkNoteItem(").count - 1
         XCTAssertEqual(
-            offers, 2,
-            "the row belongs in the configured picker AND in the no-gateway state, where it is the only working row"
+            offers, 1,
+            "the root row belongs in the no-gateway state alone, where it is the only working row; everywhere else the desk is the chooser's last row"
+        )
+        let noGateway = try RefusalLaneSource.trailingClosure(
+            after: "guard !configuredRefs.isEmpty else", in: picker, path: Self.sceneDelegatePath
+        )
+        XCTAssertTrue(
+            noGateway.contains("makeWorkNoteItem("),
+            "the one root row is drawn in the configured branch, not the no-gateway one — day one has no row that works, and a configured phone has two doors on one screen"
         )
         // A Work CARD on a car screen is content, which the
         // voice-based-conversation entitlement forbids. The row records; it
@@ -802,9 +823,10 @@ final class CarPlayWorkNoteTests: XCTestCase {
         )
         let configuredBranch = picker[configuredStart.lowerBound...]
 
-        // The hint names the row that FAILED, in the state that draws both:
-        // sending a failed Work start to "New voice chat" routes the repeated
-        // private thought to an AI.
+        // The hint names the row that FAILED. This state draws "New voice
+        // chat" on the root and reaches Work through the chooser, so a failed
+        // Work start told to "Tap New voice chat" routes the repeated private
+        // thought to an AI.
         XCTAssertTrue(
             Self.normalised(String(configuredBranch)).contains(
                 "self.lastStartDestination == .work ? String(localized: \"carplay.hint.captureStartFailed.detail.work\""
@@ -813,7 +835,7 @@ final class CarPlayWorkNoteTests: XCTestCase {
         )
         XCTAssertTrue(
             configuredBranch.contains("carplay.hint.captureStartFailed.detail.work"),
-            "the Work sentence is missing from the state that offers both rows"
+            "the Work sentence is missing from the state whose chooser can start a Work note"
         )
         XCTAssertEqual(
             configuredBranch.components(separatedBy: "carplay.hint.captureStartFailed.detail").count - 1, 2,
@@ -1677,18 +1699,17 @@ final class CarPlayWorkNoteTests: XCTestCase {
         }
     }
 
-    // MARK: - (5b) The second door — the chooser's Work ACTION row
+    // MARK: - (5b) The chooser's Work ACTION row — the desk's door wherever a gateway exists
 
     /// The destination chooser ends with the desk, and the desk is its LAST row.
     ///
     /// The driver opened this list to pick an AI, so the AIs come first and the
-    /// destination that is not one of them sits under all of them. It is the
-    /// SECOND door to a note the root row already offers in one tap — that row
-    /// stays, because on day one it is the only row in the picker that does
-    /// anything and because one tap is fewer than three — so the door exists
-    /// exactly where the list does: two or more gateways (the nav-bar switcher)
-    /// or the repair chooser a broken default pushes. With a single gateway
-    /// there is no switcher, no second door, and the root row is still one tap.
+    /// destination that is not one of them sits under all of them. Wherever a
+    /// gateway exists this is THE door to the note — the root draws its own row
+    /// only while no gateway is configured, the one state with no switcher to
+    /// open this list from — so the switcher, and with it this list, has to
+    /// exist for a single gateway too, or the desk is unreachable from the car
+    /// on exactly the phone the founder drives with.
     func testTheDestinationChooserEndsWithTheWorkRowAndOpensNoNewDoorOfItsOwn() throws {
         let scene = try Self.sceneDelegateSource()
         let chooser = Self.normalised(try RefusalLaneSource.body(
@@ -1753,35 +1774,47 @@ final class CarPlayWorkNoteTests: XCTestCase {
             "the desk row is built from a third place in the scene — a door nothing in this file describes"
         )
 
-        // THE ROOT DOOR SURVIVES. This is the second door, not a replacement:
-        // the root row is the only working row in the no-gateway state and the
-        // shortest path to a note in every other.
+        // THE DAY-ONE ROOT DOOR SURVIVES, AND ONLY THAT ONE. The root row is the
+        // only working row in the no-gateway state; everywhere else this list
+        // is the door, so a second root row would put two doors to one desk on
+        // one screen.
         let picker = try RefusalLaneSource.body(
             ofFunction: "refreshPicker", in: scene, path: Self.sceneDelegatePath
         )
         XCTAssertEqual(
-            picker.components(separatedBy: "makeWorkNoteItem(").count - 1, 2,
-            "the one-tap root row was traded for the chooser row — the desk is now three taps away, and unreachable on a phone with no gateway at all"
+            picker.components(separatedBy: "makeWorkNoteItem(").count - 1, 1,
+            "the root draws a Work row somewhere other than the no-gateway state — or nowhere, leaving day one with no row that works"
         )
 
-        // …AND NO THIRD DOOR. The chooser is pushed from exactly two places, and
-        // both need gateways: the nav-bar switcher (≥2 configured) and the
-        // repair step a broken default takes. Nothing about the Work row makes
-        // the switcher appear where it did not before.
+        // …AND NO THIRD DOOR. The chooser is pushed from exactly two places:
+        // the nav-bar switcher and the repair step a broken default takes.
         XCTAssertEqual(
             scene.components(separatedBy: "presentGatewayChooser(").count - 1, 3,
-            "the chooser is pushed from a third place — the second door now opens somewhere this guard cannot see"
+            "the chooser is pushed from a third place — the desk's door now opens somewhere this guard cannot see"
+        )
+
+        // THE SWITCHER EXISTS FOR ONE GATEWAY. Its gateway is resolved inside
+        // the "any gateway configured" block with no narrower test in front of
+        // it: a `count >= 2` gate here hides the pill on a single-gateway phone,
+        // and with the root drawing no Work row there, the desk is unreachable
+        // from the car for exactly that driver.
+        let configured = try RefusalLaneSource.trailingClosure(
+            after: "if !configuredRefs.isEmpty", in: Self.normalised(picker), path: Self.sceneDelegatePath
         )
         XCTAssertTrue(
-            Self.normalised(picker).contains("if configuredRefs.count >= 2 { current = await self.effectiveCarPlayRef() }"),
-            "the switcher's gateway is resolved outside the ≥2 test, so a single-gateway phone grows a nav-bar button that exists only to reach the second door"
+            configured.contains("current = await self.effectiveCarPlayRef()"),
+            "the switcher's gateway is no longer resolved for every configured roster — the pill, and the desk behind it, are gone for some drivers"
+        )
+        XCTAssertFalse(
+            configured.contains("count >= 2") || configured.contains("count > 1"),
+            "a multi-gateway gate is back in front of the switcher's gateway — a single-gateway phone loses the pill and with it the only door to the desk"
         )
         let switcher = try RefusalLaneSource.trailingClosure(
             after: "if let current {", in: Self.normalised(picker), path: Self.sceneDelegatePath
         )
         XCTAssertTrue(
             switcher.contains("self?.presentGatewayChooser("),
-            "the switcher no longer opens the chooser from inside the `if let current` arm — the ≥2 test above stops governing who can reach it"
+            "the switcher no longer opens the chooser from inside the `if let current` arm — the roster test above stops governing who can reach it"
         )
     }
 
