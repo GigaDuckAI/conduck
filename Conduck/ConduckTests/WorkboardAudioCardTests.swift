@@ -437,6 +437,90 @@ final class WorkboardAudioCardTests: XCTestCase {
         XCTAssertFalse(WorkboardAudioCardChip.localOnly.isAction)
     }
 
+    // MARK: - The transport glyph
+
+    /// "Cannot play" is TWO answers, and the transport has to say which.
+    ///
+    /// A recording arriving through iCloud is repaired by waiting; one whose
+    /// bytes this device no longer holds is repaired by the person pointing at
+    /// the file again. Drawn with one cloud-download symbol they were the same
+    /// picture, which on the gallery's band — a surface with no card, no chip
+    /// and no menu beside it — was the ONLY account of a control that did
+    /// nothing.
+    func testTheTransportGlyphSeparatesWaitingForICloudFromMissingBytes() {
+        XCTAssertEqual(
+            WorkboardAudioTransport.symbolName(phase: .idle, availability: .syncPending),
+            "icloud.and.arrow.down"
+        )
+        XCTAssertEqual(
+            WorkboardAudioTransport.symbolName(phase: .idle, availability: .unavailableOnThisDevice),
+            "paperclip.badge.ellipsis"
+        )
+        XCTAssertNotEqual(
+            WorkboardAudioTransport.symbolName(phase: .idle, availability: .syncPending),
+            WorkboardAudioTransport.symbolName(phase: .idle, availability: .unavailableOnThisDevice)
+        )
+    }
+
+    /// The unreadable glyph outranks the phase, and it comes from the SAME
+    /// availability policy the card's chip is drawn from — so a transport and
+    /// the chip beside it cannot disagree about which state a recording is in.
+    func testAnUnreadableRecordingDrawsItsAvailabilityRatherThanItsPhase() {
+        for phase in [WorkboardAudioPhase.idle, .playing, .loading, .paused, .failed, .blocked] {
+            for availability in [WorkboardMaterialAvailability.syncPending, .unavailableOnThisDevice] {
+                XCTAssertEqual(
+                    WorkboardAudioTransport.symbolName(phase: phase, availability: availability),
+                    WorkboardCardFacePolicy.availabilityGlyphName(for: availability),
+                    "\(availability) must not be drawn as a transport in phase \(phase)."
+                )
+            }
+        }
+    }
+
+    /// Readable bytes are a transport again, whichever lane they are on: a
+    /// local-only recording plays exactly as a synced one does.
+    func testReadableBytesStillDrawTheirPhase() {
+        for availability in [WorkboardMaterialAvailability.available, .localOnly] {
+            XCTAssertEqual(
+                WorkboardAudioTransport.symbolName(phase: .idle, availability: availability),
+                "play.fill"
+            )
+            XCTAssertEqual(
+                WorkboardAudioTransport.symbolName(phase: .playing, availability: availability),
+                "pause.fill"
+            )
+        }
+    }
+
+    /// The chip's words and glyph are stated ONCE, on the chip itself, because
+    /// the gallery's companion band draws the same chip as the audio card. Two
+    /// spellings of "Waiting for iCloud…" is the duplication this wave removed.
+    func testAChipCarriesItsOwnWordsAndTheSharedAvailabilityGlyph() {
+        XCTAssertEqual(WorkboardAudioCardChip.syncPending.availability, .syncPending)
+        XCTAssertEqual(WorkboardAudioCardChip.reattach.availability, .unavailableOnThisDevice)
+        XCTAssertEqual(WorkboardAudioCardChip.notOnThisDevice.availability, .unavailableOnThisDevice)
+        XCTAssertEqual(WorkboardAudioCardChip.localOnly.availability, .localOnly)
+
+        for chip in [
+            WorkboardAudioCardChip.localOnly,
+            .syncPending,
+            .reattach,
+            .notOnThisDevice
+        ] {
+            XCTAssertEqual(
+                chip.glyphName,
+                WorkboardCardFacePolicy.availabilityGlyphName(for: chip.availability)
+            )
+            XCTAssertFalse(String(localized: chip.label).isEmpty)
+        }
+        // The two states a person cannot tell apart from a glyph alone say
+        // different things in words.
+        XCTAssertNotEqual(
+            String(localized: WorkboardAudioCardChip.syncPending.label),
+            String(localized: WorkboardAudioCardChip.notOnThisDevice.label)
+        )
+    }
+
     // MARK: - Helpers
 
     /// Reference-typed tallies so the injected session closures can count

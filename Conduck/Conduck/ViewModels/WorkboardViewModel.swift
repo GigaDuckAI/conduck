@@ -129,6 +129,10 @@ struct WorkboardCompanionSnapshot: Identifiable, Hashable, Sendable {
         self.revision = material.revision
     }
 
+    /// The footprint this recording actually draws into. See
+    /// `WorkboardMaterialSnapshot.renderedCardSize`.
+    var renderedCardSize: WorkMaterialCardSize { WorkboardFootprint.rendered(cardSize) }
+
     /// The companion as its own card — the value Open, Share and Reattach take.
     /// It carries no companion of its own, which is the fold's no-chain rule
     /// stated in the type.
@@ -217,6 +221,16 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
         self.revision = revision
         self.companion = companion
     }
+
+    /// The footprint this card actually draws into.
+    ///
+    /// `cardSize` is what the ROW stores; this is what the BOARD grants, and
+    /// the board grants one tile. Every face, every accessibility description
+    /// and every geometry read asks here rather than reading `cardSize` or
+    /// hardcoding `.standard` — a hardcoded answer is the same decision written
+    /// in a place `WorkboardFootprint` cannot reach, so flipping the switch
+    /// back would restore the grid without restoring the drawing.
+    var renderedCardSize: WorkMaterialCardSize { WorkboardFootprint.rendered(cardSize) }
 }
 
 /// The desk as the board reads it: the material it holds, in the order the
@@ -313,9 +327,25 @@ struct WorkboardNotice: Identifiable, Equatable {
     let message: String
 }
 
+/// A note the desk says once and takes back. Two kinds, because the board has
+/// two things worth saying briefly and only one of them is good news: a capture
+/// landed, or a move could not be kept.
+///
+/// A refused drag is deliberately NOT a `WorkboardNotice`. That channel is an
+/// alert, and an alert answers a gesture the person has already completed with
+/// a modal they have to dismiss before they can try again — for something the
+/// board can simply show them by standing in the order the desk actually holds.
 struct WorkboardTransientStatus: Identifiable, Equatable {
+    enum Kind: Equatable {
+        /// Something the person asked for happened.
+        case confirmation
+        /// The desk moved underneath a gesture and kept its own order.
+        case conflict
+    }
+
     let id = UUID()
     let message: String
+    var kind: Kind = .confirmation
 }
 
 /// Progress of the one import batch the desk can be running. There is a single
@@ -470,6 +500,48 @@ enum WorkboardDeskMember {
         }
         return expanded
     }
+
+    /// The board a drag was planned on, in the STORED order and with the
+    /// companion links the desk held — the value a reorder rebases against.
+    ///
+    /// NOT `expandedOrder`. That is displayed order made complete, and the two
+    /// differ exactly when a fold is involved: a recording published before its
+    /// picture holds the lower rank, so a desk storing
+    /// `recording, other, picture` draws `other, picture` and expands to
+    /// `other, picture, recording`. Rebasing against that would report a
+    /// rearrangement on a desk nothing had rearranged, and every drag on a
+    /// folded board would be refused.
+    ///
+    /// The ranks come from the snapshots, so this must be read BEFORE the
+    /// optimistic order is applied — `applyMaterialOrder` overwrites both a
+    /// card's rank and its companion's with the dense ones the store is about
+    /// to write.
+    ///
+    /// The sort is the same `(sequence, createdAt, id)` tuple the live
+    /// repository's projection uses; a second comparator here would drift from
+    /// it silently.
+    nonisolated static func canonicalBaseline(
+        among cards: [WorkboardMaterialSnapshot]
+    ) -> WorkboardReorderBaseline {
+        var keyed: [(id: UUID, sequence: Int, createdAt: Date)] = []
+        var attachments: [UUID: UUID] = [:]
+        keyed.reserveCapacity(cards.count)
+        for card in cards {
+            keyed.append((id: card.id, sequence: card.sequence, createdAt: card.createdAt))
+            if let named = card.attachedToMaterialID { attachments[card.id] = named }
+            guard let companion = card.companion else { continue }
+            keyed.append((
+                id: companion.id,
+                sequence: companion.sequence,
+                createdAt: companion.createdAt
+            ))
+            if let named = companion.attachedToMaterialID { attachments[companion.id] = named }
+        }
+        let order = keyed
+            .sorted { ($0.sequence, $0.createdAt, $0.id.uuidString) < ($1.sequence, $1.createdAt, $1.id.uuidString) }
+            .map(\.id)
+        return WorkboardReorderBaseline(orderedIDs: order, attachments: attachments)
+    }
 }
 
 enum WorkboardWorkspaceCaptureLogic {
@@ -553,14 +625,22 @@ final class WorkboardViewModel {
         /// differently: opening presents inside the app, sharing copies bytes
         /// out of it.
         var shareMaterial: @MainActor (WorkboardMaterialSnapshot) -> Void = { _ in }
-        /// `(orderedMaterialIDs, expectedDeskRevision) -> refreshed desk`.
+        /// `(proposedMaterialIDs, baseline) -> refreshed desk`.
+        ///
         /// Rewriting sequence is board content, so it advances the desk
-        /// revision and is refused when the drag was built on an order the
-        /// person never saw.
-        var reorderMaterials: (@MainActor ([UUID], Int64) async throws -> WorkboardItemSnapshot)?
-        /// `(materialID, size)`. Revision-neutral by contract: it must not
-        /// stamp `updatedAt` on the material or on the desk.
-        var setMaterialCardSize: (@MainActor (UUID, WorkMaterialCardSize) async throws -> Void)?
+        /// revision — but a drag is guarded by REBASE rather than by that
+        /// revision. `baseline` is the canonical order and companion links the
+        /// move was planned on, and the desk accepts the proposal when its own
+        /// order is still that baseline with new ids appended, keeping both the
+        /// move and whatever arrived while it was saving. A desk that moved any
+        /// other way refuses, and the refusal is a note rather than an alert.
+        ///
+        /// No revision token: the revision has necessarily moved in exactly the
+        /// case the rebase exists to accept, so carrying one would only give a
+        /// caller a way to refuse a move the desk can keep.
+        var reorderMaterials: (
+            @MainActor ([UUID], WorkboardReorderBaseline) async throws -> WorkboardItemSnapshot
+        )?
     }
 
     private let dependencies: Dependencies
@@ -932,40 +1012,6 @@ final class WorkboardViewModel {
         }
     }
 
-    /// Board footprint only. It deliberately skips the capture lane and the
-    /// desk revision: a resize is presentation, so it must never advance the
-    /// content revision that capture writes CAS against.
-    @discardableResult
-    func setMaterialCardSize(
-        _ size: WorkMaterialCardSize,
-        materialID: UUID
-    ) async -> Bool {
-        guard let setCardSize = dependencies.setMaterialCardSize,
-              let materialIndex = desk?.materials
-                  .firstIndex(where: { $0.id == materialID }) else { return false }
-        let previous = desk?.materials[materialIndex].cardSize ?? .standard
-        guard previous != size else { return true }
-        desk?.materials[materialIndex].cardSize = size
-        do {
-            try await setCardSize(materialID, size)
-            return true
-        } catch {
-            if let materialIndex = desk?.materials
-                .firstIndex(where: { $0.id == materialID }) {
-                desk?.materials[materialIndex].cardSize = previous
-            }
-            notice = WorkboardNotice(
-                kind: .error,
-                title: LocalizedStringResource(
-                    "workboard.action.failed.title",
-                    defaultValue: "Couldn’t update the board"
-                ),
-                message: error.localizedDescription
-            )
-            return false
-        }
-    }
-
     /// Board-scoped removal. It takes the capture lane and CASes on the desk's
     /// own revision, so a removal racing an import is serialized rather than
     /// refused as stale. Removing the last card leaves the desk standing.
@@ -1039,9 +1085,8 @@ final class WorkboardViewModel {
         }
     }
 
-    /// Reorder shares the capture lane with thoughts and drops: it rewrites
-    /// canonical card order under the desk's optimistic revision, so a drag
-    /// racing an import would otherwise be refused as stale.
+    /// Reorder shares the capture lane with thoughts and drops, so a drag
+    /// racing a local import is serialized rather than raced.
     ///
     /// The plan is made from the cards the person DRAGGED — displayed order —
     /// and expanded into the stored order immediately before the store call.
@@ -1049,6 +1094,19 @@ final class WorkboardViewModel {
     /// recording that never entered the request would refuse an otherwise
     /// ordinary drag; and planning over the stored order instead would let the
     /// hidden recording occupy a slot the person cannot see.
+    ///
+    /// The desk is guarded by REBASE, not by a revision. The baseline is read
+    /// after the lane is acquired and BEFORE the optimistic order is applied —
+    /// `applyMaterialOrder` overwrites the very ranks the baseline is built
+    /// from — and it is canonical rather than displayed, because a fold makes
+    /// those two orders differ.
+    ///
+    /// Three outcomes, deliberately distinct. A cancellation is silent: nothing
+    /// asked and nothing failed. A desk that moved in a way the drag cannot be
+    /// replayed onto is a transient NOTE beside the board, which then simply
+    /// shows the order the desk holds. Anything else — a store that could not
+    /// write at all — keeps the alert, because that is a failure the person may
+    /// need to act on.
     private func performMaterialReorder(
         plan: ([WorkboardMaterialSnapshot]) -> [UUID]?
     ) async -> Bool {
@@ -1059,13 +1117,14 @@ final class WorkboardViewModel {
               let orderedIDs = plan(current.materials) else { return false }
 
         let previousMaterials = current.materials
+        let baseline = WorkboardDeskMember.canonicalBaseline(among: previousMaterials)
         let persistedIDs = WorkboardDeskMember.expandedOrder(
             orderedIDs,
             among: previousMaterials
         )
         applyMaterialOrder(orderedIDs)
         do {
-            let refreshed = try await reorderMaterials(persistedIDs, current.revision)
+            let refreshed = try await reorderMaterials(persistedIDs, baseline)
             adopt(refreshed)
             return true
         } catch {
@@ -1079,16 +1138,45 @@ final class WorkboardViewModel {
             if let refreshed = try? await dependencies.loadDesk() {
                 adopt(refreshed)
             }
-            notice = WorkboardNotice(
-                kind: .error,
-                title: LocalizedStringResource(
-                    "workboard.action.failed.title",
-                    defaultValue: "Couldn’t update the board"
-                ),
-                message: error.localizedDescription
-            )
+            reportRefusedReorder(error)
             return false
         }
+    }
+
+    /// Says what a refused drag was, in the register the refusal deserves.
+    private func reportRefusedReorder(_ error: any Error) {
+        if error is CancellationError { return }
+        if Self.isReorderConflict(error) {
+            let message = String(localized: LocalizedStringResource(
+                "workboard.reorder.conflict",
+                defaultValue: "The desk changed while this move was saving, so the board kept its own order."
+            ))
+            workspaceStatus = WorkboardTransientStatus(message: message, kind: .conflict)
+            AccessibilityAnnouncer.announce(message)
+            return
+        }
+        notice = WorkboardNotice(
+            kind: .error,
+            title: LocalizedStringResource(
+                "workboard.action.failed.title",
+                defaultValue: "Couldn’t update the board"
+            ),
+            message: error.localizedDescription
+        )
+    }
+
+    /// The one refusal that means "the desk moved", named at both layers it can
+    /// arrive from: the store's own refusal, and the adapter's translation of
+    /// it. Matched by case rather than by message so a reworded error cannot
+    /// quietly turn a note back into an alert.
+    private nonisolated static func isReorderConflict(_ error: any Error) -> Bool {
+        if let repositoryError = error as? WorkboardLiveRepositoryError {
+            return repositoryError == .staleDraft
+        }
+        if let storeError = error as? WorkboardStoreError {
+            return storeError == .staleRevision
+        }
+        return false
     }
 
     /// Mirrors the store's dense rank rewrite so the optimistic board and the

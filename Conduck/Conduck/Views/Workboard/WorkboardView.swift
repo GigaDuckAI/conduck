@@ -94,7 +94,16 @@ struct WorkboardPresentationModifier: ViewModifier {
             }
             .overlay(alignment: .top) {
                 if isActive, let status = viewModel.workspaceStatus {
-                    Label(status.message, systemImage: "checkmark.circle.fill")
+                    // The glyph carries the register: a capture landed, or the
+                    // desk kept an order this device tried to change. One
+                    // checkmark for both would confirm something that did not
+                    // happen.
+                    Label(
+                        status.message,
+                        systemImage: status.kind == .conflict
+                            ? "arrow.triangle.2.circlepath"
+                            : "checkmark.circle.fill"
+                    )
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(AppColors.textPrimary)
                         .padding(.horizontal, 14)

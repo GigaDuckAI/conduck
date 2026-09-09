@@ -169,6 +169,15 @@ nonisolated enum WorkMaterialStorageMode: String, CaseIterable, Codable, Sendabl
 /// any revision. `standard` is the absent value — a row that
 /// has never been resized stores nil, which keeps the CloudKit-mirrored column
 /// empty for every card nobody has deliberately sized.
+///
+/// THE BOARD GRANTS ONE FOOTPRINT, so this column is currently read and never
+/// written by the desk: a stored `small` or `large` — from an older build, or
+/// from a device still running one — decodes faithfully, syncs untouched and
+/// renders `standard`. It stays in the schema, and every reader stays total,
+/// because the uniform board is a product bet that has to be reversible on
+/// evidence; `WorkboardFootprint` is the one switch that reverses it, and it
+/// can only mean anything if nobody's stored size was rewritten in the
+/// meantime.
 nonisolated enum WorkMaterialCardSize: String, CaseIterable, Codable, Sendable, Hashable {
     case small
     case standard

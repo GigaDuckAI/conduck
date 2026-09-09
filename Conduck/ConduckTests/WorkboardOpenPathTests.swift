@@ -210,11 +210,11 @@ final class WorkboardOpenPathTests: XCTestCase {
 
             XCTAssertNil(router.previewNotice, "\(availability) opens without explanation")
             let presentation = try XCTUnwrap(router.materialPresentation)
-            guard case .imageGallery(let pages, let startIndex) = presentation.content else {
+            guard case .imageGallery(let gallery) = presentation.content else {
                 return XCTFail("an image card presents as a gallery on the \(availability) lane")
             }
-            XCTAssertEqual(pages.map(\.id), [photo.id])
-            XCTAssertEqual(startIndex, 0)
+            XCTAssertEqual(gallery.pages.map(\.id), [photo.id])
+            XCTAssertEqual(gallery.startIndex, 0)
             XCTAssertNil(
                 router.filePreview.previewURL,
                 "a picture is never handed to Quick Look, so no disposable copy is made for it"
@@ -287,11 +287,136 @@ final class WorkboardOpenPathTests: XCTestCase {
 
         XCTAssertNil(router.previewNotice)
         let presentation = try XCTUnwrap(router.materialPresentation)
-        guard case .imageGallery(let pages, let startIndex) = presentation.content else {
+        guard case .imageGallery(let gallery) = presentation.content else {
             return XCTFail("an image card presents as a gallery")
         }
-        XCTAssertEqual(pages.map(\.id), [photo.id], "it opens alone, on the card that was tapped")
-        XCTAssertEqual(startIndex, 0)
+        XCTAssertEqual(
+            gallery.pages.map(\.id), [photo.id], "it opens alone, on the card that was tapped"
+        )
+        XCTAssertEqual(gallery.startIndex, 0)
+    }
+
+    // MARK: - A click is never silent
+
+    /// The state that offers no primary action is the one state a card face has
+    /// to explain, and the explanation is derived from the same rule that
+    /// refuses the tap. Without this the only account of a dead tap is a 12pt
+    /// glyph and a sentence that exists in VoiceOver alone.
+    func testTheOneStateWithNoPrimaryActionSaysWhatItIsWaitingFor() {
+        XCTAssertEqual(
+            WorkboardCardActionPolicy.blockedReason(for: .syncPending),
+            .waitingForICloud,
+            "arriving bytes are the silent state, so they are the state that must speak"
+        )
+
+        for actionable in [
+            WorkboardMaterialAvailability.available,
+            .localOnly,
+            .unavailableOnThisDevice
+        ] {
+            XCTAssertNil(
+                WorkboardCardActionPolicy.blockedReason(for: actionable),
+                "\(actionable) does something when it is clicked, so it explains nothing"
+            )
+            XCTAssertNotNil(WorkboardCardActionPolicy.primaryAction(for: actionable))
+        }
+    }
+
+    /// The reason and the refusal cannot drift: every state that offers no
+    /// primary action carries a reason, and every state that offers one does
+    /// not. Stated as an equivalence rather than four rows so a state added
+    /// later cannot satisfy the rows above while being silent.
+    func testAReasonExistsForExactlyTheStatesThatRefuseEveryPrimaryAction() {
+        for availability in [
+            WorkboardMaterialAvailability.available,
+            .localOnly,
+            .unavailableOnThisDevice,
+            .syncPending
+        ] {
+            XCTAssertEqual(
+                WorkboardCardActionPolicy.blockedReason(for: availability) == nil,
+                WorkboardCardActionPolicy.primaryAction(for: availability) != nil,
+                "\(availability) must either do something or say why it does not"
+            )
+        }
+
+        // The words the card draws are the row the availability glyph already
+        // speaks, not a second sentence for the same fact.
+        XCTAssertEqual(
+            String(localized: WorkboardCardBlockedReason.waitingForICloud.label),
+            String(localized: LocalizedStringResource(
+                "workboard.material.syncPending",
+                defaultValue: "Waiting for iCloud…"
+            ))
+        )
+    }
+
+    // MARK: - Links
+
+    /// A link card opens the address, and opens it in the browser. There is no
+    /// sheet: the card's whole content IS the URL, so a preview of it could
+    /// only restate the address and offer the button the click already meant.
+    func testALinkCardOpensItsAddressAndRaisesNoSheet() async throws {
+        let router = PersonalWorkbenchRouter()
+        var opened: [URL] = []
+        router.openExternalURL = { opened.append($0) }
+        let link = WorkboardMaterialSnapshot(
+            kind: .link,
+            name: "example.com",
+            urlString: "https://example.com/a-page",
+            availability: .available
+        )
+
+        await router.present(link)
+
+        XCTAssertEqual(opened.map(\.absoluteString), ["https://example.com/a-page"])
+        XCTAssertNil(router.materialPresentation, "the browser is the surface, not a sheet of ours")
+        XCTAssertNil(router.previewNotice)
+        XCTAssertNil(router.filePreview.previewURL)
+    }
+
+    /// The availability gate still answers first. A link whose card the desk
+    /// has moved to an unreadable state opens nothing at all — the gate is one
+    /// rule for every kind, and the direct route must not become the way around
+    /// it.
+    func testALinkOnAnUnreadableCardOpensNothing() async throws {
+        for refused in [
+            WorkboardMaterialAvailability.syncPending,
+            .unavailableOnThisDevice
+        ] {
+            let router = PersonalWorkbenchRouter()
+            var opened: [URL] = []
+            router.openExternalURL = { opened.append($0) }
+            let link = WorkboardMaterialSnapshot(
+                kind: .link,
+                name: "example.com",
+                urlString: "https://example.com/a-page",
+                availability: refused
+            )
+
+            await router.present(link)
+
+            XCTAssertTrue(opened.isEmpty, "\(refused) reaches no browser")
+            XCTAssertNil(router.materialPresentation)
+            XCTAssertNotNil(router.previewNotice, "and says why rather than failing silently")
+        }
+    }
+
+    /// A link card with nothing to open is a refusal, not a browser launch.
+    func testALinkCardWithNoAddressIsRefused() async throws {
+        let router = PersonalWorkbenchRouter()
+        var opened: [URL] = []
+        router.openExternalURL = { opened.append($0) }
+
+        await router.present(WorkboardMaterialSnapshot(
+            kind: .link,
+            name: "Broken",
+            urlString: nil,
+            availability: .available
+        ))
+
+        XCTAssertTrue(opened.isEmpty)
+        XCTAssertNotNil(router.previewNotice)
     }
 
     // MARK: - What the preview copy is called
@@ -344,6 +469,52 @@ final class WorkboardOpenPathTests: XCTestCase {
         XCTAssertEqual(
             WorkMaterialExportSnapshot.filename(displayName: "Voice note", mimeType: nil),
             "Voice note"
+        )
+    }
+
+    /// The folded sheet deliberately KEEPS a companion whose bytes have not
+    /// landed — the band names the recording and says what it is waiting for —
+    /// but it must not also offer VoiceOver a Play that returns the instant it
+    /// is invoked. A rotor action that does nothing and reports nothing is the
+    /// one refusal a screen-reader user cannot detect, and it is worse than no
+    /// action at all: the person is told playback exists and then gets silence.
+    ///
+    /// A source check because the defect is a modifier on a private SwiftUI
+    /// view; what it holds is that the action is BEHIND the same readability
+    /// gate `play()` returns on, so the two cannot drift apart.
+    func testAnUnplayableFoldedRecordingOffersNoPlaybackAction() throws {
+        let source = try RefusalLaneSource.source(
+            at: "Conduck/Views/Workboard/PersonalWorkbenchView.swift"
+        )
+        let band = try XCTUnwrap(
+            source.range(of: "private struct WorkboardGalleryCompanionBand"),
+            "the folded card's bottom band must still be where this rule lives"
+        )
+        let tail = String(source[band.upperBound...])
+        // Bounded at the next top-level declaration, so a rule that moved out
+        // of this view cannot be satisfied by a match somewhere else.
+        let body = tail.range(of: "\nprivate struct ").map { String(tail[..<$0.lowerBound]) } ?? tail
+
+        XCTAssertFalse(
+            body.contains("accessibilityAction(named:"),
+            "the unconditional installer is what advertised a Play that did nothing"
+        )
+        let gate = try XCTUnwrap(
+            body.range(of: "accessibilityActions {"),
+            """
+            The playback action must be declared CONDITIONALLY.             `accessibilityAction(named:)` installs unconditionally, which is             how an unreadable recording ended up advertising a Play that             silently returned.
+            """
+        )
+        let gated = String(body[gate.upperBound...].prefix(240))
+        XCTAssertTrue(
+            gated.contains("if isPlayable"),
+            "the action is offered only where the recording's own bytes permit it"
+        )
+        XCTAssertTrue(
+            body.contains("WorkboardCardActionPolicy.allows(.play, when: companion.availability)"),
+            """
+            And the gate is the POLICY's answer for the recording, never the             picture's readability — a readable picture can be folded with a             recording that is still arriving.
+            """
         )
     }
 }

@@ -83,7 +83,6 @@ final class WorkboardMaterialPresentationTests: XCTestCase {
 
         let spoken = WorkboardCardAccessibility.summary(
             material: photo,
-            cardSize: photo.cardSize,
             boardPosition: 2,
             boardCount: 5
         )
@@ -112,7 +111,6 @@ final class WorkboardMaterialPresentationTests: XCTestCase {
         XCTAssertEqual(
             WorkboardCardAccessibility.summary(
                 material: withoutThumbnail,
-                cardSize: withoutThumbnail.cardSize,
                 boardPosition: 2,
                 boardCount: 5
             ),

@@ -88,18 +88,8 @@ final class WorkboardLiveRepository {
             },
             openMaterial: { [self] material in openMaterialHandler(material) },
             shareMaterial: { [self] material in shareMaterialHandler(material) },
-            reorderMaterials: { [self] orderedMaterialIDs, expectedRevision in
-                try await reorderMaterials(
-                    orderedMaterialIDs,
-                    expectedRevision: expectedRevision
-                )
-            },
-            setMaterialCardSize: { [self] materialID, size in
-                try await store.setWorkMaterialCardSize(
-                    size,
-                    materialID: materialID,
-                    itemID: Constants.workboardDeskItemID
-                )
+            reorderMaterials: { [self] orderedMaterialIDs, baseline in
+                try await reorderMaterials(orderedMaterialIDs, baseline: baseline)
             }
         )
     }
@@ -551,16 +541,22 @@ final class WorkboardLiveRepository {
     }
 
     /// Board drag. The store owns the single sequence rewrite, so this only
-    /// carries the compare-and-swap token and re-projects the desk.
+    /// carries the baseline the move was planned on and re-projects the desk.
+    ///
+    /// The baseline REPLACES the revision token a capture would carry: a drag
+    /// that raced an arrival is exactly the case worth keeping, so the desk is
+    /// asked whether the move can be replayed onto what it now holds rather
+    /// than whether nothing happened. `staleDraft` is what a desk that moved
+    /// some other way comes back as, and the board answers it with a note.
     private func reorderMaterials(
         _ orderedMaterialIDs: [UUID],
-        expectedRevision: Int64
+        baseline: WorkboardReorderBaseline
     ) async throws -> WorkboardItemSnapshot {
         do {
             let saved = try await store.reorderWorkMaterials(
                 itemID: Constants.workboardDeskItemID,
                 orderedMaterialIDs: orderedMaterialIDs,
-                expectedOwnerRevision: expectedRevision
+                baseline: baseline
             )
             return await snapshot(for: saved)
         } catch WorkboardStoreError.staleRevision {
