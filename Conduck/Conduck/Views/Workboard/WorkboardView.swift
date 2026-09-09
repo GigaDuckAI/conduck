@@ -37,13 +37,58 @@ struct WorkboardExperience: View {
     let isActive: Bool
     let reduceMotion: Bool
 
+    /// The section router, present only where a shell hands one down. The wide
+    /// iOS shell injects it into BOTH of its mounted layers; the compact iPhone
+    /// shell injects nothing. Presence is the whole contract for whether this
+    /// bar carries the Chats | Work control: iPhone finds nil, draws the view
+    /// menu alone, and its tab bar stays the only section switch.
+    @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
+
     var body: some View {
         NavigationStack {
             detailColumn
+                #if os(iOS)
+                .toolbar { workbenchToolbar }
+                #endif
         }
         .environment(\.workbenchDestinationIsActive, isActive)
         .modifier(presentationModifier)
     }
+
+    #if os(iOS)
+    /// Work's bar, declared INSIDE this view's own `NavigationStack`. Toolbar
+    /// items are collected in view-tree order, so an item declared ABOVE a
+    /// navigation container reaches no bar at all — which is why this belongs
+    /// here rather than on whichever host mounts the surface.
+    ///
+    /// Declaration order is left-to-right order within one placement: view menu
+    /// first, section control last, so the control is the trailing-most item and
+    /// Work reads exactly as the Mac window does. Nothing else on this surface
+    /// declares a `.primaryAction` item, so no conditional neighbour can shift
+    /// it sideways.
+    ///
+    /// No `ToolbarSpacer` between the two. A fixed spacer exists to break the
+    /// ONE shared glass capsule the system wraps around adjacent items of a
+    /// placement, and the section control already leaves that group:
+    /// `WorkbenchSectionToolbarItem` hides its shared background because the
+    /// control draws its own filled container.
+    ///
+    /// The whole bar is gated on `isActive` — the silence every
+    /// destination-aware host keeps, so a hidden layer contributes no toolbar
+    /// preference to the window it shares with its sibling.
+    @ToolbarContentBuilder
+    private var workbenchToolbar: some ToolbarContent {
+        if isActive {
+            ToolbarItem(placement: .primaryAction) {
+                WorkboardLayoutMenu(viewModel: viewModel, isActive: isActive)
+            }
+
+            if let personalWorkbenchModel {
+                WorkbenchSectionToolbarItem(model: personalWorkbenchModel)
+            }
+        }
+    }
+    #endif
 
     /// Work's column and its presentation chain are handed to the host as
     /// VALUES, never inlined into the host's own body, so each gets its own
@@ -63,6 +108,49 @@ struct WorkboardExperience: View {
         )
     }
 }
+
+#if os(iOS)
+/// Work's view menu: the board's Tiles / List choice, held in the bar instead of
+/// in the scrolling band, so the cards start at the top of the pane and the
+/// choice stays reachable however far the board is scrolled. The Mac keeps its
+/// in-band picker — its window has the width for it.
+///
+/// The mode is read HERE, inside a view's body, and not inside the `.toolbar`
+/// closure that carries this item: a toolbar closure is not an Observation
+/// tracking scope, so a glyph read there would never follow the change the menu
+/// itself just made.
+private struct WorkboardLayoutMenu: View {
+    @Bindable var viewModel: WorkboardViewModel
+
+    let isActive: Bool
+
+    private static let label = LocalizedStringResource(
+        "workboard.layout.label",
+        defaultValue: "Board view"
+    )
+
+    var body: some View {
+        Menu {
+            Picker(selection: $viewModel.layoutMode) {
+                ForEach(WorkboardLayoutMode.allCases, id: \.self) { mode in
+                    Label(mode.title, systemImage: mode.symbol).tag(mode)
+                }
+            } label: {
+                Text(Self.label)
+            }
+            // Inline puts both options in the menu itself with a checkmark on
+            // the current one — the Files-style view menu — rather than behind
+            // one more level of submenu.
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: viewModel.layoutMode.symbol)
+        }
+        .disabled(!isActive)
+        .accessibilityLabel(Text(Self.label))
+        .accessibilityIdentifier("workboard-layout")
+    }
+}
+#endif
 
 /// Work's durable presentation chain — the one-time tutorial, the capture toast
 /// and the notice alert. It rides the host's persistent shell rather than the

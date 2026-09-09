@@ -23,6 +23,12 @@ import UIKit
 
 struct ConversationLibraryView: View {
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
+    /// The section router, when a shell that HAS one put it here. Presence is
+    /// the whole contract: the wide iPad shell injects the model into both of
+    /// its mounted layers, so this host draws the Chats / Work control; the
+    /// compact iPhone shell injects nothing, so the same code draws nothing and
+    /// the tab bar stays the only section switch. See `sectionControlHost`.
+    @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
     @Binding var selectedConversationID: UUID?
     var recorder: InAppAudioRecorder
     /// Forward a user turn (typed or spoken, with optional attachments) to the
@@ -426,6 +432,9 @@ struct ConversationLibraryView: View {
             // current draft; ⌘N starts a new conversation (clears the selection
             // → next turn mints a fresh conversation via the host's send path).
             keyboardShortcuts
+
+            // LAST sibling in this ZStack, and nothing may be added after it.
+            sectionControlHost
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
@@ -498,6 +507,40 @@ struct ConversationLibraryView: View {
                     gatewayTitleControl
                 }
             }
+        }
+    }
+
+    /// The Chats / Work switch, trailing-most in THIS column's bar.
+    ///
+    /// WHY A ZERO-SIZE HOST DECLARED LAST, rather than one more `ToolbarItem` in
+    /// the `.toolbar` above: toolbar items are collected in view-tree order, and
+    /// a parent's item lands BEFORE anything a descendant declares in the same
+    /// placement. `ConversationThreadView` — a descendant, inside
+    /// `threadContent` — declares "Copy conversation" as a `.primaryAction`
+    /// whenever the open conversation has messages. An item declared on the
+    /// ZStack's own toolbar would therefore sit LEFT of Copy and slide sideways
+    /// by Copy's width every time the user opens an empty thread or sends the
+    /// first turn. Declared here, as the LAST sibling of the ZStack — after
+    /// `threadContent` and after `keyboardShortcuts` — this control is the
+    /// trailing-most item in the bar and nothing the thread does can move it.
+    /// Same measured arrangement as the macOS window shell's section host
+    /// (`MainWindowView.mountedDetailDestinations`). Nothing may declare a
+    /// toolbar after this host.
+    ///
+    /// WHY IT IS ALSO THE PLATFORM GATE: the control renders exactly when a
+    /// shell put a router in the environment. The wide iPad shell injects one
+    /// into both mounted layers; the iPhone `TabView` injects none, so the phone
+    /// draws no control and its tab bar stays the only section switch. The
+    /// destination read lives inside `WorkbenchSectionControl`'s own body (the
+    /// binding is rebuilt in `WorkbenchSectionToolbarItem`'s body), which is what
+    /// keeps it observation-tracked — an `@Observable` property read directly in
+    /// a `.toolbar {}` closure is not.
+    @ViewBuilder
+    private var sectionControlHost: some View {
+        if workbenchDestinationIsActive, let model = personalWorkbenchModel {
+            Color.clear
+                .frame(width: 0, height: 0)
+                .toolbar { WorkbenchSectionToolbarItem(model: model) }
         }
     }
 

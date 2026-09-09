@@ -698,11 +698,21 @@ struct ContentView: View {
                 ToolbarItem(placement: .principal) {
                     gatewayTitleControl
                 }
+                // Conversations. The glyph is `sidebar.leading` for family
+                // resemblance with the system sidebar toggle the iPad split view
+                // and the macOS window both pin leading-most in their bars — one
+                // app, one leading affordance across all three shells.
+                //
+                // It is a RESEMBLANCE, not the same control: this button toggles
+                // no sidebar, it presents the conversation list as a sheet
+                // (`showingList`), because the phone has no second column to
+                // reveal. That is why the label stays "Conversations" — the
+                // spoken name describes what the button opens, not the glyph.
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
                         showingList = true
                     } label: {
-                        Image(systemName: "bubble.left.and.bubble.right")
+                        Image(systemName: "sidebar.leading")
                     }
                     .accessibilityLabel("Conversations")  // xcstrings
                     .accessibilityIdentifier("toolbar.conversations")  // stable QA target (non-localized)
