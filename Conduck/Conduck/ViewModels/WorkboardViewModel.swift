@@ -588,11 +588,25 @@ final class WorkboardViewModel {
     /// True while a capture mutation holds the serialized lane.
     private(set) var isMutatingDesk = false
 
+    /// How the desk draws its cards. It lives HERE rather than on the board
+    /// view because a control that drives it can be declared above the canvas —
+    /// in a toolbar that has no access to the board's own `@State`.
+    ///
+    /// `didSet` is what persists it, and it survives the `@Observable` macro:
+    /// the macro moves the observer onto the underlying storage and leaves the
+    /// property itself tracked, so a SwiftUI binding still invalidates its
+    /// readers. Initialisation does not run the observer, which is what keeps a
+    /// launch from writing back the value it just read.
+    var layoutMode: WorkboardLayoutMode {
+        didSet { layoutMode.save() }
+    }
+
     @ObservationIgnored private var loadRequestedWhileLoading = false
     @ObservationIgnored private var deskMutationWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(dependencies: Dependencies) {
         self.dependencies = dependencies
+        self.layoutMode = WorkboardLayoutMode.load()
     }
 
     /// Every capture mutation is serialized because each success advances the

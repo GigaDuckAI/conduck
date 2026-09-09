@@ -1137,7 +1137,6 @@ private struct WorkboardMaterialBoard: View {
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
     @State private var boardWidth: CGFloat = 0
-    @State private var layoutMode = WorkboardLayoutMode.load()
     @State private var dropLocation: CGPoint?
     @State private var rowFrames: [UUID: CGRect] = [:]
     @State private var coordinateSpaceID = UUID()
@@ -1178,7 +1177,13 @@ private struct WorkboardMaterialBoard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            #if os(macOS)
+            // Mac keeps the choice in the band; the window has the width for a
+            // segmented control and no navigation bar of its own to hold one.
+            // On iOS the Work bar's view menu owns it, so nothing sits between
+            // the pane's top inset and the first card.
             arrangementControls
+            #endif
             boardContent
                 .frame(maxWidth: .infinity)
                 // A real trailing drop region makes appending possible even
@@ -1206,10 +1211,13 @@ private struct WorkboardMaterialBoard: View {
         // value form. It is scoped to the board container and never reaches the
         // navigation split view that hosts it.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: arrangement)
-        .onChange(of: layoutMode) { _, mode in
+        // Geometry only. The board's two measured maps describe the layout that
+        // just went away, so they are dropped here; persistence belongs to the
+        // view model that owns the preference, and a control outside this board
+        // can change it.
+        .onChange(of: viewModel.layoutMode) { _, _ in
             dropLocation = nil
             rowFrames = [:]
-            mode.save()
         }
         .onChange(of: workbenchDestinationIsActive) { _, active in
             if !active { dropLocation = nil }
@@ -1262,6 +1270,11 @@ private struct WorkboardMaterialBoard: View {
         }
     }
 
+    // The in-band arrangement row is macOS-only. iOS reaches the same
+    // preference from Work's toolbar (`WorkboardLayoutMenu`), and the drag
+    // affordance is taught once by the board tutorial, so neither helper has an
+    // iOS caller left to keep compiled.
+    #if os(macOS)
     private var arrangementControls: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 16) {
@@ -1287,7 +1300,7 @@ private struct WorkboardMaterialBoard: View {
     }
 
     private var layoutPicker: some View {
-        Picker(selection: $layoutMode) {
+        Picker(selection: $viewModel.layoutMode) {
             ForEach(WorkboardLayoutMode.allCases, id: \.self) { mode in
                 Label(mode.title, systemImage: mode.symbol).tag(mode)
             }
@@ -1299,10 +1312,11 @@ private struct WorkboardMaterialBoard: View {
         .disabled(!workbenchDestinationIsActive)
         .accessibilityIdentifier("workboard-layout")
     }
+    #endif
 
     @ViewBuilder
     private var boardContent: some View {
-        if layoutMode == .tiles {
+        if viewModel.layoutMode == .tiles {
             WorkboardMosaicLayout(metrics: metrics, layoutDirection: layoutDirection) {
                 boardItems
             }
@@ -1323,7 +1337,7 @@ private struct WorkboardMaterialBoard: View {
             card(for: material, at: index)
                 .workboardMosaicCardSize(material.cardSize)
                 .background {
-                    if layoutMode == .list {
+                    if viewModel.layoutMode == .list {
                         GeometryReader { proxy in
                             Color.clear.preference(
                                 key: WorkboardRowFramesKey.self,
@@ -1345,7 +1359,7 @@ private struct WorkboardMaterialBoard: View {
     }
 
     private func insertionIndex(at point: CGPoint) -> Int {
-        if layoutMode == .list {
+        if viewModel.layoutMode == .list {
             for (index, material) in item.materials.enumerated() {
                 if let frame = rowFrames[material.id], point.y < frame.midY { return index }
             }
@@ -1378,7 +1392,7 @@ private struct WorkboardMaterialBoard: View {
         guard !item.materials.isEmpty else { return nil }
         let isEnd = index == item.materials.count
         let targetIndex = min(index, item.materials.count - 1)
-        if layoutMode == .list {
+        if viewModel.layoutMode == .list {
             guard let frame = rowFrames[item.materials[targetIndex].id] else { return nil }
             return CGRect(x: frame.minX, y: (isEnd ? frame.maxY + 5 : frame.minY - 5) - 2,
                           width: frame.width, height: 4)
@@ -1431,7 +1445,7 @@ private struct WorkboardMaterialBoard: View {
             onShare: onShare,
             onReattach: onReattach
         )
-        if layoutMode == .list {
+        if viewModel.layoutMode == .list {
             WorkboardMaterialListRow(
                 material: material,
                 boardPosition: index + 1,
