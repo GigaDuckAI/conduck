@@ -271,7 +271,6 @@ final class WorkboardCompanionCardTests: XCTestCase {
     func testTheSpokenCardNamesTheScreenshotAndCarriesTheWords() {
         let summary = WorkboardCardAccessibility.summary(
             material: picture(companion: recording(transcript: "Ship the review before Friday")),
-            cardSize: .standard,
             boardPosition: 1,
             boardCount: 3
         )
@@ -292,7 +291,6 @@ final class WorkboardCompanionCardTests: XCTestCase {
     func testTheSpokenCardFallsBackToTheRecordingsNameWhenThereAreNoWords() {
         let summary = WorkboardCardAccessibility.summary(
             material: picture(companion: recording(name: "Ship it", transcript: nil)),
-            cardSize: .standard,
             boardPosition: 0,
             boardCount: 0
         )
@@ -303,7 +301,6 @@ final class WorkboardCompanionCardTests: XCTestCase {
     func testAPlainPictureStillAnnouncesItsOwnKind() {
         let summary = WorkboardCardAccessibility.summary(
             material: picture(),
-            cardSize: .standard,
             boardPosition: 0,
             boardCount: 0
         )
@@ -593,10 +590,10 @@ final class WorkboardCompanionCardTests: XCTestCase {
     /// the tile the overflow hides the picture's name and its availability
     /// glyph rather than merely clipping them.
     ///
-    /// Negative control: resolving `isCompact` to a constant, dropping the
-    /// one-row body, or a board that stopped handing the card its unit all
-    /// leave the budget test above passing over a layout that no longer honours
-    /// it — these assertions are what fail.
+    /// Negative control: resolving `isCompact` to a constant, reinstating a
+    /// per-footprint branch inside the card body, or a board that stopped
+    /// handing the card its unit all leave the budget test above passing over a
+    /// layout that no longer honours it — these assertions are what fail.
     func testTheCompactBandIsDrawnFromTheUnitTheMosaicGranted() throws {
         let source = try RefusalLaneSource.source(at: Self.canvasPath)
         let band = try RefusalLaneSource.body(
@@ -616,12 +613,20 @@ final class WorkboardCompanionCardTests: XCTestCase {
             "the drawn transport is the granted size, never the reference constant"
         )
 
+        // The card itself no longer forks on a footprint: the board grants one
+        // slot, so there is one drawing, and what changes between kinds is
+        // which face slots are filled. A density branch reappearing inside the
+        // body is the drift these two assertions exist to catch.
         let body = try propertyBody(named: "cardBody", in: source)
-        XCTAssertTrue(
-            body.contains("case .small where material.companion != nil"),
-            "a folded small card draws its thumbnail and name as ONE row"
+        XCTAssertTrue(body.contains("faceText"), body)
+        XCTAssertFalse(
+            body.contains("case .small") || body.contains("compactMetrics"),
+            "one drawing at one footprint — no per-size branch inside the card body"
         )
-        XCTAssertTrue(body.contains("dimension: compactMetrics.artwork"), body)
+        XCTAssertTrue(
+            source.contains("private var layoutSize: WorkMaterialCardSize { .standard }"),
+            "a row still carrying a stored small or large renders at the granted slot"
+        )
 
         XCTAssertTrue(
             source.contains("WorkboardCompanionBand.compactMetrics(forTileHeight: grantedUnitHeight)"),
@@ -721,12 +726,18 @@ final class WorkboardCompanionCardTests: XCTestCase {
     }
 
     /// The list row draws the same two strings the band draws, from the same
-    /// two rules — a folded row that re-derived its own title would drift from
-    /// the tile showing the same pair.
+    /// ONE rule — a folded row that re-derived its own pair would drift from
+    /// the tile showing that pair. It reads the deduplicated face rather than
+    /// the two raw slots, because a recording named after its own opening line
+    /// stacked that line on itself everywhere the raw pair was drawn.
     func testTheListRowDrawsTheRecordingsTitleAndTranscript() throws {
         let source = try RefusalLaneSource.source(at: Self.rowPath)
-        XCTAssertTrue(source.contains("WorkboardCompanionBand.title(for: companion)"))
-        XCTAssertTrue(source.contains("WorkboardCompanionBand.transcript(for: companion)"))
+        XCTAssertTrue(source.contains("WorkboardCompanionBand.face(for: companion).leadLine"))
+        XCTAssertTrue(source.contains("WorkboardCompanionBand.face(for: companion).trailingExcerpt"))
+        XCTAssertFalse(
+            source.contains("WorkboardCompanionBand.transcript(for: companion)"),
+            "the row draws the deduplicated face, never the raw transcript beside the raw title"
+        )
         XCTAssertTrue(
             source.contains("Text(verbatim: rowTitle)"),
             "the row's headline is the folded title"
@@ -734,6 +745,95 @@ final class WorkboardCompanionCardTests: XCTestCase {
         XCTAssertTrue(
             source.contains("WorkboardAudioTransport("),
             "the row draws the shared transport rather than a second player"
+        )
+    }
+
+    // MARK: - The folded pair says itself once
+
+    /// A recording is NAMED from its transcript's lead line, so a folded card
+    /// drawing the raw title over the raw transcript repeats that line. The
+    /// folded pair therefore goes through the same suppression rule a
+    /// standalone recording already used: the lead line becomes the words
+    /// themselves and nothing is drawn under them.
+    ///
+    /// Negative control: reading `title(for:)` and `transcript(for:)` straight
+    /// into the two slots leaves "Ship the review" above "Ship the review
+    /// before Friday" — this fails.
+    func testAFoldedRecordingNamedFromItsOwnWordsSaysThemOnce() {
+        let transcript = "Ship the review before Friday"
+        let face = WorkboardCompanionBand.face(for: recording(
+            name: WorkVoiceCaptureCoordinator.title(forTranscript: transcript),
+            transcript: transcript
+        ))
+
+        XCTAssertNil(face.heading)
+        XCTAssertEqual(face.leadLine, transcript)
+        XCTAssertNil(face.trailingExcerpt)
+        XCTAssertEqual(face.spokenParts, [transcript])
+    }
+
+    /// A title that is NOT what the words say is identity and stays: the rule
+    /// removes a repeat, never a second thing the card knows.
+    func testAFoldedRecordingKeepsATitleItsWordsDoNotSay() {
+        let face = WorkboardCompanionBand.face(for: recording(
+            name: "Kitchen walkthrough",
+            transcript: "Ship the review before Friday"
+        ))
+
+        XCTAssertEqual(face.leadLine, "Kitchen walkthrough")
+        XCTAssertEqual(face.trailingExcerpt, "Ship the review before Friday")
+        XCTAssertEqual(face.spokenParts, ["Kitchen walkthrough", "Ship the review before Friday"])
+    }
+
+    /// With no words at all the card keeps the recording's name, exactly as the
+    /// spoken label already did — suppression needs a body to suppress against.
+    func testAFoldedRecordingWithNoWordsKeepsItsName() {
+        let face = WorkboardCompanionBand.face(for: recording(name: "Ship it", transcript: nil))
+
+        XCTAssertEqual(face.leadLine, "Ship it")
+        XCTAssertNil(face.trailingExcerpt)
+    }
+
+    // MARK: - Opening hands the recording over
+
+    /// The gallery presents its OWN transport for the folded recording, so the
+    /// surface that opened it must stop producing audio first: otherwise the
+    /// sheet offers Play over a clip that is already sounding, and the sheet's
+    /// page-change teardown silences only its own copy.
+    ///
+    /// Negative control: wiring `openAction` straight to `onOpen` leaves the
+    /// board player running behind the sheet — the second assertion fails.
+    ///
+    /// The tile's guard is spelled as a statement rather than as a ternary
+    /// because a ternary whose branches are a method reference and `nil` makes
+    /// the Swift 6.2 type checker abandon the expression ("failed to produce
+    /// diagnostic"). The routing under test is identical either way.
+    func testOpeningAFoldedCardStopsTheBoardsOwnPlayerFirst() throws {
+        let canvas = try RefusalLaneSource.source(at: Self.canvasPath)
+        XCTAssertTrue(
+            canvas.contains(
+                "guard permittedActions.contains(.open) else { return nil }\n"
+                    + "        return { openMaterial() }"
+            ),
+            "the tile opens through the handover, not through the raw callback"
+        )
+        XCTAssertFalse(
+            canvas.contains("permittedActions.contains(.open) ? onOpen : nil"),
+            "the tile must not hand back the presenting callback unguarded"
+        )
+        XCTAssertTrue(
+            canvas.contains("companionPlayer.deactivate()\n        onOpen()"),
+            "the handover deactivates before it presents"
+        )
+
+        let row = try RefusalLaneSource.source(at: Self.rowPath)
+        XCTAssertTrue(
+            row.contains("player.deactivate()\n        onOpen()"),
+            "the list row hands its recording over on the same rule"
+        )
+        XCTAssertFalse(
+            row.contains("case .open: return onOpen"),
+            "the row's primary action opens through the handover"
         )
     }
 }

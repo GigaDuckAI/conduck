@@ -606,6 +606,39 @@
         }
       }
     },
+    "attachment.gallery.next" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Next Image"
+          }
+        }
+      }
+    },
+    "attachment.gallery.position" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld"
+          }
+        }
+      }
+    },
+    "attachment.gallery.previous" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Previous Image"
+          }
+        }
+      }
+    },
     "attachment.gallery.retry" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -613,6 +646,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Retry"
+          }
+        }
+      }
+    },
+    "attachment.gallery.share" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Share"
+          }
+        }
+      }
+    },
+    "attachment.gallery.share.filename" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Image"
           }
         }
       }
@@ -23012,7 +23067,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Whatever you collect lands here as a card you can move and resize."
+            "value" : "Whatever you collect lands here as a card you can move and open."
           }
         }
       }
@@ -23237,83 +23292,6 @@
         }
       }
     },
-    "workboard.material.card.size" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Card Size"
-          }
-        }
-      }
-    },
-    "workboard.material.card.size.large" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Large"
-          }
-        }
-      }
-    },
-    "workboard.material.card.size.large.action" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Make Card Large"
-          }
-        }
-      }
-    },
-    "workboard.material.card.size.small" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Small"
-          }
-        }
-      }
-    },
-    "workboard.material.card.size.small.action" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Make Card Small"
-          }
-        }
-      }
-    },
-    "workboard.material.card.size.standard" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Standard"
-          }
-        }
-      }
-    },
-    "workboard.material.card.size.standard.action" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Make Card Standard"
-          }
-        }
-      }
-    },
     "workboard.material.file" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23508,17 +23486,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Open"
-          }
-        }
-      }
-    },
-    "workboard.material.openLink" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Link"
           }
         }
       }
@@ -23886,6 +23853,17 @@
         }
       }
     },
+    "workboard.reorder.conflict" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The desk changed while this move was saving, so the board kept its own order."
+          }
+        }
+      }
+    },
     "workboard.sync.banner.noAccount" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23947,7 +23925,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Drag cards to rearrange them, and resize the ones that matter most."
+            "value" : "Drag cards to rearrange them — the board keeps the order you leave them in."
           }
         }
       }

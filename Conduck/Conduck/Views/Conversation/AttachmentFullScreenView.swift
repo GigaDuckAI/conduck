@@ -3,16 +3,33 @@
 // Conduck
 // AttachmentFullScreenView.swift
 //
-// The full-screen image gallery: a swipeable `TabView(.page)` over a list of
-// pages, each a pinch-zoom (Magnify + Drag, double-tap reset) on a black
-// background with a Done/X control.
+// The full-screen image gallery: one component, ONE cursor, and two containers.
+// Each page is a pinch-zoom (Magnify + Drag, double-tap reset) on a black
+// ground under a header that names what is on screen.
+//
+// TWO CONTAINERS, ONE COMPONENT. `.tabViewStyle(.page)` does not exist on
+// native macOS, so a `TabView` there falls through to the default tab-bar style
+// and — since no page sets a `.tabItem` — draws one UNLABELED segment per page:
+// a segmented control escaping the sheet, not a page indicator. iOS therefore
+// keeps the swipeable pager while macOS renders the CURRENT page alone with
+// Previous/Next, arrow keys and the header's counter, which is how the Mac's
+// own image viewers navigate. Both containers write the SAME
+// `AttachmentGallerySelection`, so what the header names, what the actions slot
+// acts on and what is drawn can never disagree. Separate galleries per platform
+// would drift on exactly that contract.
 //
 // MODEL-FREE. A page is an `AttachmentGalleryPage` (id + optional thumbnail
-// bytes + accessibility label) and the full bytes arrive through a caller-owned
-// `loadFullBytes` closure, so the same gallery serves a chat message's
-// attachments and the Work desk's image cards without either model reaching in
-// here. Chat keeps its own initialiser, which maps `AttachmentRecord`s and
-// closes over the store.
+// bytes + accessibility label + optional title) and the full bytes arrive
+// through a caller-owned `loadFullBytes` closure, so the same gallery serves a
+// chat message's attachments and the Work desk's image cards without either
+// model reaching in here. Chat keeps its own initialiser, which maps
+// `AttachmentRecord`s and closes over the store.
+//
+// ONE HEADER on both surfaces: the page's title, a counter while there is more
+// than one page, the caller's own controls, and Close. The counter is why the
+// iOS pager draws no index dots — the header already says which page this is,
+// and the dots would repeat it over the bottom of the picture, where a caller
+// (Work's folded recording) draws its transport.
 //
 // Load policy (key UX decision #4): render the page's thumbnail INSTANTLY
 // (never a black screen), then swap to the full bytes with a spinner overlay
@@ -41,6 +58,14 @@ struct AttachmentGalleryPage: Identifiable, Sendable {
     let id: UUID
     let thumbnailData: Data?
     let accessibilityLabel: String
+    /// What the header calls this picture, or nil when the picture genuinely
+    /// has no name — a pasted bitmap, a camera shot the source never named.
+    ///
+    /// NOT defaulted to the accessibility label: Chat's label is already the
+    /// position ("Image 3 of 10") and the header draws its own counter, so
+    /// falling back would print the same fact twice on the one surface that
+    /// exists to say it once.
+    var title: String?
 }
 
 extension AttachmentGalleryPage {
@@ -59,10 +84,53 @@ extension AttachmentGalleryPage {
                     format: String(localized: LocalizedStringResource(
                         "attachment.image.accessibility", defaultValue: "Image %lld of %lld")),
                     index + 1, attachments.count
-                )
+                ),
+                // The name the person's own source carried. A photo-library
+                // pick, a camera shot or a pasted bitmap frequently has none,
+                // and the header says nothing rather than inventing one.
+                title: AttachmentGalleryHeader.displayTitle(attachment.filename)
             )
         }
     }
+}
+
+/// The header's text rules, as pure functions.
+///
+/// Split out because they are the two places a header lies: a title that is
+/// really a placeholder ("" or a name of nothing but spaces), and a counter
+/// drawn over a gallery that has only one page — which announces a collection
+/// the person cannot page through.
+enum AttachmentGalleryHeader {
+    /// A page title, or nil when there is nothing worth naming.
+    nonisolated static func displayTitle(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    /// "3 of 10", or nil for a gallery of one page.
+    ///
+    /// The index is clamped for the same reason the cursor is: the pages can
+    /// change under a value that was valid when the pager wrote it.
+    nonisolated static func counter(index: Int, count: Int) -> String? {
+        guard count > 1 else { return nil }
+        let position = min(max(0, index), count - 1) + 1
+        return String.localizedStringWithFormat(
+            String(localized: LocalizedStringResource(
+                "attachment.gallery.position",
+                defaultValue: "%1$lld of %2$lld"
+            )),
+            Int64(position),
+            Int64(count)
+        )
+    }
+}
+
+/// The chrome's fixed dimensions, named so a caller drawing its own overlay on
+/// the gallery can stay clear of the header instead of guessing at it.
+enum AttachmentGalleryChrome {
+    /// The header's height, top of the safe area downwards.
+    static let headerHeight: CGFloat = 52
 }
 
 extension AttachmentGalleryPage {
@@ -197,6 +265,19 @@ struct AttachmentFullScreenView<PageActions: View>: View {
         selection.pageID(in: pages)
     }
 
+    /// The cursor's position inside the pages that exist right now, or nil for
+    /// an empty gallery. Every page-dependent thing on screen — the drawn
+    /// picture on macOS, the header, the actions slot — resolves through this
+    /// one clamp rather than subscripting `pages` with a raw index.
+    private var currentIndex: Int? {
+        guard !pages.isEmpty else { return nil }
+        return min(max(0, selection.index), pages.count - 1)
+    }
+
+    private var currentPage: AttachmentGalleryPage? {
+        currentIndex.map { pages[$0] }
+    }
+
     /// The caller's controls for the page on screen, exactly as the chrome
     /// draws them. Building this value invokes the caller's closure with the
     /// current page's id, which is the whole chain a Share tap runs through —
@@ -229,25 +310,18 @@ struct AttachmentFullScreenView<PageActions: View>: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            TabView(selection: pagerSelection) {
-                ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
-                    ZoomableImagePage(
-                        thumbnailData: page.thumbnailData,
-                        isResident: residentIndices.contains(index),
-                        fullDecodeMaxPixel: fullDecodeMaxPixel,
-                        loadFullBytes: { [loadFullBytes] in try await loadFullBytes(page.id) }
-                    )
-                    .accessibilityLabel(Text(page.accessibilityLabel))
-                    .tag(index)
-                }
-            }
-            #if os(iOS)
-            .tabViewStyle(.page(indexDisplayMode: pages.count > 1 ? .automatic : .never))
-            #endif
-            .ignoresSafeArea()
+            pager
 
             topControls
         }
+        // ONE ideal frame for every surface that presents this gallery, set
+        // here rather than at each call site: a picture wants the size it
+        // deserves rather than the floor a minimum-only sheet opens at, and two
+        // callers picking their own numbers is how the same component came to
+        // open at two different sizes. The main window's default is 1100x760,
+        // so this reads as a preview of what is behind it rather than as a
+        // second window.
+        .galleryDesktopFrame()
         #if os(iOS)
         // The neighbours are the discretionary half of the window — under
         // pressure the current page is the only one the user is looking at.
@@ -276,36 +350,194 @@ struct AttachmentFullScreenView<PageActions: View>: View {
         #endif
     }
 
-    /// The chrome over the picture: the caller's own actions on the leading
-    /// side, Done on the trailing one. Both sit in the SAME row so a gallery
-    /// that supplies actions cannot push Done off its corner.
+    /// The picture itself, in the container its platform can actually draw.
+    @ViewBuilder
+    private var pager: some View {
+        #if os(iOS)
+        TabView(selection: pagerSelection) {
+            ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
+                ZoomableImagePage(
+                    thumbnailData: page.thumbnailData,
+                    isResident: residentIndices.contains(index),
+                    fullDecodeMaxPixel: fullDecodeMaxPixel,
+                    loadFullBytes: { [loadFullBytes] in try await loadFullBytes(page.id) }
+                )
+                .accessibilityLabel(Text(page.accessibilityLabel))
+                .tag(index)
+            }
+        }
+        // No index dots: the header's counter says which page this is, and the
+        // dots sit exactly where a caller draws its own bottom chrome.
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .ignoresSafeArea()
+        #else
+        macPage
+        #endif
+    }
+
+    #if os(macOS)
+    /// The Mac's container: the CURRENT page, drawn directly.
+    ///
+    /// `.id(page.id)` is the whole navigation contract — zoom, pan, the decoded
+    /// original, a failed page's Retry are all state of `ZoomableImagePage`, so
+    /// identity per page is what makes Next start clean instead of arriving
+    /// magnified on the last picture's failure.
+    @ViewBuilder
+    private var macPage: some View {
+        if let currentIndex, let page = currentPage {
+            ZStack {
+                ZoomableImagePage(
+                    thumbnailData: page.thumbnailData,
+                    isResident: residentIndices.contains(currentIndex),
+                    fullDecodeMaxPixel: fullDecodeMaxPixel,
+                    loadFullBytes: { [loadFullBytes] in try await loadFullBytes(page.id) }
+                )
+                .accessibilityLabel(Text(page.accessibilityLabel))
+                .id(page.id)
+                .ignoresSafeArea()
+
+                if pages.count > 1 {
+                    HStack {
+                        stepButton(offset: -1, symbol: "chevron.left", shortcut: .leftArrow)
+                        Spacer()
+                        stepButton(offset: 1, symbol: "chevron.right", shortcut: .rightArrow)
+                    }
+                    .padding(.horizontal, 12)
+                }
+            }
+        }
+    }
+
+    /// One navigation control, which is also where the arrow key lands.
+    ///
+    /// The key is a `keyboardShortcut` on the button rather than an
+    /// `onKeyPress` on the container: a sheet gives no control initial focus,
+    /// so a key handler that needs focus does nothing until the person clicks
+    /// first — while a shortcut on a control in the frontmost window does not.
+    private func stepButton(
+        offset: Int,
+        symbol: String,
+        shortcut: KeyEquivalent
+    ) -> some View {
+        let target = (currentIndex ?? 0) + offset
+        let isReachable = pages.indices.contains(target)
+        return Button {
+            guard pages.indices.contains(target) else { return }
+            selection.index = target
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(.black.opacity(0.35), in: Circle())
+                .contentShape(Circle())
+        }
+        .pointerIconButton(size: 44, shape: .circle)
+        .keyboardShortcut(shortcut, modifiers: [])
+        .disabled(!isReachable)
+        .opacity(isReachable ? 1 : 0)
+        .accessibilityLabel(Text(offset < 0
+            ? LocalizedStringResource(
+                "attachment.gallery.previous",
+                defaultValue: "Previous Image"
+            )
+            : LocalizedStringResource(
+                "attachment.gallery.next",
+                defaultValue: "Next Image"
+            )))
+    }
+    #endif
+
+    /// The chrome over the picture: what this page is called and where it sits
+    /// in the collection on the leading side, the caller's own controls and
+    /// Close on the trailing one. Everything is in the SAME row so a gallery
+    /// that supplies actions cannot push Close off its corner, and the row is
+    /// the one header both Chat and Work draw.
     private var topControls: some View {
-        VStack {
-            HStack {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    if let title = currentPage?.title,
+                       let displayed = AttachmentGalleryHeader.displayTitle(title) {
+                        Text(verbatim: displayed)
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    if let counter = AttachmentGalleryHeader.counter(
+                        index: selection.index,
+                        count: pages.count
+                    ) {
+                        Text(verbatim: counter)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(1)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+
+                Spacer(minLength: 8)
+
                 currentPageActions
-                Spacer()
+
                 Button {
                     dismiss()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 30))
+                        .font(.system(size: 26))
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.white, .white.opacity(0.25))
-                        .padding(16)
+                        .frame(width: 40, height: 40)
                         .contentShape(Rectangle())
                 }
                 // Circular wash: the control is drawn as a filled circle, and a
                 // rounded-square wash would tint only the corner slivers outside
-                // it. The label's own 16pt padding already carries the frame well
-                // past the 28pt floor, so `size` never binds here.
+                // it. The label's own frame already carries the target well past
+                // the 28pt floor, so `size` never binds here.
                 .pointerIconButton(shape: .circle)
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "attachment.fullscreen.done",
                     defaultValue: "Done"
                 )))
             }
+            .padding(.horizontal, 12)
+            .frame(minHeight: AttachmentGalleryChrome.headerHeight)
+            // A picture can be any colour, so the words above it carry their own
+            // ground rather than trusting the pixels underneath.
+            .background {
+                LinearGradient(
+                    colors: [.black.opacity(0.55), .black.opacity(0)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea(edges: .top)
+                .allowsHitTesting(false)
+            }
+
             Spacer()
         }
+    }
+}
+
+private extension View {
+    /// The gallery's desktop sheet frame. Declared here rather than borrowed
+    /// from a Work helper: the gallery belongs to neither surface, and a shared
+    /// component reaching into one caller's folder for its own geometry is the
+    /// dependency that keeps the two sizes drifting apart.
+    func galleryDesktopFrame() -> some View {
+        #if os(macOS)
+        frame(
+            minWidth: 640,
+            idealWidth: 900,
+            maxWidth: .infinity,
+            minHeight: 480,
+            idealHeight: 640,
+            maxHeight: .infinity
+        )
+        #else
+        self
+        #endif
     }
 }
 
@@ -330,6 +562,11 @@ extension AttachmentFullScreenView where PageActions == EmptyView {
         )
     }
 
+}
+
+/// Chat's gallery: the same component, with the system's own Share control in
+/// the header's actions slot.
+extension AttachmentFullScreenView where PageActions == AttachmentGalleryShareLink {
     /// Chat's call site: the message's IMAGE attachments (already filtered to
     /// `isImage && !isServerFile`) plus the tapped index.
     ///
@@ -337,16 +574,55 @@ extension AttachmentFullScreenView where PageActions == EmptyView {
     /// rows whose image bytes are empty, so an index-aligned lookup would show
     /// the wrong picture on every page after such a row. A page whose bytes are
     /// missing gets the failure state instead.
+    ///
+    /// ONE loader for both the gallery and the Share item, so a share reads the
+    /// same bytes the page is showing and the in-flight fetch they may both be
+    /// waiting on is shared rather than duplicated.
     init(imageAttachments: [AttachmentRecord], messageID: UUID, startIndex: Int) {
         let loader = MessageAttachmentBytesLoader(messageID: messageID)
+        let pages = AttachmentGalleryPage.pages(forImageAttachments: imageAttachments)
         self.init(
-            pages: AttachmentGalleryPage.pages(forImageAttachments: imageAttachments),
+            pages: pages,
             startIndex: startIndex,
             loadFullBytes: { attachmentID in try await loader.bytes(for: attachmentID) },
             // Nil: this is the ZOOM surface for bytes the user already sent, so
             // Chat keeps decoding them at full resolution.
-            fullDecodeMaxPixel: nil
-        )
+            fullDecodeMaxPixel: nil,
+            selection: nil
+        ) { pageID in
+            AttachmentGalleryShareLink(
+                item: AttachmentGalleryShareItem(
+                    name: AttachmentGalleryHeader.shareName(
+                        for: pageID,
+                        in: pages
+                    ),
+                    // The picker's row title and the file the destination
+                    // writes are derived from the SAME name, so a person who
+                    // recognised the row recognises the file.
+                    filename: AttachmentGalleryShareItem.suggestedFilename(
+                        for: pageID,
+                        in: pages
+                    ),
+                    load: { try await loader.bytes(for: pageID) }
+                )
+            )
+        }
+    }
+}
+
+extension AttachmentGalleryHeader {
+    /// What a shared page is called in the system's own preview.
+    ///
+    /// A page with no title still needs a name here — a blank share preview
+    /// reads as a broken row — so the accessibility label ("Image 3 of 10")
+    /// stands in, which is exactly what the header omits and the share sheet
+    /// needs.
+    nonisolated static func shareName(
+        for pageID: UUID,
+        in pages: [AttachmentGalleryPage]
+    ) -> String {
+        guard let page = pages.first(where: { $0.id == pageID }) else { return "" }
+        return displayTitle(page.title) ?? page.accessibilityLabel
     }
 }
 

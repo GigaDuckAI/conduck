@@ -306,7 +306,7 @@ actor WorkCaptureDrainer {
                 WorkMaterialDraft(
                     id: try Self.noteMaterialID(for: envelope),
                     kind: .note,
-                    title: String(localized: "workboard.capture.note", defaultValue: "Share note"),
+                    title: Self.noteTitle(for: trimmedNote),
                     textContent: trimmedNote,
                     storageMode: .metadataOnly,
                     sourceDevice: sourceDevice,
@@ -848,6 +848,27 @@ actor WorkCaptureDrainer {
             ids.insert(try noteMaterialID(for: envelope))
         }
         return ids
+    }
+
+    /// What a shared note is CALLED, derived from what was actually shared.
+    ///
+    /// Every share-sheet capture used to land under the one literal, so three
+    /// cards on a desk carried the same identity line while the words that told
+    /// them apart sat underneath. The rule is the composer's own — first
+    /// meaningful line, cut at the same 72 characters — so a note typed into
+    /// Work and a note shared into it are named by ONE rule rather than two.
+    ///
+    /// The localized fallback survives for text with no line to take, which is
+    /// the only case with nothing to derive from. Cards already on the desk
+    /// under the old literal are left exactly as they are and suppressed at
+    /// display by `WorkboardCardFacePolicy`: rewriting them would advance the
+    /// revision of every one of those rows and re-sync the whole desk to say
+    /// nothing new.
+    static func noteTitle(for trimmedNote: String) -> String {
+        let derived = WorkboardWorkspaceCaptureLogic.title(for: trimmedNote)
+        return derived.isEmpty
+            ? String(localized: "workboard.capture.note", defaultValue: "Share note")
+            : derived
     }
 
     /// Stable visible-note identity without expanding the cross-process manifest.

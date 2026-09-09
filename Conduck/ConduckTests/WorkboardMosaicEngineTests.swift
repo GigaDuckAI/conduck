@@ -9,6 +9,16 @@
 // column search behaves from a narrow phone to a wide Mac, degenerate widths and
 // proposals stay finite, and drop indices read in visual order under both
 // layout directions.
+//
+// TWO ENGINES, ONE FILE. The board ships ONE footprint, so the default engine
+// grants every card the same tile — the "One footprint" section holds that, and
+// holds it TOTALLY, because the fixed-slot drag is only true if no path can
+// still draw a wide card. The mixed-span path stays compiled and stays tested
+// here behind an explicit `footprint: .mixed`, because uniformity is a product
+// bet that has to be reversible on evidence rather than a deletion. A test that
+// feeds a mix of sizes therefore says `.mixed`; a test whose spans are all
+// standard is left on the default engine on purpose, since that is the engine
+// the app actually runs.
 
 import SwiftUI
 import XCTest
@@ -34,7 +44,7 @@ final class WorkboardMosaicEngineTests: XCTestCase {
     // MARK: - Geometry invariants
 
     func testNoOverlapAndInBoundsAcrossWidthMatrix() {
-        let engine = WorkboardMosaicEngine()
+        let engine = WorkboardMosaicEngine(footprint: .mixed)
         for width in widthMatrix {
             for seed in UInt64(1)...UInt64(12) {
                 let spans = pseudoRandomSpans(count: 17, seed: seed)
@@ -47,7 +57,7 @@ final class WorkboardMosaicEngineTests: XCTestCase {
     }
 
     func testEveryPlacementKeepsInputOrder() {
-        let engine = WorkboardMosaicEngine()
+        let engine = WorkboardMosaicEngine(footprint: .mixed)
         let spans = pseudoRandomSpans(count: 23, seed: 99)
         let result = engine.place(spans: spans, availableWidth: 744)
 
@@ -56,7 +66,7 @@ final class WorkboardMosaicEngineTests: XCTestCase {
     }
 
     func testPermutingSizesNeverReordersPlacements() {
-        let engine = WorkboardMosaicEngine()
+        let engine = WorkboardMosaicEngine(footprint: .mixed)
         let sizes: [WorkMaterialCardSize] = [.small, .standard, .large, .small, .standard]
         for permutation in permutations(sizes) {
             for width in [CGFloat(360), 600, 920, 1280] {
@@ -72,7 +82,7 @@ final class WorkboardMosaicEngineTests: XCTestCase {
     }
 
     func testFramesAreDeterministic() {
-        let engine = WorkboardMosaicEngine()
+        let engine = WorkboardMosaicEngine(footprint: .mixed)
         let spans = pseudoRandomSpans(count: 9, seed: 7)
         XCTAssertEqual(
             engine.place(spans: spans, availableWidth: 834),
@@ -122,7 +132,7 @@ final class WorkboardMosaicEngineTests: XCTestCase {
     }
 
     func testVeryNarrowWidthDropsBelowTheCompactFloorRatherThanShrinkTiles() {
-        let engine = WorkboardMosaicEngine()
+        let engine = WorkboardMosaicEngine(footprint: .mixed)
         XCTAssertEqual(engine.columnCount(forWidth: 200), WorkboardMosaicMetrics.absoluteMinimumColumns)
 
         let result = engine.place(spans: [.large, .standard, .small], availableWidth: 200)
@@ -144,7 +154,7 @@ final class WorkboardMosaicEngineTests: XCTestCase {
     // MARK: - Degenerate input
 
     func testDegenerateWidthsStayFiniteAndPositive() {
-        let engine = WorkboardMosaicEngine()
+        let engine = WorkboardMosaicEngine(footprint: .mixed)
         for width in [CGFloat(0), -400, .nan, .infinity, -.infinity, 1, 0.0001] {
             let result = engine.place(spans: [.standard, .small, .large], availableWidth: width)
             XCTAssertTrue(result.unitSize.width.isFinite, "width \(width)")
@@ -178,7 +188,8 @@ final class WorkboardMosaicEngineTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(metrics.maximumColumns, metrics.preferredMinimumColumns)
         XCTAssertEqual(metrics.fallbackWidth, 360)
 
-        let result = WorkboardMosaicEngine(metrics: metrics).place(spans: [.large, .small], availableWidth: 500)
+        let result = WorkboardMosaicEngine(metrics: metrics, footprint: .mixed)
+            .place(spans: [.large, .small], availableWidth: 500)
         assertNoOverlap(result, context: "sanitised metrics")
         assertInBounds(result, context: "sanitised metrics")
     }
@@ -247,7 +258,7 @@ final class WorkboardMosaicEngineTests: XCTestCase {
 
     func testDynamicTypeStillHoldsGeometryInvariants() {
         for dynamicTypeSize in DynamicTypeSize.allCases {
-            let engine = WorkboardMosaicEngine(metrics: .scaled(for: dynamicTypeSize))
+            let engine = WorkboardMosaicEngine(metrics: .scaled(for: dynamicTypeSize), footprint: .mixed)
             for width in [CGFloat(320), 600, 1280] {
                 let result = engine.place(spans: pseudoRandomSpans(count: 11, seed: 3), availableWidth: width)
                 assertNoOverlap(result, context: "\(dynamicTypeSize) at \(width)")
@@ -300,7 +311,7 @@ final class WorkboardMosaicEngineTests: XCTestCase {
     }
 
     func testInsertionIndexIsMonotonicInBothAxes() {
-        let engine = WorkboardMosaicEngine()
+        let engine = WorkboardMosaicEngine(footprint: .mixed)
         let spans = pseudoRandomSpans(count: 11, seed: 7)
         let result = engine.place(spans: spans, availableWidth: 512)
 
@@ -324,7 +335,7 @@ final class WorkboardMosaicEngineTests: XCTestCase {
     }
 
     func testInsertionIndexIsAlwaysAValidInsertionPoint() {
-        let engine = WorkboardMosaicEngine()
+        let engine = WorkboardMosaicEngine(footprint: .mixed)
         let spans = pseudoRandomSpans(count: 13, seed: 42)
         let result = engine.place(spans: spans, availableWidth: 744)
         for x in stride(from: CGFloat(-50), through: result.contentSize.width + 50, by: 37) {
@@ -438,6 +449,245 @@ final class WorkboardMosaicEngineTests: XCTestCase {
             ),
             0
         )
+    }
+
+    // MARK: - One footprint
+
+    /// TOTAL enforcement, stated as a test: whatever a row stores, the DEFAULT
+    /// engine grants the same tile. This is what the fixed-slot drag rests on —
+    /// one reachable wide card and every slot rectangle below is a lie — so it
+    /// is checked over every size, every entry point into the engine and a
+    /// width matrix rather than at one convenient width.
+    func testTheDefaultEngineGrantsOneFootprintWhateverARowStores() {
+        let engine = WorkboardMosaicEngine()
+        let standardSpan = WorkboardFootprint.uniformSpan
+        for width in widthMatrix {
+            let bySpan = engine.place(spans: [.small, .large, .standard, .large], availableWidth: width)
+            let sizes: [WorkMaterialCardSize] = [.small, .large, .standard, .large]
+            let bySize = engine.place(
+                sizes: sizes.map { (id: UUID(), size: $0) },
+                availableWidth: width
+            )
+            let byItem = engine.place(
+                sizes.map { WorkboardMosaicEngine.Item(id: UUID(), size: $0) },
+                availableWidth: width
+            )
+            for result in [bySpan, bySize, byItem] {
+                let granted = min(standardSpan.columns, result.columns)
+                XCTAssertEqual(
+                    result.placements.map(\.span.columns),
+                    Array(repeating: granted, count: sizes.count),
+                    "a stored size reached the grid at width \(width)"
+                )
+                XCTAssertEqual(
+                    Set(result.placements.map(\.frame.width)).count, 1,
+                    "tiles differ in width at \(width)"
+                )
+                XCTAssertEqual(
+                    Set(result.placements.map(\.frame.height)).count, 1,
+                    "tiles differ in height at \(width)"
+                )
+            }
+            // Same board, same frames, whichever size the rows happen to hold.
+            let allStandard = engine.place(
+                spans: Array(repeating: WorkboardMosaicSpan.standard, count: sizes.count),
+                availableWidth: width
+            )
+            XCTAssertEqual(bySpan, allStandard, "the mixed board is not the uniform board at \(width)")
+        }
+    }
+
+    /// The switch is a switch. Asking for the mixed path still gets it, which
+    /// is what keeps the decision reversible rather than merely commented.
+    func testTheMixedPathStaysReachableBehindTheFootprintSwitch() {
+        let mixed = WorkboardMosaicEngine(footprint: .mixed)
+            .place(spans: [.small, .large], availableWidth: 920)
+        XCTAssertEqual(mixed.placements[0].span, .small)
+        XCTAssertEqual(mixed.placements[1].span, .large)
+        XCTAssertEqual(WorkboardFootprint.rendered(.large), .standard)
+        XCTAssertEqual(WorkboardFootprint.rendered(.small), .standard)
+        XCTAssertEqual(WorkboardFootprint.rendered(.standard), .standard)
+    }
+
+    /// THE SWITCH IS NOT THE WHOLE REVERSAL, and this is what says so out loud.
+    ///
+    /// `WorkboardFootprint.isUniform` returns the ENGINE to mixed spans. It does
+    /// not return the card FACES: `WorkboardSourceCard` and
+    /// `WorkboardAudioCardView` each hold a `layoutSize` that answers
+    /// `.standard` outright, which is exactly right while one footprint is
+    /// enforced and exactly wrong the moment it is not — standard content, and a
+    /// standard companion band, drawn into a one-unit tile. Nor does the switch
+    /// move the canvas's drop resolution off the slot functions and back onto
+    /// `WorkboardMosaicLayout.insertionIndex(at:in:containerWidth:layoutDirection:)`,
+    /// which is the only reader that understands a mixed board's gaps.
+    ///
+    /// So the coupling is asserted rather than left in a comment: while the
+    /// board is uniform the hardcoded face is correct and is pinned as such,
+    /// and the day somebody flips the switch this test fails and names the files
+    /// that have to follow it. A silent half-reversal is the failure mode a
+    /// switch invites; a red test is not.
+    func testFlippingTheFootprintSwitchAloneWouldNotReturnTheCardFaces() throws {
+        let faces = [
+            "Conduck/Views/Workboard/WorkboardCaptureCanvas.swift",
+            "Conduck/Views/Workboard/WorkboardAudioCardView.swift",
+        ]
+        let hardcoded = "private var layoutSize: WorkMaterialCardSize { .standard }"
+        let remedy = "route it through WorkboardFootprint.rendered(material.cardSize),"
+            + " restore its compact/wide drawing, and resolve drops through"
+            + " WorkboardMosaicLayout.insertionIndex(at:in:containerWidth:layoutDirection:)"
+            + " instead of the slot functions"
+        for path in faces {
+            let source = try RefusalLaneSource.source(at: path)
+            if WorkboardFootprint.isUniform {
+                XCTAssertTrue(
+                    source.contains(hardcoded),
+                    "\(path) draws the granted tile while one footprint is enforced"
+                )
+            } else {
+                XCTAssertFalse(
+                    source.contains(hardcoded),
+                    "\(path) still hardcodes its footprint on a mixed board — \(remedy)"
+                )
+            }
+        }
+    }
+
+    /// Six cards per row on the board's own column, two on a phone. The memo's
+    /// whole width argument is this number; anything else and the Mac window is
+    /// still mostly margin.
+    func testTheBoardsColumnHoldsSixCardsPerRowAndAPhoneHoldsTwo() {
+        let engine = WorkboardMosaicEngine()
+        // `WorkboardDetailView` pads before it caps, so the grid is the cap
+        // minus the two 16pt insets.
+        let grid = WorkboardMetrics.contentMaxWidth - 2 * WorkboardMetrics.standardSpacing
+        XCTAssertEqual(engine.cardsPerRow(forWidth: grid), 6)
+        XCTAssertEqual(engine.cardsPerRow(forWidth: 360 - 2 * WorkboardMetrics.standardSpacing), 2)
+        for width in widthMatrix {
+            XCTAssertGreaterThanOrEqual(engine.cardsPerRow(forWidth: width), 2, "width \(width)")
+            XCTAssertEqual(engine.columnCount(forWidth: width) % 2, 0, "width \(width)")
+        }
+    }
+
+    // MARK: - Slots
+
+    /// Slots are a pure function of (count, width): they answer for the uniform
+    /// grid whatever the cards store, and they do not move while one card is
+    /// lifted out of them. That is the property the drag is built on.
+    func testSlotFramesAreTheUniformGridAndIgnoreWhatCardsStore() {
+        let engine = WorkboardMosaicEngine()
+        for width in widthMatrix {
+            let slots = engine.slotFrames(count: 7, width: width)
+            XCTAssertEqual(slots.count, 7)
+            XCTAssertEqual(
+                slots, engine.place(spans: Array(repeating: .standard, count: 7), availableWidth: width)
+                    .placements.map(\.frame)
+            )
+            XCTAssertEqual(Set(slots.map(\.width)).count, 1, "width \(width)")
+            let perRow = engine.cardsPerRow(forWidth: width)
+            if slots.count > perRow {
+                XCTAssertEqual(slots[0].minY, slots[perRow - 1].minY, accuracy: 0.001)
+                XCTAssertGreaterThan(slots[perRow].minY, slots[0].minY, "row did not wrap at \(width)")
+            }
+        }
+        XCTAssertTrue(engine.slotFrames(count: 0, width: 920).isEmpty)
+    }
+
+    /// The presented form a placeholder is drawn from: mirrored for
+    /// right-to-left and shifted by the same centring inset the layout applies,
+    /// so a caller never re-derives either and cannot mirror twice.
+    func testPresentedSlotFramesCarryTheMirrorAndTheCentringInset() {
+        let engine = WorkboardMosaicEngine()
+        // Wide enough that the unit clamps and the grid stops filling the
+        // container, which is the only case a centring inset exists in.
+        let width: CGFloat = 2400
+        let result = engine.uniformResult(count: 5, width: width)
+        let inset = WorkboardMosaicLayout.horizontalInset(
+            containerWidth: width, contentWidth: result.contentSize.width
+        )
+        XCTAssertGreaterThan(inset, 0, "the fixture needs leftover width for the inset to matter")
+
+        let leftToRight = engine.presentedSlotFrames(count: 5, width: width, layoutDirection: .leftToRight)
+        XCTAssertEqual(leftToRight[0].minX, inset + result.placements[0].frame.minX, accuracy: 0.001)
+
+        let rightToLeft = engine.presentedSlotFrames(count: 5, width: width, layoutDirection: .rightToLeft)
+        for (index, frame) in rightToLeft.enumerated() {
+            XCTAssertEqual(frame.width, leftToRight[index].width, accuracy: 0.001)
+            XCTAssertEqual(frame.minY, leftToRight[index].minY, accuracy: 0.001)
+        }
+        XCTAssertGreaterThan(
+            rightToLeft[0].minX, rightToLeft[1].minX,
+            "the first card sits on the right in a right-to-left board"
+        )
+    }
+
+    /// The boundary rule, checked as a boundary: a pointer holds its slot right
+    /// up to a tile's horizontal midpoint and takes the next one past it. The
+    /// lines are the same in both layout directions once the mirror is undone.
+    func testInsertionSlotResolvesOnTileMidpointsInBothDirections() {
+        let engine = WorkboardMosaicEngine()
+        let width: CGFloat = 920
+        let frames = engine.presentedSlotFrames(count: 6, width: width, layoutDirection: .leftToRight)
+
+        for (index, frame) in frames.enumerated() {
+            XCTAssertEqual(
+                engine.insertionSlot(
+                    at: CGPoint(x: frame.midX - 1, y: frame.midY),
+                    count: 6, width: width, layoutDirection: .leftToRight
+                ),
+                index,
+                "slot \(index) released its gap before the midpoint"
+            )
+            XCTAssertEqual(
+                engine.insertionSlot(
+                    at: CGPoint(x: frame.midX + 1, y: frame.midY),
+                    count: 6, width: width, layoutDirection: .leftToRight
+                ),
+                index + 1,
+                "slot \(index) held its gap past the midpoint"
+            )
+        }
+
+        let mirrored = engine.presentedSlotFrames(count: 6, width: width, layoutDirection: .rightToLeft)
+        XCTAssertEqual(
+            engine.insertionSlot(
+                at: CGPoint(x: mirrored[0].midX + 1, y: mirrored[0].midY),
+                count: 6, width: width, layoutDirection: .rightToLeft
+            ),
+            0,
+            "right-to-left reads the other way and still names the first gap"
+        )
+        // Below every band, and on an empty board.
+        XCTAssertEqual(
+            engine.insertionSlot(
+                at: CGPoint(x: 10, y: 100_000), count: 6, width: width, layoutDirection: .leftToRight
+            ),
+            6
+        )
+        XCTAssertEqual(
+            engine.insertionSlot(
+                at: CGPoint(x: 10, y: 10), count: 0, width: width, layoutDirection: .leftToRight
+            ),
+            0
+        )
+    }
+
+    /// A slot is always a valid gap, at every width, for any pointer.
+    func testInsertionSlotIsAlwaysAValidGap() {
+        let engine = WorkboardMosaicEngine()
+        for width in widthMatrix {
+            let result = engine.uniformResult(count: 9, width: width)
+            for x in stride(from: CGFloat(-60), through: width + 60, by: 29) {
+                for y in stride(from: CGFloat(-60), through: result.contentSize.height + 60, by: 31) {
+                    for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+                        let slot = engine.insertionSlot(
+                            at: CGPoint(x: x, y: y), count: 9, width: width, layoutDirection: direction
+                        )
+                        XCTAssertGreaterThanOrEqual(slot, 0)
+                        XCTAssertLessThanOrEqual(slot, 9)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Helpers

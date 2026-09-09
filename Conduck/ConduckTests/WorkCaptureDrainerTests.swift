@@ -67,7 +67,10 @@ final class WorkCaptureDrainerTests: XCTestCase {
         let note = try XCTUnwrap(desk.materials.first)
         XCTAssertEqual(note.id, envelope.id)
         XCTAssertEqual(note.kind, .note)
-        XCTAssertEqual(note.title, "Share note")
+        // DESIGN CHANGE: a shared note is named by its own first line, under
+        // the composer's 72-character rule, instead of the literal "Share note"
+        // every share-sheet capture used to land under.
+        XCTAssertEqual(note.title, "Ask the harbour office about the winter timetable")
         XCTAssertEqual(note.textContent, "Ask the harbour office about the winter timetable")
     }
 

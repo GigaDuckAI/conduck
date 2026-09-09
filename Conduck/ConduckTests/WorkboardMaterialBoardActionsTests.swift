@@ -3,10 +3,14 @@
 // ConduckTests
 // WorkboardMaterialBoardActionsTests.swift
 //
-// The board is a free card board: cards are dragged into a new order and
-// resized. These tests hold the property that separates those two gestures —
-// reorder rewrites canonical card order under the owner's optimistic revision,
-// while a resize is presentation and must leave the revision untouched.
+// The board is an ordered gallery: one footprint, and cards dragged into a new
+// order. These tests hold what a reorder is — a complete permutation rewritten
+// under a baseline the drag was planned on, so an arrival that lands while it
+// is saving is kept rather than answered with a refusal.
+//
+// There is no resize gesture to separate it from any more: the board grants
+// every card the same tile (`WorkboardFootprint`), so the desk writes no card
+// size at all and the stored column is read-only to it.
 
 import XCTest
 @testable import Conduck
@@ -18,12 +22,10 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
     private final class BoardHarness {
         var item: WorkboardItemSnapshot
         var reorderedOrders: [[UUID]] = []
-        var reorderRevisions: [Int64] = []
-        var cardSizeWrites: [(materialID: UUID, size: WorkMaterialCardSize)] = []
+        var reorderBaselines: [WorkboardReorderBaseline] = []
         var removedMaterialIDs: [UUID] = []
         var removeRevisions: [Int64] = []
         var reorderFails = false
-        var cardSizeFails = false
         var removeFails = false
         var loadFails = false
         var loadCount = 0
@@ -113,7 +115,11 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
 
         XCTAssertTrue(moved)
         XCTAssertEqual(harness.reorderedOrders, [[ids[2], ids[0], ids[1]]])
-        XCTAssertEqual(harness.reorderRevisions, [9], "the drag carries the order the person saw")
+        XCTAssertEqual(
+            harness.reorderBaselines.map(\.orderedIDs),
+            [ids],
+            "the drag carries the order the person saw as its baseline"
+        )
         let stored = viewModel.desk?.materials ?? []
         XCTAssertEqual(stored.map(\.id), [ids[2], ids[0], ids[1]])
         XCTAssertEqual(stored.map(\.sequence), [0, 1, 2], "ranks stay dense")
@@ -204,50 +210,36 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
         XCTAssertNil(viewModel.notice)
     }
 
-    // MARK: - Card size
+    // MARK: - Footprint
 
-    func testCardSizeAppliesLocallyWithoutTouchingTheBriefOrTheRevision() async {
-        let materials = makeMaterials(count: 2)
+    /// The desk offers no way to change a card's footprint, so the write seam
+    /// it used to hold is gone from `Dependencies` entirely — a closure the
+    /// board cannot fire is a door that does not exist.
+    ///
+    /// The stored column survives: a row carrying `large` decodes as `large`
+    /// and syncs untouched, and only the RENDERED footprint is normalised. That
+    /// is what makes the one-footprint decision reversible on evidence —
+    /// flipping `WorkboardFootprint.isUniform` has to find the sizes still
+    /// there.
+    func testTheDeskRendersOneFootprintWithoutRewritingWhatARowStores() async {
+        var materials = makeMaterials(count: 3)
+        materials[0].cardSize = .large
+        materials[1].cardSize = .small
         let item = makeDesk(materials: materials, revision: 9)
         let harness = BoardHarness(item: item)
         let viewModel = await makeViewModelShowingDesk(harness: harness)
 
-        let resized = await viewModel.setMaterialCardSize(.large, materialID: materials[1].id)
-
-        XCTAssertTrue(resized)
-        XCTAssertEqual(harness.cardSizeWrites.count, 1)
-        XCTAssertEqual(harness.cardSizeWrites[0].materialID, materials[1].id)
-        XCTAssertEqual(harness.cardSizeWrites[0].size, .large)
         XCTAssertEqual(
             viewModel.desk?.materials.map(\.cardSize),
-            [.standard, .large]
+            [.large, .small, .standard],
+            "the board reads the column back exactly as the rows hold it"
         )
-        XCTAssertEqual(viewModel.desk?.revision, 9)
-        XCTAssertTrue(harness.reorderedOrders.isEmpty)
-    }
-
-    func testResizingToTheSameSizeIsANoOpAndAFailedResizeRollsBack() async {
-        let materials = makeMaterials(count: 2)
-        let item = makeDesk(materials: materials, revision: 2)
-        let harness = BoardHarness(item: item)
-        let viewModel = await makeViewModelShowingDesk(harness: harness)
-
-        let unchanged = await viewModel.setMaterialCardSize(
-            .standard,
-            materialID: materials[0].id
-        )
-        XCTAssertTrue(unchanged)
-        XCTAssertTrue(harness.cardSizeWrites.isEmpty)
-
-        harness.cardSizeFails = true
-        let resized = await viewModel.setMaterialCardSize(.small, materialID: materials[0].id)
-
-        XCTAssertFalse(resized)
         XCTAssertEqual(
-            viewModel.desk?.materials.map(\.cardSize),
-            [.standard, .standard]
+            viewModel.desk?.materials.map(\.renderedCardSize),
+            [.standard, .standard, .standard],
+            "and draws every one of them at the one footprint the board grants"
         )
-        XCTAssertNotNil(viewModel.notice)
+        XCTAssertEqual(viewModel.desk?.revision, 9, "reading a footprint writes nothing")
     }
 
     // MARK: - Board removal
@@ -374,9 +366,9 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
             },
             replaceMaterial: { _, _, _, _ in throw TestError.unexpectedCall },
             openMaterial: { _ in },
-            reorderMaterials: { [harness] orderedIDs, expectedRevision in
+            reorderMaterials: { [harness] orderedIDs, baseline in
                 harness.reorderedOrders.append(orderedIDs)
-                harness.reorderRevisions.append(expectedRevision)
+                harness.reorderBaselines.append(baseline)
                 if harness.reorderFails { throw TestError.expectedFailure }
                 let byID = Dictionary(
                     harness.item.materials.map { ($0.id, $0) },
@@ -392,10 +384,6 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
                     revision: harness.item.revision + 1
                 )
                 return harness.item
-            },
-            setMaterialCardSize: { [harness] materialID, size in
-                if harness.cardSizeFails { throw TestError.expectedFailure }
-                harness.cardSizeWrites.append((materialID: materialID, size: size))
             }
         ))
     }

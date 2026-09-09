@@ -6,7 +6,13 @@
 // The desk's compact alternative to mosaic cards. A steady thumbnail column,
 // readable preview and visible actions make a long desk easier to scan. The
 // board owns dragging and order; this row only marks the grip and exposes the
-// same moves to keyboard and VoiceOver users. Card sizes remain a tile concern.
+// same moves to keyboard and VoiceOver users. There is no footprint to pick:
+// the board draws one slot size, so a row offers no card-size control either.
+//
+// WHAT THE ROW SAYS is not the row's decision. Title, body, the demoted meta
+// line and the availability sentence all come from `WorkboardCardFacePolicy`,
+// the same policy the mosaic tile and the spoken label read — a row that
+// composed its own would be a third place for the desk to describe one card.
 //
 // Audio keeps the card family's player, lazy payload read and output ownership:
 // changing presentation must not introduce a second audio session or make a
@@ -107,7 +113,7 @@ struct WorkboardMaterialListRow: View {
             WorkboardAudioTransport(
                 materialID: companion.id,
                 player: player,
-                isPlayable: isPlayable,
+                availability: transportAvailability,
                 isEnabled: workbenchDestinationIsActive,
                 activation: .control,
                 dimension: 32,
@@ -122,12 +128,22 @@ struct WorkboardMaterialListRow: View {
         HStack(alignment: .center, spacing: 12) {
             artwork
             VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: rowTitle)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppColors.textPrimary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
+                if let rowTitle {
+                    Text(verbatim: rowTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppColors.textPrimary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+
+                if let rowIdentity {
+                    Text(verbatim: rowIdentity)
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textTertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
 
                 preview
                 metadata
@@ -148,9 +164,12 @@ struct WorkboardMaterialListRow: View {
         }
     }
 
+    /// Preview bytes the row ALREADY HOLDS, whatever kind wrote them, decoded
+    /// and never generated: a PDF that arrived with a thumbnail shows it, and
+    /// one that did not keeps its glyph.
     @ViewBuilder
     private var artwork: some View {
-        if material.kind == .image, let data = material.thumbnailData {
+        if let data = material.thumbnailData {
             StagedImageTile(
                 id: material.id,
                 data: data,
@@ -208,12 +227,18 @@ struct WorkboardMaterialListRow: View {
     private var metadata: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                Text(material.kind.title)
-                if let byteCount = material.byteCount {
-                    Text(verbatim: ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file))
+                // The face's meta line where it has one — a file's type and
+                // size, a picture's size — and the kind's own noun where it
+                // does not, so the row never says both about the same card.
+                if let meta = face.meta {
+                    Text(verbatim: meta)
+                } else {
+                    Text(material.kind.title)
                 }
                 Spacer(minLength: 0)
-                Text(material.createdAt, format: .relative(presentation: .named))
+                if face.showsAge {
+                    Text(material.createdAt, format: .relative(presentation: .named))
+                }
             }
             .font(.caption2)
             .foregroundStyle(AppColors.textTertiary)
@@ -253,7 +278,7 @@ struct WorkboardMaterialListRow: View {
             }
         }
         if WorkboardCardActionPolicy.allows(.open, when: material.availability) {
-            Button(action: onOpen) {
+            Button(action: openMaterial) {
                 Label(LocalizedStringResource("workboard.material.open", defaultValue: "Open"), systemImage: "arrow.up.forward.app")
             }
             if let onShare {
@@ -307,7 +332,7 @@ struct WorkboardMaterialListRow: View {
     private var accessibilityActions: some View {
         if WorkboardCardActionPolicy.allows(.open, when: material.availability) {
             if material.kind == .audio {
-                Button(LocalizedStringResource("workboard.material.open", defaultValue: "Open"), action: onOpen)
+                Button(LocalizedStringResource("workboard.material.open", defaultValue: "Open"), action: openMaterial)
             }
             if let onShare {
                 Button(
@@ -337,16 +362,30 @@ struct WorkboardMaterialListRow: View {
         }
     }
 
+    /// One card, one face, shared with the mosaic tile and the spoken label.
+    private var face: WorkboardCardFace {
+        WorkboardCardFacePolicy.face(for: material)
+    }
+
     /// A folded row's tap opens the PICTURE: the recording has its own badge,
     /// and the row is a screenshot with a voice note on it rather than a
     /// recording that happens to have a thumbnail.
     private var primaryAction: (() -> Void)? {
         if material.kind == .audio, isPlayable { return toggleTransport }
         switch WorkboardCardActionPolicy.primaryAction(for: material.availability) {
-        case .open: return onOpen
+        case .open: return openMaterial
         case .reattach: return onReattach
         case .play, .none: return nil
         }
+    }
+
+    /// Opening hands the folded recording to the gallery, which presents its
+    /// own transport for the same clip. The row's player is torn down first —
+    /// including a payload read in flight — so the sheet never shows Play over
+    /// audio the desk is still producing.
+    private func openMaterial() {
+        player.deactivate()
+        onOpen()
     }
 
     /// Whether this row draws a transport at all — an audio row, or a picture
@@ -397,23 +436,33 @@ struct WorkboardMaterialListRow: View {
         }
     }
 
-    /// The row's own headline: the recording's words on a folded row, the
-    /// material's name everywhere else.
-    private var rowTitle: String {
-        guard let companion = material.companion else { return material.name }
-        return WorkboardCompanionBand.title(for: companion)
+    /// The row's own headline: the recording's words on a folded row, and
+    /// otherwise whatever the shared face leads with — its heading, or the body
+    /// itself where the heading only repeated it. Absent means absent: a row
+    /// with nothing to lead with draws no bold blank where a title would be.
+    private var rowTitle: String? {
+        guard let companion = material.companion else { return face.leadLine }
+        return WorkboardCompanionBand.face(for: companion).leadLine
+    }
+
+    /// What names the card when its lead line is content rather than identity —
+    /// a titled link's host. The tile and the spoken label both keep it, so a
+    /// row that dropped it would be the one surface where "Winter timetable"
+    /// never says which site it is on.
+    private var rowIdentity: String? {
+        guard material.companion == nil else { return nil }
+        return face.identity
     }
 
     private var previewText: String? {
         if let companion = material.companion {
-            return WorkboardCompanionBand.transcript(for: companion)
+            return WorkboardCompanionBand.face(for: companion).trailingExcerpt
         }
-        return (material.kind == .audio ? material.textContent : WorkboardCardAccessibility.previewText(for: material))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return face.trailingExcerpt
     }
 
     private var audioSymbol: String {
-        WorkboardAudioTransport.symbolName(phase: player.phase, isPlayable: isPlayable)
+        WorkboardAudioTransport.symbolName(phase: player.phase, availability: transportAvailability)
     }
 
     private var transportTitle: LocalizedStringResource {
@@ -445,32 +494,29 @@ struct WorkboardMaterialListRow: View {
     }
 
     private var availabilitySymbol: String {
-        switch material.availability {
-        case .localOnly: return "internaldrive"
-        case .syncPending: return "icloud.and.arrow.down"
-        case .available, .unavailableOnThisDevice: return "paperclip.badge.ellipsis"
-        }
+        WorkboardCardFacePolicy.availabilityGlyphName(for: material.availability)
     }
 
     private var availabilityTint: Color {
-        switch material.availability {
-        case .localOnly: return AppColors.brandTeal
-        case .syncPending: return AppColors.textTertiary
-        case .available, .unavailableOnThisDevice: return AppColors.warning
-        }
+        WorkboardCardFacePolicy.availabilityTint(for: material.availability)
     }
 
     /// A folded row says what it IS before it says the picture's name, then the
     /// recording's words: "Image" would describe half of the row.
     private var accessibilityLabel: Text {
-        var parts = material.companion == nil
-            ? [String(localized: material.kind.title), material.name]
-            : [String(localized: WorkboardCompanionBand.accessibilityKindLabel), material.name]
-        if isPlayable { parts.append(String(localized: transportTitle)) }
-        if let previewText, !previewText.isEmpty {
-            parts.append(previewText)
-        } else if material.companion != nil {
-            parts.append(rowTitle)
+        var parts = [String(localized: material.companion == nil
+            ? material.kind.title
+            : WorkboardCompanionBand.accessibilityKindLabel)]
+        if let companion = material.companion {
+            parts.append(material.name)
+            if isPlayable { parts.append(String(localized: transportTitle)) }
+            parts.append(contentsOf: WorkboardCompanionBand.face(for: companion).spokenParts)
+        } else {
+            if isPlayable { parts.append(String(localized: transportTitle)) }
+            // The face's own slots, said once. The row used to append the name
+            // and then the preview separately, so a card whose title is its own
+            // first line was read out twice.
+            parts.append(contentsOf: face.spokenParts)
         }
         if boardCount > 0, boardPosition > 0 {
             parts.append(WorkboardCardAccessibility.boardPositionLabel(position: boardPosition, count: boardCount))
