@@ -26,8 +26,8 @@ struct ConversationLibraryView: View {
     /// The section router, when a shell that HAS one put it here. Presence is
     /// the whole contract: the wide iPad shell injects the model into both of
     /// its mounted layers, so this host draws the Chats / Work control; the
-    /// compact iPhone shell injects nothing, so the same code draws nothing and
-    /// the tab bar stays the only section switch. See `sectionControlHost`.
+    /// compact shell omits this wide model. iPhone uses its own toolbar chooser
+    /// and compact iPad its tab bar. See `sectionControlHost`.
     @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
     @Binding var selectedConversationID: UUID?
     var recorder: InAppAudioRecorder
@@ -530,7 +530,7 @@ struct ConversationLibraryView: View {
     /// WHY IT IS ALSO THE PLATFORM GATE: the control renders exactly when a
     /// shell put a router in the environment. The wide iPad shell injects one
     /// into both mounted layers; the iPhone `TabView` injects none, so the phone
-    /// draws no control and its tab bar stays the only section switch. The
+    /// draws no wide control; compact navigation is owned by its shell. The
     /// destination read lives inside `WorkbenchSectionControl`'s own body (the
     /// binding is rebuilt in `WorkbenchSectionToolbarItem`'s body), which is what
     /// keeps it observation-tracked — an `@Observable` property read directly in

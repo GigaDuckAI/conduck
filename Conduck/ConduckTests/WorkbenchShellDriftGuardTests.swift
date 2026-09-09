@@ -11,8 +11,9 @@
 // bar and is collected by nothing — the exact shape that left Work unreachable
 // from Chats on iPad. (2) EACH wide layer must hand the router down through the
 // environment, because that injection is the only thing a host has to discover
-// the control from — and the compact shell must inject NOTHING, because absence
-// is what keeps the control off the phone, which already carries a tab bar.
+// the wide control from. The compact shell keeps that model absent; iPhone uses
+// its separate phone router and hides the bottom tab bar, while compact iPad
+// retains its native tabs and receives no phone router.
 // (3) The tab order has to read Chats then Work, the same order as the wide
 // shell's control, and the wide shell has to be gated on the same predicate
 // `ContentView` gates its split layout on — a Plus/Max iPhone reports a regular
@@ -329,13 +330,7 @@ final class WorkbenchShellDriftGuardTests: XCTestCase {
         }
     }
 
-    /// The compact shell injects nothing, and no ancestor injects for it.
-    ///
-    /// Absence is the mechanism: the hosts draw the control when they find a
-    /// model and nothing when they do not, which is what keeps the phone free
-    /// of it without a single platform check in either host. An injection here
-    /// — or anywhere above the shell — would put a second, redundant section
-    /// switch in the nav bar of a phone that already carries the tab bar.
+    /// The compact shell must never inherit the wide toolbar control as well.
     func testCompactShellDoesNotInjectTheWorkbenchModel() throws {
         let source = try shellSource()
         let shell = try shellDeclaration(source)
@@ -347,9 +342,8 @@ final class WorkbenchShellDriftGuardTests: XCTestCase {
 
         XCTAssertNil(
             arms.else.range(of: "personalWorkbenchModel"),
-            "The compact arm injects `personalWorkbenchModel`. The hosts draw the Chats | Work "
-            + "control whenever they find that model, so the phone would carry a nav-bar section "
-            + "switch on top of the tab bar that already does the same job."
+            "The compact arm injects the wide model, duplicating the phone section control or "
+            + "compact iPad's native tab bar."
         )
 
         let viewBody = try RefusalLaneSource.trailingClosure(
@@ -361,7 +355,7 @@ final class WorkbenchShellDriftGuardTests: XCTestCase {
             viewBody.range(of: "personalWorkbenchModel"),
             "`PersonalWorkbenchView.body` injects `personalWorkbenchModel` above `shell`. The "
             + "environment flows down, so an injection here reaches the compact tab shell too and "
-            + "puts the section control back on the phone."
+            + "puts the wide section control on the phone alongside its own control."
         )
     }
 
@@ -388,8 +382,8 @@ final class WorkbenchShellDriftGuardTests: XCTestCase {
         )
         XCTAssertTrue(
             shellArms.else.contains("TabView"),
-            "The compact arm of `shell` no longer builds a `TabView`, so the phone loses the tab bar "
-            + "that is its only way between Chats and Work."
+            "The compact arm must retain its TabView so switching preserves destination state "
+            + "and compact iPad keeps its native tab bar."
         )
 
         let contentView = whitespaceNormalized(
@@ -493,6 +487,34 @@ final class WorkbenchShellDriftGuardTests: XCTestCase {
             ))
         }
         return tabs
+    }
+
+    func testEachCompactTabHidesBottomNavigationAndInjectsPhoneRouterOnlyOnPhone() throws {
+        let tabs = try compactTabDeclarations()
+        XCTAssertEqual(tabs.count, 2)
+        for tab in tabs {
+            let roots = topLevelStatements(in: tab.content)
+            XCTAssertEqual(roots.count, 1, "A tab must keep a stable destination root.")
+            let root = try XCTUnwrap(roots.first)
+            let chain = whitespaceNormalized(ownModifierChain(of: root))
+            XCTAssertEqual(
+                occurrences(
+                    of: ".environment(\\.phoneWorkbenchRouter, DeviceCapabilities.isiPad ? nil : model.router)",
+                    in: chain
+                ), 1,
+                "Each phone destination needs the shared router; compact iPad must receive none."
+            )
+            XCTAssertEqual(
+                occurrences(
+                    of: ".toolbar(DeviceCapabilities.isiPad ? .visible : .hidden, for: .tabBar)",
+                    in: chain
+                ), 1,
+                "Hide tabs on both iPhone destinations without removing compact iPad navigation."
+            )
+        }
+
+        let wide = try mountDeclaration(shellSource())
+        XCTAssertFalse(wide.contains("phoneWorkbenchRouter"), "Wide destinations keep their existing control.")
     }
 
     /// Chats leads, Work follows — the same reading order as the wide control.

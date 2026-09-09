@@ -37,18 +37,25 @@ struct WorkboardExperience: View {
     let isActive: Bool
     let reduceMotion: Bool
 
-    /// The section router, present only where a shell hands one down. The wide
-    /// iOS shell injects it into BOTH of its mounted layers; the compact iPhone
-    /// shell injects nothing. Presence is the whole contract for whether this
-    /// bar carries the Chats | Work control: iPhone finds nil, draws the view
-    /// menu alone, and its tab bar stays the only section switch.
+    /// The wide shell supplies its shared section control through this model.
+    /// iPhone supplies a separate router for expandable navigation; compact
+    /// iPad supplies neither because it uses the native tab bar.
     @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
+    #if os(iOS)
+    @Environment(\.phoneWorkbenchRouter) private var phoneWorkbenchRouter
+    #endif
 
     var body: some View {
         NavigationStack {
             detailColumn
                 #if os(iOS)
                 .toolbar { workbenchToolbar }
+                .overlay {
+                    if let router = phoneWorkbenchRouter {
+                        PhoneWorkbenchSectionOverlay(router: router, destination: .work)
+                    }
+                }
+                .onDisappear { phoneWorkbenchRouter?.dismissPhoneSection(for: .work) }
                 #endif
         }
         .environment(\.workbenchDestinationIsActive, isActive)
@@ -61,11 +68,9 @@ struct WorkboardExperience: View {
     /// navigation container reaches no bar at all — which is why this belongs
     /// here rather than on whichever host mounts the surface.
     ///
-    /// Declaration order is left-to-right order within one placement: view menu
-    /// first, section control last, so the control is the trailing-most item and
-    /// Work reads exactly as the Mac window does. Nothing else on this surface
-    /// declares a `.primaryAction` item, so no conditional neighbour can shift
-    /// it sideways.
+    /// The section control is always trailing-most. iPhone puts its view menu
+    /// on the leading edge to leave the expandable control its own space;
+    /// iPad keeps the view menu followed by the wide section control.
     ///
     /// No `ToolbarSpacer` between the two. A fixed spacer exists to break the
     /// ONE shared glass capsule the system wraps around adjacent items of a
@@ -79,12 +84,21 @@ struct WorkboardExperience: View {
     @ToolbarContentBuilder
     private var workbenchToolbar: some ToolbarContent {
         if isActive {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItem(placement: phoneWorkbenchRouter == nil ? .primaryAction : .topBarLeading) {
                 WorkboardLayoutMenu(viewModel: viewModel, isActive: isActive)
+                    .simultaneousGesture(TapGesture().onEnded {
+                        phoneWorkbenchRouter?.dismissPhoneSection(for: .work)
+                    })
             }
 
             if let personalWorkbenchModel {
                 WorkbenchSectionToolbarItem(model: personalWorkbenchModel)
+            }
+
+            if let router = phoneWorkbenchRouter {
+                ToolbarItem(placement: .primaryAction) {
+                    PhoneWorkbenchSectionButton(router: router, destination: .work)
+                }
             }
         }
     }
