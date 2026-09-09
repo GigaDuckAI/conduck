@@ -22,6 +22,11 @@
 // on disk, a copy that cannot start, and a copy that lands incomplete. In every
 // one of them the queue must still hold the file afterwards, or hold it until a
 // complete copy provably exists.
+//
+// And there is one thing a complete retirement must NOT carry. `refused/` is
+// swept by nothing, so a recording copied there would outlive every other copy
+// of itself — the second non-desk barrier against a recording this device never
+// agreed to keep, after the drainer's own refusal to make it a card.
 
 import XCTest
 @testable import Conduck
@@ -288,6 +293,84 @@ final class WorkCaptureDrainerRetirementTests: XCTestCase {
         XCTAssertEqual(pending, 0)
     }
 
+    // MARK: - A retirement never carries a recording
+
+    /// A capture can hold both: a document whose id AND whose escape id are
+    /// taken, which retires the whole claim, and beside it a recording the desk
+    /// refuses to hold at all. The document's bytes have to survive in
+    /// `refused/` — nobody else has them — and the recording's may not, because
+    /// nothing sweeps that directory and a copy there would outlive every other
+    /// copy of what a person said.
+    func testARefusedRecordingIsNotRetiredWithTheSiblingThatCollided() async throws {
+        let store = try await deskRefusingBothIDs(of: sharedID)
+        let document = Data("the shared file the queue is holding for us".utf8)
+        let recording = Data("compressed recording".utf8)
+        let envelope = WorkCaptureEnvelope(
+            note: "A capture whose entry id is already taken",
+            source: .shareExtension,
+            entries: [
+                .init(
+                    id: UUID(),
+                    kind: .file,
+                    sequence: 0,
+                    relativePath: "payload-000.m4a",
+                    displayName: "memo.m4a",
+                    mimeType: "audio/mp4",
+                    byteCount: Int64(recording.count)
+                ),
+                .init(
+                    id: sharedID,
+                    kind: .file,
+                    sequence: 1,
+                    relativePath: "payload-001.bin",
+                    displayName: "contract.bin",
+                    mimeType: "application/octet-stream",
+                    byteCount: Int64(document.count)
+                ),
+            ]
+        )
+        try publish(envelope, payloads: [
+            "payload-000.m4a": recording,
+            "payload-001.bin": document,
+        ])
+
+        let report = try await makeDrainer(store: store).drainAvailableCaptures()
+        XCTAssertEqual(report.invalidCaptureCount, 1)
+
+        let retired = refusedURL.appendingPathComponent(envelope.id.uuidString, isDirectory: true)
+        XCTAssertEqual(
+            try Data(contentsOf: retired.appendingPathComponent("payload-001.bin")),
+            document,
+            "what the queue gave up its copy for is still whole"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: retired.appendingPathComponent("manifest.json").path
+            )
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: retired.appendingPathComponent("refusal.txt").path
+            )
+        )
+
+        // THE POINT.
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: retired.appendingPathComponent("payload-000.m4a").path
+            ),
+            "a retirement may not become a permanent holder of a recording"
+        )
+        XCTAssertEqual(
+            try namesUnderRoot().filter { $0.hasSuffix(".m4a") }, [],
+            "and no scratch or displaced copy of it is left behind either"
+        )
+
+        // The queue was still acknowledged, so the recording left with it.
+        let pending = try await WorkCaptureInbox(baseURL: root).pendingCount()
+        XCTAssertEqual(pending, 0)
+    }
+
     // MARK: - Helpers
 
     /// The id every case here collides on. Fixed per case by the fixture rather
@@ -297,6 +380,21 @@ final class WorkCaptureDrainerRetirementTests: XCTestCase {
 
     private var refusedURL: URL {
         root.appendingPathComponent("refused", isDirectory: true)
+    }
+
+    /// Every regular file left anywhere under the inbox root, by name — the
+    /// retirement, its scratch siblings and whatever the queue still holds.
+    private func namesUnderRoot() throws -> [String] {
+        guard let walker = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        ) else { return [] }
+        var names: [String] = []
+        for case let url as URL in walker {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+            if values.isRegularFile == true { names.append(url.lastPathComponent) }
+        }
+        return names.sorted()
     }
 
     private func refusedChildren() throws -> [URL] {

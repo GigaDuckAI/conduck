@@ -358,17 +358,19 @@ final class PendingRetryOwnershipHandoffTests: XCTestCase {
 
     /// The discard confirmation says what is actually lost.
     ///
-    /// For a Work capture that already published, the recording is a playable
-    /// card on the desk and the queue is holding a second copy purely so the
-    /// words can be tried again — so "it cannot be recovered" is false, and
-    /// false in the direction that stops somebody tidying up.
+    /// For a Work capture stamped `.published`, the WORDS are on the desk and
+    /// the entry is holding only what is left over — the recording, when a death
+    /// landed between the words card and the clear, or the screenshot, when the
+    /// recording was retired the moment the words landed. So "it cannot be
+    /// recovered" is false there, and false in the direction that stops somebody
+    /// tidying up.
     func testTheDiscardConfirmationIsStateAwareAboutWhatItActuallyDeletes() throws {
         let cardPath = "Conduck/Views/Components/PendingRetryCard.swift"
         let card = try RefusalLaneSource.source(at: cardPath)
         XCTAssertTrue(card.contains("discardKeepsRecordingInWork"),
                       "The confirmation is the same sentence for every destination, so it "
-                      + "promises a published Work recording is gone when Discard removes only "
-                      + "the retry copy.")
+                      + "promises a person their words are gone when Discard removes only what "
+                      + "is left over from a capture the desk already holds.")
         XCTAssertTrue(card.contains("\"pendingRetry.card.discard.confirm.body.published\""))
         XCTAssertTrue(card.contains("\"pendingRetry.card.discard.confirm.body\""),
                       "The unpublished / Chat sentence must survive: for those captures the "

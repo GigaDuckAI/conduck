@@ -4,18 +4,22 @@
 // WatchWorkRelayPhoneTests.swift
 //
 // The phone half of the Watch → Work relay. A clip spoken into the wrist is
-// transcribed on the iPhone, and this is where it becomes a desk card.
+// parked on the iPhone, transcribed there, and this is where its words become a
+// desk card. The recording itself never reaches the desk: a Work voice note is
+// its words, and the bytes are a second copy kept only until they are written.
 //
 // Three claims, and each one has a failure the user pays for:
-//   • ORDER. The recording is published BEFORE any transcribe arm runs, and
-//     while the temp file still exists — both STT arms hand that URL to
-//     `STTClient`, which defer-deletes it. A publication deferred until after
-//     transcription would find nothing to publish, and a failed hop would cost
-//     the recording rather than just the words.
-//   • RETRYABILITY. A phase-1 refusal travels back as a code the wrist's queue
+//   • ORDER. The clip is PARKED in the phone's device-local retry lane before
+//     any transcribe arm runs, and while the temp file still exists — both STT
+//     arms hand that URL to `STTClient`, which defer-deletes it. A park
+//     deferred until after transcription would find nothing to park, and a
+//     failed hop would cost the recording rather than just the words.
+//   • RETRYABILITY. A refused park travels back as a code the wrist's queue
 //     LEAVES QUEUED. Claiming an entry deletes the only copy of the audio, so a
 //     terminal code on a storage blip destroys a capture the next attempt would
-//     have delivered.
+//     have delivered. A park that LANDED, by contrast, is answered with the
+//     durability stamp however the words go: the phone's own retry card owns
+//     the capture from then on.
 //   • ISOLATION. Nothing on this branch touches a conversation, a gateway ref
 //     or the converse pipeline. The whole point of a separate destination is
 //     that a private thought does not reach an agent; that is asserted
@@ -34,8 +38,28 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
 
     private var stores = IsolatedWorkStores()
 
+    /// The retry lane over a directory of this case's own. The production store
+    /// writes the process-global App-Group container every other capture test in
+    /// this bundle shares, so driving it would assert against — and corrupt —
+    /// their state.
+    private var retryContainer: URL!
+    private var lane: PendingRetryStore!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        retryContainer = FileManager.default.temporaryDirectory
+            .appendingPathComponent("conduck-relay-park-\(UUID().uuidString)", isDirectory: true)
+        lane = PendingRetryStore(
+            containerURL: retryContainer,
+            defaults: InMemoryDefaultsStore()
+        )
+    }
+
     override func tearDown() async throws {
         await stores.cleanUp()
+        lane = nil
+        if let retryContainer { try? FileManager.default.removeItem(at: retryContainer) }
+        retryContainer = nil
         try await super.tearDown()
     }
 
@@ -52,13 +76,13 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
         XCTAssertTrue(AppleSpeechRelayCoordinator.isWorkDestination("work"))
     }
 
-    // MARK: - The card id one utterance keeps
+    // MARK: - The capture id one utterance keeps
 
-    func testARequestIdThatIsAUuidIsTheCardIdItself() {
+    func testARequestIdThatIsAUuidIsTheCaptureIdItself() {
         // The wrist mints requestIDs as UUIDs, so the common path is an
-        // identity — which is what makes the desk write idempotent for a claim
-        // token the watch retries verbatim across the inline send, the file
-        // fallback and every drain re-fire.
+        // identity — which is what makes both the park and the desk write
+        // idempotent for a claim token the watch retries verbatim across the
+        // inline send, the file fallback and every drain re-fire.
         let requestID = UUID()
         XCTAssertEqual(
             AppleSpeechRelayCoordinator.workCaptureID(forRequestID: requestID.uuidString),
@@ -66,15 +90,15 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
         )
     }
 
-    func testAForeignRequestIdStillDerivesOneStableCardId() {
-        // A sender whose requestID is not a UUID must still land on ONE card
+    func testAForeignRequestIdStillDerivesOneStableCaptureId() {
+        // A sender whose requestID is not a UUID must still land on ONE capture
         // per utterance. A fresh random id here would turn each retry of one
-        // recording into another card on the desk.
+        // recording into another entry and another card.
         let derived = AppleSpeechRelayCoordinator.workCaptureID(forRequestID: "wrist-42")
         XCTAssertEqual(
             derived,
             AppleSpeechRelayCoordinator.workCaptureID(forRequestID: "wrist-42"),
-            "the same requestID derives the same card, in this process and any other"
+            "the same requestID derives the same capture, in this process and any other"
         )
         XCTAssertNotEqual(
             derived,
@@ -85,151 +109,162 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
         XCTAssertEqual(derived.uuid.8 & 0xC0, 0x80, "standard variant")
     }
 
-    // MARK: - Phase 1: the recording, before the words
+    // MARK: - Phase 1: the clip is parked, and nothing reaches the desk
 
-    func testARelayedCaptureBecomesAPlayableCardStampedWatchBeforeAnyTranscript() async throws {
+    func testARelayedClipIsParkedInThePhonesRetryLaneStampedWatch() async throws {
         let store = stores.make()
         let requestID = UUID().uuidString
-        let recording = Self.recordingBytes
 
-        let cardID = try await AppleSpeechRelayCoordinator.publishRelayedWorkRecording(
+        let claim = try await AppleSpeechRelayCoordinator.parkRelayedWorkClip(
             requestID: requestID,
-            audio: recording,
-            store: store
+            audio: Self.recordingBytes,
+            language: "en-US",
+            lane: lane
         )
-        XCTAssertEqual(cardID, UUID(uuidString: requestID))
 
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        let card = try XCTUnwrap(desk.materials.first { $0.id == cardID })
-        XCTAssertEqual(card.kind, .audio, "the clip is playable, not a note about a clip")
+        XCTAssertEqual(claim.id, UUID(uuidString: requestID))
+        XCTAssertEqual(claim.entry.audioData, Self.recordingBytes, "the wrist's bytes read back exactly")
+        let parked = claim.entry.metadata
         XCTAssertEqual(
-            card.sourceDevice, "watch",
+            parked.resolvedDestination, .work,
+            "A chat record would send these words to a gateway — the one thing this lane exists to prevent."
+        )
+        XCTAssertEqual(
+            parked.publicationState, .phaseOneFailed,
             """
-            the card names the surface the words were SPOKEN at. The phone writes it, so \
-            reading the writer's own device would file every wrist note under whichever \
-            iPhone happened to be nearby.
+            The ORDINARY state of a fresh Work capture, not a failure report: the desk holds \
+            nothing, so these bytes are the only copy of what was said.
             """
         )
-        XCTAssertNil(card.textContent, "phase 1 runs before transcription is attempted at all")
-        XCTAssertEqual(card.title, WorkVoiceCaptureCoordinator.untranscribedTitle)
-        XCTAssertTrue(card.hasPayload)
-        XCTAssertEqual(card.mimeType, "audio/mp4")
-        let payload = try await store.loadWorkMaterialPayload(id: cardID)
-        XCTAssertEqual(payload, recording, "the wrist's bytes read back exactly")
-    }
-
-    func testTheClipIsReadOffDiskBeforeTheTranscribeArmsCanDeleteIt() async throws {
-        // The file-taking overload is what the live path calls, and its whole
-        // job is to take the bytes while they still exist: the caller deletes
-        // this URL in a defer, and `STTClient` deletes it from under everyone.
-        let store = stores.make()
-        let requestID = UUID().uuidString
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("relay-\(UUID().uuidString)")
-            .appendingPathExtension("m4a")
-        try Self.recordingBytes.write(to: url)
-
-        let cardID = try await AppleSpeechRelayCoordinator.publishRelayedWorkRecording(
-            requestID: requestID,
-            audioURL: url,
-            store: store
-        )
-        // Exactly what the live path does next.
-        try? FileManager.default.removeItem(at: url)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
-
-        let payload = try await store.loadWorkMaterialPayload(id: cardID)
         XCTAssertEqual(
-            payload, Self.recordingBytes,
-            "the desk owns its own copy — the card survives the temp file it came from"
+            parked.sourceDevice, "watch",
+            """
+            The entry names the surface the words were SPOKEN at. The phone publishes the card, so \
+            reading the writer's own device would file every wrist note under whichever iPhone \
+            happened to be nearby.
+            """
         )
-    }
-
-    func testARefireOfOneUtteranceRepairsTheSameCardRatherThanAddingASecond() async throws {
-        let store = stores.make()
-        let requestID = UUID().uuidString
-
-        let first = try await AppleSpeechRelayCoordinator.publishRelayedWorkRecording(
-            requestID: requestID, audio: Self.recordingBytes, store: store
+        XCTAssertNil(parked.transcript, "the park runs before transcription is attempted at all")
+        XCTAssertNil(parked.lastErrorCode, "nothing has failed — there is no code to carry")
+        XCTAssertEqual(parked.preferredLanguage, "en-US",
+                       "a retry must ask for the same language the capture did")
+        XCTAssertNil(parked.workAttachedToMaterialID, "the wrist relays a clip and nothing else")
+        XCTAssertTrue(
+            parked.isExemptFromExpiry,
+            "No clock may retire the only copy of what somebody said."
         )
-        let second = try await AppleSpeechRelayCoordinator.publishRelayedWorkRecording(
-            requestID: requestID, audio: Self.recordingBytes, store: store
-        )
-        XCTAssertEqual(first, second)
+        XCTAssertNil(parked.retryTTL, "an exempt record is on no clock, not a longer one")
 
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(
-            desk.materials.count, 1,
-            "an inline send and its file fallback are one utterance, not two cards"
+        XCTAssertTrue(
+            deskValue?.materials.isEmpty ?? true,
+            """
+            The park writes NOTHING to a desk. Storing and syncing the recording is the waste this \
+            whole lane exists to stop: the words are the artifact, and nothing appears on the board \
+            until they arrive.
+            """
         )
     }
 
-    func testACaptureIdAlreadyHeldByAnotherKindEscapesInsteadOfStrandingTheWrist() async throws {
-        // The refusal is right — a material id names ONE card — but on its own
-        // it never clears, so every re-fire of this requestID would refuse
-        // identically and the wrist's entry could never leave its queue. Work
-        // entries are exempt from the queue's age-out, so "identically for
-        // ever" means exactly that.
-        let store = stores.make()
-        let requestID = UUID().uuidString
-        let captureID = AppleSpeechRelayCoordinator.workCaptureID(forRequestID: requestID)
-        _ = try await store.upsertDeskMaterial(
-            WorkMaterialDraft(
-                id: captureID,
-                kind: .note,
-                title: "already here",
-                textContent: "already here",
-                storageMode: .metadataOnly
-            )
+    func testTheParkedEntryIsTheOneTheRetryCardSees() async throws {
+        // The reservation is the whole of what "the phone has it" means, and
+        // the count is what a person is shown. A capture under a live hold is
+        // being worked on, not waiting — so it must not flash a Try Again row
+        // through every successful wrist capture.
+        let claim = try await AppleSpeechRelayCoordinator.parkRelayedWorkClip(
+            requestID: UUID().uuidString, audio: Self.recordingBytes, language: nil, lane: lane
         )
+        let pending = await lane.pendingCount()
+        XCTAssertEqual(pending, 1, "the capture is queued")
+        let waiting = await lane.waitingCount()
+        XCTAssertEqual(waiting, 0, "and it is not waiting for a person while this request holds it")
 
-        let cardID = try await AppleSpeechRelayCoordinator.publishRelayedWorkRecording(
-            requestID: requestID, audio: Self.recordingBytes, store: store
-        )
+        await AppleSpeechRelayCoordinator.handBackParkedClip(claim, lane: lane)
+        let afterHandBack = await lane.waitingCount()
         XCTAssertEqual(
-            cardID,
-            WorkMaterialCollisionEscape.materialID(forCapture: captureID),
-            "the ONE escape every Work lane derives — never a fresh random id"
+            afterHandBack, 1,
+            "the hand-back is what reveals the capture to the retry card that has to finish it"
         )
-
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(desk.materials.count, 2)
-        let note = try XCTUnwrap(desk.materials.first { $0.id == captureID })
-        XCTAssertEqual(note.kind, .note, "the card that was already there is untouched")
-        let recording = try XCTUnwrap(desk.materials.first { $0.id == cardID })
-        XCTAssertEqual(recording.kind, .audio)
-        XCTAssertEqual(recording.sourceDevice, "watch")
     }
 
     // MARK: - Phase 1 failure: the wrist keeps its clip
 
-    func testAPhaseOneRefusalTravelsBackOnACodeTheWristLeavesQueued() async throws {
-        let store = try Self.unusableStore()
-        let refuses = await Self.refusesWrites(store)
+    func testAParkThatCannotWriteItsBytesRefusesRatherThanReportingAKeptCapture() async throws {
+        // The failure is injected by putting a regular FILE where the lane's
+        // container should be: nothing inside it can be created, so the arm
+        // fails at its first write — the transient storage refusal (a full
+        // disk, a protected-data blackout) the verdict has to be retryable for.
+        let broken = try Self.unwritableLane()
+        let refuses = await Self.refusesArming(broken)
         XCTAssertTrue(refuses, "the broken fixture must really be broken")
 
         do {
-            _ = try await AppleSpeechRelayCoordinator.publishRelayedWorkRecording(
-                requestID: UUID().uuidString, audio: Self.recordingBytes, store: store
+            _ = try await AppleSpeechRelayCoordinator.parkRelayedWorkClip(
+                requestID: UUID().uuidString,
+                audio: Self.recordingBytes,
+                language: nil,
+                lane: broken
             )
-            XCTFail("a desk that cannot be written must not report a saved capture")
+            XCTFail("a lane that cannot write the bytes must not report a parked capture")
         } catch {
-            // The verdict the live path then ships.
+            XCTAssertEqual(
+                (error as? AppError)?.errorCode,
+                AppleSpeechRelayCoordinator.workPublicationFailure.errorCode,
+                """
+                The refusal must be the RETRYABLE one whatever the file system said. A raw \
+                underlying error travelling out is answered on whatever code the caller reaches \
+                for, and a terminal one has the wrist delete the clip.
+                """
+            )
         }
+    }
 
+    /// The other half of a park that is not durable: the bytes landed and the
+    /// RESERVATION did not. An entry nobody holds is one the retry card may
+    /// take and finish while this request is still transcribing, so a reply
+    /// built on the belief that this request owns the capture would be a
+    /// durability claim about somebody else's work.
+    func testAParkWhoseReservationIsRefusedIsNotAPark() async throws {
+        let requestID = UUID().uuidString
+        let captureID = AppleSpeechRelayCoordinator.workCaptureID(forRequestID: requestID)
+        try await lane.save(
+            audioData: Self.recordingBytes,
+            metadata: Self.parkedMetadata(id: captureID),
+            workImageData: nil
+        )
+        let elsewhere = await lane.claim(id: captureID, duration: 600)
+        XCTAssertNotNil(elsewhere, "another surface holds this capture")
+
+        do {
+            _ = try await AppleSpeechRelayCoordinator.parkRelayedWorkClip(
+                requestID: requestID, audio: Self.recordingBytes, language: nil, lane: lane
+            )
+            XCTFail(
+                """
+                A save that landed without a reservation reported a park. Two surfaces then finish \
+                one recording — and the wrist, told the phone has it, deletes the only other copy.
+                """
+            )
+        } catch {
+            XCTAssertEqual(
+                (error as? AppError)?.errorCode,
+                AppleSpeechRelayCoordinator.workPublicationFailure.errorCode,
+                "the wrist leaves its entry queued on this code and keeps the clip"
+            )
+        }
+    }
+
+    func testAParkRefusalTravelsBackOnACodeTheWristLeavesQueued() {
         let failure = AppleSpeechRelayCoordinator.workPublicationFailure
         XCTAssertTrue(
             failure.isRetryable,
             """
-            MEASURED: the phase-1 code is retryable, which is the ONLY property that \
-            matters here — `AppleRelayPendingQueue.leavesEntryQueued` reads exactly this, \
-            and a claimed entry deletes the audio the person already spoke.
+            MEASURED: the park-refusal code is retryable, which is the ONLY property that matters \
+            here — `AppleRelayPendingQueue.leavesEntryQueued` reads exactly this, and a claimed \
+            entry deletes the audio the person already spoke.
             """
         )
-        XCTAssertEqual(failure.errorCode, 78, "workDeskWriteFailed — the desk refused a capture")
+        XCTAssertEqual(failure.errorCode, 78, "workDeskWriteFailed — the phone refused a capture")
         XCTAssertFalse(
             AppleSpeechRelayCoordinator.shouldCacheVerdict(for: failure),
             "a memoized storage blip would poison every re-fire of this requestID"
@@ -239,91 +274,90 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
         for terminal in [AppError.audioProcessingFailed, .audioInvalid, .audioTooLarge] {
             XCTAssertFalse(
                 terminal.isRetryable,
-                "\(terminal) is terminal on the wrist — never the phase-1 verdict"
+                "\(terminal) is terminal on the wrist — never the park-refusal verdict"
             )
         }
     }
 
-    // MARK: - Phase 2: the words join the recording
+    // MARK: - Phase 2: the words become the card, and the recording goes
 
-    func testTheTranscriptLandsOnTheRelayedCardRatherThanBesideIt() async throws {
+    func testTheRelayedWordsBecomeAWordsOnlyCardAndTheRecordingIsRetired() async throws {
         let store = stores.make()
         let requestID = UUID().uuidString
-        let cardID = try await AppleSpeechRelayCoordinator.publishRelayedWorkRecording(
-            requestID: requestID, audio: Self.recordingBytes, store: store
+        let claim = try await AppleSpeechRelayCoordinator.parkRelayedWorkClip(
+            requestID: requestID, audio: Self.recordingBytes, language: nil, lane: lane
         )
 
-        let verdict = await AppleSpeechRelayCoordinator.attachRelayedWorkTranscript(
-            "remember the oat milk", toCard: cardID, store: store
+        // Exactly the order the live path runs: park the words, publish them,
+        // stamp the verdict, then — and only then — clear the entry.
+        let parkedWords = await lane.recordPublicationState(
+            claim, transcript: "remember the oat milk", publicationState: .phaseOneFailed
         )
+        XCTAssertTrue(parkedWords, "the words are parked on the entry before the desk write")
 
-        XCTAssertEqual(verdict, .attached, "The words landed, so the reply may carry the stamp.")
+        let outcome = try await WorkVoiceCaptureCoordinator.publishTranscript(
+            "remember the oat milk",
+            forCapture: claim.id,
+            createdAt: claim.entry.metadata.createdAt,
+            sourceDevice: "watch",
+            attachedTo: nil,
+            store: store
+        )
+        XCTAssertEqual(outcome, .wordsPublished(materialID: claim.id))
 
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(desk.materials.count, 1, "the words joined the card; they did not start one")
+        XCTAssertEqual(desk.materials.count, 1, "one utterance, one card")
         let card = try XCTUnwrap(desk.materials.first)
-        XCTAssertEqual(card.id, cardID)
-        XCTAssertEqual(card.kind, .audio, "still playable — a transcript does not replace a recording")
-        XCTAssertEqual(card.textContent, "remember the oat milk")
-        XCTAssertNotEqual(
-            card.title, WorkVoiceCaptureCoordinator.untranscribedTitle,
-            "the card names itself by its words once it has any"
-        )
-        let payload = try await store.loadWorkMaterialPayload(id: cardID)
-        XCTAssertEqual(payload, Self.recordingBytes)
-    }
-
-    func testACardGoneBeforeItsTranscriptIsRetryableRatherThanAcknowledged() async throws {
-        // The desk holds NOTHING for this capture, and the wrist deletes its
-        // only copy of the clip the moment it reads the stamp. So a missing card
-        // must travel back as the retryable verdict the wrist keeps its entry
-        // on — a re-fire republishes the recording and tries the words again.
-        let store = stores.make()
-
-        let verdict = await AppleSpeechRelayCoordinator.attachRelayedWorkTranscript(
-            "nothing to land on", toCard: UUID(), store: store
-        )
-
+        XCTAssertEqual(card.id, claim.id)
         XCTAssertEqual(
-            verdict, .retryable,
-            """
-            Acknowledging this would hand the wrist a stamp for a recording nowhere on this             phone, and the wrist would delete the clip on reading it.
-            """
+            card.kind, .transcript,
+            "a Work voice note is its words — never a recording the desk syncs for ever"
         )
-        XCTAssertTrue(
-            AppleSpeechRelayCoordinator.workPublicationFailure.isRetryable,
-            "control: the verdict this maps onto is the one the wrist leaves queued"
+        XCTAssertEqual(card.textContent, "remember the oat milk")
+        XCTAssertEqual(
+            card.sourceDevice, "watch",
+            "the card names the surface the words were spoken at, not the one that wrote it"
         )
-        let desk = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        XCTAssertTrue(
-            desk?.materials.isEmpty ?? true,
-            "the words are NOT published beside a card this lane never had — that is the recovery lane's decision, not this one's"
+        XCTAssertNil(card.attachedToMaterialID, "the wrist sends no picture on this lane")
+        XCTAssertFalse(card.hasPayload, "no bytes ride the desk's lane for a spoken note")
+
+        _ = await lane.recordPublicationState(
+            claim, transcript: "remember the oat milk", publicationState: .published
+        )
+        let cleared = await lane.clear(claim)
+        XCTAssertTrue(cleared)
+        let remaining = await lane.pendingCount()
+        XCTAssertEqual(
+            remaining, 0,
+            "the recording's last instant is the clear, and it comes AFTER the words are on the desk"
         )
     }
 
-    /// The other half of the same verdict: an id a card of ANOTHER kind already
-    /// holds is reproduced identically by every re-fire, so holding the clip for
-    /// it costs the person an eviction-exempt queue slot for ever and wins
-    /// nothing. That one settles.
-    func testAnIdHeldByAnotherKindOfCardSettlesInsteadOfLoopingForever() async throws {
+    func testARefireOfOneUtteranceRepairsTheSameCardRatherThanAddingASecond() async throws {
+        // A re-fire of an already-finished capture re-parks (the entry was
+        // cleared), transcribes again — one STT call, the documented cost of a
+        // lost reply — and finds its own card standing. It must not write a
+        // second one.
         let store = stores.make()
-        let captureID = UUID()
-        _ = try await store.upsertDeskMaterial(
-            WorkMaterialDraft(
-                id: captureID,
-                kind: .note,
-                title: "already here",
-                textContent: "already here",
-                storageMode: .metadataOnly
-            )
-        )
+        let requestID = UUID().uuidString
 
-        let verdict = await AppleSpeechRelayCoordinator.attachRelayedWorkTranscript(
-            "the wrist's words", toCard: captureID, store: store
+        let first = try await WorkVoiceCaptureCoordinator.publishTranscript(
+            "oat milk", forCapture: AppleSpeechRelayCoordinator.workCaptureID(forRequestID: requestID),
+            createdAt: Date(), sourceDevice: "watch", attachedTo: nil, store: store
         )
+        let second = try await WorkVoiceCaptureCoordinator.publishTranscript(
+            "oat milk", forCapture: AppleSpeechRelayCoordinator.workCaptureID(forRequestID: requestID),
+            createdAt: Date(), sourceDevice: "watch", attachedTo: nil, store: store
+        )
+        XCTAssertEqual(first.materialID, second.materialID)
 
-        XCTAssertEqual(verdict, .settledWithoutWords)
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(
+            desk.materials.count, 1,
+            "an inline send and its file fallback are one utterance, not two cards"
+        )
     }
 
     // MARK: - The reply the wrist reads
@@ -343,15 +377,15 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
             .payload(requestID: "req-3")
         XCTAssertNil(
             failure[AppleSpeechRelayCoordinator.Wire.resultWorkSavedKey],
-            "a refusal saved nothing, so it claims nothing"
+            "a refusal kept nothing, so it claims nothing"
         )
     }
 
     func testAReplayedWorkVerdictStillCarriesItsStamp() throws {
         // The wrist re-fires an undelivered requestID and receives the CACHED
         // verdict. Dropping the stamp on replay would tell it the iPhone kept
-        // no recording — and it would then write the words a second time as a
-        // note beside the card that is already there.
+        // nothing — and it would then write the words a second time as a note
+        // beside the card that is already there.
         let cache = RelayReplyCache()
         cache.store(.init(text: "oat milk", errorCode: nil, workSaved: true), forKey: "req-work")
         cache.store(.init(text: "hello duck", errorCode: nil), forKey: "req-chat")
@@ -373,52 +407,7 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
         )
     }
 
-    // MARK: - Phase 2 settles without words: the recording is still kept
-
-    func testASettledTranscriptionFailureOnAPublishedCaptureIsAcknowledged() {
-        // The defect: a card standing on the desk was reported to the wrist as
-        // a failure, so the wrist kept the (now redundant) clip. A Work entry
-        // never ages out and the phone answers every re-fire of this requestID
-        // from its cache, so "kept" meant FOR EVER — ten of them refuse the
-        // eleventh capture and push a queued chat ask out of the queue.
-        for settled in [
-            AppError.appleSpeechModelNotInstalled,
-            .audioProcessingFailed,
-            .audioInvalid,
-            .audioTooLarge,
-            .sttMissingAPIKey,
-            .sttCustomEndpointNotConfigured,
-        ] {
-            XCTAssertFalse(settled.isRetryable, "fixture drift: \(settled) is not a settled verdict")
-            XCTAssertTrue(
-                AppleSpeechRelayCoordinator.acknowledgesRecording(after: settled),
-                """
-                \(settled) is a verdict every re-fire reproduces, so no later attempt can add the \
-                words — and the recording is already on the desk. Answering it as a failure leaves \
-                the wrist holding a clip it can never settle.
-                """
-            )
-        }
-    }
-
-    func testARetryableTranscriptionFailureStillTravelsBackAsAnError() {
-        // The other half of the rule, and the reason it is not simply "always
-        // acknowledge": these verdicts are the phone saying "not right now".
-        // They are never cached, the wrist keeps its entry, and the very next
-        // re-fire can still land the words on the card. Acknowledging here
-        // would throw the transcript away to save a retry.
-        for transient in [
-            AppError.sttProviderUnreachable,
-            .sttKeyUnreadable,
-            .workDeskWriteFailed,
-        ] {
-            XCTAssertTrue(transient.isRetryable, "fixture drift: \(transient) is not retryable")
-            XCTAssertFalse(
-                AppleSpeechRelayCoordinator.acknowledgesRecording(after: transient),
-                "\(transient) can still succeed on the same bytes; the wrist keeps its entry and wins the words."
-            )
-        }
-    }
+    // MARK: - The words never arrived: the phone's own retry card owns it
 
     func testTheAcknowledgementIsASuccessReplyWithNoWordsInIt() {
         // Success-SHAPED, with an empty transcript — and NO new wire literal:
@@ -440,9 +429,10 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
     }
 
     func testAReplayedAcknowledgementSettlesTheWristToo() {
-        // The cache is what a re-fire hits FIRST, before publication and before
+        // The cache is what a re-fire hits FIRST, before the park and before
         // transcription. A replay that carried the old error would re-strand the
-        // very entry this fix exists to settle.
+        // very entry this answer exists to settle — and the capture is already
+        // here, so a fresh attempt buys nothing the retry card does not own.
         let cache = RelayReplyCache()
         cache.store(AppleSpeechRelayCoordinator.workRecordingAcknowledgement(), forKey: "req-ack")
         let replayed = cache.cachedReply(forKey: "req-ack")
@@ -451,179 +441,449 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
         XCTAssertNil(replayed?.errorCode)
     }
 
-    func testBothTranscriptionFailureArmsAnswerAPublishedCaptureFirst() throws {
+    /// What the acknowledgement PROMISES, end to end. The wrist deletes its clip
+    /// on reading that reply, so the capture it released has to be finishable on
+    /// this side — by the phone's own retry card, from the entry the failed
+    /// request handed back.
+    func testAnAcknowledgedCaptureIsFinishedByThePhonesOwnRetryCard() async throws {
+        let store = stores.make()
+        let claim = try await AppleSpeechRelayCoordinator.parkRelayedWorkClip(
+            requestID: UUID().uuidString, audio: Self.recordingBytes, language: "de-DE", lane: lane
+        )
+        // The speech hop failed; the request hands the capture back and
+        // acknowledges. Everything below is a different surface, minutes later.
+        await AppleSpeechRelayCoordinator.handBackParkedClip(claim, lane: lane)
+
+        let selected = await lane.claimNext()
+        let retry = try XCTUnwrap(
+            selected,
+            "the retry card selects the capture the relay released"
+        )
+        XCTAssertEqual(retry.id, claim.id)
+        XCTAssertEqual(
+            retry.entry.audioData, Self.recordingBytes,
+            "and it gets the recording — a promise of words needs the bytes that make them"
+        )
+        XCTAssertEqual(retry.entry.metadata.preferredLanguage, "de-DE")
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            retry,
+            transcript: "the words the wrist stopped waiting for",
+            store: store,
+            queue: lane
+        )
+        XCTAssertEqual(outcome, .wordsPublished)
+        XCTAssertTrue(outcome.isTerminal)
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let card = try XCTUnwrap(deskValue?.materials.first)
+        XCTAssertEqual(card.id, claim.id)
+        XCTAssertEqual(card.kind, .transcript)
+        XCTAssertEqual(
+            card.sourceDevice, "watch",
+            """
+            The recovery publishes on the phone and the card still names the wrist. That is what \
+            the parked `sourceDevice` is for — without it every relayed note recovered later reads \
+            as an iPhone note.
+            """
+        )
+        XCTAssertEqual(card.textContent, "the words the wrist stopped waiting for")
+
+        _ = await lane.clear(retry)
+        let remaining = await lane.pendingCount()
+        XCTAssertEqual(remaining, 0, "the recording goes once the words are written, and not before")
+    }
+
+    /// The other half: a retry that ALSO fails changes nothing. The entry, its
+    /// recording and its exemption stay exactly where they are — which is the
+    /// only reason the acknowledgement was safe to send.
+    func testAnAcknowledgedCaptureWhoseRetryAlsoFailsStaysInTheQueue() async throws {
+        let store = stores.make()
+        let claim = try await AppleSpeechRelayCoordinator.parkRelayedWorkClip(
+            requestID: UUID().uuidString, audio: Self.recordingBytes, language: nil, lane: lane
+        )
+        await AppleSpeechRelayCoordinator.handBackParkedClip(claim, lane: lane)
+
+        let selected = await lane.claimNext()
+        let retry = try XCTUnwrap(selected)
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            retry, transcript: nil, store: store, queue: lane
+        )
+        XCTAssertEqual(
+            outcome, .retryKept(.noTranscript),
+            "recognition still owes this capture its words; nothing may be written"
+        )
+        XCTAssertFalse(outcome.isTerminal, "and the durable record must stay armed")
+        await lane.release(retry)
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertTrue(deskValue?.materials.isEmpty ?? true, "nothing reaches the desk without words")
+
+        let waiting = await lane.waitingCount()
+        XCTAssertEqual(waiting, 1, "the capture is offered again")
+        let record = await lane.load().first { $0.metadata.id == claim.id }
+        let entry = try XCTUnwrap(record)
+        XCTAssertEqual(entry.audioData, Self.recordingBytes, "the bytes are still the only copy")
+        XCTAssertEqual(entry.metadata.publicationState, .phaseOneFailed)
+        XCTAssertTrue(entry.metadata.isExemptFromExpiry, "and no clock may take them")
+    }
+
+    /// A lost reply is the state this lane is built around: the wrist never saw
+    /// the answer and re-fires the SAME requestID. The re-park must not walk the
+    /// capture backwards — words already bought stay bought, and a `.published`
+    /// verdict never downgrades.
+    func testALostReplyRefireReParksWithoutErasingTheWordsOrTheVerdict() async throws {
+        let requestID = UUID().uuidString
+        let claim = try await AppleSpeechRelayCoordinator.parkRelayedWorkClip(
+            requestID: requestID, audio: Self.recordingBytes, language: nil, lane: lane
+        )
+        // The phone bought the words and died before the desk write.
+        _ = await lane.recordPublicationState(
+            claim, transcript: "oat milk", publicationState: .phaseOneFailed
+        )
+        await AppleSpeechRelayCoordinator.handBackParkedClip(claim, lane: lane)
+
+        let refire = try await AppleSpeechRelayCoordinator.parkRelayedWorkClip(
+            requestID: requestID, audio: Self.recordingBytes, language: nil, lane: lane
+        )
+        XCTAssertEqual(refire.id, claim.id, "one utterance keeps one capture id across every re-fire")
+        XCTAssertEqual(
+            refire.entry.metadata.transcript, "oat milk",
+            """
+            The re-park erased words the provider was already paid for. The next attempt then buys \
+            the same answer again — and a wrist that re-fires after every lost reply pays for one \
+            utterance as many times as the reply is lost.
+            """
+        )
+
+        // And once the desk holds this capture, a re-fire may not say otherwise:
+        // a record downgraded to `.phaseOneFailed` is exempt from every clock
+        // for ever.
+        _ = await lane.recordPublicationState(
+            refire, transcript: "oat milk", publicationState: .published
+        )
+        await AppleSpeechRelayCoordinator.handBackParkedClip(refire, lane: lane)
+
+        let third = try await AppleSpeechRelayCoordinator.parkRelayedWorkClip(
+            requestID: requestID, audio: Self.recordingBytes, language: nil, lane: lane
+        )
+        XCTAssertEqual(
+            third.entry.metadata.publicationState, .published,
+            "the desk holds this capture, and a re-arm is not the newest thing that happened to it"
+        )
+    }
+
+    // MARK: - Source shape: the order, and the answers each exit ships
+
+    func testTheClipIsReadOffDiskAndParkedBeforeAnyTranscribeArm() throws {
         // Structural, because `processRelayRequest` has no seam: it needs an
         // activated `WCSession` and a paired watch. What has to hold is an
-        // ORDER — in each catch arm the published-capture branch comes before
-        // the error reply — and a missing branch is one deleted `if`.
-        let source = try String(
-            contentsOf: Self.projectContainerURL()
-                .appendingPathComponent("Conduck/Services/AppleSpeechRelayCoordinator.swift"),
-            encoding: .utf8
+        // ORDER — the bytes are read and parked while the temp file still
+        // exists, because both STT arms hand that URL to `STTClient`, which
+        // defer-deletes it, and this scope's own defer deletes it on every exit.
+        let code = Self.strippingComments(try Self.coordinatorSource())
+        let read = try XCTUnwrap(
+            code.range(of: "let audio = try Data(contentsOf: audioURL)")?.lowerBound,
+            "the clip is no longer read off the temp file; re-anchor this guard"
         )
-        let code = Self.strippingComments(source)
-        let catchStart = try XCTUnwrap(
-            code.range(of: "catch let appError as AppError")?.lowerBound,
-            "the typed catch arm has moved; re-anchor this guard on whatever replaces it"
+        let park = try XCTUnwrap(
+            code.range(of: "Self.parkRelayedWorkClip(")?.lowerBound,
+            "the park has moved or been renamed; re-anchor this guard"
         )
-        // Bounded at the next declaration so the helper's own definition,
-        // further down the file, is not counted as a third call site.
-        let tailEnd = try XCTUnwrap(
-            code.range(of: "private func transcribeViaCustomEndpoint")?.lowerBound,
-            "the coordinator's next declaration has been renamed; re-anchor this guard's end"
+        let transcribe = try XCTUnwrap(
+            code.range(of: "transcribeViaCustomEndpoint(audioFileURL: audioURL")?.lowerBound,
+            "the first transcribe arm has moved; re-anchor this guard's end"
         )
-        XCTAssertLessThan(catchStart, tailEnd, "extractor sanity: the catch arms precede the next declaration")
-        let tail = String(code[catchStart..<tailEnd])
+        XCTAssertLessThan(read, park, "the bytes are read before they are parked")
+        XCTAssertLessThan(
+            park, transcribe,
+            """
+            The clip is parked AFTER a transcribe arm, so the file it was to be read from is \
+            already deleted. A failed hop then costs the recording rather than just the words.
+            """
+        )
+    }
 
-        let acknowledgements = Self.occurrences(of: "shipWorkRecordingAcknowledgement(", in: tail)
-        let errorReplies = Self.occurrences(of: "sendReply(requestID: requestID, errorCode:", in: tail)
-        XCTAssertEqual(
-            acknowledgements.count, 2,
-            """
-            Both transcription-failure arms — the typed one and the unknown-error one — must ask \
-            whether the recording is already on the desk. An arm that stopped asking answers a \
-            standing card with a failure, and the wrist holds its clip for ever.
-            """
+    func testTheParkTakesNoDeskWriteWithIt() throws {
+        // The one thing this whole lane exists to stop: the recording reaching
+        // the board. The park's own body may not write a card by any route.
+        let code = Self.callText(Self.strippingComments(try Self.coordinatorSource()))
+        let body = try XCTUnwrap(
+            Self.bracedBody(after: "static func parkRelayedWorkClip(", in: code),
+            "the park has moved or been renamed; re-anchor this guard"
         )
-        XCTAssertEqual(errorReplies.count, 2, "extractor sanity: both arms still ship an error reply")
-        for (acknowledgement, errorReply) in zip(acknowledgements, errorReplies) {
-            XCTAssertLessThan(
-                acknowledgement.lowerBound, errorReply.lowerBound,
+        XCTAssertTrue(body.contains("lane.save("), "extractor sanity: the park still writes the entry")
+        for forbidden in ["upsertDeskMaterial(", "publishTranscript(", "kind: .audio"] {
+            XCTAssertFalse(
+                body.contains(forbidden),
                 """
-                An arm ships its error reply BEFORE consulting the published capture, so the \
-                acknowledgement can never be the answer.
-                """
-            )
-        }
-        for arm in ["appError", "fallback"] {
-            XCTAssertTrue(
-                code.contains("if let workCardID, Self.acknowledgesRecording(after: \(arm))"),
-                """
-                The `\(arm)` arm no longer reads BOTH facts. Publication alone is not enough (a \
-                retryable verdict must keep travelling back as an error so the words can still \
-                arrive), and the verdict alone is not enough (an unpublished capture has nothing \
-                to acknowledge).
-                """
-            )
-        }
-
-        // AND each arm PARKS the words before it ships the one-way door. The
-        // acknowledgement is cached and the wrist deletes its clip on reading
-        // it, so "Add the words on your iPhone" has to name something that
-        // exists on this side of it — from BOTH arms, not just the typed one.
-        let preserves = Self.occurrences(of: "await Self.preserveRelayedWorkWords(", in: tail)
-        XCTAssertEqual(
-            preserves.count, 2,
-            """
-            An acknowledgement arm ships the wrist's "Add the words on your iPhone" without \
-            parking anything for the phone's retry card to find, so the sentence points at \
-            nothing and the clip it released is gone.
-            """
-        )
-        for (preserve, acknowledgement) in zip(preserves, acknowledgements) {
-            XCTAssertLessThan(
-                preserve.lowerBound, acknowledgement.lowerBound,
-                """
-                An arm ships the acknowledgement BEFORE parking the record, so a wrist that reads \
-                it first can delete its clip against a preservation that never ran.
+                The park calls `\(forbidden)`. A relayed clip becomes a desk card only when its \
+                WORDS arrive; storing and syncing the recording is the waste this lane removed.
                 """
             )
         }
     }
 
-    /// The helper's verdict is only half of it: the SWITCH that ships it is
-    /// where a one-line edit turns a refusal into a success.
-    ///
-    /// `attachRelayedWorkTranscript` answering `.retryable` while its caller's
-    /// arm is a bare `break` falls through to the stamped success reply — the
-    /// wrist reads the stamp, consumes its entry and deletes the only remaining
-    /// copy of the clip, for a write that was refused. The helper's own tests
-    /// cannot see that, and neither can the source guards that count catch arms.
-    /// So both non-attached arms are pinned as COMPLETE bodies, and the
-    /// `.attached` arm is pinned as the only one that may fall through.
-    func testThePhaseTwoSwitchShipsEachVerdictItIsGiven() throws {
-        let source = try String(
-            contentsOf: Self.projectContainerURL()
-                .appendingPathComponent("Conduck/Services/AppleSpeechRelayCoordinator.swift"),
-            encoding: .utf8
+    func testTheLeaseIsRenewedWhileSpeechRunsAndDroppedOnEveryExit() throws {
+        // The hold is granted for `claimLeaseDuration` and a custom endpoint is
+        // allowed 300 s per attempt, attempted three times — so the work can
+        // outlast the reservation that protects it. Source, because the interval
+        // is minutes and no simulator run can wait one out.
+        let code = Self.strippingComments(try Self.coordinatorSource())
+        let renewal = try XCTUnwrap(
+            code.range(of: "leaseRenewal = Task { await Self.renewWhileTranscribing(claim) }")?.lowerBound,
+            "the relay never extends its reservation, so a transcription longer than one lease "
+            + "hands the capture to whoever asks next while this request is still working on it"
         )
-        let code = Self.callText(Self.strippingComments(source))
+        let cancel = try XCTUnwrap(
+            code.range(of: "defer { leaseRenewal?.cancel() }")?.lowerBound,
+            "the renewal is not cancelled by a `defer`, so a refusal path leaves it running and the "
+            + "hold outlives the work it was protecting"
+        )
+        XCTAssertLessThan(
+            cancel, renewal,
+            "the `defer` is installed at request scope BEFORE the task it cancels, so every exit "
+            + "drops the renewal"
+        )
+    }
 
-        XCTAssertTrue(
-            code.contains(Self.callText("""
-            switch await Self.attachRelayedWorkTranscript(text, toCard: workCardID) {
-            case .attached:
-            break
-            """)),
-            "Only a written transcript may fall through to the stamped success reply."
-        )
-        XCTAssertTrue(
-            code.contains(Self.callText("""
-            case .settledWithoutWords:
-            shipWorkRecordingAcknowledgement(
-                requestID: requestID,
-                preferMessage: replyPrefersMessage
-            )
-            """)),
-            "The settled-without-words arm no longer ships the wordless acknowledgement, so a "
-            + "verdict no re-fire can improve on leaves the wrist holding its clip for ever."
-        )
-        XCTAssertTrue(
-            code.contains(Self.callText("""
-            case .retryable:
-            let failure = Self.workPublicationFailure
-            sendReply(
-                requestID: requestID,
-                errorCode: failure.errorCode,
-                preferMessage: replyPrefersMessage
-            )
-            """)),
+    /// Every failure on a PARKED capture ships the acknowledgement and hands the
+    /// entry back, and each one is where a one-line edit turns a refusal into a
+    /// stranded wrist. Three arms: the phase-two publish, the typed throw, the
+    /// untyped throw.
+    func testEveryFailureOnAParkedCaptureHandsItBackAndAcknowledges() throws {
+        let code = Self.strippingComments(try Self.coordinatorSource())
+
+        XCTAssertFalse(
+            code.contains("preserveRelayedWorkWords("),
             """
-            The refusal arm no longer ships the retryable code. An arm that falls through instead \
-            hands the wrist the durability stamp for a write that did not happen, and the wrist \
-            deletes its clip on reading it.
+            The lane still parks a SECOND record after the fact. The clip is parked before speech \
+            now, under the claim this request holds, so a late save can only re-arm a capture the \
+            entry already describes.
             """
         )
-        // BOUNDED TO THE SWITCH, brace-matched from its own `{`. Searching the
-        // rest of the FILE for the next `case ` ran each arm's body past the
-        // switch's close and into the catch arms below it, where an unrelated
-        // `return` satisfied the assertion — so the guard accepted exactly the
-        // deletion it exists to refuse.
-        let switchBody = try XCTUnwrap(
-            Self.bracedBody(after: "switch await Self.attachRelayedWorkTranscript(", in: code),
-            "the phase-two switch has moved or been renamed; re-anchor this guard"
+
+        let requestStart = try XCTUnwrap(
+            code.range(of: "var parkedClip: PendingRetryClaim?")?.lowerBound,
+            "the parked-claim state has moved or been renamed; re-anchor this guard"
         )
-        for arm in [".settledWithoutWords:", ".retryable:"] {
-            let start = try XCTUnwrap(
-                switchBody.range(of: "case \(arm)")?.upperBound,
-                "the `\(arm)` arm has been renamed; re-anchor this guard"
-            )
-            // The next arm INSIDE this switch, or the switch's own end — never a
-            // `case` belonging to something else.
-            let next = switchBody.range(
-                of: "case ", range: start..<switchBody.endIndex
-            )?.lowerBound ?? switchBody.endIndex
-            let body = switchBody[start..<next]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            XCTAssertTrue(
-                body.hasSuffix("return"),
+        // Bounded at the next declaration so the helpers further down the file
+        // are not counted as extra call sites.
+        let tailEnd = try XCTUnwrap(
+            code.range(of: "private func transcribeViaCustomEndpoint")?.lowerBound,
+            "the coordinator's next declaration has been renamed; re-anchor this guard's end"
+        )
+        XCTAssertLessThan(requestStart, tailEnd, "extractor sanity: the request precedes the next declaration")
+        let body = String(code[requestStart..<tailEnd])
+
+        let handBacks = Self.occurrences(of: "await Self.handBackParkedClip(parkedClip)", in: body)
+        let acknowledgements = Self.occurrences(of: "shipWorkRecordingAcknowledgement(", in: body)
+        XCTAssertEqual(
+            handBacks.count, 3,
+            """
+            A parked capture this request abandons without handing back is invisible to the retry \
+            count until its lease lapses — and the wrist has already been told the phone has it. \
+            All three failure exits (the refused publish, the typed throw, the untyped throw) owe \
+            the hand-back.
+            """
+        )
+        XCTAssertEqual(
+            acknowledgements.count, 3,
+            """
+            An exit that answers a PARKED capture with an error leaves the wrist keeping a clip \
+            this phone already holds — for ever, since a Work entry never ages out.
+            """
+        )
+        for (handBack, acknowledgement) in zip(handBacks, acknowledgements) {
+            XCTAssertLessThan(
+                handBack.lowerBound, acknowledgement.lowerBound,
                 """
-                The `\(arm)` arm does not END the request unconditionally, so it falls into the \
-                stamped success reply below it — the exact shape a wrist reads as "saved" for a \
-                refusal. A `return` reached only under a condition is the same defect: what this \
-                asserts is the LAST statement of the whole arm.
+                An arm ships the acknowledgement BEFORE handing the capture back, so a wrist that \
+                reads it first can delete its clip against an entry no surface is offering.
                 """
             )
         }
+
+        // The error reply is the answer for an UNPARKED capture only — a chat
+        // request, or a work request whose park was refused above.
+        let errorReplies = Self.occurrences(
+            of: "sendReply(requestID: requestID, errorCode:", in: body
+        )
+        XCTAssertEqual(errorReplies.count, 2, "extractor sanity: both catch arms still ship an error reply")
+        for (acknowledgement, errorReply) in zip(acknowledgements.suffix(2), errorReplies) {
+            XCTAssertLessThan(
+                acknowledgement.lowerBound, errorReply.lowerBound,
+                """
+                A catch arm ships its error reply BEFORE consulting the parked capture, so the \
+                acknowledgement can never be the answer.
+                """
+            )
+        }
+    }
+
+    /// The phase-two arm in full. A `publishTranscript` that THROWS while its
+    /// catch is a bare log falls through to the stamped success reply — the
+    /// wrist reads the stamp, consumes its entry and deletes the only remaining
+    /// copy of the clip, for a write that was refused.
+    func testThePhaseTwoPublishFailureEndsTheRequest() throws {
+        let code = Self.callText(Self.strippingComments(try Self.coordinatorSource()))
+        XCTAssertTrue(
+            code.contains(Self.callText("""
+            _ = try await WorkVoiceCaptureCoordinator.publishTranscript(
+                text,
+                forCapture: parkedClip.id,
+            """)),
+            """
+            The words are published against the CAPTURE id, which is what makes the desk write \
+            idempotent for a claim token the watch retries verbatim.
+            """
+        )
+        // BOUNDED TO THE ARM. The catch body holds no braces of its own, so the
+        // first `}` after it closes it — and reading past that would let a
+        // `return` belonging to the request's own tail satisfy the assertion.
+        let publish = try XCTUnwrap(
+            code.range(of: "WorkVoiceCaptureCoordinator.publishTranscript("),
+            "the phase-two publish has moved or been renamed; re-anchor this guard"
+        )
+        let catchStart = try XCTUnwrap(
+            code.range(of: "} catch {", range: publish.upperBound..<code.endIndex),
+            "the phase-two publish no longer has a catch arm; a throw then falls through to the "
+            + "stamped success reply"
+        )
+        let armEnd = try XCTUnwrap(
+            code.range(of: "}", range: catchStart.upperBound..<code.endIndex),
+            "extractor sanity: the catch arm must close"
+        )
+        let arm = String(code[catchStart.upperBound..<armEnd.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertTrue(
+            arm.contains("handBackParkedClip"),
+            "the refused publish keeps the capture reserved, so nothing can finish it"
+        )
+        XCTAssertTrue(
+            arm.contains("shipWorkRecordingAcknowledgement"),
+            "the refused publish answers with a code the wrist re-fires on, buying the same refusal"
+        )
+        XCTAssertTrue(
+            arm.hasSuffix("return"),
+            """
+            The refused-publish arm does not END the request unconditionally, so it falls into the \
+            stamped success reply below it — the exact shape a wrist reads as "saved" for a write \
+            that did not happen. A `return` reached only under a condition is the same defect: \
+            what this asserts is the LAST statement of the whole arm.
+            """
+        )
+    }
+
+    /// The words are parked on the entry BEFORE the desk write and the verdict
+    /// stamped after it, so every instant between them is one a recovery can
+    /// name. Parking them after would cost a crash the words the provider was
+    /// already paid for.
+    func testTheWordsAreParkedOnTheEntryBeforeTheDeskWrite() throws {
+        let code = Self.callText(Self.strippingComments(try Self.coordinatorSource()))
+        let parkedWords = try XCTUnwrap(
+            code.range(of: Self.callText("""
+            _ = await PendingRetryStore.shared.recordPublicationState(
+                parkedClip,
+                transcript: text,
+                publicationState: .phaseOneFailed
+            )
+            """)),
+            """
+            The words are no longer parked on the entry before the desk write, so a death between \
+            recognition and publication costs a transcription the provider was already paid for.
+            """
+        )
+        let publish = try XCTUnwrap(
+            code.range(of: "WorkVoiceCaptureCoordinator.publishTranscript(", range: parkedWords.upperBound..<code.endIndex),
+            "extractor sanity: the desk write follows the words' park"
+        )
+        let stamp = try XCTUnwrap(
+            code.range(of: "publicationState: .published", range: publish.upperBound..<code.endIndex),
+            "the `.published` verdict is no longer written after the desk write; a record still "
+            + "saying the desk holds nothing is exempt from every clock for ever"
+        )
+        let clear = try XCTUnwrap(
+            code.range(of: "PendingRetryStore.shared.clear(parkedClip)", range: stamp.upperBound..<code.endIndex),
+            """
+            The entry is cleared before its verdict is stamped, so a clear that fails leaves a \
+            record saying these bytes are the only copy of a capture the desk already holds.
+            """
+        )
+        XCTAssertLessThan(stamp.lowerBound, clear.lowerBound)
+    }
+
+    // MARK: - Isolation: nothing on this branch reaches a gateway
+
+    func testTheRelayCoordinatorNeverReachesAGatewayOrAConversation() throws {
+        // Structural on purpose. The regression is one added line that
+        // compiles, ships and breaks nothing a behavioural test can observe —
+        // a Work capture quietly hopped to an agent. So the guard reads the
+        // coordinator's own source and refuses the symbols outright.
+        let code = Self.strippingComments(try Self.coordinatorSource())
+        XCTAssertTrue(
+            code.contains("parkRelayedWorkClip"),
+            "extractor sanity: the stripped source must still hold this file's real code"
+        )
+        for forbidden in [
+            "startConverseHop",
+            "startDeferredConverseHop",
+            "handleQuickSend",
+            "RemoteAgentRef",
+            "BackgroundRemoteAgent",
+            "ConversationRecord",
+            "upsertConversation",
+        ] {
+            XCTAssertFalse(
+                code.contains(forbidden),
+                """
+                `\(forbidden)` appears in the relay coordinator's CODE. Nothing on the Work \
+                branch may reach a gateway, a gateway ref, or a conversation — the whole \
+                reason a wrist capture has a destination at all is that a private thought \
+                stops at the desk.
+                """
+            )
+        }
+    }
+
+    // MARK: - Fixtures
+
+    /// The coordinator's source, from this file's compile-time path so it holds
+    /// regardless of the runner's working directory.
+    private static func coordinatorSource() throws -> String {
+        try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Conduck/Services/AppleSpeechRelayCoordinator.swift"),
+            encoding: .utf8
+        )
+    }
+
+    /// A parked Work record in the shape this lane writes, for the cases that
+    /// need one already in the queue before the lane runs.
+    private static func parkedMetadata(id: UUID) -> PendingRetryMetadata {
+        PendingRetryMetadata(
+            id: id,
+            createdAt: Date(),
+            audioFileURL: URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("relay-work-\(id.uuidString).m4a"),
+            preferredLanguage: nil,
+            attemptCount: 1,
+            lastErrorCode: nil,
+            destination: .work,
+            publicationState: .phaseOneFailed,
+            sourceDevice: "watch"
+        )
     }
 
     /// The brace-matched body opened by the first `{` after `token`, without the
     /// braces themselves. Nil when the token is absent or the braces do not
     /// close, both of which mean this guard is anchored to code that has moved.
     ///
-    /// Scoping to one construct is the whole point: an assertion about a
-    /// switch's arms that is allowed to read past the switch is satisfied by any
-    /// statement anywhere after it.
+    /// Scoping to one construct is the whole point: an assertion about an arm
+    /// that is allowed to read past it is satisfied by any statement anywhere
+    /// after it.
     private static func bracedBody(after token: String, in source: String) -> String? {
         guard let anchor = source.range(of: token),
               let opening = source.range(of: "{", range: anchor.upperBound..<source.endIndex)
@@ -650,56 +910,8 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
             .replacingOccurrences(of: "( ", with: "(")
     }
 
-    // MARK: - Isolation: nothing on this branch reaches a gateway
-
-    func testTheRelayCoordinatorNeverReachesAGatewayOrAConversation() throws {
-        // Structural on purpose. The regression is one added line that
-        // compiles, ships and breaks nothing a behavioural test can observe —
-        // a Work capture quietly hopped to an agent. So the guard reads the
-        // coordinator's own source and refuses the symbols outright.
-        let source = try String(
-            contentsOf: Self.projectContainerURL()
-                .appendingPathComponent("Conduck/Services/AppleSpeechRelayCoordinator.swift"),
-            encoding: .utf8
-        )
-        let code = Self.strippingComments(source)
-        XCTAssertTrue(
-            code.contains("publishRelayedWorkRecording"),
-            "extractor sanity: the stripped source must still hold this file's real code"
-        )
-        for forbidden in [
-            "startConverseHop",
-            "startDeferredConverseHop",
-            "handleQuickSend",
-            "RemoteAgentRef",
-            "BackgroundRemoteAgent",
-            "ConversationRecord",
-            "upsertConversation",
-        ] {
-            XCTAssertFalse(
-                code.contains(forbidden),
-                """
-                `\(forbidden)` appears in the relay coordinator's CODE. Nothing on the Work \
-                branch may reach a gateway, a gateway ref, or a conversation — the whole \
-                reason a wrist capture has a destination at all is that a private thought \
-                stops at the desk.
-                """
-            )
-        }
-    }
-
-    // MARK: - Fixtures
-
-    /// `.../Conduck/Conduck` — derived from this file's compile-time path, so
-    /// it holds regardless of the runner's working directory.
-    private static func projectContainerURL() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-    }
-
     /// Every range at which `needle` appears, in order — the ordering is what
-    /// the guard above measures, so a bare count would not do.
+    /// the guards above measure, so a bare count would not do.
     private static func occurrences(of needle: String, in haystack: String) -> [Range<String.Index>] {
         var found: [Range<String.Index>] = []
         var searchStart = haystack.startIndex
@@ -746,44 +958,34 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
         return out
     }
 
-    /// Not decodable as audio and comfortably under the sync ceiling, so the
-    /// storage policy picks the synced lane exactly as it does in the app.
-    private static let recordingBytes = Data(repeating: 0x6D, count: 4_096)
-
-    /// A store that cannot mount, so every operation on it throws — the
-    /// transient desk failure (a full disk, a protected-data blackout) the
-    /// phase-1 verdict has to be retryable for. The URL names a DIRECTORY,
-    /// which SQLite cannot open as a database file.
-    private static func unusableStore() throws -> ConversationStore {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "conduck-unusable-\(UUID().uuidString).sqlite",
-                isDirectory: true
-            )
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true
-        )
-        return ConversationStore(inMemory: false, storeURL: directory)
+    /// A retry lane whose container is a regular FILE, so every write into it
+    /// fails at `open` — the transient storage refusal the park verdict has to
+    /// be retryable for.
+    private static func unwritableLane() throws -> PendingRetryStore {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("conduck-relay-unwritable-\(UUID().uuidString)")
+        try Data().write(to: path)
+        return PendingRetryStore(containerURL: path, defaults: InMemoryDefaultsStore())
     }
 
-    /// Proves the broken fixture is really broken: a test that passed because
-    /// the store quietly worked would assert nothing at all.
-    private static func refusesWrites(_ store: ConversationStore) async -> Bool {
+    /// Proves the broken fixture is really broken: a case that passed because
+    /// the lane quietly worked would assert nothing at all.
+    private static func refusesArming(_ lane: PendingRetryStore) async -> Bool {
         do {
-            _ = try await store.upsertDeskMaterial(
-                WorkMaterialDraft(
-                    id: UUID(),
-                    kind: .note,
-                    title: "probe",
-                    textContent: "probe",
-                    storageMode: .metadataOnly
-                )
+            try await lane.save(
+                audioData: Data(repeating: 0x01, count: 8),
+                metadata: parkedMetadata(id: UUID()),
+                workImageData: nil
             )
             return false
         } catch {
             return true
         }
     }
+
+    /// Not decodable as audio and comfortably under the sync ceiling, so the
+    /// storage policy picks the synced lane exactly as it does in the app.
+    private static let recordingBytes = Data(repeating: 0x6D, count: 4_096)
 }
 
 #endif // os(iOS)

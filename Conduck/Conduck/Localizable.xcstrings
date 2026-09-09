@@ -1107,13 +1107,13 @@
         }
       }
     },
-    "carplay.work.notSaved.speak" : {
+    "carplay.work.keptOnPhone.speak" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Couldn't save that yet. Open Conduck to retry."
+            "value" : "Kept on your iPhone. Open Conduck to add it to Work."
           }
         }
       }
@@ -1125,17 +1125,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Saved to Work."
-          }
-        }
-      }
-    },
-    "carplay.work.savedWithoutWords.speak" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Saved to Work. Add the words on your iPhone."
           }
         }
       }
@@ -6869,6 +6858,17 @@
         }
       }
     },
+    "intent.workAddFiles.error.audioFile" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "“%@” is a recording. Work keeps recordings only when you add them yourself — open Work and use the attachment button."
+          }
+        }
+      }
+    },
     "intent.workAddFiles.error.fileTooLarge" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7840,7 +7840,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "This removes only the copy kept for another try at transcribing it. The recording is already in Work and stays there."
+            "value" : "Your words are already on your desk. This removes only the leftover copy this device kept."
           }
         }
       }
@@ -22742,6 +22742,28 @@
         }
       }
     },
+    "workboard.capture.recordingRefused.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Work keeps recordings only when you add them yourself. Open Work and use the attachment button."
+          }
+        }
+      }
+    },
+    "workboard.capture.recordingRefused.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recording not added"
+          }
+        }
+      }
+    },
     "workboard.capture.retry.message" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22896,6 +22918,17 @@
         }
       }
     },
+    "workboard.chatCapture.recordingRefused" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Added to Work without the recording. Add recordings yourself with the attachment button in Work."
+          }
+        }
+      }
+    },
     "workboard.chatCapture.remote" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -22991,6 +23024,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Screenshot with voice note"
+          }
+        }
+      }
+    },
+    "workboard.companion.card.label.words" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Screenshot with note"
           }
         }
       }
@@ -23710,6 +23754,17 @@
         }
       }
     },
+    "workboard.material.transcript" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Spoken note"
+          }
+        }
+      }
+    },
     "workboard.material.unavailableHere" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23837,7 +23892,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "That recording is no longer on your desk."
+            "value" : "That note is no longer on your desk."
           }
         }
       }
@@ -24024,7 +24079,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Nothing from this capture is on your desk."
+            "value" : "Nothing from this capture is on your desk yet. The recording is kept on this Mac for Try Again."
           }
         }
       }
@@ -24040,46 +24095,13 @@
         }
       }
     },
-    "workboard.voice.error.recordingKept" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your recording is on your desk. Only the words are missing."
-          }
-        }
-      }
-    },
-    "workboard.voice.error.recordingMissing" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your screenshot is on your desk. The recording is not."
-          }
-        }
-      }
-    },
-    "workboard.voice.error.recordingMissingScreenshotQueued" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your screenshot is on its way to your desk. The recording is not."
-          }
-        }
-      }
-    },
     "workboard.voice.error.screenshotMissing" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Your recording and words are on your desk. The screenshot is not."
+            "value" : "Your words are on your desk. The screenshot is not."
           }
         }
       }
@@ -24095,17 +24117,6 @@
         }
       }
     },
-    "workboard.voice.error.wordsAndScreenshotMissing" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your recording is on your desk. The words and screenshot are missing."
-          }
-        }
-      }
-    },
     "workboard.voice.error.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24113,6 +24124,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Voice capture stopped"
+          }
+        }
+      }
+    },
+    "workboard.voice.error.wordsMissing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your screenshot is on your desk. The words are not yet."
+          }
+        }
+      }
+    },
+    "workboard.voice.error.wordsMissingScreenshotQueued" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your screenshot is on its way to your desk. The words are not yet."
           }
         }
       }
@@ -24145,7 +24178,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Keeps the recording on your private desk and adds the words when they’re ready. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation, and never through a server of ours."
+            "value" : "Your recording stays on this device while it becomes words, and the words go to your private desk. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation, and never through a server of ours."
           }
         }
       }
@@ -24200,18 +24233,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "The recording is on your desk. Try Again adds the words to that same card."
-          }
-        }
-      }
-    },
-    "workboard.voice.stopped.body.noCard" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "That recording isn’t on your desk any more. Try Again brings its words back."
+            "value" : "Your recording is still on this device. Try Again turns it into a note on your desk."
           }
         }
       }

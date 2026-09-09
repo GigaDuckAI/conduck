@@ -8,6 +8,11 @@
 // rerun reproduces, and refusals that take the whole set rather than quietly
 // dropping part of it. Nothing here touches Core Data, a gateway, or the
 // network — a publication is bytes and a manifest on disk.
+//
+// One of those refusals is about what Work IS rather than about a limit: a
+// recording. The desk keeps an audio file only when a person attaches it there
+// themselves, and this lane is headless, so a set carrying one is refused whole
+// and from the declaration alone — before a byte is copied.
 
 import XCTest
 @testable import Conduck
@@ -42,14 +47,14 @@ final class WorkCaptureFileCaptureTests: XCTestCase {
         let captureID = UUID(uuidString: "9C0B7A3E-9E6E-4A2F-9A0D-2C2B9C1F44A1")!
         let first = try writeFile(named: "notes.txt", contents: "first")
         let second = try writeFile(named: "plan.pdf", contents: "second")
-        let third = try writeFile(named: "memo.m4a", contents: "third")
+        let third = try writeFile(named: "sites.csv", contents: "third")
 
         let published = try await inbox.publishFileCapture(
             note: "Everything the surveyor sent",
             files: [
                 input(first, mimeType: "text/plain", typeIdentifier: "public.plain-text"),
                 input(second, mimeType: "application/pdf", typeIdentifier: "com.adobe.pdf"),
-                input(third, mimeType: "audio/mp4", typeIdentifier: "public.mpeg-4-audio"),
+                input(third, mimeType: "text/csv", typeIdentifier: "public.comma-separated-values-text"),
             ],
             captureID: captureID,
             createdAt: Date(timeIntervalSince1970: 1_700_000_000)
@@ -65,11 +70,11 @@ final class WorkCaptureFileCaptureTests: XCTestCase {
         XCTAssertEqual(claim.envelope.entries.map(\.kind), [.file, .file, .file])
         XCTAssertEqual(
             claim.envelope.entries.map(\.displayName),
-            ["notes.txt", "plan.pdf", "memo.m4a"]
+            ["notes.txt", "plan.pdf", "sites.csv"]
         )
         XCTAssertEqual(
             claim.envelope.entries.map(\.mimeType),
-            ["text/plain", "application/pdf", "audio/mp4"]
+            ["text/plain", "application/pdf", "text/csv"]
         )
         XCTAssertEqual(claim.envelope.entries.compactMap(\.byteCount), [5, 6, 5])
 
@@ -84,7 +89,7 @@ final class WorkCaptureFileCaptureTests: XCTestCase {
         }
         XCTAssertEqual(
             claim.envelope.entries.compactMap(\.relativePath),
-            ["payload-000.txt", "payload-001.pdf", "payload-002.m4a"]
+            ["payload-000.txt", "payload-001.pdf", "payload-002.csv"]
         )
         let bytes = try claim.envelope.entries.map { entry in
             try Data(contentsOf: try XCTUnwrap(claim.payloadURL(for: entry)))
@@ -350,6 +355,88 @@ final class WorkCaptureFileCaptureTests: XCTestCase {
         )
     }
 
+    // MARK: - A recording takes the whole set
+
+    /// Work keeps an audio file only when a person attaches it at the desk
+    /// itself. This lane is headless — it shows nobody what it kept — so a
+    /// recording among the chosen files refuses the SET, the way every other
+    /// verdict in this intent does: landing the documents and silently dropping
+    /// the recording would tell a person who chose two files that one of them is
+    /// what they captured.
+    func testASetCarryingARecordingIsRefusedWhole() {
+        let document = declared(named: "proposal.pdf", mimeType: "application/pdf", typeIdentifier: "com.adobe.pdf")
+        let recording = declared(named: "memo.m4a", mimeType: "audio/mp4", typeIdentifier: "public.mpeg-4-audio")
+
+        XCTAssertNil(AddFilesToWorkIntent.refusal(for: [document]))
+        XCTAssertEqual(
+            AddFilesToWorkIntent.refusal(for: [document, recording]),
+            .audioFile(name: "memo.m4a"),
+            "the refusal names the recording, not the document beside it"
+        )
+        XCTAssertNotNil(
+            WorkFileCaptureRefusal.audioFile(name: "memo.m4a").errorDescription,
+            "a shortcut shows the sentence, so there has to be one"
+        )
+    }
+
+    /// Decided from the DECLARATION alone, before a byte is staged: these inputs
+    /// name files that do not exist, and the verdict lands anyway. The intent
+    /// calls this before it creates its staging directory, so a refused set
+    /// never duplicates a person's file onto a disk they may be short of.
+    func testARecordingIsRefusedBeforeAnythingIsStaged() throws {
+        let recording = declared(named: "memo.m4a", mimeType: "audio/mp4", typeIdentifier: "public.mpeg-4-audio")
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: recording.url.path),
+            "the case needs a declaration nothing has read"
+        )
+        XCTAssertEqual(AddFilesToWorkIntent.refusal(for: [recording]), .audioFile(name: "memo.m4a"))
+        XCTAssertEqual(try stagedChildren().count, 0)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(at: sources, includingPropertiesForKeys: nil).count,
+            0,
+            "no snapshot was written for a set that never becomes a capture"
+        )
+    }
+
+    /// A source that annotates with a UTI instead of a MIME type is the same
+    /// recording, and so is one that annotates with neither: the extension is
+    /// the last thing asked, and it answers.
+    func testARecordingDeclaredOnlyByTypeOrByNameIsRefusedToo() {
+        XCTAssertEqual(
+            AddFilesToWorkIntent.refusal(for: [
+                declared(named: "interview", mimeType: nil, typeIdentifier: "public.mp3")
+            ]),
+            .audioFile(name: "interview"),
+            "a UTI conforming to public.audio is a recording however the file is named"
+        )
+        XCTAssertEqual(
+            AddFilesToWorkIntent.refusal(for: [
+                declared(named: "voice.m4a", mimeType: nil, typeIdentifier: nil)
+            ]),
+            .audioFile(name: "voice.m4a")
+        )
+    }
+
+    /// The residual, pinned so it is not mistaken for a leak: a file that
+    /// declares nothing and carries no extension a recording is known by lands
+    /// as an ordinary document. Nothing here reads bytes to guess — a headless
+    /// process that sniffed every file would spend the memory this lane exists
+    /// not to spend, and would still be guessing.
+    func testAnUnannotatedFileIsNotTreatedAsARecording() {
+        XCTAssertNil(
+            AddFilesToWorkIntent.refusal(for: [
+                declared(named: "recording", mimeType: nil, typeIdentifier: nil)
+            ])
+        )
+        XCTAssertNil(
+            AddFilesToWorkIntent.refusal(for: [
+                declared(named: "walkthrough.mov", mimeType: "video/quicktime", typeIdentifier: "com.apple.quicktime-movie")
+            ]),
+            "a film is not a microphone capture; refusing it would close a door nobody asked to close"
+        )
+    }
+
     // MARK: - Fixtures
 
     private func input(
@@ -365,6 +452,24 @@ final class WorkCaptureFileCaptureTests: XCTestCase {
             mimeType: mimeType,
             typeIdentifier: typeIdentifier,
             byteCount: byteCount
+        )
+    }
+
+    /// An input the way a shortcut hands one over — a name and whatever the
+    /// graph declared — with no file behind it. The whole-set refusals are a
+    /// pure function of the declaration, which is what lets them be taken
+    /// before anything is copied.
+    private func declared(
+        named name: String,
+        mimeType: String?,
+        typeIdentifier: String?
+    ) -> WorkCaptureFileInput {
+        WorkCaptureFileInput(
+            url: sources.appendingPathComponent(name, isDirectory: false),
+            displayName: name,
+            mimeType: mimeType,
+            typeIdentifier: typeIdentifier,
+            byteCount: 1_024
         )
     }
 

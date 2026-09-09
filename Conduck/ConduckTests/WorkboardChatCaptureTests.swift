@@ -8,6 +8,12 @@
 // (so a repeat is a no-op rather than a second card), the desk is the only
 // Work item the lane ever writes, and an attachment that cannot be copied is
 // reported rather than silently dropped.
+//
+// One attachment is refused rather than copied. A recording shared into a chat
+// and then captured here would ride the desk's syncing lane for ever, and Work
+// keeps audio only when the person adds it themselves in the Work pane — so the
+// turn's words and its other attachments land, the recording stays in the chat
+// untouched, and the receipt carries the count the banner needs to say so.
 
 import XCTest
 @testable import Conduck
@@ -450,5 +456,132 @@ final class WorkboardChatCaptureTests: XCTestCase {
         let strangerPayload = try await store.loadWorkMaterialPayload(id: attachmentID)
         XCTAssertEqual(strangerPayload, strangerBytes,
                        "and its payload is not replaced by the bytes this turn was carrying")
+    }
+
+    // MARK: - A recording stays in the chat
+
+    /// The founder's rule at the Chat door: an audio file shared into a chat
+    /// and then captured into Work would put those bytes on the desk's syncing
+    /// lane for ever, so the capture skips it. Everything else about the turn
+    /// still lands, and the receipt says what did not — the banner is the only
+    /// account the person gets.
+    ///
+    /// Negative control: without the sniffer the recording becomes a `.file`
+    /// card carrying its bytes; the card count, the refusal count and the
+    /// payload lane assertions all fail.
+    func testARecordingSharedIntoChatIsNotCapturedIntoWork() async throws {
+        let store = isolated.make()
+        let conversation = try await store.createConversation(backend: "hermes")
+        let pictureBytes = Data("picture".utf8)
+        let picture = AttachmentDraft(
+            mimeType: "image/png",
+            filename: "screenshot.png",
+            data: pictureBytes,
+            thumbnailData: nil,
+            width: 0,
+            height: 0,
+            byteSize: pictureBytes.count,
+            sequence: 0
+        )
+        let clipBytes = Data("clip".utf8)
+        let recording = AttachmentDraft(
+            mimeType: "audio/mp4",
+            filename: "memo.m4a",
+            data: clipBytes,
+            thumbnailData: nil,
+            width: 0,
+            height: 0,
+            byteSize: clipBytes.count,
+            sequence: 1
+        )
+        let message = try await store.appendMessage(
+            role: "user",
+            text: "Two attachments",
+            conversationID: conversation.id,
+            sourceDevice: "test",
+            attachments: [picture, recording]
+        )
+
+        let receipt = try await store.captureMessageToWork(message, conversationID: conversation.id)
+
+        XCTAssertEqual(receipt.addedMaterialCount, 2, "the turn's words and its picture")
+        XCTAssertEqual(receipt.refusedMaterialCount, 1, "and one recording it left behind")
+        XCTAssertEqual(
+            receipt.failedMaterialCount, 0,
+            "nothing went wrong: a refusal is not something to try again"
+        )
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.count, 2)
+        XCTAssertTrue(desk.materials.contains { $0.id == message.id }, "the turn's words")
+        XCTAssertNotNil(
+            desk.materials.first { $0.filename == "screenshot.png" },
+            "and the picture beside the recording"
+        )
+        XCTAssertNil(
+            desk.materials.first { $0.filename == "memo.m4a" || $0.title == "memo.m4a" },
+            "the recording reached no card of any kind"
+        )
+
+        // The PERSISTED attachment identity — the draft carries none, and a
+        // card would be published under the stored row's id.
+        let payloads = try await store.loadLocalAttachmentPayloads(for: message.id)
+        let recordingID = try XCTUnwrap(payloads.first { $0.value == clipBytes }?.key)
+        let rows = await store._workMaterialRowsForTesting(id: recordingID)
+        XCTAssertTrue(rows.isEmpty, "no row, so no blob and no vault leaf either")
+    }
+
+    /// A turn whose ONLY attachment is a recording still captures its words.
+    /// The refusal is per attachment, never per turn: dropping the whole turn
+    /// would lose the one thing the desk is for.
+    func testATurnWhoseOnlyAttachmentIsARecordingStillCapturesItsWords() async throws {
+        let store = isolated.make()
+        let conversation = try await store.createConversation(backend: "hermes")
+        let clipBytes = Data("clip".utf8)
+        let recording = AttachmentDraft(
+            mimeType: "audio/mp4",
+            filename: "memo.m4a",
+            data: clipBytes,
+            thumbnailData: nil,
+            width: 0,
+            height: 0,
+            byteSize: clipBytes.count,
+            sequence: 0
+        )
+        let message = try await store.appendMessage(
+            role: "user",
+            text: "Listen to this",
+            conversationID: conversation.id,
+            sourceDevice: "test",
+            attachments: [recording]
+        )
+
+        let receipt = try await store.captureMessageToWork(message, conversationID: conversation.id)
+
+        XCTAssertEqual(receipt.addedMaterialCount, 1)
+        XCTAssertEqual(receipt.refusedMaterialCount, 1)
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.map(\.id), [message.id], "the words, and nothing else")
+        XCTAssertEqual(desk.materials.first?.textContent, "Listen to this")
+    }
+
+    /// An ordinary turn is untouched: the refusal counter stays at zero, so the
+    /// banner keeps saying what it said before.
+    func testATurnWithNoRecordingReportsNoRefusal() async throws {
+        let store = isolated.make()
+        let conversation = try await store.createConversation(backend: "hermes")
+        let message = try await store.appendMessage(
+            role: "user",
+            text: "Draft the migration plan",
+            conversationID: conversation.id,
+            sourceDevice: "test"
+        )
+
+        let receipt = try await store.captureMessageToWork(message, conversationID: conversation.id)
+
+        XCTAssertEqual(receipt.refusedMaterialCount, 0)
     }
 }

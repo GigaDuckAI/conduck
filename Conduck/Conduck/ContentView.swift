@@ -38,6 +38,7 @@
 //  been taken over by a surface that already sent the same words.
 //
 
+import OSLog
 import SwiftUI
 import UserNotifications
 import AVFoundation
@@ -50,6 +51,13 @@ import UIKit
 // MARK: - ContentView (conversation thread shell)
 
 struct ContentView: View {
+    /// FACTS ONLY. The one thing this surface logs is whether a store write it
+    /// deliberately does not fail on succeeded — never a transcript, never an
+    /// id, never a file name.
+    private static let log = Logger(
+        subsystem: Constants.identityNamespace, category: "WorkVoiceRetry"
+    )
+
     @State private var currentConversationID: UUID?
     /// The detail VM bound to the visible conversation. Owned here so the mic
     /// footer and the on-screen thread share ONE in-flight state machine
@@ -57,11 +65,20 @@ struct ContentView: View {
     /// the mic just fired). Recreated whenever `currentConversationID` changes.
     @State private var detailVM: ConversationDetailViewModel?
     @State private var hasPendingRetry: Bool = false
-    /// How many captures are waiting, the one the card's Retry would take
-    /// included. The card speaks for a QUEUE — Retry finishes one and whatever
-    /// is behind it keeps the card up — so the count is what stops a card that
-    /// is still there after a successful retry from reading as a failure.
-    /// Metadata-only (`pendingCount()` reads no recording).
+    /// How many captures are waiting for a PERSON, the one the card's Retry
+    /// would take included. The card speaks for a QUEUE — Retry finishes one and
+    /// whatever is behind it keeps the card up — so the count is what stops a
+    /// card that is still there after a successful retry from reading as a
+    /// failure.
+    ///
+    /// `waitingCount()` rather than `pendingCount()`: an ordinary capture parks
+    /// its recording and holds its own reservation for the whole of its
+    /// transcription, so the queue-depth reading would raise this card through
+    /// every successful recording somebody makes. Nothing is waiting for a
+    /// person while its own lane is still working on it — and the moment that
+    /// lane dies without releasing, the reservation lapses and the capture
+    /// counts again, which is the state this card exists to show. Metadata-only:
+    /// no recording is read.
     @State private var pendingRetryCount: Int = 0
     /// The `AppError.errorCode` that armed the pending retry, mirrored from the
     /// store alongside `hasPendingRetry` so the retry card's Troubleshoot
@@ -1240,8 +1257,11 @@ struct ContentView: View {
         // exit that runs one leaves the flag standing for a second refresh.
         pendingRetryQueueChangeMissed = false
         // The COUNT rather than a boolean, because the card has to say how many
-        // are waiting and both readings come from one metadata-only scan.
-        pendingRetryCount = await PendingRetryStore.shared.pendingCount()
+        // are waiting and both readings come from one metadata-only scan. It
+        // counts what is waiting for a PERSON: a capture whose own lane still
+        // holds it is being worked on, and raising a Try Again over it is this
+        // card interrupting a recording that is going fine.
+        pendingRetryCount = await PendingRetryStore.shared.waitingCount()
         hasPendingRetry = pendingRetryCount > 0
         pendingRetryErrorCode = await PendingRetryStore.shared.pendingErrorCode()
         // Deriving this from the code above withheld Retry from every recording
@@ -1311,7 +1331,7 @@ struct ContentView: View {
             await refreshPendingRetryState()
             return
         }
-        pendingRetryCount = await PendingRetryStore.shared.pendingCount()
+        pendingRetryCount = await PendingRetryStore.shared.waitingCount()
         withAnimation { hasPendingRetry = pendingRetryCount > 0 }
     }
 
@@ -1721,8 +1741,16 @@ struct ContentView: View {
         )
     }
 
-    /// True when the recording the Discard confirmation is about is ALREADY a
-    /// card on the desk, so the dialog must not claim it is about to be lost.
+    /// True when the desk ALREADY holds what this capture produced, so the
+    /// dialog must not claim the person is about to lose what they said.
+    ///
+    /// A `.published` Work entry means the words card is written and only a
+    /// leftover is still parked — the recording, when a death landed between the
+    /// stamp and the clear, or the screenshot, when the recording was retired
+    /// the moment the words landed. Either way the artifact is on the desk and
+    /// "it cannot be recovered" is false, in the direction that stops somebody
+    /// tidying up. Every other Work entry, and every Chat entry, is the only
+    /// copy of what was said, and gets the sentence that says so.
     private var pendingRetryDiscardKeepsRecording: Bool {
         guard let metadata = pendingRetryDiscard?.entry.metadata else { return false }
         return metadata.resolvedDestination == .work
@@ -1745,7 +1773,15 @@ struct ContentView: View {
             // Nothing this surface may take. Either the queue is empty, or
             // every capture in it is reserved — by the menu bar, a Shortcut
             // host, or an attempt this app was force-quit in the middle of.
-            // Only the first of those retires the card, so the count decides.
+            // The refresh answers both the same way, and deliberately: a
+            // capture somebody is finishing is not waiting for this person, and
+            // the card that says one is comes down. It comes back on its own if
+            // that holder fails — a hand-back announces itself, and a lapsed
+            // reservation counts again — which is the state the card exists for.
+            //
+            // The busy line is for the third case: another capture became free
+            // between the reservation attempt and this read, so the card is
+            // still on screen and owes the tap an answer.
             await refreshPendingRetryState()
             if pendingRetryCount > 0 {
                 presentRetryError(pendingRetryBusyMessage)
@@ -1784,11 +1820,27 @@ struct ContentView: View {
         // file, the provider round trip — would be spent buying an answer this
         // record already carries, and a key removed since would refuse a retry
         // that needs none. This one finishes with no network at all.
+        //
+        // It is also the whole of what a PICTURE-OWING entry needs. Such an
+        // entry — words on the desk, recording retired, screenshot still parked
+        // — is handed over with EMPTY bytes and its words, and this arm is the
+        // one that finishes it: the picture is published, the words card is
+        // found already standing, and the entry is cleared.
         if pending.metadata.resolvedDestination == .work,
            let parked = pending.metadata.transcript?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !parked.isEmpty {
             return await finishWorkRetry(claim, transcript: parked)
+        }
+
+        // NO BYTES and no words. The queue offers an entry with no recording
+        // only when it still shelters a picture, so the debt is real and the
+        // speech hop is not: staging an empty file and asking a provider to read
+        // it buys a refusal for money. The desk lane publishes whatever is
+        // parked and hands the entry back if that leaves nothing to write, and
+        // the next claim retires an entry with neither artifact left.
+        if pending.metadata.resolvedDestination == .work, pending.audioData.isEmpty {
+            return await finishWorkRetry(claim, transcript: "")
         }
 
         // ATOMIC snapshot — (presetID, apiKey, provider, customModel,
@@ -1958,13 +2010,25 @@ struct ContentView: View {
     /// its words and by one whose words were already parked.
     ///
     /// The desk decision itself is not taken here. `recover` owns it, because
-    /// the question — attach, republish then attach, or write the words beside
-    /// a card that is gone — is answered from the record's own publication
-    /// verdict, which this surface cannot observe: an id naming no card is
-    /// either a publication the desk refused or a card a person deleted while
-    /// recognition was in flight, and they call for opposite acts. Duplicating
-    /// that decision at each surface is how one of them started resurrecting
-    /// deleted cards while another dropped the words.
+    /// the question — which of a capture's three candidate ids already carries
+    /// its words, and whether a card an earlier build published is standing to
+    /// take them — is answered from the desk itself, which this surface has no
+    /// business reading. Duplicating that decision at each surface is how one of
+    /// them started resurrecting deleted cards while another dropped the words.
+    ///
+    /// THE WORDS ARE PARKED FIRST, before either publication. They were bought
+    /// from a provider a moment ago and they exist in one place: this call's
+    /// argument. A death between here and the desk write would cost them, and
+    /// the retry that follows would pay for the same recognition again — so the
+    /// entry takes them before anything else is attempted. Non-fatal by design:
+    /// the publish proceeds on a refusal, because the words are in hand and the
+    /// desk write is what the person is waiting for.
+    ///
+    /// It TOLERATES AN ENTRY WITH NO RECORDING. A capture whose words already
+    /// landed and whose screenshot is still parked is offered with empty bytes,
+    /// and everything below is exactly what it needs: the picture is published,
+    /// the recovery finds the words card already standing, and the entry is
+    /// cleared. There is no speech hop above it and no file to stage.
     ///
     /// The release of the durable record sits BELOW the recovery and inside the
     /// same `do`, so a store that refused the write skips it and the recording
@@ -1984,6 +2048,30 @@ struct ContentView: View {
         guard await PendingRetryStore.shared.confirmOwnership(claim) else {
             presentRetryError(pendingRetryBusyMessage)
             return false
+        }
+        // Under the reservation, and RESTATING the verdict rather than deciding
+        // it: this line learns nothing about the desk. A fresh capture reads
+        // `.phaseOneFailed` and stays it; the picture-owing entry whose words
+        // already landed reads `.published` and must not be talked back down to
+        // "these bytes are the only copy", which is the reading that exempts an
+        // entry from every clock.
+        //
+        // Skipped when there are no words: an entry offered with no bytes and
+        // nothing recognised has none to park, and an empty transcript written
+        // over the entry's own would erase words somebody already paid for.
+        if !transcript.isEmpty {
+            let wordsParked = await PendingRetryStore.shared.recordPublicationState(
+                claim,
+                transcript: transcript,
+                publicationState: pending.metadata.publicationState ?? .phaseOneFailed
+            )
+            if !wordsParked {
+                // FACT only — no transcript, no id. Not a refusal: the words are
+                // in memory and the desk write below is what the person is
+                // waiting for. What it costs is one more recognition if this
+                // process dies in the next few lines.
+                Self.log.error("Work retry words not parked")
+            }
         }
         do {
             // A GigaAction capture can also carry a screenshot, and the retry
@@ -2069,7 +2157,7 @@ struct ContentView: View {
             PendingRetryGuard.cancelDeferredNotification(for: claim.id)
         }
 
-        pendingRetryCount = await PendingRetryStore.shared.pendingCount()
+        pendingRetryCount = await PendingRetryStore.shared.waitingCount()
         pendingRetryErrorCode = pendingRetryCount > 0
             ? await PendingRetryStore.shared.pendingErrorCode()
             : nil

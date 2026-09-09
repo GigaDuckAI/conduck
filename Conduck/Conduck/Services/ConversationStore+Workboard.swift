@@ -669,6 +669,13 @@ extension ConversationStore {
     /// only on the user's gateway is recorded as a reference instead, because a
     /// chat snapshot cannot truthfully copy bytes it never held.
     ///
+    /// A RECORDING IS NOT CAPTURED. Chat legitimately carries audio, and Work
+    /// keeps a recording only when the person adds one deliberately through the
+    /// Work pane's own attachment button or a drop onto it. An audio attachment
+    /// is therefore skipped here and counted on the receipt, so the turn's words
+    /// and its other attachments still land and the caller can say what did not.
+    /// Nothing is deleted: the recording stays in the chat, untouched.
+    ///
     /// The message id is the note card's identity and every attachment keeps
     /// its own, so a retry after a process interruption repairs the same cards
     /// instead of publishing a second set — every attachment whose bytes this
@@ -714,6 +721,7 @@ extension ConversationStore {
         var added = 0
         var referencedOnly = 0
         var failed = 0
+        var refused = 0
 
         if !messageText.isEmpty, !existingIDs.contains(persistedMessage.id) {
             do {
@@ -748,6 +756,18 @@ extension ConversationStore {
         // Rank is the desk write's to decide, so the cards are published in the
         // order they are meant to read: the turn's words, then its attachments.
         for attachment in persistedMessage.attachments.sorted(by: { $0.sequence < $1.sequence }) {
+            // Refused BEFORE the desk is asked for anything, so no row, no
+            // blob and no vault leaf is ever written for a recording. The
+            // SHARED sniffer, so this door and the two that keep a recording
+            // agree about what one is.
+            guard !WorkCaptureEnvelope.isAudioPayload(
+                mimeType: attachment.mimeType,
+                typeIdentifier: nil,
+                filename: attachment.filename
+            ) else {
+                refused += 1
+                continue
+            }
             let localPayload = payloads[attachment.id]
             let alreadyOnDesk = existingIDs.contains(attachment.id)
             // An attachment whose bytes this device still holds is republished
@@ -846,6 +866,7 @@ extension ConversationStore {
             addedMaterialCount: added,
             referencedOnlyMaterialCount: referencedOnly,
             failedMaterialCount: failed,
+            refusedMaterialCount: refused,
             wasAlreadyCaptured: wasAlreadyCaptured
         )
     }
@@ -897,6 +918,18 @@ extension ConversationStore {
     /// rewritten, and a row that claims no payload is never given one: that is
     /// reattach, which `replaceWorkMaterialPayloadFile` owns.
     ///
+    /// CANCELLATION. A capture the person cancelled mid-flight must not land,
+    /// and the check that decides it belongs at the MUTATION BOUNDARY inside the
+    /// transaction — not at the caller. Everything between a caller's own check
+    /// and this write can suspend for an unbounded time: the desk and material
+    /// claims above spin, `ensureLoaded()` opens a store on first use, and the
+    /// bytes are staged before the transaction opens. A press landing anywhere
+    /// in there is answered here, where the row would otherwise be written, and
+    /// `Task.isCancelled` cannot serve: inside a `context.perform` closure it
+    /// answers about the queue's own task and reads `false` however hard the
+    /// person pressed. Everything this call staged is taken back on the way out,
+    /// exactly as a refusal is.
+    ///
     /// - Parameter repairPayload: Bytes the caller still holds for a material
     ///   that already exists but cannot produce its payload. Falls back to
     ///   `draft.payload`, so an ordinary replay needs no second copy.
@@ -912,6 +945,9 @@ extension ConversationStore {
     ///   guard, and a refusal there would drop a capture the person already
     ///   made. Supplied against a desk that does not exist yet, it is refused:
     ///   a token for an absent row cannot be honestly compared.
+    /// - Parameter authorization: The cancellation a Work voice capture's own
+    ///   surface can still revoke while this write is in flight. Nil for every
+    ///   caller with nothing to cancel, which is every caller but that lane.
     func upsertDeskMaterial(
         _ draft: WorkMaterialDraft,
         sourceFileURL: URL? = nil,
@@ -919,6 +955,7 @@ extension ConversationStore {
         repairPayload: Data? = nil,
         legacyProvenance: WorkMaterialLegacyProvenance? = nil,
         expectedOwnerRevision: Int64? = nil,
+        authorization: WorkVoiceWriteAuthorization? = nil,
         onProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> WorkMaterialRecord {
         try await publishWorkMaterial(
@@ -928,6 +965,7 @@ extension ConversationStore {
             repairPayload: repairPayload,
             legacyProvenance: legacyProvenance,
             expectedOwnerRevision: expectedOwnerRevision,
+            authorization: authorization,
             onProgress: onProgress
         )
         guard let record = try await fetchWorkMaterial(id: draft.id) else {
@@ -1071,6 +1109,7 @@ extension ConversationStore {
         repairPayload: Data?,
         legacyProvenance: WorkMaterialLegacyProvenance?,
         expectedOwnerRevision: Int64?,
+        authorization: WorkVoiceWriteAuthorization?,
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws {
         let ownerID = Constants.workboardDeskItemID
@@ -1255,6 +1294,17 @@ extension ConversationStore {
         let outcome: WorkMaterialWriteOutcome
         do {
             outcome = try await context.perform { [context] () -> WorkMaterialWriteOutcome in
+                // THE MUTATION BOUNDARY, and the last place a cancel can still
+                // mean something. Everything above this line — the two claims,
+                // the publication lock, `ensureLoaded()`, the sizing pass, the
+                // staging, the blob save — can suspend, and a press that landed
+                // in any of it is a promise about a card that must not exist.
+                // Taken before the desk row is even resolved, because
+                // `insertDeskRow` is itself a mutation. It THROWS rather than
+                // reporting an outcome: nothing was attempted, so there is no
+                // publication to report, and the `catch` below reclaims the
+                // vault leaf and the blob row this call had already written.
+                if authorization?.isCancelled == true { throw CancellationError() }
                 var createdOwner = false
                 let ownerRow: NSManagedObject
                 if let row = try Self.workItemRow(id: ownerID, in: context) {
@@ -3259,8 +3309,8 @@ extension ConversationStore {
     /// The picture a recording's `attachedToMaterialID` actually resolves to on
     /// this desk, or nil when it resolves to none.
     ///
-    /// TWO CANDIDATES AND NO MORE, in this order: the id the recording names,
-    /// then the one escape a colliding publication may have taken
+    /// TWO CANDIDATES AND NO MORE, in this order: the id the voice material
+    /// names, then the one escape a colliding publication may have taken
     /// (`WorkMaterialCollisionEscape` — there is deliberately no second
     /// escape, so there is no third candidate).
     ///
@@ -3274,7 +3324,7 @@ extension ConversationStore {
     /// from the CANONICAL row, the same one the board draws from, so the store
     /// and the board cannot disagree about what a duplicate-merged card is.
     ///
-    /// A RECORDING THAT NAMES ITSELF RESOLVES TO NOTHING, and this returns nil
+    /// A CHILD THAT NAMES ITSELF RESOLVES TO NOTHING, and this returns nil
     /// before either candidate is looked up rather than merely skipping the
     /// self-referential one: the escape of the child's OWN id is not the child,
     /// so a skip would let whatever picture happens to sit at that derived id
@@ -3282,9 +3332,9 @@ extension ConversationStore {
     /// cards that were never a pair. No lane writes a self-link; the stored
     /// value is raw, so a corrupt or synced row can carry one.
     ///
-    /// The link is a promise about identity, not existence: a recording whose
-    /// picture never landed resolves to nil here and is a standalone card,
-    /// which is correct rather than a defect.
+    /// The link is a promise about identity, not existence: a voice material
+    /// whose picture never landed resolves to nil here and is a standalone
+    /// card, which is correct rather than a defect.
     private static func eligibleCompanionPictureID(
         link: UUID,
         child: UUID,
@@ -3306,13 +3356,13 @@ extension ConversationStore {
         return nil
     }
 
-    /// Delete a folded pair — a picture and the recording that names it — as
-    /// ONE mutation.
+    /// Delete a folded pair — a picture and the voice material that names it —
+    /// as ONE mutation.
     ///
     /// WHY IT IS NOT TWO DELETES. `deleteWorkMaterial` advances the desk's
     /// `updatedAt`, so a second call carrying the token the person's board was
     /// holding is refused by the first call's own write. What that leaves is
-    /// the worst outcome the card has: the picture gone and its recording
+    /// the worst outcome the card has: the picture gone and its voice material
     /// standing alone on the desk, delivered by the one control that offered
     /// to remove both. So the pair takes ONE transaction, ONE compare-and-swap,
     /// ONE timestamp and ONE save, and either both cards go or neither does.
@@ -3322,11 +3372,15 @@ extension ConversationStore {
     /// different child, because the board's own selection rule (lowest child
     /// UUID among several claimants) can move under a sync while a confirmation
     /// alert is up, and deleting a recording nobody pointed at is unrecoverable.
-    /// What it does check is that the named pair IS a pair: the child is an
-    /// `.audio` on this desk, it names a picture, and that name resolves —
-    /// through `eligibleCompanionPictureID`, the same two candidates the board
-    /// folds by — to exactly `parentID`. Anything else is
+    /// What it does check is that the named pair IS a pair: the child is the
+    /// press's voice material on this desk — an `.audio` or a `.transcript`,
+    /// the two shapes the board folds — it names a picture, and that name
+    /// resolves, through `eligibleCompanionPictureID` and the same two
+    /// candidates the board folds by, to exactly `parentID`. Anything else is
     /// `WorkboardStoreError.invalidMaterialCompanion` and nothing is deleted.
+    /// The kinds accepted here and the fold's own child condition are ONE rule
+    /// in two places: a shape the board draws inside a picture and this refuses
+    /// is a folded card whose Delete throws.
     ///
     /// EVERY PHYSICAL ROW of both materials goes, duplicates included: CloudKit
     /// can merge one logical card into several, and a survivor would resurrect
@@ -3347,7 +3401,7 @@ extension ConversationStore {
     /// conflict check, not a distributed deletion marker.
     ///
     /// - Parameter parentID: The picture. Never re-derived.
-    /// - Parameter childID: The recording, exactly as displayed.
+    /// - Parameter childID: The voice material, exactly as displayed.
     /// - Parameter workItemID: The desk both must sit on.
     /// - Parameter expectedOwnerRevision: Compare-and-swap token, supplied by
     ///   the board path that knows which revision the person saw. Nil skips the
@@ -3363,9 +3417,9 @@ extension ConversationStore {
         let context = newWriteContext()
         let vaultKeys = try await context.perform { [context] () -> [String] in
             // A card is not its own companion. Unreachable through the kind
-            // checks below — one row cannot be both `.audio` and `.image` —
-            // and stated anyway, because the deletion that follows would
-            // otherwise be handed the same rows twice.
+            // checks below — one row cannot be both a voice material and an
+            // `.image` — and stated anyway, because the deletion that follows
+            // would otherwise be handed the same rows twice.
             guard parentID != childID else {
                 throw WorkboardStoreError.invalidMaterialCompanion
             }
@@ -3375,8 +3429,8 @@ extension ConversationStore {
             guard let childRow = Self.canonicalRow(among: childRows) else {
                 throw WorkboardStoreError.materialNotFound
             }
-            guard WorkMaterialKind(stored: childRow.value(forKey: "kind") as? String) == .audio
-            else {
+            let childKind = WorkMaterialKind(stored: childRow.value(forKey: "kind") as? String)
+            guard childKind == .audio || childKind == .transcript else {
                 throw WorkboardStoreError.invalidMaterialCompanion
             }
             guard let link = childRow.value(forKey: "attachedToMaterialID") as? UUID else {

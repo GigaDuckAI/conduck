@@ -3,10 +3,11 @@
 // Conduck
 // WorkboardAudioCardView.swift
 //
-// The desk's playable voice-note card, and the small player behind it. A voice
-// note is kept as AUDIO — the transcript is a caption on the recording, not a
-// replacement for it — so the card is playable from the moment its bytes land,
-// with or without a transcript.
+// The desk's playable recording card, and the small player behind it. It draws
+// an audio file a person attached in Work, or a recording written by an earlier
+// build; nothing records into it, because a Work voice note is its words. The
+// card is playable from the moment its bytes land, with or without a
+// transcript.
 //
 // WHY ITS OWN PLAYER: Chat's read-aloud stack (`ReplyVoice` / `SpeechPlayer` /
 // `ThreadSpeaker`) owns a per-turn exactly-once completion contract, an Apple

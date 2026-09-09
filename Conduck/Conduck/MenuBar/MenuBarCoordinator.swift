@@ -2416,23 +2416,23 @@ final class MenuBarCoordinator {
     /// The capture reached a terminal answer.
     ///
     /// Only a SUCCESS acknowledges, and only when a card owns the words: the
-    /// recorder nils `workRecordingMaterialID` when the capture turned out to
-    /// own no recording at all (a card deleted while speech recognition was in
-    /// flight), and "Added to Work" said over an empty desk is the one sentence
-    /// this surface may not print. A failure sets nothing — the recorder owns
-    /// the error state and the retry lane, and the HUD renders both.
+    /// recorder nils `workRecordingMaterialID` when the words turned out to have
+    /// no card at all (one deleted while speech recognition was in flight), and
+    /// "Added to Work" said over an empty desk is the one sentence this surface
+    /// may not print. A failure sets nothing — the recorder owns the error state
+    /// and the retry lane, and the HUD renders both.
     private func noteWorkCaptureFinished(_ result: Result<String, AppError>) {
         guard case .success = result else { return }
         // The capture is over, so the HUD's thumbnail is too. A FAILURE
-        // deliberately keeps it: an unfinished capture still owns its card and
-        // its Try Again, and the picture is what says which one.
+        // deliberately keeps it: an unfinished capture still owns its parked
+        // recording and its Try Again, and the picture is what says which one.
         clearPendingWorkCaptureImage()
         guard workVoiceRecorder.workRecordingMaterialID != nil else {
             quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(
                 kind: .failed,
                 message: String(localized: LocalizedStringResource(
                     "workboard.menuBar.voice.cardMissing",
-                    defaultValue: "That recording is no longer on your desk."
+                    defaultValue: "That note is no longer on your desk."
                 ))
             )
             return

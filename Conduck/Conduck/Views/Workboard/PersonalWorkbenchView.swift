@@ -535,7 +535,10 @@ final class PersonalWorkbenchRouter {
                     : WorkbenchPreviewError.unavailable
             }
             switch material.kind {
-            case .note:
+            // Typed words and spoken words open the same way, because opening
+            // either one can only mean reading it: neither has bytes behind it
+            // to preview.
+            case .note, .transcript:
                 commit(
                     MaterialPresentation(
                         title: material.name,
@@ -929,6 +932,27 @@ final class PersonalWorkbenchModel {
                                     "workboard.capture.discarded.title",
                                     defaultValue: "Shared items not added"
                                 ),
+                            message: message
+                        )
+                        AccessibilityAnnouncer.announce(message)
+                    } else if report.refusedEntryCount > 0 {
+                        // A sibling of the discarded-capture notice, not a
+                        // variant of it: nothing failed, the rest of the capture
+                        // is on the board, and the sentence has to name the door
+                        // that does keep a recording. No count in it — one
+                        // sentence for one recording and for five is the honest
+                        // answer here, and a number would buy a plural rule for
+                        // every language.
+                        let message = String(localized: LocalizedStringResource(
+                            "workboard.capture.recordingRefused.message",
+                            defaultValue: "Work keeps recordings only when you add them yourself. Open Work and use the attachment button."
+                        ))
+                        workboardViewModel.notice = WorkboardNotice(
+                            kind: .error,
+                            title: LocalizedStringResource(
+                                "workboard.capture.recordingRefused.title",
+                                defaultValue: "Recording not added"
+                            ),
                             message: message
                         )
                         AccessibilityAnnouncer.announce(message)
@@ -1631,21 +1655,37 @@ private struct WorkboardGallerySheet: View {
     }
 }
 
-/// The recording's transport along the bottom of the picture it was captured
-/// with.
+/// The voice material along the bottom of the picture it was captured with: a
+/// recording with its transport, or the words alone.
+///
+/// THE WORDS-ONLY BAND IS WHY THE PICTURE WAS OPENED. On the board its card can
+/// spare two lines for them; here the sheet is the full view of the pair, so the
+/// band spends its height on the text and draws no transport, no availability
+/// chip and no progress track — a control, a waiting sentence and a filling bar
+/// would all be about bytes that do not exist.
 ///
 /// ACCESSIBILITY IS THIS VIEW'S OWN JOB. `WorkboardAudioTransport(.control)`
 /// hides itself from VoiceOver because on the board its card supplies the
 /// matching custom actions; there is no card here, so the band states what the
-/// recording is, what it is doing, and offers the one action itself.
+/// voice material is, what it is doing, and offers the one action itself.
 private struct WorkboardGalleryCompanionBand: View {
     let companion: WorkboardCompanionSnapshot
     let player: WorkboardAudioCardPlayer
 
     /// The recording's OWN readability, never the picture's. A picture that
     /// opened can be folded with a recording whose bytes are still arriving.
+    /// Words alone are never playable: nothing is behind them to reach for.
     private var isPlayable: Bool {
-        WorkboardCardActionPolicy.allows(.play, when: companion.availability)
+        companion.kind == .audio
+            && WorkboardCardActionPolicy.allows(.play, when: companion.availability)
+    }
+
+    /// How much of the words the band shows. A recording's band is a caption
+    /// under a transport — the clip is the material and two lines name it —
+    /// while a words-only band IS the material, and the picture was opened to
+    /// read it.
+    private var transcriptLineLimit: Int {
+        companion.kind == .audio ? 2 : 8
     }
 
     /// Why the transport is not offering to play, IN WORDS.
@@ -1658,8 +1698,13 @@ private struct WorkboardGalleryCompanionBand: View {
     /// own importer — and this sheet wires nothing to it, so the chip states
     /// what is true ("Not on this device") instead of naming an action that
     /// would do nothing here.
+    ///
+    /// Only a recording has bytes that can be somewhere else, so a words-only
+    /// companion draws none: it is unplayable by construction rather than by
+    /// misfortune, and "Not on this device" about text the band is displaying
+    /// would be false.
     private var availabilityChip: WorkboardAudioCardChip? {
-        guard !isPlayable else { return nil }
+        guard companion.kind == .audio, !isPlayable else { return nil }
         return WorkboardAudioCardPresentation.chip(
             for: companion.availability,
             hasReattachAction: false
@@ -1668,14 +1713,16 @@ private struct WorkboardGalleryCompanionBand: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            WorkboardAudioTransport(
-                materialID: companion.id,
-                player: player,
-                availability: companion.availability,
-                activation: .control,
-                dimension: 40,
-                placement: .scrim
-            )
+            if companion.kind == .audio {
+                WorkboardAudioTransport(
+                    materialID: companion.id,
+                    player: player,
+                    availability: companion.availability,
+                    activation: .control,
+                    dimension: 40,
+                    placement: .scrim
+                )
+            }
             let face = WorkboardCompanionBand.face(for: companion)
             VStack(alignment: .leading, spacing: 3) {
                 if let lead = face.leadLine {
@@ -1688,7 +1735,7 @@ private struct WorkboardGalleryCompanionBand: View {
                     Text(verbatim: transcript)
                         .font(.caption)
                         .foregroundStyle(Color.white.opacity(0.85))
-                        .lineLimit(2)
+                        .lineLimit(transcriptLineLimit)
                         .multilineTextAlignment(.leading)
                 }
                 if let chip = availabilityChip {
@@ -1703,7 +1750,9 @@ private struct WorkboardGalleryCompanionBand: View {
                     // above.
                     .foregroundStyle(Color.white.opacity(0.85))
                 }
-                WorkboardAudioProgressTrack(player: player, placement: .scrim)
+                if companion.kind == .audio {
+                    WorkboardAudioProgressTrack(player: player, placement: .scrim)
+                }
             }
             // Only the transport is a control. The words let the touch through
             // to the picture underneath, exactly as the board's own band does.
@@ -1754,7 +1803,9 @@ private struct WorkboardGalleryCompanionBand: View {
     }
 
     private var accessibilityLabel: String {
-        var parts = [String(localized: WorkboardCompanionBand.accessibilityKindLabel)]
+        var parts = [String(
+            localized: WorkboardCompanionBand.accessibilityKindLabel(for: companion)
+        )]
         // The same deduplicated pair the band draws: a recording named after
         // its own opening line said that line twice here.
         parts.append(contentsOf: WorkboardCompanionBand.face(for: companion).spokenParts)

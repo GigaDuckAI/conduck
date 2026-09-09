@@ -334,22 +334,31 @@ final class WorkboardLiveRepository {
     }
 
     /// The ONE mapping from a stored material to the kind its card claims to be.
-    /// A stored kind is broader than the four shapes a card can draw, so the
+    /// A stored kind is broader than the shapes a card can draw, so the
     /// narrowing happens here and nowhere else: a second transcription of this
     /// switch would let two surfaces disagree about what one record IS, and the
     /// disagreement would only ever be visible as a card drawn with the wrong
     /// icon and the wrong noun. Internal so the tests can drive the real mapping
     /// instead of a copy of it.
+    ///
+    /// Every kind a card can draw maps 1:1; only `.unknown` is decided by what
+    /// the record carries, because that is the one stored kind this build has no
+    /// shape for.
     static func presentationKind(_ record: WorkMaterialRecord) -> WorkboardMaterialKind {
         switch record.kind {
         case .image: return .image
         case .file: return .file
-        // A voice note travels as its recording, and the recording is the card:
-        // narrowing it to a file would draw an openable document where a
-        // transport belongs, and the audio card would never be reached.
+        // An attached recording IS its card: narrowing it to a file would draw
+        // an openable document where a transport belongs, and the audio card
+        // would never be reached.
         case .audio: return .audio
         case .link: return .link
-        case .note, .transcript: return .note
+        case .note: return .note
+        // Spoken words keep their own shape rather than passing as a typed
+        // note: they read as a note but they are not one, and the board's noun
+        // and glyph are the only place a person is told which they are looking
+        // at.
+        case .transcript: return .transcript
         case .unknown: return record.filename != nil || record.hasPayload ? .file : .note
         }
     }
@@ -380,6 +389,8 @@ final class WorkboardLiveRepository {
             return String(localized: "workboard.material.note", defaultValue: "Note")
         case .audio:
             return String(localized: "workboard.material.audio", defaultValue: "Voice note")
+        case .transcript:
+            return String(localized: "workboard.material.transcript", defaultValue: "Spoken note")
         }
     }
 
@@ -465,7 +476,9 @@ final class WorkboardLiveRepository {
             sourceFileURL = nil
             textContent = nil
             urlString = value
-        case .note:
+        // Typed words and spoken words are prepared identically: both are text
+        // and nothing else, and an empty one is not a card either way.
+        case .note, .transcript:
             let text = material.textContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !text.isEmpty else { throw WorkboardLiveRepositoryError.emptyNote }
             payload = nil
@@ -481,7 +494,13 @@ final class WorkboardLiveRepository {
                 caption: material.detail ?? "",
                 textContent: textContent,
                 urlString: urlString,
-                filename: material.kind == .image || material.kind == .file ? material.name : nil,
+                // Every payload-bearing kind keeps the name its bytes arrived
+                // under — the same three the payload arm above accepts. It is
+                // what Share and Open hand back to the system, so a recording
+                // stripped of it exports as an unnamed blob.
+                filename: material.kind == .image
+                    || material.kind == .file
+                    || material.kind == .audio ? material.name : nil,
                 mimeType: material.mimeType,
                 payload: payload,
                 byteSize: material.byteCount ?? payload.map { Int64($0.count) },
@@ -537,6 +556,7 @@ final class WorkboardLiveRepository {
         case .link: return .link
         case .note: return .note
         case .audio: return .audio
+        case .transcript: return .transcript
         }
     }
 
@@ -744,13 +764,19 @@ enum WorkboardLiveRepositoryError: LocalizedError, Equatable {
 
 // MARK: - Companion fold
 
-/// The ONE rule by which a recording stops being its own card and becomes part
-/// of the picture it names.
+/// The ONE rule by which a spoken capture stops being its own card and becomes
+/// part of the picture it names.
 ///
-/// One press of Capture to Work publishes two materials — a picture and a
-/// recording — and the recording carries the id of the picture from that same
-/// press (`WorkMaterialDraft.attachedToMaterialID`). This turns that link into
-/// what the person sees: one card, the picture, with the recording inside it.
+/// One press of Capture to Work publishes two materials — a picture and the
+/// VOICE material of that same press — and the voice material carries the id of
+/// the picture (`WorkMaterialDraft.attachedToMaterialID`). This turns that link
+/// into what the person sees: one card, the picture, with the voice inside it.
+///
+/// THE VOICE MATERIAL IS EITHER SHAPE. A press whose recording is kept publishes
+/// an `.audio`; a press whose words are kept without it publishes a
+/// `.transcript`. Both are the same half of the same press, so both fold — a
+/// rule that folded only the recording would leave every words-only capture as
+/// a second card beside the picture it was spoken over.
 ///
 /// A PROMISE ABOUT IDENTITY, NOT ABOUT EXISTENCE. The link is written whenever
 /// the press carried a picture, even when the picture's own publication failed,
@@ -774,8 +800,9 @@ enum WorkboardLiveRepositoryError: LocalizedError, Equatable {
 /// - the parent is an `.image` — the fold draws a picture with a recording in
 ///   it, and nothing else,
 /// - the parent names no picture of its own — a chain is not a fold,
-/// - the child is `.audio` — a typed note keeps its own card this iteration,
-///   because a folded note would lose its full-text route,
+/// - the child is the press's voice material, `.audio` or `.transcript` — a
+///   TYPED `.note` keeps its own card, because a folded note would lose its
+///   full-text route and nothing spoke it over the picture,
 /// - the recording names something OTHER than itself — a self-naming link
 ///   resolves to nothing at all, the escape candidate included.
 ///
@@ -807,11 +834,12 @@ enum WorkboardCompanionFold {
 
     /// Fold one desk's cards. Pure: same input, same output, no store, no clock.
     static func fold(_ materials: [WorkboardMaterialSnapshot]) -> Folded {
-        // The desk almost never holds a linked recording, and this is the whole
-        // board build's hot path: without this exit every load would derive an
-        // escape id per card for nothing.
-        guard materials.contains(where: { $0.kind == .audio && $0.attachedToMaterialID != nil })
-        else {
+        // The desk almost never holds a linked voice material, and this is the
+        // whole board build's hot path: without this exit every load would
+        // derive an escape id per card for nothing.
+        guard materials.contains(where: {
+            ($0.kind == .audio || $0.kind == .transcript) && $0.attachedToMaterialID != nil
+        }) else {
             return (materials, [], [:])
         }
 
@@ -827,7 +855,8 @@ enum WorkboardCompanionFold {
         // child id, which is not knowable until the last claimant is seen.
         var claimants: [UUID: [UUID]] = [:]
         for child in materials {
-            guard child.kind == .audio, let link = child.attachedToMaterialID else { continue }
+            guard child.kind == .audio || child.kind == .transcript,
+                  let link = child.attachedToMaterialID else { continue }
             guard let parentID = eligibleParentID(link: link, child: child.id, among: byID)
             else { continue }
             claimants[parentID, default: []].append(child.id)

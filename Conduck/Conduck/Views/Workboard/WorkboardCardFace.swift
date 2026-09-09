@@ -87,12 +87,14 @@ nonisolated enum WorkboardCardFacePolicy {
         let availability = availabilityLabel(for: material.availability)
 
         switch material.kind {
-        // A recording's title IS its transcript's lead line — the publication
-        // lane writes it there — so a voice note duplicates itself exactly as a
-        // typed note does, and both are fixed by the same rule. With no words
-        // the recording keeps its name and its capture time, which is all a
-        // card can honestly say about a clip nothing has decoded.
-        case .note, .audio:
+        // A spoken note's title IS its words' lead line — the publication lane
+        // writes it there — so it duplicates itself exactly as a typed note
+        // does, and all three are fixed by the same rule: a heading the body
+        // already says is dropped, because a card that repeats its own name
+        // spends its first line saying nothing. With no words a recording keeps
+        // its name and its capture time, which is all a card can honestly say
+        // about a clip nothing has decoded.
+        case .note, .audio, .transcript:
             let body = text(material.textContent) ?? caption(
                 from: material.detail,
                 byteCount: material.byteCount

@@ -2085,20 +2085,27 @@ enum WorkboardCompanionAction: String, Equatable, Sendable, CaseIterable {
     case reattachRecording
 }
 
-/// What a picture's folded recording draws, and where.
+/// What a picture's folded voice material draws, and where.
+///
+/// TWO COMPANIONS, ONE BAND. A press of Capture to Work leaves the picture with
+/// either the recording (`.audio`) or the words alone (`.transcript`), and the
+/// band draws both: the name, as much of the words as the footprint holds, and
+/// — only for a recording — the transport and its progress track. A words-only
+/// companion has no bytes, so a transport over it would be a control that fails
+/// on every activation and a clock that measures a clip nothing decoded.
 ///
 /// Stated apart from the view, and pure, because the band appears in three
 /// different tiles — over the photograph's scrim, inside a standard/large tile
 /// with no thumbnail to fill itself with, and on the smallest footprint — and
-/// "a picture with a recording always shows it" must be ONE rule rather than
-/// three layout branches that can each forget it. `WorkboardCompanionFold`
+/// "a picture with a voice material always shows it" must be ONE rule rather
+/// than three layout branches that can each forget it. `WorkboardCompanionFold`
 /// decides whether there is a companion at all; this decides only how the card
 /// that hid it draws it.
 ///
-/// The band is drawn for ANY card carrying a companion, without re-checking the
-/// parent's kind: the fold only ever attaches a recording to a picture, and a
-/// card that hid a recording and then declined to draw it would be the one way
-/// a material could vanish from the desk.
+/// The band is drawn for ANY card carrying a companion the tile has room for,
+/// without re-checking the parent's kind: the fold only ever attaches a voice
+/// material to a picture, and a card that hid one and then declined to draw it
+/// would be the one way a material could vanish from the desk.
 enum WorkboardCompanionBand {
     /// How the band is drawn on one card.
     enum Placement: String, Equatable, Sendable {
@@ -2124,11 +2131,18 @@ enum WorkboardCompanionBand {
         for material: WorkboardMaterialSnapshot,
         footprint: WorkMaterialCardSize
     ) -> Placement? {
-        guard material.companion != nil else { return nil }
+        guard let companion = material.companion else { return nil }
         // The smallest tile is compact whatever it draws inside itself: a
         // single grid unit has no room for a strip band's words on TOP of the
         // tile's own content, so the footprint decides before the artwork does.
-        guard footprint != .small else { return .compact }
+        guard footprint != .small else {
+            // And a compact band is its transport and NOTHING else, so a
+            // words-only companion has nothing left to put there. It draws no
+            // band at all rather than an empty strip standing on the picture:
+            // the words are still in the card's spoken label and in the sheet
+            // the tile opens.
+            return companion.kind == .audio ? .compact : nil
+        }
         switch WorkboardCardArtworkMode.resolve(
             kind: material.kind,
             hasThumbnail: material.thumbnailData != nil,
@@ -2234,15 +2248,19 @@ enum WorkboardCompanionBand {
         }
     }
 
-    /// The words the band names the recording with: the transcript's lead line,
-    /// which the publication lane already wrote onto the recording's title, and
-    /// the same "Voice note" placeholder that card carried while the words were
-    /// pending or after a transcription failed. Never a second derivation of
-    /// the title — the folded recording and a standalone one are named
-    /// identically.
+    /// The words the band names the voice material with: the transcript's lead
+    /// line, which the publication lane already wrote onto its title, and the
+    /// placeholder that material's own card carries when there is no lead line
+    /// to use. Never a second derivation of the title — a folded voice material
+    /// and a standalone one are named identically.
     static func title(for companion: WorkboardCompanionSnapshot) -> String {
         let name = companion.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard name.isEmpty else { return name }
+        // A words-only companion is not a "Voice note": there is no recording
+        // to call one. It falls back to the noun its own card would draw.
+        guard companion.kind == .audio else {
+            return String(localized: WorkboardMaterialKind.transcript.title)
+        }
         return String(localized: LocalizedStringResource(
             "workboard.voice.recording.untitled",
             defaultValue: "Voice note"
@@ -2291,6 +2309,13 @@ enum WorkboardCompanionBand {
     /// screenshot that is readable here says nothing about whether its
     /// recording's bytes arrived, and the two are separate materials with
     /// separate lanes.
+    ///
+    /// A WORDS-ONLY COMPANION OFFERS NONE OF THEM. Every row here names a file
+    /// — play it, open it, share those bytes, repair them — and a `.transcript`
+    /// has no file at all, so each row would be an action that fails the moment
+    /// it is chosen. The words themselves are already drawn in the band and
+    /// spoken in the card's label, and the card's own Share still hands over
+    /// the picture.
     static func actions(
         for companion: WorkboardCompanionSnapshot,
         phase: WorkboardAudioPhase,
@@ -2298,6 +2323,7 @@ enum WorkboardCompanionBand {
         hasShareRecording: Bool,
         hasReattachRecording: Bool = false
     ) -> [WorkboardCompanionAction] {
+        guard companion.kind == .audio else { return [] }
         var actions: [WorkboardCompanionAction] = []
         if WorkboardCardActionPolicy.allows(.play, when: companion.availability) {
             switch WorkboardAudioCardPresentation.transportAction(for: phase) {
@@ -2397,6 +2423,10 @@ enum WorkboardCompanionBand {
                 for: companion.availability
             )))
         }
+        // A words-only companion holds no clip, so the transport status and the
+        // clock would both report a player that is not there. What it can be
+        // doing is exactly its availability, and usually nothing at all.
+        guard companion.kind == .audio else { return parts.joined(separator: ". ") }
         if let status = WorkboardAudioTransport.statusLabel(for: phase) {
             parts.append(String(localized: status))
         }
@@ -2411,11 +2441,23 @@ enum WorkboardCompanionBand {
     /// What a folded card IS, in the one place it is said. It replaces the
     /// kind's own title in the spoken card, because "Image" would describe half
     /// of what the person is touching.
-    static var accessibilityKindLabel: LocalizedStringResource {
-        LocalizedStringResource(
-            "workboard.companion.card.label",
-            defaultValue: "Screenshot with voice note"
-        )
+    ///
+    /// It names WHICH half, too. A picture with a recording on it offers Play,
+    /// Open Recording and Share Recording; a picture with words on it offers
+    /// none of them, and a label that called both "voice note" would promise a
+    /// clip that half of these cards do not have.
+    static func accessibilityKindLabel(
+        for companion: WorkboardCompanionSnapshot
+    ) -> LocalizedStringResource {
+        companion.kind == .audio
+            ? LocalizedStringResource(
+                "workboard.companion.card.label",
+                defaultValue: "Screenshot with voice note"
+            )
+            : LocalizedStringResource(
+                "workboard.companion.card.label.words",
+                defaultValue: "Screenshot with note"
+            )
     }
 }
 
@@ -2734,11 +2776,11 @@ private struct WorkboardSourceCard: View {
         material.companion == nil ? 0 : bandHeight
     }
 
-    /// The recording, drawn inside the picture that names it: transport, the
-    /// name the recording carries, and as much of the transcript as this
-    /// footprint can hold. It is one row of the SAME card — no second card, no
-    /// second tap target for the gallery — and it sits outside the tile's
-    /// button so its own control is reachable.
+    /// The voice material, drawn inside the picture that names it: the name it
+    /// carries, as much of the words as this footprint can hold, and — for a
+    /// recording — the transport and its progress track. It is one row of the
+    /// SAME card — no second card, no second tap target for the gallery — and
+    /// it sits outside the tile's button so its own control is reachable.
     private func companionBand(
         _ companion: WorkboardCompanionSnapshot,
         placement: WorkboardCompanionBand.Placement
@@ -2751,17 +2793,24 @@ private struct WorkboardSourceCard: View {
         // is sized from the tile the grid granted, which on a narrow board is
         // smaller than the one the constants are drawn at.
         let isCompact = placement == .compact
+        // Only a recording is played. A words-only companion draws the words
+        // alone: a transport over bytes that do not exist is a control that
+        // fails on every activation, and the track under it would fill for a
+        // clip nothing decoded.
+        let drawsTransport = companion.kind == .audio
         return HStack(alignment: .top, spacing: 8) {
-            WorkboardAudioTransport(
-                materialID: companion.id,
-                player: companionPlayer,
-                availability: companion.availability,
-                isEnabled: workbenchDestinationIsActive,
-                activation: .control,
-                dimension: isCompact ? compactMetrics.transport : 32,
-                placement: onScrim ? .scrim : .card,
-                loadPayload: loadCompanionPayload
-            )
+            if drawsTransport {
+                WorkboardAudioTransport(
+                    materialID: companion.id,
+                    player: companionPlayer,
+                    availability: companion.availability,
+                    isEnabled: workbenchDestinationIsActive,
+                    activation: .control,
+                    dimension: isCompact ? compactMetrics.transport : 32,
+                    placement: onScrim ? .scrim : .card,
+                    loadPayload: loadCompanionPayload
+                )
+            }
             if !isCompact {
                 let companionFace = WorkboardCompanionBand.face(for: companion)
                 VStack(alignment: .leading, spacing: 3) {
@@ -2779,10 +2828,12 @@ private struct WorkboardSourceCard: View {
                             .multilineTextAlignment(.leading)
                             .lineLimit(limit)
                     }
-                    WorkboardAudioProgressTrack(
-                        player: companionPlayer,
-                        placement: onScrim ? .scrim : .card
-                    )
+                    if drawsTransport {
+                        WorkboardAudioProgressTrack(
+                            player: companionPlayer,
+                            placement: onScrim ? .scrim : .card
+                        )
+                    }
                 }
                 // Only the transport is a control here. Everything else lets the
                 // touch through to the tile underneath, so a tap on the words still
@@ -2809,9 +2860,10 @@ private struct WorkboardSourceCard: View {
     }
 
     /// The recording's OWN availability decides whether it plays — the picture
-    /// being readable here says nothing about where the audio's bytes are.
+    /// being readable here says nothing about where the audio's bytes are. A
+    /// words-only companion never plays: it holds no bytes to reach for.
     private var companionIsPlayable: Bool {
-        guard let companion = material.companion else { return false }
+        guard let companion = material.companion, companion.kind == .audio else { return false }
         return WorkboardCardActionPolicy.allows(.play, when: companion.availability)
     }
 
@@ -3286,9 +3338,9 @@ enum WorkboardCardAccessibility {
         boardCount: Int
     ) -> String {
         let face = WorkboardCardFacePolicy.face(for: material)
-        var parts = [String(localized: material.companion == nil
-            ? material.kind.title
-            : WorkboardCompanionBand.accessibilityKindLabel)]
+        var parts = [String(localized: material.companion.map(
+            WorkboardCompanionBand.accessibilityKindLabel(for:)
+        ) ?? material.kind.title)]
         parts.append(contentsOf: face.spokenParts)
         // The recording's own slots, said once: the SAME deduplicated pair the
         // band draws, so what is heard and what is seen cannot disagree.
@@ -3364,7 +3416,7 @@ private enum WorkboardDropProviderRoute: Equatable {
     }
 }
 
-private enum WorkboardResolvedImportItem: Sendable {
+enum WorkboardResolvedImportItem: Sendable {
     case image(data: Data, displayName: String)
     case imageFile(
         sourceURL: URL,
@@ -3433,7 +3485,7 @@ private extension DropSession where Item == WorkboardResolvedDropSlot {
     }
 }
 
-private struct WorkboardResolvedImportBatch: Sendable {
+struct WorkboardResolvedImportBatch: Sendable {
     let items: [WorkboardResolvedImportItem]
     let failedCount: Int
 
@@ -3476,7 +3528,21 @@ private struct WorkboardWorkspaceLargeImportConfirmation: WorkboardLargeImportCo
 /// the pane-wide drop. Security scopes it opens are RETURNED rather than closed
 /// here: a scoped URL must stay open until the caller's import has finished
 /// reading the bytes.
-private enum WorkboardImportMapping {
+///
+/// THE PICKER AND THE DROP ARE THE ONLY TWO DOORS through which an audio file
+/// becomes a playable card. Both are deliberate gestures made inside the Work
+/// pane on a file the person chose, which is the whole of the permission: every
+/// other door — the share sheet, the Add Files Shortcut, the share-inbox
+/// drainer, Chat to Work — refuses a recording and says where to add one.
+///
+/// NOTHING HERE TRANSCRIBES. A file that arrives this way is bytes to play and
+/// never words to read, which is what separates it from the voice lanes: those
+/// publish the words alone and keep no recording at all.
+///
+/// Internal rather than file-private for the reason `WorkboardCompanionBand` is:
+/// the mapping the two doors actually run is what the tests drive, instead of a
+/// copy of it that can silently disagree.
+enum WorkboardImportMapping {
     static func imports(
         from batch: WorkboardResolvedImportBatch
     ) -> (imports: [WorkboardMaterialImport], scopedURLs: [URL]) {
@@ -3538,6 +3604,9 @@ private enum WorkboardImportMapping {
         return (imports, scopedURLs)
     }
 
+    /// The card shape a picked or dropped file draws as. Pictures first — a
+    /// screenshot is the desk's commonest capture and has its own shape — then
+    /// a recording, then everything else as a file.
     static func materialKind(filename: String, mimeType: String?) -> WorkboardMaterialKind {
         if let mimeType,
            let type = UTType(mimeType: mimeType),
@@ -3547,6 +3616,20 @@ private enum WorkboardImportMapping {
         if let type = UTType(filenameExtension: (filename as NSString).pathExtension),
            type.conforms(to: .image) {
             return .image
+        }
+        // The SHARED sniffer, never a second audio rule of this door's own: the
+        // doors that refuse a recording and the two that keep one have to agree
+        // about what a recording IS, or a file the share sheet turned away
+        // would arrive here as a plain document instead of a playable card. It
+        // answers from the mime type when that is specific and from the
+        // extension when it is not, so `application/octet-stream` beside
+        // `memo.m4a` still resolves.
+        if WorkCaptureEnvelope.isAudioPayload(
+            mimeType: mimeType,
+            typeIdentifier: nil,
+            filename: filename
+        ) {
+            return .audio
         }
         return .file
     }

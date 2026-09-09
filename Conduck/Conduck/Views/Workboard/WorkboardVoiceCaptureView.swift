@@ -6,12 +6,15 @@
 // Explicit, interactive voice capture for the Work desk. It reuses Conduck's
 // existing mic/STT state machine (including permission, on-device model
 // self-heal, selected-provider routing, retry preservation and duration cap).
-// The recorder publishes the recording as a playable card BEFORE the speech
-// hop, so a transcription that fails costs the words and never the audio; the
-// transcript is then written onto that same card. A capture that stopped part
-// way is finished by Try Again — the same card, the same bytes — and only the
-// separately labelled Record Again starts a second one. Nothing here reaches a
-// gateway.
+//
+// THE WORDS ARE WHAT LANDS. The recorder parks the recording on this device
+// before the speech hop and publishes the transcript as the card; the audio is
+// deleted the moment those words are on the desk. So a transcription that fails
+// leaves NOTHING on the board — the recording waits in the device-local retry
+// queue, and the sheet's Try Again is what turns it into a card. Record Again,
+// the separately labelled second action, hands that waiting recording back to
+// the queue instead of ending it: it may be the only copy of what was said.
+// Nothing here reaches a gateway.
 
 #if !os(watchOS)
 
@@ -127,20 +130,16 @@ struct WorkboardVoiceCaptureView: View {
                         defaultValue: "Transcription stopped"
                     ))
                     .font(.title3.weight(.semibold))
-                    // THE DESK'S OWN ANSWER, not the capture's. A capture still
-                    // in hand proves only that something is left to finish — the
-                    // card it published can have been deleted on another device
-                    // while recognition ran, and the recorder's last refresh is
-                    // where that is discovered. Told from the retention alone,
-                    // this receipt promised a card that a synced deletion had
-                    // already taken away.
-                    Text(recorder.workCaptureFacts.recordingOnDesk
-                         ? LocalizedStringResource(
-                            "workboard.voice.stopped.body",
-                            defaultValue: "The recording is on your desk. Try Again adds the words to that same card.")
-                         : LocalizedStringResource(
-                            "workboard.voice.stopped.body.noCard",
-                            defaultValue: "That recording isn’t on your desk any more. Try Again brings its words back."))
+                    // ONE sentence, because there is one state to describe. A
+                    // stopped transcription has put nothing on the desk — this
+                    // lane publishes the words and only the words — so the
+                    // recording is on this device and nowhere else, and Try
+                    // Again is what turns it into a card. A receipt that asked
+                    // the desk what it was holding would have nothing to read.
+                    Text(LocalizedStringResource(
+                        "workboard.voice.stopped.body",
+                        defaultValue: "Your recording is still on this device. Try Again turns it into a note on your desk."
+                    ))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
                     // The refusal changes no state, so without this the only
@@ -264,11 +263,11 @@ struct WorkboardVoiceCaptureView: View {
         case .error(let error):
             if error.isRetryable {
                 // Try Again finishes THIS capture — the recording it already
-                // published, or the words it already recognized — and only
-                // starts a new one when there is nothing left to finish.
-                // Recording again is the separate action, because it leaves the
-                // first card on the desk without its words and puts a second
-                // one beside it.
+                // parked, or the words it already recognized — and only starts a
+                // new one when there is nothing left to finish. Recording again
+                // is the separate action, because it hands this capture back to
+                // the retry queue with nothing of it on the desk, and a person
+                // who meant "finish it" would be left looking for it there.
                 Button {
                     if recorder.canRetryWorkCapture {
                         Task { handle(await recorder.retryWorkCapture()) }
@@ -319,9 +318,9 @@ struct WorkboardVoiceCaptureView: View {
             .buttonStyle(.bordered)
         case .idle:
             // A stopped transcription is the ONE idle this sheet can be looked
-            // at in, and the capture it stopped still owns a card and a
-            // reservation — so the action that finishes it belongs here, not
-            // only in `.error`. Reached solely through `handle(_:)`, which
+            // at in, and the capture it stopped still owns a parked recording
+            // and a reservation — so the action that finishes it belongs here,
+            // not only in `.error`. Reached solely through `handle(_:)`, which
             // dismisses instead whenever there is nothing left to finish.
             if transcriptionStopped, recorder.canRetryWorkCapture {
                 Button {
@@ -355,11 +354,15 @@ struct WorkboardVoiceCaptureView: View {
         }
     }
 
-    /// The sheet's privacy line. Two promises it may not make. It may not
-    /// promise that nothing is sent: the words come from whichever speech
-    /// provider the person configured, and `STTClient`'s table is mostly cloud
-    /// vendors, so the recording leaves the device on every configuration
-    /// except Apple's on-device engine. And it may not promise that the audio
+    /// The sheet's privacy line. It states where the recording LIVES — on this
+    /// device, until the words replace it — because that is now the lane's
+    /// defining property: the desk gets a note, never a voice file, so no
+    /// recording made here is ever carried to another device.
+    ///
+    /// Two promises it may not make. It may not promise that nothing is sent:
+    /// the words come from whichever speech provider the person configured, and
+    /// `STTClient`'s table is mostly cloud vendors, so the recording leaves the
+    /// device on every configuration except Apple's on-device engine. And it may not promise that the audio
     /// never reaches an AI: `STTProvider.openAI` is `gpt-4o-transcribe`,
     /// `STTProvider.gemini` is a Gemini model, and a custom OpenAI-compatible
     /// endpoint can be anything the person points it at — several selectable
@@ -371,7 +374,7 @@ struct WorkboardVoiceCaptureView: View {
         Label(
             LocalizedStringResource(
                 "workboard.voice.privacy",
-                defaultValue: "Keeps the recording on your private desk and adds the words when they’re ready. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation, and never through a server of ours."
+                defaultValue: "Your recording stays on this device while it becomes words, and the words go to your private desk. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation, and never through a server of ours."
             ),
             systemImage: "lock.shield"
         )
@@ -452,13 +455,12 @@ struct WorkboardVoiceCaptureView: View {
             // Nothing is stopped any more, and this sheet renders for as long as
             // its dismissal takes.
             transcriptionStopped = false
-            // The recording is already a card on the desk and the transcript is
-            // already written onto it, so handing the same words to the
-            // composer would put one utterance on the board twice. `onCancel`
-            // is this sheet's only dismissal hook. The composer is reached only
-            // when the capture turned out to own no recording at all — a
-            // storage failure is an error state, not a success, so it never
-            // arrives here.
+            // The words are already a card on the desk, so handing the same
+            // words to the composer would put one utterance on the board twice.
+            // `onCancel` is this sheet's only dismissal hook. The composer is
+            // reached only when the capture produced no card at all — a storage
+            // failure is an error state, not a success, so it never arrives
+            // here.
             if recorder.workRecordingMaterialID != nil {
                 onCancel()
             } else {
@@ -467,8 +469,8 @@ struct WorkboardVoiceCaptureView: View {
         case .failure(let error):
             // A CANCELLED hop is not a failure and the recorder says so: it
             // returns to `.idle` with no banner, because "Cancel Transcription"
-            // is a promise about the WORDS and the recording it published is
-            // already a card. What that leaves on screen is this sheet's
+            // is a promise about the WORDS and the recording behind them is
+            // parked and safe. What that leaves on screen is this sheet's
             // problem: `.idle` renders the startup line and no controls, so the
             // capture's own Try Again — the thing that would still put the words
             // on that card — became unreachable the moment the press landed.
@@ -486,8 +488,8 @@ struct WorkboardVoiceCaptureView: View {
                 return
             }
             // The recorder already owns the typed error state and retry lane,
-            // and the recording it published before transcribing stands on the
-            // desk either way.
+            // and the recording it parked before transcribing is waiting in it
+            // either way.
             break
         }
     }

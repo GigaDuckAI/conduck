@@ -126,6 +126,11 @@ nonisolated struct WorkMessageCaptureReceipt: Sendable, Hashable {
     let addedMaterialCount: Int
     let referencedOnlyMaterialCount: Int
     let failedMaterialCount: Int
+    /// Attachments this capture deliberately left in the chat. A recording is
+    /// the only one: Work keeps audio only when the person adds it themselves
+    /// through the Work pane. Counted rather than folded into `failed`, because
+    /// nothing went wrong and there is nothing to try again.
+    var refusedMaterialCount: Int = 0
     let wasAlreadyCaptured: Bool
 }
 
@@ -136,11 +141,13 @@ nonisolated enum WorkMaterialKind: String, CaseIterable, Codable, Sendable, Hash
     case link
     case image
     case file
-    /// A voice recording kept as playable bytes. Its transcript, when speech
-    /// recognition produces one, lands in `textContent` on this same material,
-    /// so a failed transcription costs the words and never the recording.
+    /// An audio file a person attached in Work, or a recording written by an
+    /// earlier build, kept as playable bytes. `textContent` carries words only
+    /// where such a build attached them to the recording itself.
     case audio
-    /// A transcript captured by voice, carrying no recording of its own.
+    /// The words of a Work voice note, carrying no recording of its own — the
+    /// recording is deleted once this card is written. Where the note named a
+    /// screenshot, `attachedToMaterialID` folds this card into that picture's.
     case transcript
     /// Forward-compatible fallback for a kind this build cannot render richly.
     case unknown

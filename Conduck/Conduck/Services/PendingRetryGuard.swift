@@ -48,7 +48,17 @@ import UserNotifications
 /// save that fails leaves NO bytes on disk, so `Token.audioPreserved` reports
 /// it and the deferred notification is not scheduled: a system alert titled
 /// "Recording Saved" offering a retry that has nothing to retry is a worse
-/// outcome than silence.
+/// outcome than silence. `Token.isDurable` is the stricter reading — saved AND
+/// reserved — and is what a lane consults before it deletes its own copy of the
+/// recording or tells the person the audio is kept, because a saved entry
+/// nobody holds is one another surface may take mid-flight.
+///
+/// A save that lands the RECORDING and loses only the screenshot is not one of
+/// those failures. `PendingRetrySaveOutcome.recordingParkedWithoutPicture` says
+/// the entry is committed and claimable, so the arm stands and takes its
+/// reservation: an armed entry whose author believes it does not exist is worse
+/// than either half of the write failing outright, because nothing then refuses
+/// a second surface that claims it.
 enum PendingRetryGuard {
     /// Window before the deferred notification fires. Larger than the
     /// STT-client retry budget (~3 s × 3 attempts + ~120 s timeout) so
@@ -109,6 +119,24 @@ enum PendingRetryGuard {
         /// reservation. Both readings are answered by `stillOwnsCapture`, which
         /// is what every caller asks rather than testing this for nil.
         let claim: PendingRetryClaim?
+
+        /// Did this arm actually PARK the capture — bytes on disk under an
+        /// entry this process holds a reservation over?
+        ///
+        /// The question a lane asks before it destroys its own copy of the
+        /// recording or tells the person their audio is safe. `audioPreserved`
+        /// alone is not enough: a save can land and the reservation still be
+        /// refused, and an entry nobody holds is one another surface may take
+        /// and finish while this lane believes it owns it. False therefore
+        /// means "nothing is parked as far as this process is concerned" —
+        /// keep the bytes, promise nothing, delete nothing.
+        ///
+        /// `nonisolated` because it reads two immutable fields of a `Sendable`
+        /// value and the lanes that ask it are headless: an App Intent host, a
+        /// CarPlay scene's capture path. A computed property that inherited the
+        /// module's actor would have to be awaited from exactly the contexts
+        /// that need it most.
+        nonisolated var isDurable: Bool { audioPreserved && claim != nil }
     }
 
     /// Save audio + metadata to `PendingRetryStore` and schedule a deferred
@@ -143,6 +171,21 @@ enum PendingRetryGuard {
                 metadata: metadata,
                 workImageData: workImageData
             )
+        } catch PendingRetrySaveOutcome.recordingParkedWithoutPicture {
+            // THE RECORDING IS PARKED. Only the screenshot — the last byte
+            // written before the index row — failed, and the store commits the
+            // row anyway, so the queue holds a live entry any surface can claim.
+            // Reading this as a failed save is the state that makes the arm
+            // dangerous rather than merely incomplete: the lane that made the
+            // entry would hold no reservation over it, `stillOwnsCapture` would
+            // answer true on the no-entry rule below, and a second surface
+            // finishing the same capture would meet no refusal from either side.
+            // So the arm stands, the reservation is taken, and the notification
+            // is honest — a recording really is saved. The picture is the thing
+            // that is gone, and its own lane still holds the only copy.
+            #if DEBUG
+            print("🛡️ PendingRetryGuard: screenshot not written — recording parked, arm stands")
+            #endif
         } catch {
             preserved = false
             #if DEBUG

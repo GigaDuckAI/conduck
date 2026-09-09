@@ -1229,15 +1229,17 @@ final class MacMenuBarWorkShortcutDriftGuardTests: XCTestCase {
     // MARK: - (7) A quit does not land inside the audio's crash window
 
     /// The quit guard waits for a Work capture that has stopped and has not yet
-    /// reached the desk.
+    /// been PARKED.
     ///
     /// `QuitGuard`'s live count is conversations this process holds a gateway
     /// claim on — by construction it can never see a Work capture, which is the
     /// whole point of the lane. But the recording is memory-only between the
-    /// stop and the desk write, so those are the milliseconds in which ⌘Q
-    /// silently destroys it. No alert: there is nothing for a person to decide,
-    /// and the wait is bounded so a stuck write can never hold the app open.
-    func testTheQuitGuardWaitsForAWorkCaptureThatHasNotReachedTheDesk() throws {
+    /// stop and the moment the retry queue takes it, so those are the
+    /// milliseconds in which ⌘Q silently destroys it. Nothing of this lane ever
+    /// reaches the desk as audio, so the queue is the whole of what "durable"
+    /// means here. No alert: there is nothing for a person to decide, and the
+    /// wait is bounded so a stuck write can never hold the app open.
+    func testTheQuitGuardWaitsForAWorkCaptureThatHasNotBeenParked() throws {
         let body = try Self.appDelegateFunction("applicationShouldTerminate")
 
         let asked = try XCTUnwrap(
@@ -1362,8 +1364,9 @@ final class MacMenuBarWorkShortcutDriftGuardTests: XCTestCase {
     /// A capture nothing durable would take is a DIFFERENT state from one still
     /// being written, and waiting cannot resolve it.
     ///
-    /// When the desk write fails and `retryLane.save` fails with it, the bytes
-    /// are in `pendingWorkCapture` and nowhere else — and the function-scope
+    /// When `retryLane.save` fails, the bytes are in `pendingWorkCapture` and
+    /// nowhere else — the desk never holds a recording in this lane, so the
+    /// queue is the only place they could have gone — and the function-scope
     /// release handed the in-flight window back on the way out, so ⌘Q read an
     /// empty registry and quit with the only copy of a recording. The count is
     /// held instead, and the person is asked rather than refused in silence:
@@ -1373,7 +1376,9 @@ final class MacMenuBarWorkShortcutDriftGuardTests: XCTestCase {
 
         // The reading is taken on BOTH artifacts. A screenshot whose
         // publication and preservation both failed is memory-only even while
-        // the recording is safely on the desk.
+        // the recording is safely parked. `capture.materialID` names the card
+        // that holds this capture's WORDS: once it exists the recording is
+        // waste, which is why it reads as safe.
         let durability = try Self.recorderFunction("noteWorkDurability")
         for half in [
             "let audioSafe = audioInFlight || capture.audio.isEmpty || capture.materialID != nil || parked",
@@ -1610,20 +1615,33 @@ final class MacMenuBarWorkShortcutDriftGuardTests: XCTestCase {
         )
 
         // …and the caller acts on that outcome rather than reading every throw
-        // as "nothing was parked".
-        let preserveBody = try Self.recorderFunction("preserveForRetry")
+        // as "nothing was parked". It is read in `writeDurableRetry`, the ONE
+        // write both entry points share — the park every Work capture takes
+        // before its speech hop, and the preservation a failure takes after it
+        // — so the partial outcome cannot be handled on one path and dropped on
+        // the other.
+        let writeBody = try Self.recorderFunction("writeDurableRetry")
         XCTAssertTrue(
-            preserveBody.contains(Self.squeezed(
+            writeBody.contains(Self.squeezed(
                 "catch PendingRetrySaveOutcome.recordingParkedWithoutPicture {"
             )),
             "The recorder reads a partial preservation as no preservation again, so the entry the "
-            + "store armed is one it can neither reserve nor retire: \(preserveBody.prefix(900))"
+            + "store armed is one it can neither reserve nor retire: \(writeBody.prefix(900))"
         )
         XCTAssertTrue(
-            preserveBody.contains(Self.squeezed("armedRetryOmittedPicture = true")),
+            writeBody.contains(Self.squeezed("armedRetryOmittedPicture = true")),
             "A partial arm no longer records that the PICTURE is still memory-only, so the quit "
-            + "guard reads a parked recording as covering both: \(preserveBody.prefix(900))"
+            + "guard reads a parked recording as covering both: \(writeBody.prefix(900))"
         )
+        // Both entry points, or the rule holds on one path only.
+        for entry in ["preserveForRetry", "parkForTranscription"] {
+            let body = try Self.recorderFunction(entry)
+            XCTAssertTrue(
+                body.contains(Self.squeezed("writeDurableRetry(")),
+                "`\(entry)` writes the durable record itself again, so a second spelling of the "
+                + "arm can drift from the one the outcome above is handled in: \(body.prefix(600))"
+            )
+        }
 
         // NEGATIVE CONTROL: the silent preservation this replaced — a `guard`
         // that returns with nothing recorded anywhere.

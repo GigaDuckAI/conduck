@@ -191,9 +191,10 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
     // MARK: - Card projections
 
     /// A stored kind is broader than the shapes a card can draw, so the
-    /// narrowing is stated once. A voice note travels as its recording and draws
-    /// as its own transport-bearing card rather than as the note its transcript
-    /// becomes, and `.unknown` is decided by whether there is anything to open.
+    /// narrowing is stated once. Every kind a card can draw maps 1:1 — an
+    /// attached recording draws its own transport-bearing card, and spoken words
+    /// draw their own shape rather than passing as the typed note they read
+    /// like. Only `.unknown` is decided by whether there is anything to open.
     @MainActor
     func testPresentationKindNarrowsEveryStoredKindToACardShape() {
         let expected: [(WorkMaterialKind, WorkboardMaterialKind)] = [
@@ -202,7 +203,7 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
             (.audio, .audio),
             (.link, .link),
             (.note, .note),
-            (.transcript, .note),
+            (.transcript, .transcript),
         ]
         for (stored, card) in expected {
             XCTAssertEqual(
@@ -235,7 +236,7 @@ final class WorkboardLiveRepositorySupportTests: XCTestCase {
             Set(WorkMaterialKind.allCases.map {
                 WorkboardLiveRepository.presentationKind(Self.record(kind: $0))
             }),
-            [.image, .file, .link, .note, .audio],
+            [.image, .file, .link, .note, .audio, .transcript],
             "every stored kind resolves; a new one must be given a shape here"
         )
     }

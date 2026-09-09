@@ -29,6 +29,15 @@ import XCTest
 final class WorkboardCompanionActionsTests: XCTestCase {
     private enum TestError: Error, Equatable { case refused, unexpectedCall }
 
+    /// The group-delete cases below run against the REAL store, and every
+    /// isolated store mints a vault directory nothing else removes.
+    private let isolated = IsolatedWorkStores()
+
+    override func tearDown() async throws {
+        await isolated.cleanUp()
+        try await super.tearDown()
+    }
+
     private final class BoardHarness {
         var desk: WorkboardItemSnapshot
         var groupRemovals: [(revision: Int64, parentID: UUID, childID: UUID)] = []
@@ -257,6 +266,122 @@ final class WorkboardCompanionActionsTests: XCTestCase {
                 onReattach: { _ in XCTFail("no companion, no route") }
             )
         )
+    }
+
+    // MARK: - The pair the store must accept
+
+    /// The blocking half of the words-only fold, asked of the REAL store: the
+    /// board draws a picture with the words spoken over it inside, so the one
+    /// Delete that card offers has to be a pair the store will validate.
+    ///
+    /// No harness can answer this. Every case above supplies its own
+    /// `removeMaterialGroup`, so a store that refuses the pair passes all of
+    /// them while the person's Delete removes nothing and reports a failure
+    /// with no repair.
+    ///
+    /// Negative control: a child-kind check still spelled `.audio` alone throws
+    /// `invalidMaterialCompanion` here, and both materials stay on the desk.
+    func testAFoldedWordsCardDeletesWithItsPictureAgainstTheRealStore() async throws {
+        let store = isolated.make()
+        let screenshot = try await store.upsertDeskMaterial(WorkMaterialDraft(
+            kind: .image,
+            title: "screenshot.jpg",
+            filename: "screenshot.jpg",
+            mimeType: "image/jpeg",
+            payload: Data("picture".utf8)
+        ))
+        let spoken = try await store.upsertDeskMaterial(WorkMaterialDraft(
+            kind: .transcript,
+            title: "Ship the review",
+            textContent: "Ship the review before Friday",
+            storageMode: .metadataOnly,
+            attachedToMaterialID: screenshot.id
+        ))
+        let beforeValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let before = try XCTUnwrap(beforeValue)
+        XCTAssertEqual(
+            Set(before.materials.map(\.id)), [screenshot.id, spoken.id],
+            "the premise: two materials, one of them the words"
+        )
+
+        try await store.deleteWorkMaterialGroup(
+            parentID: screenshot.id,
+            childID: spoken.id,
+            workItemID: Constants.workboardDeskItemID
+        )
+
+        let afterValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let after = try XCTUnwrap(afterValue)
+        XCTAssertTrue(after.materials.isEmpty, "one Delete, both materials, one revision")
+    }
+
+    /// And the accepted set is exactly the set the board folds. A TYPED note
+    /// keeps its own card, so a group delete naming one is still refused — a
+    /// store that accepted it would remove a card the person never saw inside
+    /// the picture.
+    func testAGroupDeleteNamingATypedNoteIsStillRefused() async throws {
+        let store = isolated.make()
+        let screenshot = try await store.upsertDeskMaterial(WorkMaterialDraft(
+            kind: .image,
+            title: "screenshot.jpg",
+            filename: "screenshot.jpg",
+            mimeType: "image/jpeg",
+            payload: Data("picture".utf8)
+        ))
+        let typed = try await store.upsertDeskMaterial(WorkMaterialDraft(
+            kind: .note,
+            title: "typed",
+            textContent: "typed beside it",
+            storageMode: .metadataOnly,
+            attachedToMaterialID: screenshot.id
+        ))
+
+        do {
+            try await store.deleteWorkMaterialGroup(
+                parentID: screenshot.id,
+                childID: typed.id,
+                workItemID: Constants.workboardDeskItemID
+            )
+            XCTFail("a typed note is not a fold, so it is not a group delete either")
+        } catch WorkboardStoreError.invalidMaterialCompanion {
+            // Expected.
+        }
+
+        let afterValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let after = try XCTUnwrap(afterValue)
+        XCTAssertEqual(
+            Set(after.materials.map(\.id)), [screenshot.id, typed.id],
+            "a refused pair deletes nothing at all"
+        )
+    }
+
+    /// The routes off a folded words card are still WIRED. The band offers no
+    /// rows for them — there is no file to open or share — but Open on the card
+    /// itself still reaches the gallery, and the routing is what the card reads
+    /// to decide it holds a companion at all.
+    ///
+    /// Negative control: gating the routing itself on `.audio` returns nil, the
+    /// card stops drawing a band, and the words vanish from the desk.
+    func testAWordsOnlyCompanionStillCarriesItsRoutes() throws {
+        let spoken = card(kind: .transcript, name: "Ship the review")
+        let screenshot = folded(card(kind: .image, name: "screenshot.jpg"), around: spoken)
+        var opened: [UUID] = []
+        var shared: [UUID] = []
+        var reattached: [UUID] = []
+
+        let routes = try XCTUnwrap(WorkboardCompanionRouting.actions(
+            for: screenshot,
+            onOpen: { opened.append($0.id) },
+            onShare: { shared.append($0.id) },
+            onReattach: { reattached.append($0.id) }
+        ))
+        routes.open()
+        routes.share()
+        routes.reattach()
+
+        XCTAssertEqual(opened, [spoken.id])
+        XCTAssertEqual(shared, [spoken.id])
+        XCTAssertEqual(reattached, [spoken.id])
     }
 
     // MARK: - Member lookup and order expansion

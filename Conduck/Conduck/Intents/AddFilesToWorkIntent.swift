@@ -49,6 +49,24 @@
 // is written and an over-ceiling copy is abandoned and reclaimed where it
 // stands.
 //
+// A RECORDING IS REFUSED WHOLE, and refused here rather than anywhere further
+// down. Work keeps an audio file only when a person attaches it at the desk
+// itself — the chat-bar attachment button, or a drop into the Work pane — and
+// this lane cannot be one of those doors because it is headless: it shows
+// nobody what it kept, so a recording it accepted would sit on the desk, and
+// ride the desk's sync, without anyone having chosen to put it there. The
+// verdict is taken on the DECLARED set, before a byte is staged, and it takes
+// the whole set the way every other verdict in this file does: publishing the
+// documents and silently dropping the recording would tell a person who chose
+// five files that four of them are what they captured.
+//
+// The residual, stated so it is not mistaken for a leak: a file that declares
+// no type, carries no MIME type and has no extension a recording is known by
+// lands as a document card. Its bytes are then desk material like any other
+// file's. Nothing here sniffs content — a headless process that read the head
+// of every file to guess at it would spend the memory this lane exists not to
+// spend, and would still be guessing.
+//
 // The dialog is true at PUBLICATION time, not at import time. The drain below
 // is best-effort — if the process dies before it, the envelope is still queued
 // and the cards land at the next app launch — so the count spoken back is the
@@ -252,6 +270,20 @@ struct AddFilesToWorkIntent: AppIntent {
         guard !files.isEmpty else { return .noFiles }
         guard files.count <= WorkCaptureEnvelope.maximumEntryCount else {
             return .tooManyFiles(limit: WorkCaptureEnvelope.maximumEntryCount)
+        }
+        // Ahead of the ceilings, because no ceiling can make a recording
+        // acceptable here: the envelope owns the rule so this process and the
+        // one that claims the queue read a file the same way, and the name is
+        // the one the person will recognise in the sentence.
+        for file in files {
+            let name = Self.name(of: file)
+            if WorkCaptureEnvelope.isAudioPayload(
+                mimeType: file.mimeType,
+                typeIdentifier: file.typeIdentifier,
+                filename: name
+            ) {
+                return .audioFile(name: name)
+            }
         }
         var total: Int64 = 0
         for file in files {
@@ -524,6 +556,10 @@ enum WorkFileCaptureRefusal: LocalizedError, Equatable {
     case setTooLarge
     case unreadableFile(name: String)
     case noteTooLong
+    /// A recording among the chosen files. Work keeps one only when a person
+    /// attaches it at the desk, so this lane refuses the set and says where the
+    /// door is.
+    case audioFile(name: String)
 
     /// The queue's verdicts, restated as the sentence the person reads. The
     /// queue refuses per rule; this maps each rule onto the one thing they can
@@ -586,6 +622,14 @@ enum WorkFileCaptureRefusal: LocalizedError, Equatable {
             return String(
                 localized: "intent.workAddFiles.error.noteTooLong",
                 defaultValue: "That note is too long to add to Work. Shorten it, then try again."
+            )
+        case .audioFile(let name):
+            // Names the file and then names the door. A refusal that only says
+            // no leaves a person believing Work cannot hold a recording at all,
+            // when what it cannot hold is one nobody watched arrive.
+            return String(
+                localized: "intent.workAddFiles.error.audioFile",
+                defaultValue: "“\(name)” is a recording. Work keeps recordings only when you add them yourself — open Work and use the attachment button."
             )
         }
     }

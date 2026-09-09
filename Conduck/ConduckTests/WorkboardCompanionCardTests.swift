@@ -3,9 +3,17 @@
 // ConduckTests
 // WorkboardCompanionCardTests.swift
 //
-// The CARD half of the companion fold: a screenshot that swallowed the
-// recording spoken over it has to show that recording, name it, play it, and
-// say all of it to VoiceOver — or the fold has hidden a material.
+// The CARD half of the companion fold: a screenshot that swallowed what was
+// spoken over it has to show that voice material, name it, say all of it to
+// VoiceOver, and play it when there is something to play — or the fold has
+// hidden a material.
+//
+// TWO COMPANIONS SHARE THIS CARD. A press that kept the recording folds an
+// `.audio`; a press that kept only the words folds a `.transcript`. The words
+// are drawn identically; everything about a FILE — the transport, the clock,
+// Play, Open Recording, Share Recording, Reattach Recording, and the compact
+// tile's transport-only band — belongs to the recording alone, and offering any
+// of it over a card with no bytes is a control that fails on every activation.
 //
 // Everything asserted here is a pure rule the card reads rather than a rendered
 // tile, for the reason `WorkboardImageCardLayoutTests` states: an image-forward
@@ -45,6 +53,23 @@ final class WorkboardCompanionCardTests: XCTestCase {
                 textContent: transcript,
                 byteCount: 2_048,
                 availability: availability
+            )
+        )
+    }
+
+    /// The other half of the same press: the words, with no recording behind
+    /// them. `.metadataOnly` text is always readable, which is why availability
+    /// is not a parameter here — there are no bytes to be waiting for.
+    private func words(
+        name: String = "Ship the review",
+        transcript: String? = "Ship the review before Friday"
+    ) -> WorkboardCompanionSnapshot {
+        WorkboardCompanionSnapshot(
+            WorkboardMaterialSnapshot(
+                kind: .transcript,
+                name: name,
+                textContent: transcript,
+                availability: .available
             )
         )
     }
@@ -276,7 +301,9 @@ final class WorkboardCompanionCardTests: XCTestCase {
         )
 
         XCTAssertTrue(
-            summary.contains(String(localized: WorkboardCompanionBand.accessibilityKindLabel)),
+            summary.contains(String(
+                localized: WorkboardCompanionBand.accessibilityKindLabel(for: recording())
+            )),
             summary
         )
         XCTAssertTrue(summary.contains("screenshot.jpg"), summary)
@@ -305,10 +332,14 @@ final class WorkboardCompanionCardTests: XCTestCase {
             boardCount: 0
         )
         XCTAssertTrue(summary.contains(String(localized: WorkboardMaterialKind.image.title)), summary)
-        XCTAssertFalse(
-            summary.contains(String(localized: WorkboardCompanionBand.accessibilityKindLabel)),
-            summary
-        )
+        for companion in [recording(), words()] {
+            XCTAssertFalse(
+                summary.contains(String(
+                    localized: WorkboardCompanionBand.accessibilityKindLabel(for: companion)
+                )),
+                summary
+            )
+        }
     }
 
     /// What the card says the RECORDING is doing, which is the only place a
@@ -527,6 +558,168 @@ final class WorkboardCompanionCardTests: XCTestCase {
         }
     }
 
+    // MARK: - A words-only companion
+
+    /// The founder's other card: a screenshot with WORDS folded into it offers
+    /// nothing about a file, because there is no file. Every row here names one
+    /// — play it, open it, share it, repair it — so a words-only companion
+    /// offers none of them at any availability and in any transport phase.
+    ///
+    /// Negative control: without the kind gate, `.available` words offer Play,
+    /// Open Recording and Share Recording — three controls that fail the moment
+    /// they are chosen, and the only report of that failure is silence.
+    func testAWordsOnlyCompanionOffersNoRecordingRowsAtAll() {
+        let availabilities: [WorkboardMaterialAvailability] = [
+            .available, .localOnly, .syncPending, .unavailableOnThisDevice
+        ]
+        let phases: [WorkboardAudioPhase] = [
+            .idle, .loading, .playing, .paused, .failed, .blocked
+        ]
+        for availability in availabilities {
+            var companion = words()
+            companion.availability = availability
+            for phase in phases {
+                XCTAssertEqual(
+                    WorkboardCompanionBand.actions(
+                        for: companion,
+                        phase: phase,
+                        hasOpenRecording: true,
+                        hasShareRecording: true,
+                        hasReattachRecording: true
+                    ),
+                    [],
+                    "\(availability) \(phase)"
+                )
+            }
+        }
+    }
+
+    /// The card still says WHAT it is holding, and says which of the two it is:
+    /// a picture with a recording on it and a picture with words on it offer
+    /// different things, so a label that called both "voice note" would promise
+    /// a clip half of these cards do not have. The words themselves are spoken
+    /// once, by the same deduplicated face the band draws.
+    ///
+    /// Negative control: a single fixed label announces "Screenshot with voice
+    /// note" over a card with no recording — the inequality fails.
+    func testTheSpokenCardNamesAWordsOnlyCompanionAsANote() {
+        let spoken = String(
+            localized: WorkboardCompanionBand.accessibilityKindLabel(for: words())
+        )
+        XCTAssertNotEqual(
+            spoken,
+            String(localized: WorkboardCompanionBand.accessibilityKindLabel(for: recording()))
+        )
+        XCTAssertFalse(spoken.isEmpty)
+
+        let summary = WorkboardCardAccessibility.summary(
+            material: picture(companion: words(
+                name: "Ship the review",
+                transcript: "Ship the review before Friday"
+            )),
+            boardPosition: 1,
+            boardCount: 3
+        )
+        XCTAssertTrue(summary.contains(spoken), summary)
+        XCTAssertTrue(summary.contains("screenshot.jpg"), summary)
+        XCTAssertEqual(
+            summary.components(separatedBy: "Ship the review before Friday").count - 1, 1,
+            "the words are said once, not once as a title and again as a transcript"
+        )
+    }
+
+    /// A words-only companion is never DOING anything: it holds no clip, so a
+    /// transport status and a clock would both report a player that is not
+    /// there — including while the card beside it is playing, which is the
+    /// state that produces a shared phase.
+    ///
+    /// Negative control: reading the phase for every companion announces
+    /// "Playing" and a running clock over a card with no audio — both
+    /// assertions fail.
+    func testAWordsOnlyCompanionSaysNothingAboutATransportOrAClock() {
+        let value = WorkboardCompanionBand.accessibilityValue(
+            for: words(),
+            phase: .playing,
+            elapsed: 3,
+            duration: 12
+        )
+        XCTAssertEqual(value, "", "readable words in no state worth saying")
+        XCTAssertFalse(value.contains(WorkboardAudioTransport.clockText(elapsed: 3, duration: 12)))
+
+        let phases: [WorkboardAudioPhase] = [
+            .idle, .loading, .playing, .paused, .failed, .blocked
+        ]
+        for phase in phases {
+            XCTAssertEqual(
+                WorkboardCompanionBand.accessibilityValue(
+                    for: words(), phase: phase, elapsed: 0, duration: 0
+                ),
+                "",
+                "\(phase)"
+            )
+        }
+    }
+
+    /// A name is still a name, and a companion with none falls back to the noun
+    /// its OWN card would draw rather than to "Voice note" — which would name a
+    /// recording that does not exist.
+    func testAWordsOnlyCompanionWithNoNameFallsBackToTheSpokenNoteNoun() {
+        XCTAssertEqual(
+            WorkboardCompanionBand.title(for: words(name: "   ")),
+            String(localized: WorkboardMaterialKind.transcript.title)
+        )
+        XCTAssertNotEqual(
+            WorkboardCompanionBand.title(for: words(name: "")),
+            WorkboardCompanionBand.title(for: recording(name: ""))
+        )
+        XCTAssertEqual(WorkboardCompanionBand.title(for: words(name: "Ship it")), "Ship it")
+    }
+
+    /// The smallest tile's band is its TRANSPORT and nothing else — that is the
+    /// whole reason the compact placement exists — so a words-only companion
+    /// draws no band there at all. An empty strip standing on a 64-point tile
+    /// would spend the picture's name and its availability glyph on nothing.
+    ///
+    /// Every larger footprint still draws: the words are what the fold hid, and
+    /// a card that hid them and then declined to draw them would be the one way
+    /// a material vanishes from the desk.
+    ///
+    /// Negative control: keeping `.compact` for a words-only companion puts an
+    /// empty band on the smallest tile — the nil assertion fails.
+    func testAWordsOnlyCompanionDrawsNoBandOnTheSmallestTileAndOneEverywhereElse() {
+        let folded = picture(companion: words())
+        XCTAssertNil(WorkboardCompanionBand.placement(for: folded, footprint: .small))
+        XCTAssertEqual(WorkboardCompanionBand.placement(for: folded, footprint: .standard), .scrim)
+        XCTAssertEqual(WorkboardCompanionBand.placement(for: folded, footprint: .large), .scrim)
+
+        let previewless = picture(thumbnail: false, companion: words())
+        XCTAssertNil(WorkboardCompanionBand.placement(for: previewless, footprint: .small))
+        XCTAssertEqual(
+            WorkboardCompanionBand.placement(for: previewless, footprint: .standard), .inline
+        )
+
+        // The recording keeps its compact band: the rule is about what there is
+        // to draw, not about the footprint.
+        XCTAssertEqual(
+            WorkboardCompanionBand.placement(for: picture(companion: recording()), footprint: .small),
+            .compact
+        )
+    }
+
+    /// The card still holds two things, so its own Share row still has to say
+    /// which one leaves. The words are not a file, but the picture is, and
+    /// "Share" alone on a card drawing two names is the ambiguity the qualified
+    /// row exists to remove.
+    func testTheShareRowStillNamesThePictureOnAWordsOnlyCard() {
+        XCTAssertEqual(
+            String(localized: WorkboardCompanionBand.shareTitle(hasCompanion: true)),
+            String(localized: LocalizedStringResource(
+                "workboard.companion.share.picture",
+                defaultValue: "Share Screenshot"
+            ))
+        )
+    }
+
     // MARK: - Source guards
 
     private static let canvasPath = "Conduck/Views/Workboard/WorkboardCaptureCanvas.swift"
@@ -581,6 +774,36 @@ final class WorkboardCompanionCardTests: XCTestCase {
         XCTAssertEqual(
             band.components(separatedBy: "allowsHitTesting(false)").count - 1, 2,
             "the words and the band's own surface both pass their taps through"
+        )
+    }
+
+    /// The band draws its TRANSPORT and its progress track only for a
+    /// recording. Both are controls over bytes: the transport reads a payload
+    /// on activation and the track fills from a decoded clip's clock, so over a
+    /// words-only companion the first fails on every tap and the second is a
+    /// bar that can never move.
+    ///
+    /// A source check because the defect is two SwiftUI subviews inside a
+    /// private view body; what it holds is that both stand behind the same
+    /// kind test, so they cannot drift apart from each other or from the row
+    /// set `actions(for:)` decides.
+    ///
+    /// Negative control: drawing the transport unconditionally leaves the
+    /// branch count at zero and this fails.
+    func testTheBandsTransportAndTrackAreDrawnOnlyForARecording() throws {
+        let source = try RefusalLaneSource.source(at: Self.canvasPath)
+        let band = try RefusalLaneSource.body(
+            ofFunction: "companionBand",
+            in: source,
+            path: Self.canvasPath
+        )
+        XCTAssertTrue(
+            band.contains("companion.kind == .audio"),
+            "the band asks what it is drawing before it draws a control"
+        )
+        XCTAssertEqual(
+            band.components(separatedBy: "if drawsTransport {").count - 1, 2,
+            "the transport and the progress track stand behind the SAME answer"
         )
     }
 
