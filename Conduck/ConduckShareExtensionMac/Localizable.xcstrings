@@ -376,6 +376,18 @@
         }
       }
     },
+    "share.work.error.audioRefused" : {
+      "comment" : "Non-retryable failure message when a share bound for Work carries a recording",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recordings can’t be shared into Work. To keep one, open Work and add it with the attachment button."
+          }
+        }
+      }
+    },
     "share.work.error.empty" : {
       "comment" : "Actionable empty Workboard capture failure message",
       "extractionState" : "extracted_with_value",

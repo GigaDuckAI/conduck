@@ -90,6 +90,11 @@ enum WorkboardCommitFailure: Hashable, Identifiable, Sendable {
     /// Something in the share is not a regular file — a folder or a package
     /// document such as `.rtfd` or `.pages`.
     case unsupportedItem
+    /// Something in the share is a recording. Work keeps one only when a person
+    /// attaches it at the desk, so the whole capture is refused and the sentence
+    /// names that door. Sending the same recording to a conversation still
+    /// works.
+    case audioRefused
     /// The assembled capture violates the durable envelope contract, so the
     /// same share can never publish however often it is replayed.
     case invalidContent
@@ -97,8 +102,8 @@ enum WorkboardCommitFailure: Hashable, Identifiable, Sendable {
     var id: Self { self }
 
     /// Only a transient filesystem failure can improve when replayed unchanged.
-    /// Size, empty-input, unsupported-item, and contract failures all require
-    /// the person to change the share.
+    /// Size, empty-input, unsupported-item, refused-recording, and contract
+    /// failures all require the person to change the share.
     var allowsRetry: Bool {
         if case .unavailable = self { return true }
         return false
@@ -955,6 +960,8 @@ struct ShareView: View {
             return Strings.workboardErrorEmpty
         case .unsupportedItem:
             return Strings.workboardErrorUnsupportedItem
+        case .audioRefused:
+            return Strings.workboardErrorAudioRefused
         case .invalidContent:
             return Strings.workboardErrorInvalidContent
         }
@@ -1044,6 +1051,9 @@ struct ShareView: View {
         static let workboardErrorUnsupportedItem = String(localized: "share.work.error.unsupportedItem",
             defaultValue: "Folders and package documents can’t be added to Work. Share the files inside them instead.",
             comment: "Non-retryable failure message when a shared item is not a regular file")
+        static let workboardErrorAudioRefused = String(localized: "share.work.error.audioRefused",
+            defaultValue: "Recordings can’t be shared into Work. To keep one, open Work and add it with the attachment button.",
+            comment: "Non-retryable failure message when a share bound for Work carries a recording")
         static let workboardErrorInvalidContent = String(localized: "share.work.error.invalidContent",
             defaultValue: "Something in this share can’t be saved to Work. Share it a different way, or share fewer items.",
             comment: "Non-retryable failure message when a share breaks the Work capture contract")

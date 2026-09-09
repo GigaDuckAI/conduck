@@ -32,6 +32,12 @@ enum WorkboardMaterialKind: String, CaseIterable, Codable, Hashable, Sendable {
     // the board draws it with a transport, so a card that cannot play must be
     // impossible to reach through this kind.
     case audio
+    // Spoken words with no recording behind them. It is a separate shape from
+    // `.note` because the board owes the person the fact that these words were
+    // SPOKEN — a typed note and a dictated one are read differently — and a
+    // separate shape from `.audio` because there is nothing to play: routing it
+    // through `.audio` would draw a transport over bytes that do not exist.
+    case transcript
 
     var title: LocalizedStringResource {
         switch self {
@@ -45,6 +51,11 @@ enum WorkboardMaterialKind: String, CaseIterable, Codable, Hashable, Sendable {
             return LocalizedStringResource("workboard.material.note", defaultValue: "Note")
         case .audio:
             return LocalizedStringResource("workboard.material.audio", defaultValue: "Voice note")
+        case .transcript:
+            return LocalizedStringResource(
+                "workboard.material.transcript",
+                defaultValue: "Spoken note"
+            )
         }
     }
 
@@ -54,7 +65,10 @@ enum WorkboardMaterialKind: String, CaseIterable, Codable, Hashable, Sendable {
         case .file: return "doc"
         case .link: return "link"
         case .note: return "note.text"
+        // `waveform` is reserved for the kinds that carry a transport, so the
+        // glyph never promises playback the card cannot offer.
         case .audio: return "waveform"
+        case .transcript: return "text.quote"
         }
     }
 

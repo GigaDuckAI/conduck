@@ -465,15 +465,23 @@ final class WatchWorkCaptureUITests: XCTestCase {
 
     /// The fourth line, and the one that is easiest to get wrong by reusing
     /// another: the iPhone kept the RECORDING and had no words for it — the
-    /// exact mirror of `savedWordsOnly`. Saying "Saved to Work." here hides the
-    /// one thing the person has to do next; saying the words-only sentence
-    /// tells them their recording was thrown away, which is the opposite of
-    /// what happened. The wording is CarPlay's own for the same state, because
-    /// one product should not describe one outcome two ways.
+    /// exact mirror of `savedWordsOnly`. Nothing reached the desk, so "Saved to
+    /// Work." is not merely vague here, it is false: a Work voice note is its
+    /// words, and the words are what did not arrive. The words-only sentence is
+    /// the opposite error — it tells them the recording was thrown away when the
+    /// iPhone is the one thing still holding it. So the line names where the
+    /// recording is and denies the card, which is the pair of claims neither
+    /// sibling can make.
     func testTheWordlessSaveNamesTheHalfThatIsMissing() {
+        let line = WatchWorkCaptureCopy.terminalLine(for: .savedWithoutWords)
         XCTAssertEqual(
-            WatchWorkCaptureCopy.terminalLine(for: .savedWithoutWords),
-            "Saved to Work. Add the words on your iPhone."
+            line,
+            "Kept on your iPhone. Nothing reaches Work until the words land."
+        )
+        XCTAssertFalse(
+            line.contains("Saved to Work"),
+            "The desk holds nothing for this capture until its words land, so the one "
+            + "sentence this line may never borrow is the clean save's: \(line)"
         )
         let lines = Self.durableOutcomes.map(WatchWorkCaptureCopy.terminalLine(for:))
         XCTAssertEqual(
@@ -484,7 +492,8 @@ final class WatchWorkCaptureUITests: XCTestCase {
         XCTAssertEqual(
             WatchWorkCaptureCopy.symbolName(for: .savedWithoutWords),
             "tray.and.arrow.down.fill",
-            "The card IS on the desk, so it wears the desk's glyph."
+            "The iPhone TOOK the recording, so it wears the same inbound glyph as the two "
+            + "outcomes that reached the desk; only the wrist-side wait draws differently."
         )
     }
 
@@ -495,7 +504,8 @@ final class WatchWorkCaptureUITests: XCTestCase {
         XCTAssertEqual(WatchWorkCaptureOutcome.forSettlement(.workAcknowledged), .saved)
         XCTAssertEqual(
             WatchWorkCaptureOutcome.forSettlement(.workRecordingOnly), .savedWithoutWords,
-            "A stamped reply with no words reported a clean save, over a card with nothing on it."
+            "A stamped reply with no words reported a clean save, over a desk holding nothing "
+            + "for this capture at all."
         )
         XCTAssertEqual(WatchWorkCaptureOutcome.forSettlement(.workWordsOnly), .savedWordsOnly)
         XCTAssertNil(

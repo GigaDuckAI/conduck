@@ -6,8 +6,8 @@
 // The launcher for Work's voice capture, and deliberately NOTHING else. It owns
 // no recorder, no microphone lease and no publication: it reveals the desk and
 // asks it to present the capture surface the in-app button already presents, so
-// the whole durable lane — record, publish the recording BEFORE the speech hop,
-// attach the transcript after — stays in one place with one set of failure
+// the whole durable lane — record, park the recording BEFORE the speech hop,
+// publish the words alone after — stays in one place with one set of failure
 // paths.
 //
 // FOREGROUND, because a recorder without a screen is a recorder nobody can stop.

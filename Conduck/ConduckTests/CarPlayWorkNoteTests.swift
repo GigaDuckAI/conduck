@@ -29,13 +29,16 @@
 //     note. `.chat` is the value that must be reached by falling back, and
 //     `.work` the one that must be asked for.
 // (3) THE SPOKEN ACKNOWLEDGEMENT. It is HEARD once, at speed, by somebody who
-//     cannot re-read it, so it has to be true of exactly the state it names —
-//     and the three states have to sound different, or a driver whose words did
-//     not land has no way to know they need to open the phone.
+//     cannot re-read it, so it has to be true of exactly the state it names.
+//     Three sentences from two facts — the words reached the desk, the
+//     recording reached the queue — and the one that must never be borrowed is
+//     "kept on your iPhone", which names a device to go and open.
 // (4) THE FORK ITSELF. Nothing on the Work lane may reach a gateway
 //     (`startConverseHop`) or re-arm the microphone (`handleEmptyTurn`), the
-//     recording must be durable BEFORE the speech hop, and the queue entry may
-//     be released only when the words actually landed.
+//     recording must be parked before the speech hop and must never reach the
+//     desk, a park the store refuses must destroy nothing and must not end the
+//     note, and whatever the capture is holding may be released only when the
+//     words actually landed.
 
 import Observation
 import XCTest
@@ -160,45 +163,54 @@ final class CarPlayWorkNoteTests: XCTestCase {
 
     // MARK: - (3) The spoken acknowledgement
 
-    func testTheAcknowledgementIsDecidedByPublicationFirstAndWordsSecond() {
+    func testTheAcknowledgementIsDecidedByTheDeskFirstAndTheParkSecond() {
         XCTAssertEqual(
-            CarPlayRecordingService.workNoteOutcome(recordingPublished: true, transcriptAttached: true),
+            CarPlayRecordingService.workNoteOutcome(recordingParked: true, wordsOnDesk: true),
             .saved
         )
         XCTAssertEqual(
-            CarPlayRecordingService.workNoteOutcome(recordingPublished: true, transcriptAttached: false),
-            .savedWithoutWords,
-            "every refusal below the fork, and an empty transcript, land here"
+            CarPlayRecordingService.workNoteOutcome(recordingParked: true, wordsOnDesk: false),
+            .keptOnPhone,
+            "every refusal below the fork over a parked capture, and an empty transcript, land here"
         )
+    }
+
+    /// A refused park does NOT make the note unsaved. The words are the
+    /// artifact, so a card that landed is a card that landed — the recording it
+    /// came from was never the thing being promised, and telling the driver to
+    /// go and finish a note that is already on the desk sends them to do work
+    /// that does not exist.
+    func testARefusedParkStillReportsSavedOnceTheWordsAreOnTheDesk() {
         XCTAssertEqual(
-            CarPlayRecordingService.workNoteOutcome(recordingPublished: false, transcriptAttached: false),
-            .notSaved
+            CarPlayRecordingService.workNoteOutcome(recordingParked: false, wordsOnDesk: true),
+            .saved
         )
     }
 
-    /// The pair that cannot happen, pinned because of what it would SAY if it
-    /// ever did: words cannot be attached to a recording that was never
-    /// published, and a bug that produced that state must not tell the driver
-    /// their note is saved.
-    func testAnImpossibleStateNeverClaimsTheNoteIsSaved() {
-        let outcome = CarPlayRecordingService.workNoteOutcome(
-            recordingPublished: false, transcriptAttached: true
+    /// The fourth cell is not an outcome at all.
+    ///
+    /// Nothing parked and nothing on the desk means nothing survived, and
+    /// `.keptOnPhone` there would name a device holding nothing — the one
+    /// sentence that sends a driver to an empty retry lane. Answered as nil so
+    /// the caller has to say something else, rather than as a case somebody can
+    /// reach by accident.
+    func testNothingParkedAndNothingOnTheDeskIsNoOutcomeAtAll() {
+        XCTAssertNil(
+            CarPlayRecordingService.workNoteOutcome(recordingParked: false, wordsOnDesk: false),
+            "a note that survived neither way must not borrow the sentence of one that survived"
         )
-        XCTAssertEqual(outcome, .notSaved)
-        XCTAssertNotEqual(outcome, .saved)
     }
 
-    func testTheThreeSpokenLinesAreDistinctAndNoneOfThemMentionsSending() {
+    func testTheTwoSpokenLinesAreDistinctAndNeitherMentionsSending() {
         let lines = [
             CarPlayRecordingService.workNoteAcknowledgement(for: .saved),
-            CarPlayRecordingService.workNoteAcknowledgement(for: .savedWithoutWords),
-            CarPlayRecordingService.workNoteAcknowledgement(for: .notSaved)
+            CarPlayRecordingService.workNoteAcknowledgement(for: .keptOnPhone)
         ]
         for line in lines {
             XCTAssertFalse(line.isEmpty, "a silent acknowledgement is no acknowledgement")
         }
         XCTAssertEqual(
-            Set(lines).count, 3,
+            Set(lines).count, 2,
             "a driver whose words did not land must not hear what a driver whose words did land hears"
         )
         // Work opens, keeps and removes; it never sends. The desk has no code
@@ -208,26 +220,35 @@ final class CarPlayWorkNoteTests: XCTestCase {
             let lowered = line.lowercased()
             for forbidden in ["send", "sent", "dispatch", "draft", "brief", "chat", "conversation"] {
                 XCTAssertFalse(lowered.contains(forbidden),
-                               "spoken Work copy says “\(forbidden)”: “\(line)”")
+                               "spoken Work copy says \u{201C}\(forbidden)\u{201D}: \u{201C}\(line)\u{201D}")
             }
         }
     }
 
-    /// Only the outcome that has somewhere to retry FROM may invite one. The
-    /// other two would send a driver to a queue that holds nothing.
-    func testOnlyTheUnsavedLineInvitesTheDriverBackToThePhoneToRetry() {
-        let notSaved = CarPlayRecordingService.workNoteAcknowledgement(for: .notSaved).lowercased()
-        XCTAssertTrue(notSaved.contains("retry") || notSaved.contains("try again"),
-                      "the queued capture is the only reason this line exists")
+    /// The kept line names the DEVICE the note is on and the ACTION that
+    /// finishes it, because those are the only two things a driver can act on
+    /// once they are out of the car — and it claims nothing about the desk,
+    /// which holds nothing in that state. The saved line asks for nothing,
+    /// because nothing is outstanding.
+    func testOnlyTheKeptLineSendsTheDriverToThePhoneAndItNeverClaimsTheDeskHoldsAnything() {
+        let kept = CarPlayRecordingService.workNoteAcknowledgement(for: .keptOnPhone).lowercased()
+        XCTAssertTrue(kept.contains("iphone"),
+                      "the line has to name the device the only copy is on, or it tells the driver nothing they can act on")
+        XCTAssertTrue(kept.contains("conduck"),
+                      "and the app that finishes it — a driver who is told only that something was kept has no next step")
+        XCTAssertFalse(kept.contains("saved to work"),
+                       "nothing is on the desk in this state; a line that says so sends the driver to look for a card that does not exist")
+
         let saved = CarPlayRecordingService.workNoteAcknowledgement(for: .saved).lowercased()
-        XCTAssertFalse(saved.contains("retry") || saved.contains("try again"),
+        XCTAssertFalse(saved.contains("retry") || saved.contains("try again") || saved.contains("iphone"),
                        "nothing is outstanding on a note whose words landed")
     }
 
     // MARK: - (4) The fork
 
-    /// The invariant the whole slice exists for: the recording is durable, and
-    /// on the desk, BEFORE a single word is transcribed.
+    /// The invariant the whole slice exists for: the recording is PARKED before
+    /// a single word is transcribed, so a refusal from the speech hop leaves a
+    /// capture the phone can finish rather than nothing at all.
     func testTheRecordingIsSecuredBeforeTheSpeechHopIsAttempted() throws {
         let source = try Self.recordingServiceSource()
         let body = try RefusalLaneSource.body(
@@ -238,10 +259,19 @@ final class CarPlayWorkNoteTests: XCTestCase {
         let speech = try XCTUnwrap(body.range(of: "STTClient.shared.transcribe("),
                                    "the speech hop is what the fork sits above")
         XCTAssertTrue(fork.lowerBound < speech.lowerBound,
-                      "a refusal from the speech hop must cost the words, never the recording")
+                      "a refusal from the speech hop must find the recording already parked, or the note is lost outright")
     }
 
-    func testTheBytesReachTheQueueBeforeTheContainerFileIsDeletedAndBeforeTheDeskWrite() throws {
+    /// PHASE ONE WRITES NOTHING TO THE DESK, and the bytes reach the queue
+    /// before the only other copy of them is destroyed.
+    ///
+    /// The recording is not the artifact — the words are — so a card carrying
+    /// the audio would put a compressed voice note on the person's private
+    /// CloudKit for ever, which is the whole thing this lane exists to stop.
+    /// Pinned by ABSENCE as well as order, because the regression is a desk
+    /// write reappearing above the speech hop and nothing about the ordering
+    /// assertions would notice it.
+    func testPhaseOneParksTheBytesAndWritesNothingToTheDesk() throws {
         let source = try Self.recordingServiceSource()
         let body = try RefusalLaneSource.body(
             ofFunction: "secureWorkNote", in: source, path: Self.recordingServicePath
@@ -249,70 +279,220 @@ final class CarPlayWorkNoteTests: XCTestCase {
         let arm = try XCTUnwrap(body.range(of: "PendingRetryGuard.arm("))
         let deleteContainer = try XCTUnwrap(body.range(of: "removeItem(at: containerURL)"),
                                             "the container file is the only copy until the queue has one")
-        let publish = try XCTUnwrap(body.range(of: "WorkVoiceCaptureCoordinator.publishRecording("))
         XCTAssertTrue(arm.lowerBound < deleteContainer.lowerBound,
                       "deleting the recording before it is queued leaves the bytes only in this process")
-        XCTAssertTrue(arm.lowerBound < publish.lowerBound,
-                      "a desk write that fails must still leave a retryable capture behind")
+
+        for deskWrite in ["publishTranscript(", "publishRecording(", "upsertDeskMaterial(", "kind: .audio"] {
+            XCTAssertFalse(
+                body.contains(deskWrite),
+                "`secureWorkNote` reaches `\(deskWrite)`: phase one parks the recording and nothing else, and a desk write here syncs the audio the words were supposed to replace"
+            )
+        }
+
         XCTAssertTrue(body.contains("sourceDevice: \"carplay\""),
-                      "the card remembers the surface the words were spoken at")
-        XCTAssertTrue(body.contains("publicationState: .published"),
-                      "a recovery cannot tell a refused publication from a deleted card without this verdict")
+                      "the card remembers the surface the words were spoken at, and only this process knows it")
         XCTAssertTrue(body.contains("publicationState: .phaseOneFailed"),
-                      "both verdicts are load-bearing; neither may be dropped")
+                      "the entry has to say the desk holds nothing, or a recovery cannot tell a card that was never written from one the person deleted")
+        XCTAssertFalse(body.contains("publicationState: .published"),
+                       "phase one published nothing; that verdict belongs to the words write alone")
         XCTAssertTrue(body.contains("requestNotificationAuthorization: false"),
                       "a driver is never asked for notification permission at the wheel")
     }
 
-    func testTheQueueEntryIsReleasedOnlyWhenTheWordsActuallyLanded() throws {
-        let source = try Self.recordingServiceSource()
+    /// A park that was NOT confirmed destroys nothing, promises nothing — and
+    /// does not end the note.
+    ///
+    /// `PendingRetryGuard.arm` hands back a token whether or not the save
+    /// landed and whether or not the reservation was granted, so the container
+    /// file — the only copy of the recording at that instant — must not be
+    /// deleted on the strength of it. But the lane keeps going: the words are
+    /// the artifact, and a card written after a refused park is durable in its
+    /// own right, so aborting here would spend the driver's note to protect a
+    /// recording nothing was going to keep anyway.
+    func testARefusedParkKeepsTheContainerFileAndStillReachesTheSpeechHop() throws {
+        let source = Self.normalised(try Self.recordingServiceSource())
         let body = try RefusalLaneSource.body(
-            ofFunction: "attachWorkNoteTranscript", in: source, path: Self.recordingServicePath
+            ofFunction: "secureWorkNote", in: source, path: Self.recordingServicePath
         )
-        let attached = try XCTUnwrap(body.range(of: "case .attached:"))
-        let missing = try XCTUnwrap(body.range(of: "case .recordingMissing, .notAudio:"),
-                                    "both non-attaching answers are handled explicitly")
+        // THE WHOLE STATEMENT, not the call inside it: a branch satisfied by the
+        // mention alone is satisfied by `token.isDurable || true`, which is the
+        // check present and answering yes to everything.
+        XCTAssertTrue(
+            body.contains("let parked = token.isDurable"),
+            "the durability of the park is not read as one fact — `audioPreserved` alone passes for a save that landed under a reservation the store refused, and an entry nobody holds is one another surface may take and finish"
+        )
+        let branch = try XCTUnwrap(
+            body.range(of: "if parked {"),
+            "the container deletion is no longer behind the park's verdict — update this guard rather than deleting it"
+        )
+        // ANCHORED BEFORE THE OPENING BRACE. `endOfBlock` matches from the
+        // first `{` at or after the index it is given, so an index already past
+        // the arm's own brace would brace-match the first NESTED block instead.
+        let parkedArmStart = try XCTUnwrap(body.range(of: "if parked"))
+        let parkedArmEnd = try XCTUnwrap(
+            Self.endOfBlock(openingAt: parkedArmStart.upperBound, in: body),
+            "the parked arm is no longer a braced block — update this guard"
+        )
+        let parkedArm = String(body[branch.upperBound..<parkedArmEnd])
+        XCTAssertTrue(
+            parkedArm.contains("removeItem(at: containerURL)"),
+            "the container file is deleted outside the arm that confirmed the park, so a refused park destroys the last copy of the recording"
+        )
+
+        // The refused arm hands the file on rather than deleting it, and hands
+        // the capture on rather than ending the note.
+        let refusedArm = String(body[parkedArmEnd...])
+        XCTAssertFalse(
+            refusedArm.contains("removeItem(at: containerURL)"),
+            "a park that was not confirmed deletes the container file anyway — that file is the only copy of the recording at that instant"
+        )
+        XCTAssertTrue(
+            body.contains("unparkedContainerURL: parked ? nil : containerURL"),
+            "the kept container file is not carried on the capture, so nothing downstream can ever release it and the last copy outlives the note"
+        )
+        XCTAssertEqual(
+            body.components(separatedBy: "endSession(").count - 1, 1,
+            "phase one speaks more than once, or no longer speaks only for the scratch-write failure: a refused park must NOT end the session — recognition still runs, and the words can still reach the desk"
+        )
+    }
+
+    /// The three sentences, and which fact decides each — asserted on the ONE
+    /// function that decides them, so the six sites that end a note cannot
+    /// disagree.
+    ///
+    /// The raw line is the load-bearing half. `.keptOnPhone` names a device the
+    /// driver is told to go and open, and after a refused park that device
+    /// holds nothing, so the sentence would send them to an empty retry lane.
+    func testTheWorkLanesSingleExitSpeaksTheRawLineWhenNothingSurvived() throws {
+        let source = Self.normalised(try Self.recordingServiceSource())
+        let body = try RefusalLaneSource.body(
+            ofFunction: "endWorkNote", in: source, path: Self.recordingServicePath
+        )
+        XCTAssertTrue(
+            body.contains("recordingParked: capture.guardToken.isDurable"),
+            "the exit asks something other than the token about whether anything is parked — no call site can tell from its own position, which is why the question lives here"
+        )
+        let refusal = try XCTUnwrap(
+            body.range(of: "else {"),
+            "the nil answer is no longer a braced arm — update this guard rather than deleting it"
+        )
+        let refusalEnd = try XCTUnwrap(
+            Self.endOfBlock(openingAt: try XCTUnwrap(body.range(of: "guard let outcome")).upperBound, in: body),
+            "the exit's nil arm is no longer brace-matched — update this guard"
+        )
+        let nothingSurvived = String(body[refusal.upperBound..<refusalEnd])
+        XCTAssertTrue(
+            nothingSurvived.contains("Couldn't save — try again."),
+            "nothing survived and the driver is told otherwise: the raw line is the only one true of a note with no copy anywhere"
+        )
+        XCTAssertFalse(
+            nothingSurvived.contains("workNoteAcknowledgement("),
+            "the kept-on-phone sentence claims a copy exists on the phone, and after a refused park none does"
+        )
+
+        // Every Work-lane ending goes through here, or the three sentences are
+        // decided in six places again.
+        let service = source
+        XCTAssertEqual(
+            service.components(separatedBy: "Self.workNoteAcknowledgement(for:").count - 1, 1,
+            "a site outside `endWorkNote` picks its own sentence, so a refused park can still be told its note is waiting on the phone"
+        )
+    }
+
+    /// The parked recording is released ONLY once the words are on the desk.
+    ///
+    /// The release is what deletes the audio, and until the words land those
+    /// bytes are the only copy of the note — so every non-publishing answer
+    /// leaves the entry armed for the phone's retry card. Exactly one release
+    /// site, or the rule has two answers.
+    func testTheQueueEntryIsReleasedOnlyWhenTheWordsActuallyLanded() throws {
+        let source = Self.normalised(try Self.recordingServiceSource())
+        let body = try RefusalLaneSource.body(
+            ofFunction: "publishWorkNoteTranscript", in: source, path: Self.recordingServicePath
+        )
         let disarms = body.components(separatedBy: "PendingRetryGuard.disarm(").count - 1
         XCTAssertEqual(disarms, 1, "exactly one release site, or the rule has two answers")
+
+        let write = try XCTUnwrap(
+            body.range(of: "WorkVoiceCaptureCoordinator.publishTranscript("),
+            "the desk write is what the release stands behind"
+        )
         let disarm = try XCTUnwrap(body.range(of: "PendingRetryGuard.disarm("))
-        XCTAssertTrue(attached.lowerBound < disarm.lowerBound && disarm.lowerBound < missing.lowerBound,
-                      "the release belongs to `.attached` alone; a card that is gone is settled on the phone")
+        XCTAssertTrue(write.lowerBound < disarm.lowerBound,
+                      "the recording is deleted before the words that replace it are written")
+
+        // The catch arm writes nothing and releases nothing: those bytes are
+        // still the only copy of the note.
+        // ANCHORED BEFORE THE OPENING BRACE, for the reason `endOfBlock`
+        // documents: from an index past the arm's own `{` it brace-matches the
+        // first nested block instead.
+        let refusal = try XCTUnwrap(body.range(of: "} catch", range: write.upperBound..<body.endIndex))
+        let refusalEnd = try XCTUnwrap(
+            Self.endOfBlock(openingAt: refusal.upperBound, in: body),
+            "the desk write's refusal is no longer a braced arm — update this guard rather than deleting it"
+        )
+        XCTAssertFalse(
+            body[refusal.upperBound..<refusalEnd].contains("PendingRetryGuard.disarm("),
+            "a desk write that threw released the only copy of the recording"
+        )
+
+        // The verdict is stamped before the release, so a clear that fails
+        // still leaves a recovery something it can read.
+        let stamp = try XCTUnwrap(
+            body.range(of: "recordPublicationState(capture.guardToken, publicationState: .published)"),
+            "the words write no longer stamps the verdict a later recovery reads"
+        )
+        XCTAssertTrue(write.lowerBound < stamp.lowerBound && stamp.lowerBound < disarm.lowerBound,
+                      "the `.published` verdict belongs between the desk write and the release, or a failed clear leaves an entry claiming the desk holds nothing")
+
+        // BOTH releases, because what phase one managed to keep decides which
+        // one is owed. A capture that was never parked has no entry to stamp or
+        // clear; what it has is the raw container file phase one held back, and
+        // the card that just landed is what makes that file expendable. Without
+        // this arm the last copy of every best-effort note outlives the note.
+        XCTAssertTrue(
+            body.contains("} else if let containerURL = capture.unparkedContainerURL {"),
+            "the success path releases only the parked capture — a note that reached the desk after a refused park leaves its container file behind for ever"
+        )
+        let containerRelease = try XCTUnwrap(
+            body.range(of: "removeItem(at: containerURL)"),
+            "the kept container file is never deleted, so a refused park leaks the recording it was holding"
+        )
+        XCTAssertTrue(write.lowerBound < containerRelease.lowerBound,
+                      "the container file is deleted before the card that replaces it exists")
     }
 
     /// The words are PARKED on the queue entry first, and only then written to
-    /// the card — and only while this process still HOLDS the capture.
+    /// the desk — and only while this process still HOLDS the capture.
     ///
     /// Two rules in one order, because the order is the whole point.
     ///
-    /// Parking first: `attachTranscript` can throw, or find the card gone,
-    /// after recognition already succeeded. Without the parking the transcript
-    /// exists only in this process, so the phone's retry has to buy the same
-    /// words again — and a kill during the attach loses them outright. The
-    /// parking's own result is deliberately unused: it answers false both for
-    /// an overtaken claim and for an arm that preserved nothing, which need
-    /// opposite answers.
+    /// Parking first: the desk write can throw after recognition already
+    /// succeeded. Without the parking the transcript exists only in this
+    /// process, so the phone's retry has to buy the same words again — and a
+    /// kill during the write loses them outright. The stamp there stays
+    /// `.phaseOneFailed`, which is still true: the desk holds nothing until the
+    /// write returns.
     ///
-    /// Ownership after it: the attach is idempotent for identical words only —
-    /// the store compares the stored text and rewrites the row whenever it
-    /// differs. Lease renewal is best-effort and the speech hop can outlast the
-    /// reservation window, so a lapsed hold can be taken by the phone's retry
-    /// card, which transcribes the same bytes and saves its own words on this
-    /// same card. Writing here afterwards would overwrite that surface's
-    /// transcript with this one.
+    /// Ownership after it: lease renewal is best-effort and the speech hop can
+    /// outlast the reservation window, so a lapsed hold can be taken by the
+    /// phone's retry card, which transcribes the same bytes and publishes its
+    /// own words under this same id. Writing here afterwards would race that
+    /// surface for the card.
     func testTheWordsAreParkedBeforeTheyAreWrittenAndOnlyWrittenWhileThisProcessHoldsTheCapture() throws {
         let source = try Self.recordingServiceSource()
         let body = Self.normalised(try RefusalLaneSource.body(
-            ofFunction: "attachWorkNoteTranscript", in: source, path: Self.recordingServicePath
+            ofFunction: "publishWorkNoteTranscript", in: source, path: Self.recordingServicePath
         ))
         let write = try XCTUnwrap(
-            body.range(of: "WorkVoiceCaptureCoordinator.attachTranscript("),
+            body.range(of: "WorkVoiceCaptureCoordinator.publishTranscript("),
             "the desk write is what the parking and the ownership question stand in front of"
         )
         let beforeTheWrite = body[..<write.lowerBound]
 
         let parking = try XCTUnwrap(
             beforeTheWrite.range(of: "recordPublicationState(capture.guardToken, transcript: transcript"),
-            "the recognised words are parked nowhere: an attach that throws leaves them only in this process, and the phone re-buys them"
+            "the recognised words are parked nowhere: a desk write that throws leaves them only in this process, and the phone re-buys them"
         )
         let firstStaleness = try XCTUnwrap(
             beforeTheWrite.range(of: "isCurrentListen(", range: parking.upperBound..<beforeTheWrite.endIndex),
@@ -325,10 +505,20 @@ final class CarPlayWorkNoteTests: XCTestCase {
             body.contains("guard await PendingRetryGuard.stillOwnsCapture(capture.guardToken) else {"),
             "the ownership question is no longer the whole condition — a disjunction beside it answers yes for a capture another surface already finished"
         )
+        // AND ASKED WHEREVER THERE IS A RESERVATION TO ASK ABOUT — no wider and
+        // no narrower. `stillOwnsCapture` answers false for a claimless token,
+        // and on this lane that state is the refused park the best-effort path
+        // exists to rescue, not another surface holding the entry; asking it
+        // there would throw the driver's words away to protect an entry nobody
+        // holds. Scoping it to any OTHER condition is the mutation this pins.
+        XCTAssertTrue(
+            body.contains("if capture.guardToken.isDurable { guard await PendingRetryGuard.stillOwnsCapture(capture.guardToken) else {"),
+            "the ownership gate is scoped to something other than the reservation's existence — either a parked capture is written without asking who owns it, or a best-effort capture is refused for having no owner to ask about"
+        )
         let ownership = try XCTUnwrap(
             beforeTheWrite.range(of: "stillOwnsCapture(capture.guardToken)",
                                  range: firstStaleness.upperBound..<beforeTheWrite.endIndex),
-            "the transcript is written without asking whether the capture is still this process's — a retry card that took it has already saved its own words on that card"
+            "the transcript is written without asking whether the capture is still this process's — a retry card that took it is publishing its own words under this same id"
         )
         // SKIP THE REFUSAL ARM. It carries its own staleness check, so a search
         // that merely starts at `stillOwnsCapture` finds THAT one and passes
@@ -355,15 +545,31 @@ final class CarPlayWorkNoteTests: XCTestCase {
         // MENTION. `if !capture.guardToken.audioPreserved { … }` around it keeps
         // every range above in the same order while the captures that DID
         // preserve their audio — the ones with something to lose — park no
-        // words at all, so an attach that throws costs the driver a second
+        // words at all, so a desk write that throws costs the driver a second
         // transcription of speech they have already paid for.
+        //
+        // Its result is READ. The stamp can be refused (an overtaken claim, an
+        // arm that preserved nothing) and that is not fatal — the words are in
+        // memory and the desk write below is what the driver is waiting for —
+        // but a call whose answer nothing looks at is one that can start
+        // failing silently for every capture on the lane.
         XCTAssertTrue(
             body.trimmingCharacters(in: .whitespaces).hasPrefix(
-                "_ = await PendingRetryGuard.recordPublicationState(capture.guardToken, "
-                + "transcript: transcript, publicationState: .published) "
+                "let wordsParked = await PendingRetryGuard.recordPublicationState(capture.guardToken, "
+                + "transcript: transcript, publicationState: .phaseOneFailed) "
                 + "guard isCurrentListen(attemptID) else { return }"
             ),
-            "the parking is no longer this function's unconditional opening — a branch around it leaves the recognised words in this process only, for exactly the captures that have something to lose"
+            "the parking is no longer this function's unconditional opening, or its result is no longer read — a branch around it leaves the recognised words in this process only, for exactly the captures that have something to lose"
+        )
+        XCTAssertTrue(
+            body.contains("if !wordsParked {"),
+            "a park that was refused is not reported at all — every capture on the lane could stop parking its words and nothing would say so"
+        )
+        // The words are parked under the verdict that is still TRUE at that
+        // instant: the desk holds nothing until the write below returns.
+        XCTAssertFalse(
+            beforeTheWrite.contains("publicationState: .published"),
+            "the words are parked under a `.published` verdict before anything is published — a recovery reading that entry would treat a card that was never written as one the person deleted"
         )
 
         // Refusing ownership writes NOTHING and releases NOTHING: the entry
@@ -422,9 +628,21 @@ final class CarPlayWorkNoteTests: XCTestCase {
                       "a refusal that runs after the hand-off would leak the file it no longer owns")
     }
 
+    /// Every suspension on the Work lane is followed by a staleness check.
+    ///
+    /// Stated as a RATIO and a TAIL rather than a fixed floor. A floor is a
+    /// number that was true of the function on the day it was written: delete a
+    /// suspension and the floor keeps demanding checks nobody needs, add one
+    /// and the floor is satisfied by the checks that were already there. Both
+    /// halves below move with the function.
+    ///
+    /// The tail is the half that catches the real defect. A session can end
+    /// under ANY suspension, and the last one is the one whose resumption goes
+    /// straight on to speak or to write — so a check after every suspension but
+    /// the last leaves exactly the case where an ended session is spoken to.
     func testEverySuspensionOnTheWorkLaneIsFollowedByAStalenessCheck() throws {
         let source = try Self.recordingServiceSource()
-        for function in ["secureWorkNote", "attachWorkNoteTranscript"] {
+        for function in ["secureWorkNote", "publishWorkNoteTranscript"] {
             let body = try RefusalLaneSource.body(
                 ofFunction: function, in: source, path: Self.recordingServicePath
             )
@@ -432,8 +650,16 @@ final class CarPlayWorkNoteTests: XCTestCase {
             let checks = body.components(separatedBy: "isCurrentListen(").count - 1
             XCTAssertGreaterThan(suspensions, 0, "\(function) is an async lane; the scan is broken otherwise")
             XCTAssertGreaterThanOrEqual(
-                checks, 2,
+                checks, suspensions,
                 "\(function) resumes after \(suspensions) suspensions with only \(checks) staleness checks — a session that ended under one of them would be spoken to"
+            )
+            let lastSuspension = try XCTUnwrap(
+                body.range(of: "await ", options: .backwards),
+                "\(function) no longer suspends at all — the scan is broken"
+            )
+            XCTAssertNotNil(
+                body.range(of: "isCurrentListen(", range: lastSuspension.upperBound..<body.endIndex),
+                "\(function) resumes from its LAST suspension without asking whose listen it is, and everything after that either speaks or writes to the desk"
             )
         }
     }
@@ -651,7 +877,7 @@ final class CarPlayWorkNoteTests: XCTestCase {
             "reArmAfterSettle",
             "speakErrorAndEnd"
         ]
-        for function in ["secureWorkNote", "attachWorkNoteTranscript", "endRefusalBelowFork"] {
+        for function in ["secureWorkNote", "publishWorkNoteTranscript", "endWorkNote", "endRefusalBelowFork"] {
             let body = try RefusalLaneSource.body(
                 ofFunction: function, in: source, path: Self.recordingServicePath
             )

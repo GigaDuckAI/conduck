@@ -63,11 +63,10 @@ struct PendingRetryCard: View {
     /// Raised by the HOST once it holds the reservation, so the confirmation
     /// can only ever be answered about a capture this surface owns.
     @Binding var confirmingDiscard: Bool
-    /// True when the reserved recording is ALREADY a card on the desk — a Work
-    /// capture whose publication landed and whose words are all that is still
-    /// owed. Discarding that one removes the copy kept for another transcription
-    /// attempt and nothing else, so the confirmation may not say the recording
-    /// is gone for good.
+    /// True when the desk ALREADY holds what the reserved capture produced — a
+    /// Work capture whose words card is written and whose entry is holding only
+    /// a leftover. Discarding that one costs the person nothing they said, so
+    /// the confirmation may not borrow the finality of the sentence beside it.
     let discardKeepsRecordingInWork: Bool
     /// Delete the reserved recording.
     let onDiscardConfirmed: () -> Void
@@ -189,12 +188,17 @@ struct PendingRetryCard: View {
     /// What the discard actually costs, which is not the same sentence for
     /// every waiting capture.
     ///
-    /// A Chat capture, and a Work capture the desk never accepted, exist only
+    /// A Chat capture, and a Work capture whose words never landed, exist only
     /// in the retry queue: discarding one deletes the only copy of what somebody
-    /// said. A Work capture that already PUBLISHED is a playable card on the
-    /// desk — the queue is holding a second copy purely so the words can be
-    /// tried again — so telling that person the recording cannot be recovered
-    /// is false, and false in the direction that stops them tidying up.
+    /// said, and nothing reclaims it. That is the sentence below.
+    ///
+    /// The sibling is for a capture whose words ARE on the desk and whose entry
+    /// is holding only what is left over — the recording, when a death landed
+    /// between the words card and the clear, or the screenshot, when the
+    /// recording was retired the moment the words landed. Telling that person
+    /// their words cannot be recovered is false, and false in the direction that
+    /// stops them tidying up. It may not say the recording is in Work either: no
+    /// recording is ever on the desk.
     private var discardMessage: String {
         guard discardKeepsRecordingInWork else {
             return String(
@@ -208,9 +212,8 @@ struct PendingRetryCard: View {
         return String(
             localized: "pendingRetry.card.discard.confirm.body.published",
             defaultValue: """
-                This removes only the copy kept for another try at \
-                transcribing it. The recording is already in Work and stays \
-                there.
+                Your words are already on your desk. This removes only the \
+                leftover copy this device kept.
                 """
         )
     }

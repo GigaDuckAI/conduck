@@ -1036,18 +1036,27 @@ struct DictationPopoverView: View {
     /// What the desk got, said before the reason it got no more.
     ///
     /// READ FROM THE RECORDER'S FACTS, never inferred from the error's identity.
-    /// A Work capture publishes up to three things — a picture, a recording,
-    /// the words — on three independent terms, and any of them can land while
-    /// the next one is refused. A sentence derived from the failure alone
-    /// therefore lies in both directions: it says nothing arrived when the
-    /// screenshot did, and it says only the words are missing when the picture
-    /// went with them. `workCaptureFacts` is what actually happened.
+    /// A Work capture publishes up to two things — a picture and the words — on
+    /// two independent terms, and either can land while the other is refused. A
+    /// sentence derived from the failure alone therefore lies in both
+    /// directions: it says nothing arrived when the screenshot did, and it says
+    /// only the picture is missing when the words went with it.
+    /// `workCaptureFacts` is what actually happened.
+    ///
+    /// THE RECORDING IS NEVER PART OF THE NEWS, because it is never on the desk.
+    /// It is parked on this Mac until the words are written and then deleted, so
+    /// the honest thing to say about a capture whose words never arrived is that
+    /// the recording is being KEPT — which is the sentence that makes Try Again
+    /// mean something. `recordingOnDesk` survives for the one legacy shape it
+    /// still describes: a recording an earlier build published, standing at the
+    /// capture id, that took these words onto itself. That case lands with the
+    /// words, so it needs no sentence of its own.
     ///
     /// `nil` when there is nothing to add: everything the capture carried is on
-    /// the desk. Unreachable today (a capture with all three landed is a
-    /// success, not an error) — and the right answer if it ever is reachable,
-    /// because inventing a fourth claim about the desk is what this exists to
-    /// stop. The failure's own sentence still renders below.
+    /// the desk. Unreachable today (a capture with both landed is a success, not
+    /// an error) — and the right answer if it ever is reachable, because
+    /// inventing a third claim about the desk is what this exists to stop. The
+    /// failure's own sentence still renders below.
     private var workCaptureOutcomeText: String? {
         let facts = workRecorder.workCaptureFacts
         // A picture is MISSING only when it is nowhere: not taken is not
@@ -1065,14 +1074,14 @@ struct DictationPopoverView: View {
             && !facts.screenshotOnDesk
             && !facts.screenshotImportPending
 
-        guard facts.recordingOnDesk else {
-            // The words are not mentioned on this branch at all: with no card
-            // there is nothing for a transcript to attach to, so the recording's
-            // absence is the whole of the news.
+        guard facts.wordsOnDesk else {
+            // The words are the whole of what a spoken capture produces, so
+            // their absence is the news — and the recording that would have
+            // produced them is the reassurance, because it is still here.
             if facts.screenshotOnDesk {
                 return String(localized: LocalizedStringResource(
-                    "workboard.voice.error.recordingMissing",
-                    defaultValue: "Your screenshot is on your desk. The recording is not."
+                    "workboard.voice.error.wordsMissing",
+                    defaultValue: "Your screenshot is on your desk. The words are not yet."
                 ))
             }
             // Accepted, not arrived. Publication hands back an id before the
@@ -1082,8 +1091,8 @@ struct DictationPopoverView: View {
             // receipt in a smaller font.
             if facts.screenshotImportPending {
                 return String(localized: LocalizedStringResource(
-                    "workboard.voice.error.recordingMissingScreenshotQueued",
-                    defaultValue: "Your screenshot is on its way to your desk. The recording is not."
+                    "workboard.voice.error.wordsMissingScreenshotQueued",
+                    defaultValue: "Your screenshot is on its way to your desk. The words are not yet."
                 ))
             }
             // Present tense, and scoped to THIS CAPTURE. "Nothing reached your
@@ -1092,35 +1101,30 @@ struct DictationPopoverView: View {
             // branch is reached in once presence is re-read rather than
             // remembered. "Nothing is on your desk" fixes the tense and breaks
             // the scope instead: the facts behind this sentence describe one
-            // capture's three artifacts and say nothing whatever about the
-            // cards already on the board, which a person looking at a full desk
-            // can see it contradicting.
+            // capture's artifacts and say nothing whatever about the cards
+            // already on the board, which a person looking at a full desk can
+            // see it contradicting.
+            //
+            // The second clause is the one that makes the first bearable, and
+            // it is true of every capture that reaches here: the recording is
+            // parked on this Mac, exempt from every clock, and Try Again is
+            // what turns it into the note.
             return String(localized: LocalizedStringResource(
                 "workboard.voice.error.captureAbsent",
-                defaultValue: "Nothing from this capture is on your desk."
+                defaultValue: """
+                    Nothing from this capture is on your desk yet. The recording \
+                    is kept on this Mac for Try Again.
+                    """
             ))
         }
 
-        guard facts.wordsOnDesk else {
-            if screenshotMissing {
-                return String(localized: LocalizedStringResource(
-                    "workboard.voice.error.wordsAndScreenshotMissing",
-                    defaultValue: "Your recording is on your desk. The words and screenshot are missing."
-                ))
-            }
-            return String(localized: LocalizedStringResource(
-                "workboard.voice.error.recordingKept",
-                defaultValue: "Your recording is on your desk. Only the words are missing."
-            ))
-        }
-
-        // Recording and words both landed, so the only thing that can have put
-        // this arm on screen is a refused picture — and the Try Again below
-        // republishes exactly that.
+        // The words landed, so the only thing that can have put this arm on
+        // screen is a refused picture — and the Try Again below republishes
+        // exactly that.
         guard screenshotMissing else { return nil }
         return String(localized: LocalizedStringResource(
             "workboard.voice.error.screenshotMissing",
-            defaultValue: "Your recording and words are on your desk. The screenshot is not."
+            defaultValue: "Your words are on your desk. The screenshot is not."
         ))
     }
 

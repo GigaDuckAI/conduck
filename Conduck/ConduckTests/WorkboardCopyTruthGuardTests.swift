@@ -34,12 +34,16 @@
 // reclaims a Work capture the desk never accepted, so the retry card's discard
 // deletes the only copy of what somebody said; its confirmation has to name
 // the device the bytes are on and say they do not come back.
-// (6) THAT SENTENCE IS FALSE FOR A CAPTURE THE DESK ALREADY TOOK. Its recording
-// is a playable card and the queue is holding a second copy purely so the words
-// can be tried again, so the confirmation shown there is a DIFFERENT row that
-// may not borrow either of rule (5)'s claims — a dialog that tells someone
-// their recording cannot be recovered when it is sitting on their desk stops
-// them tidying up a queue they are entitled to empty.
+// (6) THAT SENTENCE IS FALSE ONCE THE WORDS ARE ON THE DESK. The entry is then
+// holding a leftover — the recording, when a death landed between the words
+// card and the clear, or the screenshot, when the recording was retired the
+// moment the words landed — so the confirmation shown there is a DIFFERENT row
+// that may not borrow either of rule (5)'s claims: a dialog that tells someone
+// what they said cannot be recovered, when it is already a card on their desk,
+// stops them tidying up a queue they are entitled to empty. Nor may that row
+// reassure them that the RECORDING is in Work. A Work voice note reaches the
+// desk as words alone, so no recording is ever on it, and the sentence would
+// point at a card that does not exist.
 // (7) AN INTENT'S NAME IS SYSTEM COPY, AND THE SYSTEM SHOWS IT EVERYWHERE. A
 // title or description written for the surface its author had open — "Record a
 // note on iPhone" — is read on the Mac's Shortcuts editor, in the Watch's
@@ -394,13 +398,20 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
         )
     }
 
-    /// The sibling confirmation, for a capture whose recording the desk already
+    /// The sibling confirmation, for a capture whose WORDS the desk already
     /// holds. `PendingRetryCard.discardMessage` picks between the two rows on
-    /// `discardKeepsRecordingInWork`, and this one is shown when the discard
-    /// costs the person nothing but a second transcription attempt — so it is
-    /// guarded on the COMPLEMENT of rule (5): it has to say the recording stays
-    /// in Work, and it may not carry either claim the other row exists to make.
-    func testThePublishedDiscardConfirmationSaysTheRecordingStaysInWork() throws {
+    /// `discardKeepsRecordingInWork`, and this one is shown when the entry has
+    /// been reduced to a leftover — the recording, when a death landed between
+    /// the words card and the clear, or the screenshot, when the recording was
+    /// retired the moment the words landed. So it is guarded on the COMPLEMENT
+    /// of rule (5): it has to say the words are safe, and it may not carry
+    /// either claim the other row exists to make.
+    ///
+    /// It may not say the recording is in Work either. No recording is ever on
+    /// the desk, so the row's old reassurance — "already in Work and stays
+    /// there" — would now point somebody at a card that does not exist, which
+    /// is the same failure as rule (5)'s in the opposite direction.
+    func testThePublishedDiscardConfirmationSaysTheWordsAreAlreadySaved() throws {
         let strings = try catalogStrings()
         let body = try XCTUnwrap(
             englishValue(try XCTUnwrap(
@@ -412,35 +423,38 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
         let lowered = body.lowercased()
 
         XCTAssertTrue(
-            lowered.contains("work"),
-            "the recording is a card on the desk, and naming where it still is is the "
-                + "whole reason this row exists apart from its sibling: \(body)"
+            lowered.contains("words"),
+            "what survives this discard is the words card, and saying so is the whole "
+                + "reason this row exists apart from its sibling — the person is answering "
+                + "a question about losing something they said: \(body)"
         )
         XCTAssertTrue(
-            ["stays", "remains", "still there"].contains(where: { lowered.contains($0) }),
-            "the person is answering \"Discard this recording?\" about a recording that "
-                + "is not going anywhere, so the sentence has to say so: \(body)"
+            lowered.contains("desk") || lowered.contains("work"),
+            "the reassurance is only load-bearing if it names where the words already "
+                + "are: \(body)"
         )
         XCTAssertTrue(
-            lowered.contains("copy"),
-            "what the discard actually removes is the second copy the queue is holding "
-                + "for another transcription attempt, and the sentence has to name it "
-                + "rather than leave the person guessing what they are agreeing to: \(body)"
+            lowered.contains("copy") || lowered.contains("leftover"),
+            "what the discard actually removes is the leftover the entry is still "
+                + "holding, and the sentence has to name it rather than leave the person "
+                + "guessing what they are agreeing to: \(body)"
         )
         XCTAssertFalse(
             lowered.contains("cannot be recovered") || lowered.contains("can't be recovered"),
-            "this recording IS recoverable — it is a playable card on the desk — so "
-                + "borrowing the other row's finality is simply false: \(body)"
+            "what this discard costs is a leftover, not the capture — the words are on "
+                + "the desk — so borrowing the other row's finality is simply false: \(body)"
         )
         XCTAssertFalse(
-            lowered.contains("this device"),
-            "the other row names the device because that device holds the only copy; "
-                + "here the desk holds it and it syncs, so the claim does not transfer: \(body)"
+            ["recording is already", "recording is in work", "recording stays",
+             "recording remains"].contains(where: { lowered.contains($0) }),
+            "a Work voice note reaches the desk as words alone, so no recording is ever "
+                + "on it; this row's old reassurance now points at a card that does not "
+                + "exist: \(body)"
         )
         XCTAssertFalse(
             lowered.contains("delete"),
-            "the recording is not deleted by this discard, only the queue's spare copy "
-                + "of it: \(body)"
+            "the words are not deleted by this discard, only the leftover copy the entry "
+                + "is holding: \(body)"
         )
 
         let unpublished = try XCTUnwrap(

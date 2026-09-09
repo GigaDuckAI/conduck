@@ -336,34 +336,54 @@ final class MenuBarWorkCaptureStateTests: XCTestCase {
         )
     }
 
-    /// The stopped state's receipt is the DESK's answer, not the capture's.
+    /// The stopped state's receipt describes THIS DEVICE, and there is one
+    /// sentence because there is one state.
     ///
-    /// A capture still in hand proves only that something is left to finish. Its
-    /// card can have been deleted on another device while recognition ran — the
-    /// recorder's own refresh confirms exactly that on the cancellation path —
-    /// and `canRetryWorkCapture` stays true through it. Told from the retention
-    /// alone, the receipt promised a card the person had already thrown away and
-    /// said Try Again would add words to it, when what a retry can do there is
-    /// bring the words back.
-    func testTheStoppedStateReadsTheDesksAnswerAndNotTheRetention() throws {
+    /// A stopped transcription has put nothing on the desk: this lane publishes
+    /// the words and only the words, and the words are exactly what it did not
+    /// get. So the receipt may not ask the desk what it is holding — the answer
+    /// is always "nothing", and a sentence branching on it can only be wrong in
+    /// one direction or the other. What is true is where the recording is: on
+    /// this device, waiting for the Try Again that turns it into a note.
+    func testTheStoppedStateDescribesTheRecordingThisDeviceIsStillHolding() throws {
         let sheet = try Self.squeezedSource(at: "Conduck/Views/Workboard/WorkboardVoiceCaptureView.swift")
 
         XCTAssertTrue(
             sheet.contains(Self.squeezedLiteral("""
+            Text(LocalizedStringResource(
+                "workboard.voice.stopped.body",
+            """)),
+            """
+            The stopped receipt is no longer one unconditional sentence. Any branch here is a \
+            branch on a desk that holds nothing for this capture.
+            """
+        )
+        XCTAssertFalse(
+            sheet.contains(Self.squeezedLiteral("recorder.workCaptureFacts.recordingOnDesk")),
+            """
+            The receipt asks the desk whether it holds the RECORDING. Nothing this lane makes ever \
+            reaches the desk as audio, so the answer is a constant false and the sentence chosen by \
+            it is the wrong one every time.
+            """
+        )
+        XCTAssertFalse(
+            sheet.contains(Self.squeezedLiteral("\"workboard.voice.stopped.body.noCard\"")),
+            "The retired second sentence is back, and the state it described — a card deleted "
+            + "while recognition ran — cannot exist before the words are published."
+        )
+        // NEGATIVE CONTROL: the two-sentence shape this replaced must fail the
+        // first assertion, so what it pins is the UNCONDITIONAL sentence and not
+        // merely the presence of the key.
+        XCTAssertFalse(
+            Self.squeezedLiteral("""
             Text(recorder.workCaptureFacts.recordingOnDesk
                  ? LocalizedStringResource(
                     "workboard.voice.stopped.body",
+            """).contains(Self.squeezedLiteral("""
+            Text(LocalizedStringResource(
+                "workboard.voice.stopped.body",
             """)),
-            """
-            The receipt asserts the card from the retained capture again. `workCaptureFacts` is \
-            the recorder's own read of the desk and the only thing that may be described to a \
-            person as standing on it.
-            """
-        )
-        XCTAssertTrue(
-            sheet.contains(Self.squeezedLiteral("\"workboard.voice.stopped.body.noCard\"")),
-            "There is one sentence for both answers again, so a deleted card is described as "
-            + "waiting for its words."
+            "Control: the ternary receipt must FAIL this guard."
         )
     }
 

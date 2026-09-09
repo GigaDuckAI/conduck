@@ -35,6 +35,27 @@
 // the instant the completion handler returns. We therefore COPY the bytes into
 // `tmp/<uuid>/` INSIDE the handler, synchronously, before returning. See
 // `copyFileRepresentation(...)`.
+//
+// ── Work refuses a recording; Chat does not ───────────────────────────────────
+// Two lanes leave this appex. Send hands the shared bytes to a conversation and
+// takes everything, recordings included. The Work lane writes a capture envelope
+// onto the desk, and the desk keeps an audio file ONLY when a person attaches it
+// there themselves — the chat-bar attachment button, or a drop into the Work
+// pane. A share sheet is not one of those doors, so `writeWorkCaptureEnvelope`
+// refuses a recording and the person is told where the door is.
+//
+// Refused WHOLE, like a folder: a screenshot shared together with a voice memo
+// is one thing the person did, and landing half of it is a judgement this appex
+// cannot make. The verdict is asked of the provider before a byte is copied, and
+// again of the annotations after the copy for a source that declared nothing —
+// both through `WorkCaptureEnvelope.isAudioPayload`, so this process and the
+// drainer that claims what it writes cannot disagree about what a recording is.
+// `loadOne` is deliberately untouched: it is shared with Send, and asking it
+// would refuse audio for Chat too.
+//
+// The activation rule stays as it is. Narrowing it would drop this appex out of
+// the share sheet for a recording entirely, which refuses Chat's legitimate
+// forward and does it with no sentence at all.
 
 import UIKit
 import SwiftUI
@@ -489,6 +510,8 @@ final class ShareViewController: UIViewController {
                         failure = .empty
                     case .unsupportedItem:
                         failure = .unsupportedItem
+                    case .audioRefused:
+                        failure = .audioRefused
                     case .appGroupUnavailable:
                         failure = .unavailable
                     }
@@ -635,6 +658,11 @@ final class ShareViewController: UIViewController {
     /// same memory-bounded loader as Send now, but land under a different App-
     /// Group root that no dispatch drainer observes. Shared plain text becomes a
     /// material entry; `note` remains the user's separate instruction.
+    ///
+    /// This is where a recording is refused, and the only place: `loadOne` below
+    /// is shared with Send, so a rule there would refuse audio for Chat too. The
+    /// refusal takes the whole capture and reaches the person as one sentence
+    /// naming the desk's own attachment button.
     private func writeWorkCaptureEnvelope(
         id: UUID,
         note: String,
@@ -669,6 +697,14 @@ final class ShareViewController: UIViewController {
         var sequence = 0
         for provider in providers {
             if let capture, ObjectIdentifier(provider) == capture.providerID { continue }
+            // Asked of the PROVIDER, before its bytes are copied: a recording
+            // refused after the copy has already spent the disk and the memory
+            // the refusal exists to avoid. Chat is unaffected — `loadOne` is
+            // shared with the send lane and asks nothing about audio, so a
+            // recording still forwards to a conversation exactly as before.
+            if provider.hasItemConformingToTypeIdentifier(UTType.audio.identifier) {
+                throw ShareError.audioRefused
+            }
             try await loadOne(
                 provider: provider,
                 sequence: &sequence,
@@ -718,6 +754,18 @@ final class ShareViewController: UIViewController {
             // required to destroy on claim.
             guard (attributes[.type] as? FileAttributeType) == .typeRegular else {
                 throw ShareError.unsupportedItem
+            }
+            // The second half of the recording refusal, for a source that
+            // declared nothing the provider check could read. The envelope owns
+            // the rule, so this appex and the drainer that claims what it writes
+            // decide what a recording IS the same way; a second spelling here is
+            // how the two ends drift apart.
+            if WorkCaptureEnvelope.isAudioPayload(
+                mimeType: item.mimeType,
+                typeIdentifier: item.utTypeIdentifier,
+                filename: item.originalName
+            ) {
+                throw ShareError.audioRefused
             }
             let byteCount = (attributes[.size] as? NSNumber)?.int64Value ?? 0
             guard byteCount <= WorkCaptureEnvelope.maximumFileBytes else {
@@ -1081,5 +1129,11 @@ final class ShareViewController: UIViewController {
         /// A shared item that is not a regular file (a folder or a package
         /// document). The envelope contract carries file bytes only.
         case unsupportedItem
+        /// A recording among the shared items. Work keeps an audio file only
+        /// when a person attaches it at the desk itself, so the WHOLE capture is
+        /// refused — a screenshot shared alongside a voice memo is one thing the
+        /// person did, and landing half of it is a judgement this appex cannot
+        /// make. The send lane is untouched: Chat still forwards a recording.
+        case audioRefused
     }
 }

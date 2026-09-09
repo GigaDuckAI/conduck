@@ -583,16 +583,17 @@ final class AppleRelayPendingQueue {
     enum RelaySettlement: Equatable {
         /// Chat: claim the entry, then dispatch the deferred converse hop.
         case converseHop
-        /// Work, and the iPhone says it published the RECORDING
-        /// (`result.work == true`): claim the entry — the phone's copy is now
-        /// the durable one — and report it saved.
+        /// Work, and the iPhone says it TOOK the capture and had words for it
+        /// (`result.work == true`, transcript non-empty): the desk holds the
+        /// words card. Claim the entry — the phone's copy is now the durable
+        /// one — and report it saved.
         case workAcknowledged
-        /// Work, the iPhone published the RECORDING, and it had no words to
-        /// send with it: transcription settled against this clip, so no re-fire
-        /// will produce any. Claims exactly as `workAcknowledged` does — the
-        /// phone holds the durable copy either way — and differs only in what
-        /// the person is told, because a card they must open their iPhone to
-        /// finish is not the same event as a card that is done.
+        /// Work, the iPhone TOOK the recording, and it had no words to send
+        /// with it: transcription settled against this clip, so no re-fire will
+        /// produce any. Claims exactly as `workAcknowledged` does — the phone
+        /// holds the durable copy either way — and differs only in what the
+        /// person is told, because a recording parked on their iPhone for a
+        /// retry is not the same event as a note that is on the desk.
         case workRecordingOnly
         /// Work, with a transcript but no durability stamp: an iPhone build
         /// that predates the Work destination transcribed the clip and kept
@@ -600,8 +601,8 @@ final class AppleRelayPendingQueue {
         /// to the desk FIRST and the entry is claimed only if that write lands.
         case workWordsOnly
         /// Chat locally, Work on the receipt. `result.work == true` is written
-        /// by ONE line on the iPhone (`workSaved = workCardID != nil`), so a
-        /// reply carrying it is a reply about a capture that reached the DESK —
+        /// by ONE line on the iPhone (`workSaved = parkedClip != nil`), so a
+        /// reply carrying it is a reply about a capture the phone TOOK —
         /// while this entry's own destination says gateway. Both readings
         /// cannot be true, and the queue may not resolve the disagreement by
         /// picking the one that sends: this lane exists to keep a private
@@ -1229,11 +1230,12 @@ final class AppleRelayPendingQueue {
     /// The two partial arms NAME the gap rather than claiming a clean save,
     /// and they name opposite halves of it. Words-only: the person's recording
     /// is genuinely gone from this lane, because their iPhone transcribed it on
-    /// a build that had nowhere to put the audio. Recording-only: the card is
-    /// playable on the desk and has no words on it, so the sentence sends them
-    /// to the one surface that can add them. A banner is often the ONLY thing
-    /// read on a deferred settlement, so a shared "Saved to Work." would leave
-    /// half of these people believing a card is finished when it is not.
+    /// a build that had nowhere to put the audio. Recording-only: the words
+    /// never arrived, so the iPhone is holding the clip in its retry queue and
+    /// the desk has nothing at all — the sentence has to say where the
+    /// recording is instead of claiming a card. A banner is often the ONLY
+    /// thing read on a deferred settlement, so a shared "Saved to Work." would
+    /// tell half of these people a card exists that does not.
     private func postWorkNotification(_ settlement: RelaySettlement) {
         let body: String
         switch settlement {
@@ -1248,7 +1250,7 @@ final class AppleRelayPendingQueue {
         case .workRecordingOnly:
             body = String(
                 localized: "watch.work.notification.savedWithoutWords",
-                defaultValue: "Saved to Work. Add the words on your iPhone."
+                defaultValue: "Kept on your iPhone. Nothing reaches Work until the words land."
             )
         case .workWordsOnly:
             body = String(

@@ -417,21 +417,26 @@ nonisolated enum WatchWorkCaptureCopy {
                 defaultValue: "Saved the words to Work. Update Conduck on your iPhone to keep recordings."
             ))
         case .savedWithoutWords:
-            // The mirror of the line above, and the wording CarPlay already
-            // speaks for the same state: the recording is on the desk, the
-            // words are not, and the iPhone is where they get added.
+            // The mirror of the line above. The iPhone has the recording and
+            // could not turn it into words, so it is holding the clip in its
+            // retry queue and the desk is holding nothing — which is why this
+            // line may not say "Saved to Work." The person's next move is on
+            // the iPhone, and until they make it there is no card.
             return String(localized: LocalizedStringResource(
                 "watch.work.capture.savedWithoutWords",
-                defaultValue: "Saved to Work. Add the words on your iPhone."
+                defaultValue: "Kept on your iPhone. Nothing reaches Work until the words land."
             ))
         case .refused(let reason):
             return reason
         }
     }
 
-    /// SF Symbol for the terminal line. The two "it is on the desk" outcomes
-    /// share the desk's own glyph, so the end of the flow visibly answers the
-    /// row that began it.
+    /// SF Symbol for the terminal line. The three outcomes the iPhone has
+    /// already taken share the inbound glyph — two of them as a card on the
+    /// desk, the third as a clip its retry queue is holding — so the end of the
+    /// flow visibly answers the row that began it. The wrist-side wait is the
+    /// one outcome that draws differently, because it is the one the iPhone has
+    /// not seen yet.
     static func symbolName(for outcome: WatchWorkCaptureOutcome) -> String {
         switch outcome {
         case .saved, .savedWordsOnly, .savedWithoutWords: return "tray.and.arrow.down.fill"
@@ -440,9 +445,10 @@ nonisolated enum WatchWorkCaptureCopy {
         }
     }
 
-    /// True when the capture is safe — either on the desk already, or held on
-    /// the wrist until the iPhone is nearby. Drives the success haptic and the
-    /// green tint; a refusal is the only outcome that captured nothing.
+    /// True when the capture is safe — on the desk already, held on the iPhone
+    /// until its words land, or held on the wrist until the iPhone is nearby.
+    /// Drives the success haptic and the green tint; a refusal is the only
+    /// outcome that captured nothing.
     static func isReassuring(_ outcome: WatchWorkCaptureOutcome) -> Bool {
         switch outcome {
         case .saved, .deferredToPhone, .savedWordsOnly, .savedWithoutWords: return true

@@ -293,6 +293,37 @@ final class WorkboardAvailabilityTests: XCTestCase {
         XCTAssertNil(unreadable)
     }
 
+    /// Spoken words are a card with nothing to download. `.metadataOnly` is the
+    /// mode that says a row intentionally has no payload, so a spoken note has
+    /// to read `.available` on every device the desk reaches — a person who
+    /// dictated on their phone and opens their Mac must be able to read the
+    /// words, not be told to reattach bytes that were never stored.
+    func testASpokenNoteIsReadableEverywhereBecauseItHasNoBytesToWaitFor() async throws {
+        let store = isolated.make()
+        let words = "Ship the review before Friday"
+        let draft = WorkMaterialDraft(kind: .transcript, title: words, textContent: words)
+
+        let published = try await store.upsertDeskMaterial(draft)
+        XCTAssertEqual(published.storageMode, .metadataOnly)
+
+        let board = try await deskMaterials(store)
+        let card = try XCTUnwrap(board[draft.id])
+        XCTAssertEqual(card.availability, .metadataOnly)
+        XCTAssertFalse(card.hasPayload, "there is no recording behind a spoken note")
+        XCTAssertEqual(
+            WorkboardLiveRepository.presentationAvailability(card), .available,
+            "words with no payload are readable wherever the desk reaches"
+        )
+        XCTAssertEqual(
+            WorkboardLiveRepository.presentationKind(card), .transcript,
+            "and they draw as their own shape, not as a typed note"
+        )
+
+        let detail = WorkboardLiveRepository.materialDetail(card)
+        XCTAssertFalse(detail?.contains(pendingCopy) == true)
+        XCTAssertFalse(detail?.contains(reattachCopy) == true)
+    }
+
     // MARK: - The whole board, in one pass
 
     func testOneBoardPassAnswersEveryLaneCorrectly() async throws {
