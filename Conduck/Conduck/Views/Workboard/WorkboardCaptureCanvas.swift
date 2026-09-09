@@ -1146,7 +1146,6 @@ private struct WorkboardMaterialBoard: View {
     /// lift has a current origin to start from without any scroll having
     /// invalidated the board.
     @State private var boardFrame = BoardFrame()
-    @State private var layoutMode = WorkboardLayoutMode.load()
     @State private var dragSession: DragSession?
     @State private var rowFrames: [UUID: CGRect] = [:]
     @State private var coordinateSpaceID = UUID()
@@ -1214,7 +1213,13 @@ private struct WorkboardMaterialBoard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            #if os(macOS)
+            // Mac keeps the choice in the band; the window has the width for a
+            // segmented control and no navigation bar of its own to hold one.
+            // On iOS the Work bar's view menu owns it, so nothing sits between
+            // the pane's top inset and the first card.
             arrangementControls
+            #endif
             boardSurface
         }
         .confirmationDialog(
@@ -1278,10 +1283,13 @@ private struct WorkboardMaterialBoard: View {
             // changes nothing to animate.
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: dragEntries)
             .workboardDragFeedback(source: dragSession?.sourceID, slot: acceptedSlot)
-            .onChange(of: layoutMode) { _, mode in
+            // Geometry only. The board's measured maps describe the layout that
+            // just went away, so they are dropped here; persistence belongs to
+            // the view model that owns the preference, and a control outside
+            // this board can change it.
+            .onChange(of: viewModel.layoutMode) { _, _ in
                 endDrag()
                 rowFrames = [:]
-                mode.save()
             }
             // The desk moved under a live drag. Tiles rebase — their slot lines
             // are a function of (count, width) and nothing else — but three
@@ -1340,6 +1348,11 @@ private struct WorkboardMaterialBoard: View {
             )
     }
 
+    // The in-band arrangement row is macOS-only. iOS reaches the same
+    // preference from Work's toolbar (`WorkboardLayoutMenu`), and the drag
+    // affordance is taught once by the board tutorial, so neither helper has an
+    // iOS caller left to keep compiled.
+    #if os(macOS)
     private var arrangementControls: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 16) {
@@ -1365,7 +1378,7 @@ private struct WorkboardMaterialBoard: View {
     }
 
     private var layoutPicker: some View {
-        Picker(selection: $layoutMode) {
+        Picker(selection: $viewModel.layoutMode) {
             ForEach(WorkboardLayoutMode.allCases, id: \.self) { mode in
                 Label(mode.title, systemImage: mode.symbol).tag(mode)
             }
@@ -1377,10 +1390,11 @@ private struct WorkboardMaterialBoard: View {
         .disabled(!workbenchDestinationIsActive)
         .accessibilityIdentifier("workboard-layout")
     }
+    #endif
 
     @ViewBuilder
     private var boardContent: some View {
-        if layoutMode == .tiles {
+        if viewModel.layoutMode == .tiles {
             WorkboardMosaicLayout(metrics: metrics, layoutDirection: layoutDirection) {
                 boardItems
             }
@@ -1419,7 +1433,7 @@ private struct WorkboardMaterialBoard: View {
         card(for: material, at: index)
             .workboardMosaicCardSize(material.cardSize)
             .background {
-                if layoutMode == .list {
+                if viewModel.layoutMode == .list {
                     GeometryReader { proxy in
                         Color.clear.preference(
                             key: WorkboardRowFramesKey.self,
@@ -1472,8 +1486,8 @@ private struct WorkboardMaterialBoard: View {
                     style: StrokeStyle(lineWidth: 2, dash: [7, 5])
                 )
             }
-            .frame(maxWidth: .infinity, maxHeight: layoutMode == .list ? nil : .infinity)
-            .frame(height: layoutMode == .list ? placeholderHeight(forSource: dragSession?.sourceID) : nil)
+            .frame(maxWidth: .infinity, maxHeight: viewModel.layoutMode == .list ? nil : .infinity)
+            .frame(height: viewModel.layoutMode == .list ? placeholderHeight(forSource: dragSession?.sourceID) : nil)
             .workboardMosaicCardSize(WorkboardFootprint.uniform)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
@@ -1542,7 +1556,7 @@ private struct WorkboardMaterialBoard: View {
     /// The size of the hole the card leaves, so what the pointer carries and
     /// what the board is holding open for it are the same shape.
     private func liftPreviewSize(for material: WorkboardMaterialSnapshot) -> CGSize {
-        if layoutMode == .list {
+        if viewModel.layoutMode == .list {
             let width = boardWidth.isFinite && boardWidth > 0 ? boardWidth : Self.fallbackPreviewEdge * 2
             return CGSize(width: width, height: placeholderHeight(forSource: material.id))
         }
@@ -1654,7 +1668,7 @@ private struct WorkboardMaterialBoard: View {
         width: CGFloat
     ) -> Int? {
         guard !item.materials.isEmpty else { return nil }
-        if layoutMode == .list {
+        if viewModel.layoutMode == .list {
             // The frozen map is true of one order AND of one set of heights.
             // `listSlot` tests the order; this tests the measurements, which a
             // resize, a Dynamic Type change or a row settling to a taller
@@ -1730,7 +1744,7 @@ private struct WorkboardMaterialBoard: View {
             listBaseline: session.listBaseline,
             displayedIDs: ids,
             isCommitted: session.committedSlot != nil,
-            resolvesByMeasuredRows: layoutMode == .list
+            resolvesByMeasuredRows: viewModel.layoutMode == .list
         ) else {
             endDrag()
             return
@@ -1769,7 +1783,7 @@ private struct WorkboardMaterialBoard: View {
             onShare: onShare,
             onReattach: onReattach
         )
-        if layoutMode == .list {
+        if viewModel.layoutMode == .list {
             WorkboardMaterialListRow(
                 material: material,
                 boardPosition: index + 1,

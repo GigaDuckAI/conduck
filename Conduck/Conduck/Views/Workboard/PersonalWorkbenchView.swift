@@ -21,11 +21,21 @@ import SwiftUI
 // overlay — both imports are required for the modifier to resolve.
 import QuickLook
 import UniformTypeIdentifiers
+#if canImport(UIKit)
+// For `UITabBar.appearance()`: the phone tab bar's brand colour is installed on
+// the UIKit proxy rather than written as a SwiftUI tint. See
+// `WorkbenchTabBarTint`.
+import UIKit
+#endif
 
-#if os(macOS)
-/// Gives the native macOS conversation shell access to the Work destination so
-/// both modes can inhabit one persistent NavigationSplitView. The optional
-/// default keeps MainWindowView usable in isolated previews and tests.
+/// Hands a platform shell the section router, on every platform that has one.
+/// The macOS window shell reads it so both modes inhabit one persistent
+/// NavigationSplitView; the wide iOS shell injects it into BOTH of its mounted
+/// layers, and each layer's own navigation container is what declares the
+/// section control. Presence is the whole contract: the compact iPhone shell
+/// injects nothing, so a host that finds no model draws no control and the tab
+/// bar stays the only section switch. The optional default also keeps
+/// MainWindowView usable in isolated previews and tests.
 private struct PersonalWorkbenchModelKey: EnvironmentKey {
     static let defaultValue: PersonalWorkbenchModel? = nil
 }
@@ -36,7 +46,6 @@ extension EnvironmentValues {
         set { self[PersonalWorkbenchModelKey.self] = newValue }
     }
 }
-#endif
 
 private struct WorkbenchNavigationTitleModifier: ViewModifier {
     let title: Text
@@ -191,6 +200,9 @@ struct WorkbenchSectionControl: View {
         #if os(macOS)
         30
         #else
+        // The standard touch target. Whether an iPad navigation bar seats 44pt
+        // without growing is a measurement on a real bar, taken by the
+        // integration pass rather than assumed here.
         WorkboardMetrics.touchTarget
         #endif
     }
@@ -218,6 +230,47 @@ struct WorkbenchSectionControl: View {
         .accessibilityIdentifier(
             destination == .work ? "workbench.section.work" : "workbench.section.chats"
         )
+    }
+}
+
+/// The ONE toolbar declaration every iPad host uses, so the control is
+/// identical in both sections instead of two call sites drifting apart. A host
+/// declares this INSIDE its own navigation container: toolbar items are
+/// collected in view-tree order, so an item declared above a container lands in
+/// no bar at all.
+///
+/// The shared background is suppressed here rather than at each call site
+/// because the control draws one continuous filled container itself; without
+/// this it ships double-wrapped in the system's glass capsule (same reason the
+/// Mac shell sets it on its own section host).
+struct WorkbenchSectionToolbarItem: ToolbarContent {
+    /// The router the control drives, taken as the model a host already holds
+    /// rather than as a `@Binding`: the binding is rebuilt in this body, so the
+    /// destination read happens inside the control's own body and stays
+    /// observation-tracked from every host.
+    let model: PersonalWorkbenchModel
+
+    /// The control's two-way seam onto the router, as a value rather than a
+    /// literal inside `body`. Both halves are silent when wrong — a `get` that
+    /// read a copy would leave the highlighted half stuck on the section the
+    /// user just left, and a `set` that wrote anywhere else would make the
+    /// control a decoration — and neither shows up in an opaque `ToolbarContent`
+    /// body a test cannot mount. Named here, the seam is a value a test drives
+    /// directly, and the guard suite pins that `body` is the thing consuming it.
+    static func selectionBinding(
+        for router: PersonalWorkbenchRouter
+    ) -> Binding<PersonalWorkbenchRouter.Destination> {
+        Binding(
+            get: { router.destination },
+            set: { router.destination = $0 }
+        )
+    }
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            WorkbenchSectionControl(selection: Self.selectionBinding(for: model.router))
+        }
+        .sharedBackgroundVisibility(.hidden)
     }
 }
 
@@ -935,6 +988,69 @@ final class PersonalWorkbenchModel {
     }
 }
 
+#if !os(macOS)
+/// The phone's tab bar wears the brand amber, and nothing else in the app does.
+///
+/// The colour goes on the UIKit tab-bar appearance rather than on a SwiftUI
+/// `.tint(AppColors.brandAmber)` written on the `TabView`, because that tint
+/// does not stay in the bar. A tint is one environment value AND SwiftUI hands
+/// it to the tab-bar controller's own view; a UIKit `tintColor` cascades to
+/// every view hosted under that controller, and `Color.accentColor` resolves
+/// through it, so ambient-tint controls inside the tabs turn amber as well —
+/// `PendingRetryCard`'s `.borderedProminent` Retry button, which names no tint
+/// of its own, and the composer's own text selection. The same controls render
+/// in the system accent on iPad, which builds no `TabView`, and inside a
+/// presented sheet, which sits outside the bar's view tree. Measured on iOS
+/// 26.5 by classifying the composer's selection highlight: amber under the
+/// SwiftUI tint, system blue here. Writing the environment tint back to the
+/// unset state at each tab root does not undo it, because the leak travels the
+/// UIKit path, which no environment value reaches.
+///
+/// The appearance proxy reaches `UITabBar` instances and nothing else, so the
+/// scoping is structural rather than remembered: a control inside a tab is not
+/// a subview of the bar, and a tab added later cannot forget to opt out of a
+/// colour it never inherits. The app's only other `TabView` — the attachment
+/// gallery — is `.page` styled, which builds a page controller carrying no
+/// `UITabBar`, so the proxy cannot reach that either.
+///
+/// The colour has to be written into the per-layout appearances, not into the
+/// proxy's `tintColor`: on iOS 26.5 the bar reads its selected item's colour
+/// from the appearance objects, and a proxy `tintColor` alone leaves the
+/// selected tab in the system accent (measured: zero amber pixels in the
+/// selected tab's box). Both the standard and the scroll-edge appearance carry
+/// it, and all three layouts within each, so the bar keeps its colour in every
+/// state it draws.
+///
+/// A `static let` because the install has to happen exactly once and before the
+/// bar it paints reaches a window: UIKit applies an appearance proxy's values
+/// as a view ENTERS a window, and does not repaint one already there, so a late
+/// install leaves that bar in the system accent until something rebuilds it.
+/// `PersonalWorkbenchView.init` is the touch that runs this, and it is early
+/// enough — it returns before that view's body builds the bar. It lives out
+/// here rather than on that view because a generic type holds no static stored
+/// property. The app ships an EMPTY AccentColor asset on purpose so the Mac
+/// honours the user's system accent, which is why no app-root tint exists and
+/// none may be added.
+private enum WorkbenchTabBarTint {
+    static let installed: Void = {
+        let amber = UIColor(AppColors.brandAmber)
+        let appearance = UITabBarAppearance()
+        appearance.configureWithDefaultBackground()
+        for layout in [
+            appearance.stackedLayoutAppearance,
+            appearance.inlineLayoutAppearance,
+            appearance.compactInlineLayoutAppearance
+        ] {
+            layout.selected.iconColor = amber
+            layout.selected.titleTextAttributes = [.foregroundColor: amber]
+        }
+        let bar = UITabBar.appearance()
+        bar.standardAppearance = appearance
+        bar.scrollEdgeAppearance = appearance
+    }()
+}
+#endif
+
 struct PersonalWorkbenchView<Chats: View>: View {
     @State private var model = PersonalWorkbenchModel()
     @Environment(\.scenePhase) private var scenePhase
@@ -944,6 +1060,14 @@ struct PersonalWorkbenchView<Chats: View>: View {
 
     init(@ViewBuilder chats: () -> Chats) {
         self.chats = chats()
+        #if !os(macOS)
+        // Here rather than in `shell`: UIKit applies an appearance proxy's
+        // values as a view ENTERS a window and does not repaint one already
+        // there, and this initializer returns before this view's body builds
+        // the tab bar — so the colour is in place before that bar reaches a
+        // window.
+        _ = WorkbenchTabBarTint.installed
+        #endif
     }
 
     var body: some View {
@@ -1129,20 +1253,25 @@ struct PersonalWorkbenchView<Chats: View>: View {
         #if os(macOS)
         mountedWideDestinations
         #else
-        if horizontalSizeClass == .compact {
+        // BOTH conditions, and the same pair `ContentView` gates its split
+        // layout on (`horizontalSizeClass == .regular && DeviceCapabilities.isiPad`).
+        // `.regular` alone asks a different question: a large iPhone reports a
+        // REGULAR horizontal size class in landscape, so a size-class-only test
+        // hands that geometry the two-layer wide shell while ContentView keeps
+        // it on `phoneLayout` — one device, two shells disagreeing about which
+        // chrome exists. Gating on the iPad idiom keeps every phone geometry,
+        // portrait and landscape, on the tab bar.
+        if horizontalSizeClass == .regular && DeviceCapabilities.isiPad {
+            mountedWideDestinations
+        } else {
+            // Chats leads, Work follows — the same reading order as the wide
+            // shell's `WorkbenchSectionControl`, so the phone's section switch
+            // and the iPad's never disagree about which side a mode sits on.
+            //
+            // The bar's brand amber arrives through `WorkbenchTabBarTint`,
+            // never through a `.tint` written here — that type carries why the
+            // difference decides whether the colour stays inside the bar.
             TabView(selection: $model.router.destination) {
-                Tab(
-                    String(localized: LocalizedStringResource("workbench.work", defaultValue: "Work")),
-                    systemImage: "tray.full",
-                    value: PersonalWorkbenchRouter.Destination.work
-                ) {
-                    WorkboardView(viewModel: model.workboardViewModel)
-                        .environment(
-                            \.workbenchDestinationIsActive,
-                            model.router.destination == .work
-                        )
-                }
-
                 Tab(
                     String(localized: LocalizedStringResource("workbench.chats", defaultValue: "Chats")),
                     systemImage: "bubble.left.and.bubble.right",
@@ -1154,9 +1283,19 @@ struct PersonalWorkbenchView<Chats: View>: View {
                             model.router.destination == .chats
                         )
                 }
+
+                Tab(
+                    String(localized: LocalizedStringResource("workbench.work", defaultValue: "Work")),
+                    systemImage: "tray.full",
+                    value: PersonalWorkbenchRouter.Destination.work
+                ) {
+                    WorkboardView(viewModel: model.workboardViewModel)
+                        .environment(
+                            \.workbenchDestinationIsActive,
+                            model.router.destination == .work
+                        )
+                }
             }
-        } else {
-            mountedWideDestinations
         }
         #endif
     }
@@ -1178,22 +1317,23 @@ struct PersonalWorkbenchView<Chats: View>: View {
             )
             .environment(\.personalWorkbenchModel, model)
         #else
-        // Two declarations, one per layer, and NOT collapsible into the single
-        // zero-size host macOS uses: each layer here owns its own
-        // `NavigationSplitView`, so each has its own navigation bar and there is
-        // no shared bar for one item to sit in. A host declared as a ZStack
-        // sibling would sit outside both containers and render no item at all.
+        // Each layer owns its own navigation container, so there is no shared bar
+        // this shell could put the section control in: a `.toolbar` attached to a
+        // layer from OUT HERE sits above that layer's container, is collected by
+        // nothing, and renders no item at all. The control is declared by the
+        // HOSTS instead, each inside its own container — `ConversationLibraryView`'s
+        // detail column for Chats, `WorkboardExperience`'s stack for Work — and
+        // this shell's whole job is handing them the router. Presence is the
+        // flag: the compact iPhone shell injects nothing, a host that finds no
+        // model draws no control, and that is what keeps the control off the
+        // phone without a single platform check in either host.
         ZStack {
             WorkboardView(viewModel: model.workboardViewModel)
                 .environment(
                     \.workbenchDestinationIsActive,
                     model.router.destination == .work
                 )
-                .toolbar {
-                    if model.router.destination == .work {
-                        sectionToolbar
-                    }
-                }
+                .environment(\.personalWorkbenchModel, model)
                 .workbenchDestinationLayer(
                     isActive: model.router.destination == .work,
                     reduceMotion: reduceMotion
@@ -1204,28 +1344,13 @@ struct PersonalWorkbenchView<Chats: View>: View {
                     \.workbenchDestinationIsActive,
                     model.router.destination == .chats
                 )
-                .toolbar {
-                    if model.router.destination == .chats {
-                        sectionToolbar
-                    }
-                }
+                .environment(\.personalWorkbenchModel, model)
                 .workbenchDestinationLayer(
                     isActive: model.router.destination == .chats,
                     reduceMotion: reduceMotion
                 )
         }
         #endif
-    }
-
-    @ToolbarContentBuilder
-    private var sectionToolbar: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            sectionPicker
-        }
-    }
-
-    private var sectionPicker: some View {
-        WorkbenchSectionControl(selection: $model.router.destination)
     }
 
     #if !os(macOS)
