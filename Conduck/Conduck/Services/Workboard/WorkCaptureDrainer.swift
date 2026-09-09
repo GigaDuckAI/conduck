@@ -26,6 +26,22 @@
 // which then writes no further material, acknowledges nothing, and releases
 // nothing it no longer owns.
 //
+// A RECORDING IS NEVER A CARD HERE, whatever an envelope declares. Work keeps
+// an audio file only when a person attaches it at the desk itself — the
+// chat-bar attachment button, or a drop into the Work pane — and this queue is
+// neither of those doors: every capture that reaches it was assembled by a
+// process nobody was watching. Both share extensions and the files Shortcut
+// refuse a recording before they write one, so an entry that arrives here
+// carrying one came from a build that did not, and it is refused rather than
+// promoted: no draft, no card, no bytes copied anywhere. The siblings beside it
+// land, the claim is acknowledged the ordinary way, and the recording leaves the
+// device with the queue copy. `refused/` never receives one either — nothing
+// sweeps that directory, so a copy there would be a permanent holder of what a
+// person said, which is the exact thing the refusal exists to prevent. The
+// claimed directory itself is never edited to achieve that: a queue entry short
+// of a payload its manifest declares is malformed, and the next claim would
+// destroy the capture and the siblings a retirement exists to preserve.
+//
 // One persistence failure is not retryable and must not be treated as one. A
 // desk write refuses an id already held by a card of another kind, and that
 // state never clears on its own — releasing the claim would requeue an entry
@@ -46,7 +62,6 @@
 #if !os(watchOS)
 
 import Foundation
-import UniformTypeIdentifiers
 
 actor WorkCaptureDrainer {
     struct Report: Sendable, Equatable {
@@ -59,12 +74,19 @@ actor WorkCaptureDrainer {
         /// not arrive — which is why one count carries them.
         let invalidCaptureCount: Int
         let importedMaterialCount: Int
+        /// Entries inside captures that DID land, which the desk will not hold.
+        /// Today that is one thing: a recording. Counted apart from
+        /// `invalidCaptureCount` because nothing malfunctioned and the person
+        /// reads a different sentence — the rest of their capture is on the
+        /// desk, and the recording is refused on purpose, with a door named.
+        let refusedEntryCount: Int
 
         static let empty = Report(
             importedCaptureCount: 0,
             replayedCaptureCount: 0,
             invalidCaptureCount: 0,
-            importedMaterialCount: 0
+            importedMaterialCount: 0,
+            refusedEntryCount: 0
         )
     }
 
@@ -79,6 +101,9 @@ actor WorkCaptureDrainer {
         /// shared text and a link carry their whole content in the row, so a
         /// payload requirement on them would refuse every valid capture.
         let payloadBearingIDs: Set<UUID>
+        /// Entries this capture carried that the desk refuses to hold. Their
+        /// bytes are never written anywhere and leave with the claim.
+        let refusedEntryCount: Int
 
         var materialCount: Int { materialIDs.count }
     }
@@ -228,6 +253,7 @@ actor WorkCaptureDrainer {
         var replayedCaptureCount = 0
         var invalidCaptureCount = 0
         var importedMaterialCount = 0
+        var refusedEntryCount = 0
 
         while true {
             // A cancelled drain claims nothing further. The capture it would
@@ -257,6 +283,7 @@ actor WorkCaptureDrainer {
                     importedCaptureCount += 1
                 }
                 importedMaterialCount += persisted.materialCount
+                refusedEntryCount += persisted.refusedEntryCount
             case .refused:
                 // The disposition a malformed envelope already gets: the queue
                 // no longer holds it, the person is told one shared item did
@@ -271,7 +298,8 @@ actor WorkCaptureDrainer {
             importedCaptureCount: importedCaptureCount,
             replayedCaptureCount: replayedCaptureCount,
             invalidCaptureCount: invalidCaptureCount,
-            importedMaterialCount: importedMaterialCount
+            importedMaterialCount: importedMaterialCount,
+            refusedEntryCount: refusedEntryCount
         )
     }
 
@@ -294,6 +322,7 @@ actor WorkCaptureDrainer {
 
         var materialIDs: [UUID] = []
         var payloadBearingIDs: Set<UUID> = []
+        var refusedEntryCount = 0
 
         // The share-sheet note is source material in its own right, and every
         // capture carries it onto the desk — including the first one ever made,
@@ -321,13 +350,20 @@ actor WorkCaptureDrainer {
         }
 
         for entry in envelope.entries.sorted(by: Self.entryOrder) {
-            try await requireImportMayContinue(ownership, atMaterialBoundary: materialIDs.count)
-            let draft = try Self.materialDraft(
+            // The draft is decided BEFORE the boundary gate, so an entry that
+            // writes nothing spends no boundary: the numbering the gate reports
+            // stays the count of cards this capture has written, which is what
+            // a caller holding at boundary 2 is asking about.
+            guard let draft = try Self.materialDraft(
                 for: entry,
                 in: claim,
                 sourceDevice: sourceDevice,
                 createdAt: envelope.createdAt
-            )
+            ) else {
+                refusedEntryCount += 1
+                continue
+            }
+            try await requireImportMayContinue(ownership, atMaterialBoundary: materialIDs.count)
             let record: WorkMaterialRecord
             if let payloadURL = claim.payloadURL(for: entry) {
                 let byteSize: Int64
@@ -357,7 +393,8 @@ actor WorkCaptureDrainer {
         return PersistedCapture(
             wasReplay: wasReplay,
             materialIDs: materialIDs,
-            payloadBearingIDs: payloadBearingIDs
+            payloadBearingIDs: payloadBearingIDs,
+            refusedEntryCount: refusedEntryCount
         )
     }
 
@@ -530,7 +567,11 @@ actor WorkCaptureDrainer {
                 throw WorkCaptureInbox.InboxError.staleClaim
             }
             do {
-                try retireRefusedCapture(claim, reason: collision.reason)
+                try retireRefusedCapture(
+                    claim,
+                    reason: collision.reason,
+                    excluding: Self.refusedPayloadNames(in: claim.envelope)
+                )
                 try await inbox.acknowledge(claim)
                 return .refused
             } catch {
@@ -593,9 +634,19 @@ actor WorkCaptureDrainer {
     /// entry goes back to the queue and refuses again on the next drain —
     /// writes no second copy of the same bytes. Two captures cannot share that
     /// name: the queue refuses a publication under an id it already holds.
+    ///
+    /// `excluding` names payload leaves this copy may NOT carry: the recordings
+    /// the desk refused. `refused/` is swept by nothing, so a copy there is a
+    /// permanent holder of what a person said, and the whole point of refusing a
+    /// recording is that this device stops holding it. Those bytes leave with
+    /// the claim instead, at the acknowledgement below. The claimed directory
+    /// itself is never touched — a queue entry missing a payload its manifest
+    /// declares is malformed, and the next claim would destroy the capture and
+    /// the siblings this retirement exists to preserve.
     private func retireRefusedCapture(
         _ claim: WorkCaptureInbox.Claim,
-        reason: String
+        reason: String,
+        excluding refusedPayloadNames: Set<String> = []
     ) throws {
         let fileManager = FileManager.default
         let refused = claim.directoryURL
@@ -610,10 +661,14 @@ actor WorkCaptureDrainer {
         let expected = try Self.retirementContents(
             of: claim.directoryURL,
             fileManager: fileManager
-        )
+        ).filter { !refusedPayloadNames.contains($0.key) }
 
         if fileManager.fileExists(atPath: destination.path) {
-            if Self.holdsRetirement(expected, at: destination, fileManager: fileManager) {
+            // A directory carrying a refused recording is not a retirement
+            // however complete it otherwise looks: an older build's copy is
+            // displaced and rewritten rather than left holding those bytes.
+            if Self.holdsRetirement(expected, at: destination, fileManager: fileManager),
+               !Self.holdsAny(refusedPayloadNames, at: destination, fileManager: fileManager) {
                 // The retirement already stands. Its reason is rewritten rather
                 // than skipped, so a directory an interrupted attempt left
                 // still says why it is here.
@@ -643,12 +698,15 @@ actor WorkCaptureDrainer {
         )
         do {
             try fileManager.copyItem(at: claim.directoryURL, to: staged)
-            try? fileManager.removeItem(
-                at: staged.appendingPathComponent(
-                    WorkCaptureInbox.leaseFilename,
-                    isDirectory: false
+            // Removed from the STAGED copy, before the verification that decides
+            // whether it becomes the retirement — so the only directory these
+            // bytes were ever in under `refused/` is a scratch one this method
+            // deletes on its own failure path.
+            for name in refusedPayloadNames.union([WorkCaptureInbox.leaseFilename]) {
+                try? fileManager.removeItem(
+                    at: staged.appendingPathComponent(name, isDirectory: false)
                 )
-            )
+            }
             #if CONDUCK_TESTING
             retirementStagingHoldForTesting?(staged)
             #endif
@@ -665,11 +723,11 @@ actor WorkCaptureDrainer {
         }
     }
 
-    /// What a complete retirement of this claim carries: every regular file in
-    /// the claimed directory at the byte count it has there, minus the lease,
-    /// which names an acquisition of a queue the copy has left. A claimed
-    /// directory is flat — the inbox refuses a payload path carrying a
-    /// separator — so nothing here recurses.
+    /// What a claim's bytes look like: every regular file in the claimed
+    /// directory at the byte count it has there, minus the lease, which names an
+    /// acquisition of a queue the copy has left. A claimed directory is flat —
+    /// the inbox refuses a payload path carrying a separator — so nothing here
+    /// recurses. The caller subtracts the leaves a retirement may not carry.
     private static func retirementContents(
         of directory: URL,
         fileManager: FileManager
@@ -687,6 +745,21 @@ actor WorkCaptureDrainer {
             contents[name] = size.int64Value
         }
         return contents
+    }
+
+    /// Whether `directory` holds any of these leaves. A retirement that does is
+    /// carrying bytes this device refused to keep, which no amount of otherwise
+    /// being complete makes acceptable.
+    private static func holdsAny(
+        _ names: Set<String>,
+        at directory: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        names.contains { name in
+            fileManager.fileExists(
+                atPath: directory.appendingPathComponent(name, isDirectory: false).path
+            )
+        }
     }
 
     /// Whether `directory` holds all of them, whole. This is the question a
@@ -829,6 +902,33 @@ actor WorkCaptureDrainer {
         .captureEnvelope(envelope.id, legacyTargetWorkItemID: envelope.targetWorkItemID)
     }
 
+    /// Whether one entry is a recording the desk will not hold.
+    ///
+    /// The envelope owns the rule, so the process that WROTE this entry and the
+    /// process claiming it read a file the same way; a second spelling here is
+    /// how the two ends drift apart. Only a `.file` entry is asked — an `.image`
+    /// is an image and a `.webPage` is this app's own markdown.
+    private static func isRefusedRecording(_ entry: WorkCaptureEnvelope.Entry) -> Bool {
+        entry.kind == .file && WorkCaptureEnvelope.isAudioPayload(
+            mimeType: entry.mimeType,
+            typeIdentifier: entry.typeIdentifier,
+            filename: entry.displayName ?? entry.relativePath
+        )
+    }
+
+    /// The payload leaves of every refused entry, named as the claimed
+    /// directory names them. Pure and derived from the envelope alone, so the
+    /// import that writes no card for these bytes and the retirement that must
+    /// not copy them ask one question one way.
+    private static func refusedPayloadNames(
+        in envelope: WorkCaptureEnvelope
+    ) -> Set<String> {
+        Set(envelope.entries.compactMap { entry in
+            guard Self.isRefusedRecording(entry) else { return nil }
+            return entry.relativePath
+        })
+    }
+
     private static func entryOrder(
         _ lhs: WorkCaptureEnvelope.Entry,
         _ rhs: WorkCaptureEnvelope.Entry
@@ -842,6 +942,11 @@ actor WorkCaptureDrainer {
     /// only when a visible note will actually be written. Publication validation
     /// refuses an envelope with neither a note nor an entry, so this is never
     /// empty for a claimed capture.
+    ///
+    /// A refused recording's id is listed here too, and harmlessly: this set is
+    /// only ever intersected with the desk's, and an id nothing ever writes is
+    /// an id the desk never holds. Excluding it would buy nothing and would give
+    /// the replay test a second rule to disagree with the import about.
     private static func materialIDs(for envelope: WorkCaptureEnvelope) throws -> Set<UUID> {
         var ids = Set(envelope.entries.map(\.id))
         if !envelope.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -895,29 +1000,20 @@ actor WorkCaptureDrainer {
         throw WorkCaptureInbox.InboxError.invalidEnvelope(envelope.id, .duplicateEntry)
     }
 
-    /// Whether a file entry carries audio. The MIME type a source app supplied
-    /// is checked first because it is the one annotation every share and
-    /// Shortcut path fills in; the type identifier answers for the sources that
-    /// declare a UTI instead, and conformance rather than equality so a
-    /// recording in any concrete audio type is recognised.
-    private static func isAudioPayload(_ entry: WorkCaptureEnvelope.Entry) -> Bool {
-        if let mimeType = entry.mimeType, mimeType.lowercased().hasPrefix("audio/") {
-            return true
-        }
-        guard let identifier = entry.typeIdentifier, let type = UTType(identifier) else {
-            return false
-        }
-        return type.conforms(to: .audio)
-    }
-
-    /// Map one envelope entry to its card. `sequence` is deliberately left at the
-    /// draft default: the desk write assigns rank inside its own transaction.
+    /// Map one envelope entry to its card, or to nothing when the desk refuses
+    /// to hold it. `sequence` is deliberately left at the draft default: the
+    /// desk write assigns rank inside its own transaction.
+    ///
+    /// Nil means REFUSED, not failed: the entry writes no card, its siblings
+    /// still do, and the claim is acknowledged the ordinary way — so the bytes
+    /// this drainer declined leave the device with the queue copy, which is the
+    /// point of refusing them here.
     private static func materialDraft(
         for entry: WorkCaptureEnvelope.Entry,
         in claim: WorkCaptureInbox.Claim,
         sourceDevice: String,
         createdAt: Date
-    ) throws -> WorkMaterialDraft {
+    ) throws -> WorkMaterialDraft? {
         switch entry.kind {
         case .text:
             let text = entry.text ?? ""
@@ -946,6 +1042,12 @@ actor WorkCaptureDrainer {
             )
 
         case .image, .file, .webPage:
+            // The last barrier, and the second one every non-desk lane already
+            // passed: the Shortcut refuses a recording before it publishes and
+            // both share extensions refuse one before they copy a byte. An
+            // envelope that reaches here carrying one was written by a build
+            // that did not, so the card is simply never made.
+            if Self.isRefusedRecording(entry) { return nil }
             guard let payloadURL = claim.payloadURL(for: entry) else {
                 throw WorkCaptureInbox.InboxError.invalidEnvelope(claim.id, .missingPayload)
             }
@@ -959,7 +1061,6 @@ actor WorkCaptureDrainer {
             }
             let isImage = entry.kind == .image
             let isWebPage = entry.kind == .webPage
-            let isAudio = entry.kind == .file && Self.isAudioPayload(entry)
             let fallbackTitle: String = {
                 if isImage {
                     return String(localized: "workboard.capture.image", defaultValue: "Image")
@@ -970,15 +1071,12 @@ actor WorkCaptureDrainer {
                 return String(localized: "workboard.capture.file", defaultValue: "File")
             }()
             let filename = entry.displayName ?? entry.relativePath
-            let kind: WorkMaterialKind = {
-                if isImage { return .image }
-                // A shared or Shortcut-captured recording is the same thing on
-                // the desk as one the app recorded: a card that plays. The
-                // envelope has one file kind for every payload, so the card's
-                // kind is read from what the file IS.
-                if isAudio { return .audio }
-                return .file
-            }()
+            // Never `.audio`. A playable recording card is made at the desk's
+            // own two doors — the attachment button and a drop into the Work
+            // pane — and this queue is neither of them: a capture that arrives
+            // here was written by a process nobody was watching, so a recording
+            // it carried is refused above rather than promoted.
+            let kind: WorkMaterialKind = isImage ? .image : .file
             return WorkMaterialDraft(
                 id: entry.id,
                 kind: kind,

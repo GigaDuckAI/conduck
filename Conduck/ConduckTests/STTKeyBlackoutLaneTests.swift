@@ -211,7 +211,11 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
              preservation: nil,
              note: "wrist background STT"),
         // iPhone side of a wrist relay, custom-endpoint arm. The words were
-        // spoken on the WATCH; the refusal travels back as a bare code.
+        // spoken on the WATCH, and the phone PARKED the clip before it ever
+        // reached this verdict — so what travels back is an acknowledgement
+        // that the phone is holding the recording, and the phone's own retry
+        // card owns the capture from there. `preservation` is nil because the
+        // park happens in the relay's phase one, above this function.
         Lane(path: "Conduck/Services/AppleSpeechRelayCoordinator.swift",
              function: "transcribeViaCustomEndpoint",
              typedRead: "STTKeyReadiness.resolve",
@@ -278,15 +282,15 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
              blackoutArm: ".sttKeyUnreadable",
              preservation: nil,
              note: "iOS retry card"),
-        // CarPlay, and the one lane with NO retry mechanism of any kind. The
-        // refusal is SPOKEN and it lands after the microphone: the on-disk
-        // recording is deleted at the top of `processRecording`, the compressed
-        // bytes live only in memory, and this surface has no `PendingRetryStore`
-        // write and no queue to hand them to. `preservation` is therefore nil
-        // because there is nothing to hand them TO, not because the lane refuses
-        // before the mic — a known architectural gap, recorded here rather than
-        // papered over. What this row pins is the half that is fixable: which
-        // fact the refusal claims, and that the driver hears something true.
+        // CarPlay, whose two destinations answer this differently. A CHAT
+        // capture still has nowhere to go: its container file is deleted at the
+        // top of `processRecording`, the compressed bytes live only in memory,
+        // and a spoken refusal is the whole of what the driver gets. A WORK
+        // capture is parked in `PendingRetryStore` BEFORE the key is ever read,
+        // which is why `preservation` names the call that does it — the driver
+        // hears that the recording is kept on the phone, and the phone's retry
+        // card is where it is finished. `testTheCarPlayWorkLaneParksTheRecording`
+        // below pins what that park actually is.
         //
         // It also reaches its verdict LIVE rather than from `CarPlaySettings`'s
         // process-lifetime cache, which is what stops a nil cached at launch —
@@ -296,12 +300,15 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
              function: "processRecording",
              typedRead: "STTKeyReadiness.resolve",
              absenceArm: "Add your STT key",
+             // See `testTheCarPlayWorkLaneParksTheRecordingBeforeTheKeyVerdict`
+             // for what `secureWorkNote` does: arm the queue with the compressed
+             // bytes, stamped "carplay", before any of this runs.
              // The spoken blackout line HEDGES the unlock ("if your iPhone just
              // restarted"), because a locked Keychain is only the most likely
              // `.unreadable` — the token is the remedy clause that survives that
              // hedge, not the whole sentence.
              blackoutArm: "unlock it and try again",
-             preservation: nil,
+             preservation: "secureWorkNote(",
              note: "CarPlay in-car capture"),
     ]
 
@@ -355,6 +362,54 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
             }
         }
         XCTAssertEqual(Self.lanes.count, 9, "Nine registered lanes; the loop must have walked all of them.")
+    }
+
+    /// What the CarPlay row's `preservation` token actually buys: the Work
+    /// lane's recording is in the device-local queue BEFORE the key verdict is
+    /// reached, stamped with the surface it was spoken at.
+    ///
+    /// The row alone would pass on a `secureWorkNote` that had stopped parking
+    /// anything, and the ordering is the whole claim — a park that happens after
+    /// a blackout refusal is a park that never happens, because the refusal
+    /// speaks and ends the session. The driver is told the recording is kept on
+    /// their iPhone, and that sentence has to be true when it is spoken.
+    func testTheCarPlayWorkLaneParksTheRecordingBeforeTheKeyVerdict() throws {
+        let path = "Conduck/CarPlay/CarPlayRecordingService.swift"
+        let source = try RefusalLaneSource.source(at: path)
+
+        let entry = try RefusalLaneSource.body(
+            ofFunction: "processRecording", in: source, path: path
+        )
+        let parkAt = try XCTUnwrap(
+            entry.range(of: "secureWorkNote(")?.lowerBound,
+            "`processRecording` no longer reaches `secureWorkNote(`, so a Work capture refused on "
+            + "the key verdict below has nothing sheltering its bytes and the spoken line "
+            + "promising the iPhone holds it is false."
+        )
+        let verdictAt = try XCTUnwrap(
+            entry.range(of: "STTKeyReadiness.resolve")?.lowerBound,
+            "`processRecording` no longer reads the key through the typed helper."
+        )
+        XCTAssertLessThan(
+            parkAt, verdictAt,
+            "The park must PRECEDE the key verdict. A refusal speaks and ends the session, so a "
+            + "park written below it never runs for the one capture that needs it most."
+        )
+
+        let secure = try RefusalLaneSource.body(
+            ofFunction: "secureWorkNote", in: source, path: path
+        )
+        XCTAssertNotNil(
+            secure.range(of: "PendingRetryGuard.arm("),
+            "`secureWorkNote` no longer arms the retry queue. Nothing else in the car writes one, "
+            + "so the compressed bytes would live in a scene process the OS can kill at any "
+            + "moment — and the desk holds nothing for this capture until the words land."
+        )
+        XCTAssertNotNil(
+            secure.range(of: "sourceDevice: \"carplay\""),
+            "The parked record no longer says where the words were SPOKEN, so the note the phone "
+            + "eventually publishes is filed under whatever device happened to write it."
+        )
     }
 
     /// The wrist relay leg is the one lane whose words live in a DURABLE QUEUE

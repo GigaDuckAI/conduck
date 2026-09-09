@@ -11,9 +11,10 @@
 // The rule is small and every clause in it was bought with a real failure mode,
 // so each is pinned separately here: the two candidate ids (the named one and
 // the one collision escape), FIRST ELIGIBLE rather than first existing, an
-// `.image` parent that names nothing itself, an `.audio` child, and — when two
-// recordings name one picture — the lowest child id rather than the lowest rank,
-// so a drag on an unrelated card cannot hand a screenshot a different voice.
+// `.image` parent that names nothing itself, a child that is the press's VOICE
+// material — the recording or the words alone — and, when two of them name one
+// picture, the lowest child id rather than the lowest rank, so a drag on an
+// unrelated card cannot hand a screenshot a different voice.
 //
 // The invariant underneath all of them: nothing is discarded. Every material
 // handed to the fold comes back, either as a card of its own or as exactly one
@@ -429,6 +430,78 @@ final class WorkboardCompanionFoldTests: XCTestCase {
             companion.attachedToMaterialID, picture.id,
             "the raw link is projected onto the card, unresolved"
         )
+    }
+
+    // MARK: - The words-only half of the same press
+
+    /// A press that keeps the words and no recording folds exactly as one that
+    /// kept the recording: the picture and what was spoken over it are ONE
+    /// card, and the words carry the fold's own naming.
+    ///
+    /// Negative control: a child condition still spelled `.audio` alone leaves
+    /// the words standing beside the picture as a second card — the displayed
+    /// list is two ids and the companion is nil, so every assertion here fails.
+    func testAPictureTakesTheWordsOnlyCompanionThatNamesIt() throws {
+        let picture = card(kind: .image, name: "screenshot.jpg")
+        var words = card(kind: .transcript, name: "Ship the review", attachedTo: picture.id)
+        words.textContent = "Ship the carrier review by Friday"
+        let unrelated = card(kind: .note, name: "typed")
+
+        let folded = WorkboardCompanionFold.fold([picture, words, unrelated])
+
+        XCTAssertEqual(
+            folded.displayed.map(\.id), [picture.id, unrelated.id],
+            "the words stopped being a card of their own"
+        )
+        XCTAssertEqual(folded.hiddenChildIDs, [words.id])
+        XCTAssertEqual(folded.childByParent, [picture.id: words.id])
+        let companion = try XCTUnwrap(folded.displayed.first?.companion)
+        XCTAssertEqual(companion.id, words.id)
+        XCTAssertEqual(companion.kind, .transcript, "the shape survives the fold")
+        XCTAssertEqual(companion.textContent, "Ship the carrier review by Friday")
+        assertNothingDiscarded(from: [picture, words, unrelated], folded)
+    }
+
+    /// A desk holding ONLY a words-only pair must not take the hot-path exit.
+    /// That exit asks whether any linked recording is present at all, and a
+    /// version of it still spelled `.audio` returns the desk untouched — a fold
+    /// that looks correct in the mixed case above and silently does nothing in
+    /// the ordinary one.
+    ///
+    /// Negative control: the exit narrowed back to `.audio` returns both cards
+    /// unfolded, so the count assertion fails.
+    func testADeskOfWordsOnlyPairsIsNotSkippedByTheHotPathExit() {
+        let picture = card(kind: .image, name: "screenshot.jpg")
+        let words = card(kind: .transcript, name: "Ship the review", attachedTo: picture.id)
+
+        let folded = WorkboardCompanionFold.fold([picture, words])
+
+        XCTAssertEqual(folded.displayed.count, 1, "one card, not two")
+        XCTAssertEqual(folded.displayed.first?.companion?.id, words.id)
+    }
+
+    /// Two voice materials naming one picture still resolve to ONE companion by
+    /// the lowest child id, whichever shapes they are: the choice is about
+    /// identity, and it must not start depending on kind.
+    func testTheLowestChildIdStillWinsAcrossBothVoiceShapes() {
+        let picture = card(kind: .image, name: "screenshot.jpg")
+        let words = card(
+            UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+            kind: .transcript, name: "Ship the review", attachedTo: picture.id
+        )
+        let recording = card(
+            UUID(uuidString: "00000000-0000-4000-8000-0000000000F0")!,
+            kind: .audio, name: "Ship the review", attachedTo: picture.id
+        )
+
+        let folded = WorkboardCompanionFold.fold([picture, recording, words])
+
+        XCTAssertEqual(folded.childByParent, [picture.id: words.id])
+        XCTAssertEqual(
+            folded.displayed.map(\.id), [picture.id, recording.id],
+            "the loser keeps its own card rather than disappearing"
+        )
+        assertNothingDiscarded(from: [picture, recording, words], folded)
     }
 
     // MARK: - Fixtures

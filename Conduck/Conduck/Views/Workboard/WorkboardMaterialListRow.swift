@@ -22,11 +22,13 @@
 // Availability gates every action through the same policy as the mosaic, so a
 // thumbnail never stands in for missing bytes.
 //
-// A picture that folded a recording into it draws ONE row here too: the
-// thumbnail with a play badge over it, the recording's words as the row's text,
-// and the picture's own size and date underneath. The row's single player is
-// the one that plays it — a folded row is never also an audio row, so the two
-// can never both want it.
+// A picture that folded a VOICE MATERIAL into it draws ONE row here too: the
+// thumbnail, the voice material's words as the row's text, and the picture's own
+// size and date underneath. That voice material is a recording or the words
+// alone; only a recording puts a play badge over the thumbnail, because only a
+// recording has bytes to reach for. The row's single player is the one that
+// plays it — a folded row is never also an audio row, so the two can never both
+// want it.
 
 import SwiftUI
 
@@ -107,9 +109,13 @@ struct WorkboardMaterialListRow: View {
     /// the artwork column's own 48pt square so the picture still shows around
     /// it: the row is about the screenshot, and the recording is a control on
     /// it rather than a replacement for it.
+    ///
+    /// Drawn only for a RECORDING. A words-only companion has nothing to play,
+    /// and a badge over it would be a control that fails on every tap while
+    /// hiding part of the picture it sits on.
     @ViewBuilder
     private var companionTransport: some View {
-        if let companion = material.companion {
+        if let companion = material.companion, companion.kind == .audio {
             WorkboardAudioTransport(
                 materialID: companion.id,
                 player: player,
@@ -389,10 +395,12 @@ struct WorkboardMaterialListRow: View {
     }
 
     /// Whether this row draws a transport at all — an audio row, or a picture
-    /// with a recording folded into it. Never both: the fold attaches a
-    /// recording only to a picture.
+    /// with a RECORDING folded into it. Never both: the fold attaches a voice
+    /// material only to a picture. A picture folded around words alone draws no
+    /// transport, no clock and no playback status: there are no bytes behind it,
+    /// so every one of those would report a player that does not exist.
     private var hasTransport: Bool {
-        material.kind == .audio || material.companion != nil
+        material.kind == .audio || material.companion?.kind == .audio
     }
 
     /// The recording this row's one player plays.
@@ -504,9 +512,9 @@ struct WorkboardMaterialListRow: View {
     /// A folded row says what it IS before it says the picture's name, then the
     /// recording's words: "Image" would describe half of the row.
     private var accessibilityLabel: Text {
-        var parts = [String(localized: material.companion == nil
-            ? material.kind.title
-            : WorkboardCompanionBand.accessibilityKindLabel)]
+        var parts = [String(localized: material.companion.map(
+            WorkboardCompanionBand.accessibilityKindLabel(for:)
+        ) ?? material.kind.title)]
         if let companion = material.companion {
             parts.append(material.name)
             if isPlayable { parts.append(String(localized: transportTitle)) }

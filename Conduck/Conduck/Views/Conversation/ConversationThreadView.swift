@@ -1393,6 +1393,17 @@ struct ConversationThreadView: View {
                             ),
                             Int64(receipt.failedMaterialCount)
                         )
+                } else if receipt.refusedMaterialCount > 0 {
+                    // A sibling of the partial notice, not a variant of it:
+                    // nothing failed and nothing is going to be retried, so the
+                    // sentence names the door that does keep a recording. No
+                    // count in it — one sentence for one recording and for five
+                    // is the honest answer, and a number would buy a plural rule
+                    // in every language for a case nobody can act on differently.
+                    detail = String(
+                        localized: "workboard.chatCapture.recordingRefused",
+                        defaultValue: "Added to Work without the recording. Add recordings yourself with the attachment button in Work."
+                    )
                 } else if receipt.referencedOnlyMaterialCount > 0 {
                     detail = receipt.referencedOnlyMaterialCount == 1
                         ? String(

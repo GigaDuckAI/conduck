@@ -49,6 +49,7 @@
 
 import AppKit
 import AVFoundation
+import OSLog
 import Speech
 
 /// Recording/transcription states for the menu bar capture flow.
@@ -72,6 +73,13 @@ enum DictationState: Equatable {
 @Observable
 @MainActor
 final class DictationService: RecordingExclusivityAuthority {
+    /// FACTS ONLY. The one thing this service logs is whether a store write it
+    /// deliberately does not fail on succeeded — never a transcript, never an
+    /// id, never a file name.
+    nonisolated private static let log = Logger(
+        subsystem: Constants.identityNamespace, category: "WorkVoiceRetry"
+    )
+
     private(set) var state: DictationState = .idle
     private(set) var recordingTime: TimeInterval = 0
 
@@ -111,10 +119,16 @@ final class DictationService: RecordingExclusivityAuthority {
     /// Drives the amber timer in `DictationPopoverView.recordingView`.
     private(set) var nearMaxDuration: Bool = false
 
-    /// How many captures are still waiting in `PendingRetryStore`, as of the
-    /// last time this service asked. Metadata only — `pendingCount()` reads no
-    /// recording — and refreshed on every finish, so the `.error` state this
-    /// service settles into after finishing one can say what is left.
+    /// How many captures are WAITING FOR A PERSON in `PendingRetryStore`, as of
+    /// the last time this service asked. Metadata only — no recording is read —
+    /// and refreshed on every finish, so the `.error` state this service settles
+    /// into after finishing one can say what is left.
+    ///
+    /// `waitingCount()` rather than the queue's depth: an ordinary capture holds
+    /// its own reservation for the whole of its transcription, so the depth
+    /// reading raises a Try Again through every successful recording somebody
+    /// makes. A capture comes back into this count the moment its lane dies
+    /// without releasing, which is the state the retry affordance exists for.
     ///
     /// It is the DIRECT answer to the question `DictationPopoverView`'s
     /// `hasSavedRetryAudio` asks of the error taxonomy ("are there bytes to
@@ -344,16 +358,21 @@ final class DictationService: RecordingExclusivityAuthority {
             // and finishing the same recording beside us. What is still queued
             // is offered by the next tap.
             guard let claim = await PendingRetryStore.shared.claimNext() else {
-                // Nothing this window may take. A capture another surface holds
-                // is still WAITING, so the count decides which sentence is
-                // true — "there is nothing to retry" retires the affordance and
-                // must not be said while a recording is parked.
+                // Nothing this window may take, which is two different states.
                 await refreshPendingRetryCount()
-                // …and it is not said at all over a cancelled Retry: the
-                // reservation hop suspends, and a banner drawn after the Esc
+                // THE WHOLE QUEUE, not what is waiting for a person. This is the
+                // one question on this surface that is about the recordings
+                // rather than about the affordance: `claimNext` skips a capture
+                // somebody else is holding, and so does `waitingCount()` by
+                // construction, so reading that here would answer "there is
+                // nothing to retry" over a recording another surface is finishing
+                // — and `isRetryable: false` takes the button away with it. The
+                // reservation lapses; the recording does not.
+                let waiting = await PendingRetryStore.shared.pendingCount() > 0
+                // …and neither sentence is said at all over a cancelled Retry:
+                // the reservation hop suspends, and a banner drawn after the Esc
                 // lands on whatever the person did next.
                 guard stillCurrent(generation) else { return }
-                let waiting = pendingRetryCount > 0
                 state = .error(
                     message: waiting
                         ? pendingRetryBusyMessage
@@ -396,11 +415,26 @@ final class DictationService: RecordingExclusivityAuthority {
         // an answer this record already carries, and a key removed since
         // would refuse a retry that needs none. This one finishes with no
         // network at all.
+        //
+        // It is also the whole of what a PICTURE-OWING entry needs: words on
+        // the desk, recording retired, screenshot still parked. That one is
+        // handed over with EMPTY bytes and its words, and this arm publishes
+        // the picture, finds the words card already standing, and clears it.
         if pending.metadata.resolvedDestination == .work,
            let parked = pending.metadata.transcript?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !parked.isEmpty {
             return await finishWorkRetry(claim, transcript: parked, generation: generation)
+        }
+
+        // NO BYTES and no words. The queue hands over an entry with no recording
+        // only when it still shelters a picture — the recording was retired the
+        // moment the words landed — so the debt is real and the speech hop is
+        // not: staging an empty file and asking a provider to read it buys a
+        // refusal for money. The desk lane publishes whatever is parked and
+        // hands the entry back if that leaves nothing to write.
+        if pending.metadata.resolvedDestination == .work, pending.audioData.isEmpty {
+            return await finishWorkRetry(claim, transcript: "", generation: generation)
         }
 
         // ATOMIC snapshot: (presetID, apiKey, provider)
@@ -604,11 +638,24 @@ final class DictationService: RecordingExclusivityAuthority {
     /// its words and by one whose words were already parked.
     ///
     /// The desk decision itself is not taken here. `recover` owns it, because
-    /// the question — attach, republish then attach, or write the words beside
-    /// a card that is gone — is answered from the record's own publication
-    /// verdict, which this surface cannot observe: an id naming no card is
-    /// either a publication the desk refused or a card a person deleted while
-    /// recognition was in flight, and they call for opposite acts.
+    /// the question — which of a capture's three candidate ids already carries
+    /// its words, and whether a card an earlier build published is standing to
+    /// take them — is answered from the desk itself, which this surface has no
+    /// business reading.
+    ///
+    /// THE WORDS ARE PARKED FIRST, before either publication. They were bought
+    /// from a provider a moment ago and they exist in one place: this call's
+    /// argument. A death between here and the desk write would cost them, and
+    /// the retry that follows would pay for the same recognition again — so the
+    /// entry takes them before anything else is attempted. Non-fatal by design:
+    /// the publish proceeds on a refusal, because the words are in hand and the
+    /// desk write is what the person is waiting for.
+    ///
+    /// It TOLERATES AN ENTRY WITH NO RECORDING. A capture whose words already
+    /// landed and whose screenshot is still parked is handed over with empty
+    /// bytes, and everything below is exactly what it needs: the picture is
+    /// published, the recovery finds the words card already standing, and the
+    /// entry is cleared. There is no speech hop above it and no file to stage.
     ///
     /// The release of the durable record sits BELOW the recovery and inside the
     /// same `do`, so a store that refused the write skips it and the recording
@@ -633,6 +680,30 @@ final class DictationService: RecordingExclusivityAuthority {
         guard await PendingRetryStore.shared.confirmOwnership(claim) else {
             presentRetryOutcome(pendingRetryBusyMessage, generation: generation)
             return false
+        }
+        // Under the reservation, and RESTATING the verdict rather than deciding
+        // it: this line learns nothing about the desk. A fresh capture reads
+        // `.phaseOneFailed` and stays it; the picture-owing entry whose words
+        // already landed reads `.published` and must not be talked back down to
+        // "these bytes are the only copy", which is the reading that exempts an
+        // entry from every clock.
+        //
+        // Skipped when there are no words: an entry offered with no bytes and
+        // nothing recognised has none to park, and an empty transcript written
+        // over the entry's own would erase words somebody already paid for.
+        if !transcript.isEmpty {
+            let wordsParked = await PendingRetryStore.shared.recordPublicationState(
+                claim,
+                transcript: transcript,
+                publicationState: pending.metadata.publicationState ?? .phaseOneFailed
+            )
+            if !wordsParked {
+                // FACT only — no transcript, no id. Not a refusal: the words are
+                // in memory and the desk write below is what the person is
+                // waiting for. What it costs is one more recognition if this
+                // process dies in the next few lines.
+                Self.log.error("Work retry words not parked")
+            }
         }
         do {
             // A GigaAction capture can also carry a screenshot, and the retry
@@ -780,9 +851,10 @@ final class DictationService: RecordingExclusivityAuthority {
         return retired
     }
 
-    /// The queue's size, metadata only — `pendingCount()` reads no recording.
+    /// What is waiting for a person, metadata only — no recording is read. A
+    /// capture its own lane is still working on is not waiting for anybody.
     private func refreshPendingRetryCount() async {
-        pendingRetryCount = await PendingRetryStore.shared.pendingCount()
+        pendingRetryCount = await PendingRetryStore.shared.waitingCount()
     }
 
     /// The one sentence for "another surface holds this recording". The holder

@@ -7,12 +7,16 @@
 // one envelope directory into the App Group and the main app later claims it.
 // This type intentionally contains no gateway, conversation, or dispatch field.
 // It may name an inert Work item to append to, but receiving a capture is never
-// enough to contact an AI. The iOS and macOS
+// enough to contact an AI. It also owns the one pure rule for reading a
+// payload's shape — `isAudioPayload` — because the writing process and the
+// claiming process both have to answer that question and must answer it
+// identically. The iOS and macOS
 // share extensions carry verbatim mirrors because each extension is a separate
 // process and target. Keep the declarations byte-identical from `import
 // Foundation` onward; `WorkCaptureInboxTests` guards the three-way mirror.
 
 import Foundation
+import UniformTypeIdentifiers
 
 /// One durable Workboard capture. The enclosing directory name is `id`, making
 /// publication and import idempotent even when a wake is delivered more than
@@ -328,6 +332,47 @@ struct WorkCaptureEnvelope: Codable, Sendable, Equatable {
               scheme == "https" || scheme == "http",
               components.host?.isEmpty == false else { return false }
         return true
+    }
+
+    // MARK: - Payload shape
+
+    /// Whether a payload is a recording. Every process that can be handed a file
+    /// asks this one question the same way, and each compiles its own copy of
+    /// this file, so the app and both share extensions cannot disagree about
+    /// what a recording IS.
+    ///
+    /// Three annotations answer, in the order they can be trusted. The MIME type
+    /// a source app supplied is checked first because it is the one annotation
+    /// every share and Shortcut path fills in. The type identifier answers for
+    /// the sources that declare a UTI instead. The filename's extension is the
+    /// last resort, for a payload that arrived carrying neither — dropping a
+    /// file onto the desk is the ordinary way that happens. Conformance rather
+    /// than equality throughout, so a recording in any concrete audio type is
+    /// recognised rather than only the handful worth spelling out.
+    ///
+    /// Video is deliberately NOT a recording even though it is audible: a film
+    /// conforms to `public.movie` and never to `public.audio`, and treating one
+    /// as audio would refuse it at doors that exist to keep microphone captures
+    /// out.
+    ///
+    /// Pure and inert. It reads nothing, writes nothing, and carries no wire
+    /// meaning: it only decides what its caller does next.
+    nonisolated static func isAudioPayload(
+        mimeType: String?,
+        typeIdentifier: String?,
+        filename: String?
+    ) -> Bool {
+        if let mimeType, mimeType.lowercased().hasPrefix("audio/") { return true }
+        if let typeIdentifier,
+           let declared = UTType(typeIdentifier),
+           declared.conforms(to: .audio) {
+            return true
+        }
+        guard let filename else { return false }
+        let pathExtension = (filename as NSString).pathExtension
+        guard !pathExtension.isEmpty,
+              let inferred = UTType(filenameExtension: pathExtension) else { return false }
+        return inferred.conforms(to: .audio)
     }
 
     private nonisolated static func isSafeLeaf(_ value: String) -> Bool {

@@ -128,7 +128,7 @@ enum WorkboardMaterialIcon {
             return ext.isEmpty ? AppColors.brandAmber : AttachmentChipStyle.tint(forExtension: ext)
         case .link:
             return AppColors.guidedSetupBlue
-        case .image, .note, .audio:
+        case .image, .note, .audio, .transcript:
             return AppColors.brandAmber
         }
     }
