@@ -42,7 +42,7 @@ struct WorkboardDetailView: View {
                         ),
                         message: LocalizedStringResource(
                             "workboard.desk.empty.message",
-                            defaultValue: "Whatever you collect lands here as a card you can move and resize."
+                            defaultValue: "Whatever you collect lands here as a card you can move and open."
                         )
                     )
                 case .cards:

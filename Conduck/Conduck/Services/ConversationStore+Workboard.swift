@@ -23,6 +23,105 @@ import Foundation
 import CoreData
 import CryptoKit
 
+// MARK: - Reorder rebase
+
+/// The board a drag was planned on, as the store has to see it.
+///
+/// CANONICAL, never displayed. A folded pair is ONE card on screen and TWO
+/// materials on disk, and a recording published before its picture is ranked
+/// before it — so a board showing `other, picture` can stand over a stored
+/// `recording, other, picture`. A baseline built from what was drawn would
+/// disagree with the desk about an order nothing has changed.
+nonisolated struct WorkboardReorderBaseline: Sendable, Hashable {
+    /// Every logical material of the desk, in stored order, at plan time.
+    let orderedIDs: [UUID]
+    /// The picture each of those materials named, for the ones that named one.
+    ///
+    /// Ids alone cannot see a fold change. A recording arriving for a picture
+    /// already on the board, or a picture arriving for a recording that was
+    /// standing alone, both leave the baseline order intact as a prefix while
+    /// silently repartitioning what the person is dragging between — so the
+    /// links travel too, and either direction is a refusal.
+    let attachments: [UUID: UUID]
+
+    init(orderedIDs: [UUID], attachments: [UUID: UUID] = [:]) {
+        self.orderedIDs = orderedIDs
+        self.attachments = attachments
+    }
+}
+
+/// Whether a drag planned on one board still means something on the board the
+/// desk now holds, and if so what order to write.
+///
+/// A bare superset test — "every baseline id is still there" — is not enough
+/// and was the defect this replaces: it passes on "somebody else reordered,
+/// then something arrived", and writing the proposal then erases that reorder
+/// without anybody seeing it happen. Requiring the baseline as a PREFIX is what
+/// distinguishes an append from a rearrangement.
+nonisolated enum WorkboardReorderRebase {
+    /// The order to write, or nil when the desk has moved in a way this drag
+    /// cannot be replayed onto.
+    ///
+    /// Conservative on purpose. A peer's material arriving with an earlier rank
+    /// lands in the MIDDLE of the canonical order and is refused even though no
+    /// old card changed places, because accepting it would need a placement
+    /// rule for where the newcomer belongs relative to a rearrangement it never
+    /// saw. A refusal is visible and costs one gesture; a wrong placement is
+    /// invisible.
+    static func rebased(
+        proposed: [UUID],
+        baseline: WorkboardReorderBaseline,
+        current: [UUID],
+        currentAttachments: [UUID: UUID]
+    ) -> [UUID]? {
+        let baselineIDs = baseline.orderedIDs
+        let baselineSet = Set(baselineIDs)
+        guard baselineSet.count == baselineIDs.count,
+              Set(proposed).count == proposed.count,
+              Set(proposed) == baselineSet else { return nil }
+        guard Set(current).count == current.count,
+              current.count >= baselineIDs.count,
+              Array(current.prefix(baselineIDs.count)) == baselineIDs else { return nil }
+
+        // A card the drag was planned on must still be the same MEMBER it was:
+        // the same link, or the same absence of one.
+        for id in baselineIDs where currentAttachments[id] != baseline.attachments[id] {
+            return nil
+        }
+
+        let appended = Array(current.dropFirst(baselineIDs.count))
+        // BOTH CANDIDATES OF EVERY LINK, because a raw id is not what the fold
+        // resolves. `eligibleParentID` reads a link as the picture it names OR
+        // as the one escape a colliding publication may have taken
+        // (`WorkMaterialCollisionEscape`), so a check that compares raw ids
+        // alone reads an escaped arrival as an unrelated newcomer while the
+        // board quietly folds it into a card the drag was planned around.
+        //
+        // Refusing on the escape candidate can only over-refuse: this cannot
+        // see the kind and ownership conditions the fold also applies, so a
+        // derived id that happens to name an ineligible row costs one gesture,
+        // where missing a real fold writes an order for a partition that no
+        // longer exists.
+        var named: Set<UUID> = []
+        for target in baseline.attachments.values {
+            named.insert(target)
+            named.insert(WorkMaterialCollisionEscape.materialID(forCapture: target))
+        }
+        for id in appended {
+            // A newcomer that folds INTO the dragged board, or that a dragged
+            // card was already naming, changes which cards exist rather than
+            // adding one after them.
+            if let target = currentAttachments[id],
+               baselineSet.contains(target)
+                || baselineSet.contains(WorkMaterialCollisionEscape.materialID(forCapture: target)) {
+                return nil
+            }
+            if named.contains(id) { return nil }
+        }
+        return proposed + appended
+    }
+}
+
 #if CONDUCK_TESTING
 /// One PHYSICAL `WorkMaterial` row, before deduplication collapses a
 /// CloudKit-merged material to a single logical card. It carries the columns a
@@ -3030,6 +3129,38 @@ extension ConversationStore {
         priorRevisions.map { $0.addingTimeInterval(step) }
     }
 
+    /// A write stamp that is never BELOW what it replaces.
+    ///
+    /// `Date()` is not monotone against a synced row. A peer whose clock runs
+    /// ahead writes an `updatedAt` in the future and CloudKit hands it to this
+    /// device verbatim, so stamping with the local wall clock LOWERS the
+    /// revision it is overwriting. Two places that costs something real:
+    ///
+    ///   * A MERGED CARD. The canonical row is picked by `revision` first, so
+    ///     lowering the winner under a duplicate that is merely less far ahead
+    ///     hands every read to the loser — the card changes its content, its
+    ///     payload or its link because somebody moved it. Advancing past every
+    ///     duplicate is what keeps the winner the winner.
+    ///   * THE DESK'S OWN TOKEN. `workRevision(for:)` is a compare-and-swap
+    ///     over this column, and a stamp that walks backwards can land on a
+    ///     value some caller is still holding, which makes a stale token match
+    ///     again.
+    ///
+    /// So: the local instant, or one step past the highest revision being
+    /// stood on, whichever is later. `step` is a millisecond for the same
+    /// reason `restoredRevisionStamps` uses one — it survives any date rounding
+    /// a CloudKit round trip applies, where a single-ULP bump might not.
+    ///
+    /// Pure and static, so the property is provable without a store.
+    nonisolated static func advancedWriteStamp(
+        _ now: Date,
+        notBelow priorRevisions: [Date],
+        step: TimeInterval = 0.001
+    ) -> Date {
+        guard let ceiling = priorRevisions.max() else { return now }
+        return max(now, ceiling.addingTimeInterval(step))
+    }
+
     func deleteWorkMaterial(
         id: UUID,
         workItemID: UUID? = nil,
@@ -3294,13 +3425,36 @@ extension ConversationStore {
     /// uses, so the two surfaces cannot disagree about what order means. Order
     /// is canonical: it decides the dispatch prompt, so this deliberately
     /// advances the item's revision and an already-sent run is honestly marked
-    /// as changed. `expectedOwnerRevision` is optional in the same sense it is
-    /// for the other material mutations here — supplied, it refuses a rewrite
-    /// built on an order the person never saw.
+    /// as changed.
+    ///
+    /// TWO WAYS TO GUARD THE SAME WRITE, and a caller picks exactly one.
+    ///
+    /// `expectedOwnerRevision` is the plain compare-and-swap the other material
+    /// mutations use: supplied, it refuses a rewrite built on an order the
+    /// person never saw. It is the right guard for a caller that rewrites the
+    /// desk wholesale.
+    ///
+    /// `baseline` is the drag's guard, and it REBASES rather than refuses. A
+    /// drag is a direct-manipulation gesture the person has already completed,
+    /// so answering an unrelated arrival with "your move did not happen" is a
+    /// worse outcome than keeping the move and the arrival both. The baseline
+    /// carries the canonical order the drag was planned on; the rewrite is
+    /// accepted when the desk's current canonical order is still that baseline
+    /// with new ids APPENDED, and the accepted order is then the proposed
+    /// permutation followed by those new ids. A baseline therefore SUPERSEDES
+    /// the revision token — the revision has necessarily moved in exactly the
+    /// case the rebase exists to accept — so passing both is a caller error and
+    /// the baseline wins.
+    ///
+    /// This is LOCAL validation, not a distributed compare-and-swap. Two
+    /// devices reordering at once still merge through the store's ordinary
+    /// record merge; what a baseline buys is that THIS device never writes an
+    /// arrangement built on a board it can see has moved on.
     @discardableResult
     func reorderWorkMaterials(
         itemID: UUID,
         orderedMaterialIDs: [UUID],
+        baseline: WorkboardReorderBaseline? = nil,
         expectedOwnerRevision: Int64? = nil
     ) async throws -> WorkItemRecord {
         try await ensureLoaded()
@@ -3309,22 +3463,76 @@ extension ConversationStore {
             guard let owner = try Self.workItemRow(id: itemID, in: context) else {
                 throw WorkboardStoreError.itemNotFound
             }
-            if let expectedOwnerRevision {
-                guard let updatedAt = owner.value(forKey: "updatedAt") as? Date,
-                      Self.workRevision(for: updatedAt) == expectedOwnerRevision else {
+            let finalOrder: [UUID]
+            if let baseline {
+                let desk = try Self.canonicalMaterialOrder(workItemID: itemID, in: context)
+                guard let rebased = WorkboardReorderRebase.rebased(
+                    proposed: orderedMaterialIDs,
+                    baseline: baseline,
+                    current: desk.order,
+                    currentAttachments: desk.attachments
+                ) else {
                     throw WorkboardStoreError.staleRevision
                 }
+                finalOrder = rebased
+            } else {
+                if let expectedOwnerRevision {
+                    guard let updatedAt = owner.value(forKey: "updatedAt") as? Date,
+                          Self.workRevision(for: updatedAt) == expectedOwnerRevision else {
+                        throw WorkboardStoreError.staleRevision
+                    }
+                }
+                finalOrder = orderedMaterialIDs
             }
             let rewrite = try Self.rewriteWorkMaterialSequence(
-                orderedMaterialIDs: orderedMaterialIDs,
+                orderedMaterialIDs: finalOrder,
                 workItemID: itemID,
                 in: context
             )
             guard rewrite.didChange else { return false }
             let now = Date()
-            owner.setValue(now, forKey: "updatedAt")
-            for material in rewrite.materials where material.hasChanges {
-                material.setValue(now, forKey: "updatedAt")
+            owner.setValue(
+                Self.advancedWriteStamp(
+                    now,
+                    notBelow: [owner.value(forKey: "updatedAt") as? Date].compactMap { $0 }
+                ),
+                forKey: "updatedAt"
+            )
+            // ONLY the canonical row of each changed material is stamped, and
+            // never with a value below the rows it is standing on.
+            //
+            // Every PHYSICAL row is re-ranked — a duplicate left at its old rank
+            // would resurrect the old order — but stamping them all with the
+            // SAME instant flattens the `revision` key that decides which
+            // duplicate a read answers from, and the tie then falls through to
+            // `createdAt`, the title and the content hash. A merged card whose
+            // duplicates disagree about any of those would silently swap which
+            // one wins because somebody moved it. Advancing the winner alone
+            // keeps it the winner.
+            //
+            // Advancing it PAST EVERY DUPLICATE is the other half, and a plain
+            // `Date()` does not do it: a row synced from a device whose clock
+            // ran ahead carries a future `updatedAt`, so the local instant
+            // lowers the winner under a duplicate that is merely less far
+            // ahead and promotes the loser — the same silent content swap, out
+            // of the fix for it. See `advancedWriteStamp`.
+            var rowsByID: [UUID: [NSManagedObject]] = [:]
+            for material in rewrite.materials {
+                guard let id = material.value(forKey: "id") as? UUID else { continue }
+                rowsByID[id, default: []].append(material)
+            }
+            for rows in rowsByID.values where rows.contains(where: { $0.hasChanges }) {
+                guard let winner = Self.canonicalRow(among: rows) else { continue }
+                let priors = rows.map {
+                    Self.materialRevisionDate(
+                        updatedAt: $0.value(forKey: "updatedAt") as? Date,
+                        createdAt: $0.value(forKey: "createdAt") as? Date
+                    )
+                }
+                winner.setValue(
+                    Self.advancedWriteStamp(now, notBelow: priors),
+                    forKey: "updatedAt"
+                )
             }
             try context.save()
             return true
@@ -3950,6 +4158,44 @@ extension ConversationStore {
             thumbnailData: row.value(forKey: "thumbnailData") as? Data,
             rowKey: row.objectID.uriRepresentation().absoluteString
         )
+    }
+
+    /// The desk's CANONICAL order and its companion links, read inside a write
+    /// context.
+    ///
+    /// One logical material can hold several physical rows, so each id answers
+    /// from `canonicalRow(among:)` — the same row every other read answers from
+    /// — and the order is the same `(sequence, createdAt, id)` tuple the board's
+    /// projection sorts by. A baseline compared against anything else would
+    /// refuse arrangements the person is looking at.
+    private static func canonicalMaterialOrder(
+        workItemID: UUID,
+        in context: NSManagedObjectContext
+    ) throws -> (order: [UUID], attachments: [UUID: UUID]) {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+        request.predicate = NSPredicate(format: "workItemID == %@", workItemID as CVarArg)
+        var rowsByID: [UUID: [NSManagedObject]] = [:]
+        for row in try context.fetch(request) {
+            guard let id = row.value(forKey: "id") as? UUID else { continue }
+            rowsByID[id, default: []].append(row)
+        }
+        var keyed: [(id: UUID, sequence: Int, createdAt: Date)] = []
+        var attachments: [UUID: UUID] = [:]
+        for (id, rows) in rowsByID {
+            guard let winner = canonicalRow(among: rows) else { continue }
+            keyed.append((
+                id: id,
+                sequence: (winner.value(forKey: "sequence") as? NSNumber)?.intValue ?? 0,
+                createdAt: winner.value(forKey: "createdAt") as? Date ?? .distantPast
+            ))
+            if let named = winner.value(forKey: "attachedToMaterialID") as? UUID {
+                attachments[id] = named
+            }
+        }
+        let order = keyed
+            .sorted { ($0.sequence, $0.createdAt, $0.id.uuidString) < ($1.sequence, $1.createdAt, $1.id.uuidString) }
+            .map(\.id)
+        return (order, attachments)
     }
 
     /// The single sequence-rewrite the Workboard has. Both the editor's autosave

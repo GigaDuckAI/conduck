@@ -16,7 +16,13 @@ import CoreTransferable
 import UniformTypeIdentifiers
 
 enum WorkboardMetrics {
-    static let contentMaxWidth: CGFloat = 920
+    /// The board's column, OUTER: the cap is applied after the horizontal
+    /// padding in `WorkboardDetailView`, so the grid itself gets 1440 of it.
+    /// That is six uniform cards per row on a wide display — 12 grid units at
+    /// 109 points each — where the older 920 gave four and left most of a Mac
+    /// window as margin. Wider buys no seventh column at these unit
+    /// thresholds, only bigger tiles.
+    static let contentMaxWidth: CGFloat = 1472
     static let standardSpacing: CGFloat = 16
     static let generousSpacing: CGFloat = 24
     static let touchTarget: CGFloat = 44

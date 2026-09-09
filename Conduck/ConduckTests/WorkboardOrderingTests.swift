@@ -8,6 +8,19 @@
 // restoring its old array would silently hide another device's newer work.
 // The platform drag provider carries card identity without advertising any
 // representation that the desk's external-material importer could claim.
+//
+// The drag is guarded by REBASE rather than by the desk's revision, so these
+// also hold what the baseline it sends IS: the CANONICAL stored order, read
+// after the mutation lane is taken and before the optimistic order overwrites
+// the ranks it is built from. A baseline built from the folded board — what the
+// person can see — differs from the stored order exactly when a recording was
+// published before its picture, and every drag on such a board would be refused
+// for a rearrangement nobody made.
+//
+// And what a refusal LOOKS like: a desk that moved is a transient note beside
+// the board, never an alert, because the person has already completed the
+// gesture and the board can simply show them the order the desk holds. A store
+// that could not write at all is still an alert.
 
 import XCTest
 import UniformTypeIdentifiers
@@ -46,7 +59,7 @@ final class WorkboardOrderingTests: XCTestCase {
         var loadFails = false
         var recovery: SnapshotGate?
         var reorderedIDs: [[UUID]] = []
-        var reorderRevisions: [Int64] = []
+        var reorderBaselines: [WorkboardReorderBaseline] = []
 
         init(desk: WorkboardItemSnapshot) {
             self.desk = desk
@@ -134,7 +147,12 @@ final class WorkboardOrderingTests: XCTestCase {
         XCTAssertEqual(finalViewModel.desk?.materials.map(\.sequence), [0, 1, 2, 3])
     }
 
-    func testDragQueuedBehindACaptureKeepsTheArrivingCardAndUsesItsRevision() async {
+    /// The baseline a queued drag sends is the board it was FINALLY planned on
+    /// — the desk including the capture it waited behind — because a drag reads
+    /// its baseline after it takes the mutation lane. A baseline captured when
+    /// the gesture started would name a board the desk has already left, and
+    /// the store would refuse a move nothing was actually racing.
+    func testDragQueuedBehindACaptureKeepsTheArrivingCardAndBaselinesOnIt() async {
         let original = makeDesk(names: ["First", "Second", "Third"], revision: 4)
         let harness = DeskHarness(desk: original)
         let capture = SnapshotGate()
@@ -164,7 +182,11 @@ final class WorkboardOrderingTests: XCTestCase {
 
         let expectedIDs = [ids[1], ids[2], ids[0], arriving.id]
         XCTAssertEqual(harness.reorderedIDs, [expectedIDs], "the drag retains the completed capture")
-        XCTAssertEqual(harness.reorderRevisions, [5], "a queued drag uses the captured desk's revision")
+        XCTAssertEqual(
+            harness.reorderBaselines.map(\.orderedIDs),
+            [ids + [arriving.id]],
+            "a queued drag rebases on the desk the capture left, not the one the gesture started on"
+        )
         var reordered = captured
         reordered.revision = 6
         reordered.materials = [original.materials[1], original.materials[2], original.materials[0], arriving]
@@ -410,7 +432,8 @@ final class WorkboardOrderingTests: XCTestCase {
         )
         XCTAssertEqual(viewModel.desk?.materials.map(\.sequence), [0, 1])
         XCTAssertEqual(viewModel.desk?.materials.last?.companion?.sequence, 2)
-        XCTAssertNotNil(viewModel.notice)
+        XCTAssertNil(viewModel.notice, "a desk that moved is not an alert")
+        XCTAssertEqual(viewModel.workspaceStatus?.kind, .conflict)
         XCTAssertFalse(viewModel.isMutatingDesk)
     }
 
@@ -461,7 +484,127 @@ final class WorkboardOrderingTests: XCTestCase {
             "the recording keeps the rank it was published with, ahead of its picture"
         )
         XCTAssertEqual(viewModel.desk?.materials.last?.companion?.id, pair.recordingID)
-        XCTAssertNotNil(viewModel.notice)
+        XCTAssertNil(viewModel.notice)
+        XCTAssertEqual(viewModel.workspaceStatus?.kind, .conflict)
+        XCTAssertFalse(viewModel.isMutatingDesk)
+    }
+
+    // MARK: - What the drag sends, and how a refusal reads
+
+    /// THE BASELINE IS THE STORED ORDER, NOT THE FOLDED BOARD.
+    ///
+    /// A recording published before its picture holds the lower rank, so a desk
+    /// storing `recording, between, picture` DRAWS `between, picture` with the
+    /// recording inside the picture. Expanding that displayed order — which is
+    /// exactly what the store request does — gives `between, picture, recording`,
+    /// a completely different sequence from the one on disk.
+    ///
+    /// Negative control: sending the expanded displayed order as the baseline
+    /// makes the desk read a rearrangement that never happened, and every drag
+    /// on a board like this is refused.
+    func testTheBaselineIsTheStoredOrderAndNotTheFoldedBoard() async {
+        let pair = makeFoldedPicture(
+            name: "screenshot.jpg",
+            recordingName: "Ship the review",
+            sequence: 2,
+            recordingSequence: 0
+        )
+        let between = makeMaterial(name: "Between", sequence: 1)
+        let board = WorkboardItemSnapshot(
+            id: Constants.workboardDeskItemID,
+            materials: [between, pair.card],
+            revision: 4
+        )
+        let harness = DeskHarness(desk: board)
+        let reorder = SnapshotGate()
+        let viewModel = makeViewModel(harness: harness, reorder: reorder)
+        await viewModel.load()
+
+        let drag = Task { @MainActor in
+            await viewModel.reorderMaterial(pair.card.id, toInsertionIndex: 0)
+        }
+        await fulfillment(of: [reorder.entered], timeout: 2)
+
+        XCTAssertEqual(
+            harness.reorderBaselines.first?.orderedIDs,
+            [pair.recordingID, between.id, pair.card.id],
+            "the recording holds rank 0, so it is FIRST in the stored order"
+        )
+        XCTAssertNotEqual(
+            harness.reorderBaselines.first?.orderedIDs,
+            [between.id, pair.card.id, pair.recordingID],
+            "and the expanded DISPLAYED order is a different sequence entirely"
+        )
+        XCTAssertEqual(
+            harness.reorderBaselines.first?.attachments,
+            [pair.recordingID: pair.card.id],
+            "the fold travels with the baseline: ids alone cannot see a pair form or break"
+        )
+
+        var refreshed = board
+        refreshed.revision = 5
+        reorder.finish(.success(refreshed))
+        _ = await drag.value
+    }
+
+    /// A desk that moved answers a completed gesture with a note beside the
+    /// board, and the board then simply stands in the order the desk holds. An
+    /// alert would make the person dismiss a modal before they could try again,
+    /// for something they can already see.
+    func testADeskThatMovedIsANoteAndAStoreThatFailedIsStillAnAlert() async {
+        let original = makeDesk(names: ["First", "Second"], revision: 4)
+
+        let conflictHarness = DeskHarness(desk: original)
+        let conflictGate = SnapshotGate()
+        let conflicted = makeViewModel(harness: conflictHarness, reorder: conflictGate)
+        await conflicted.load()
+        let conflictDrag = Task { @MainActor in
+            await conflicted.reorderMaterial(original.materials[1].id, toInsertionIndex: 0)
+        }
+        await fulfillment(of: [conflictGate.entered], timeout: 2)
+        conflictGate.finish(.failure(WorkboardLiveRepositoryError.staleDraft))
+        let conflictMoved = await conflictDrag.value
+        XCTAssertFalse(conflictMoved)
+
+        XCTAssertNil(conflicted.notice, "a desk that moved is not a failure to report modally")
+        XCTAssertEqual(conflicted.workspaceStatus?.kind, .conflict)
+        XCTAssertFalse(conflicted.workspaceStatus?.message.isEmpty ?? true)
+
+        let brokenHarness = DeskHarness(desk: original)
+        let brokenGate = SnapshotGate()
+        let broken = makeViewModel(harness: brokenHarness, reorder: brokenGate)
+        await broken.load()
+        let brokenDrag = Task { @MainActor in
+            await broken.reorderMaterial(original.materials[1].id, toInsertionIndex: 0)
+        }
+        await fulfillment(of: [brokenGate.entered], timeout: 2)
+        brokenGate.finish(.failure(TestError.refused))
+        let brokenMoved = await brokenDrag.value
+        XCTAssertFalse(brokenMoved)
+
+        XCTAssertNotNil(broken.notice, "a store that could not write is still worth an alert")
+        XCTAssertNil(broken.workspaceStatus)
+    }
+
+    /// A cancelled drag asked for nothing and failed at nothing, so it says
+    /// nothing — neither a note nor an alert.
+    func testACancelledDragSaysNothingAtAll() async {
+        let original = makeDesk(names: ["First", "Second"], revision: 4)
+        let harness = DeskHarness(desk: original)
+        let reorder = SnapshotGate()
+        let viewModel = makeViewModel(harness: harness, reorder: reorder)
+        await viewModel.load()
+
+        let drag = Task { @MainActor in
+            await viewModel.reorderMaterial(original.materials[1].id, toInsertionIndex: 0)
+        }
+        await fulfillment(of: [reorder.entered], timeout: 2)
+        reorder.finish(.failure(CancellationError()))
+
+        let moved = await drag.value
+        XCTAssertFalse(moved)
+        XCTAssertNil(viewModel.notice)
+        XCTAssertNil(viewModel.workspaceStatus)
         XCTAssertFalse(viewModel.isMutatingDesk)
     }
 
@@ -486,9 +629,9 @@ final class WorkboardOrderingTests: XCTestCase {
             removeMaterial: { _, _ in throw TestError.unexpectedCall },
             replaceMaterial: { _, _, _, _ in throw TestError.unexpectedCall },
             openMaterial: { _ in },
-            reorderMaterials: { [harness] ids, revision in
+            reorderMaterials: { [harness] ids, baseline in
                 harness.reorderedIDs.append(ids)
-                harness.reorderRevisions.append(revision)
+                harness.reorderBaselines.append(baseline)
                 return try await reorder.suspend()
             }
         ))

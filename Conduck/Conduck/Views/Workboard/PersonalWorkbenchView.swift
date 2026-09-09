@@ -326,14 +326,18 @@ final class PersonalWorkbenchRouter {
         /// recording and offer the system's own share and open-with routes.
         /// A sheet of ours could only re-describe the file and hand those routes
         /// back to the system anyway.
+        ///
+        /// A LINK is absent for the opposite reason: it has no content of its
+        /// own to draw. Opening one is the browser's job, so the router hands
+        /// the address straight to it rather than raising a sheet whose whole
+        /// body is the URL and a button that does what the click already meant.
         enum Content {
             case note(String)
-            case link(URL)
             /// Every openable image on the desk, in board order, with the tapped
             /// card's position. The whole desk rather than the one card because
             /// a picture is looked at NEXT to its neighbours; the tapped card
             /// alone would make the swipe gesture a dead end.
-            case imageGallery(pages: [AttachmentGalleryPage], startIndex: Int)
+            case imageGallery(GallerySelection)
         }
 
         let id = UUID()
@@ -355,10 +359,28 @@ final class PersonalWorkbenchRouter {
         let message: String
     }
 
-    /// The pages of an image gallery plus where the tap landed in them.
+    /// The pages of an image gallery, where the tap landed in them, and the
+    /// recordings folded into them.
+    ///
+    /// The companions are keyed by PICTURE id — the page's own id — because
+    /// that is what the gallery's cursor names, and they are carried here
+    /// rather than on `AttachmentGalleryPage` so the gallery stays model-free:
+    /// a page holding a `WorkboardCompanionSnapshot` would put a Work type
+    /// inside the component Chat also draws.
+    ///
+    /// Like the pages themselves this is a SNAPSHOT taken when the sheet opens.
+    /// A transcript that lands, or bytes that finish arriving, while the sheet
+    /// is up do not change it; the desk behind it is what refreshes.
     struct GallerySelection {
         let pages: [AttachmentGalleryPage]
         let startIndex: Int
+        var companions: [UUID: WorkboardCompanionSnapshot] = [:]
+
+        /// The recording folded into the page the cursor is on, if any.
+        func companion(forPage pageID: UUID?) -> WorkboardCompanionSnapshot? {
+            guard let pageID else { return nil }
+            return companions[pageID]
+        }
     }
 
     // Preserve Conduck's existing launch behavior. Chat owns OnLaunchMode and
@@ -401,6 +423,21 @@ final class PersonalWorkbenchRouter {
     /// capture. It is read once, at the moment of the tap, so the gallery's
     /// pages are the cards that were on screen when the person tapped one.
     @ObservationIgnored var deskMaterials: @MainActor () -> [WorkboardMaterialSnapshot] = { [] }
+
+    /// Hand an address to the person's browser.
+    ///
+    /// A seam rather than a call inside `present` so the one thing a link card
+    /// does can be driven by a test without a browser. The desk makes NO
+    /// request of its own here — no title, no favicon, no preview: the click is
+    /// the person's, and fetching what is behind the address would be the desk
+    /// phoning out unasked.
+    @ObservationIgnored var openExternalURL: @MainActor (URL) -> Void = { url in
+        #if os(iOS)
+        UIApplication.shared.open(url)
+        #elseif os(macOS)
+        NSWorkspace.shared.open(url)
+        #endif
+    }
 
     private var materialRequestID: UUID?
 
@@ -453,14 +490,14 @@ final class PersonalWorkbenchRouter {
                     ),
                     requestID: requestID
                 )
+            // A link opens where links open. There is nothing of the card to
+            // draw — its whole content IS the address — so a sheet could only
+            // restate the URL and offer the button the click already stood for.
             case .link:
                 guard let value = material.urlString, let url = URL(string: value) else {
                     throw WorkbenchPreviewError.unavailable
                 }
-                commit(
-                    MaterialPresentation(title: material.name, content: .link(url)),
-                    requestID: requestID
-                )
+                openExternalURL(url)
             // EVERY image lane. A camera original parked in the device-local
             // vault is a picture exactly as much as a small synced one is, and
             // routing by lane would open the large one as a document — the size
@@ -478,10 +515,7 @@ final class PersonalWorkbenchRouter {
                 commit(
                     MaterialPresentation(
                         title: material.name,
-                        content: .imageGallery(
-                            pages: selection.pages,
-                            startIndex: selection.startIndex
-                        )
+                        content: .imageGallery(selection)
                     ),
                     requestID: requestID
                 )
@@ -581,9 +615,23 @@ final class PersonalWorkbenchRouter {
         }
         let materials = openable.contains { $0.id == tapped.id } ? openable : [tapped]
         let startIndex = materials.firstIndex { $0.id == tapped.id } ?? 0
+        // Built from the pages that ACTUALLY open, after the lone-card
+        // fallback: a folded picture the desk no longer carries still opens on
+        // its own, and its recording has to come with it.
+        //
+        // A companion whose own bytes are not readable here is kept rather than
+        // filtered out. The picture's readability is not the recording's, and a
+        // band that says what it is waiting for beats one that vanishes.
+        var companions: [UUID: WorkboardCompanionSnapshot] = [:]
+        for material in materials {
+            if let companion = material.companion {
+                companions[material.id] = companion
+            }
+        }
         return GallerySelection(
             pages: materials.map(galleryPage(for:)),
-            startIndex: startIndex
+            startIndex: startIndex,
+            companions: companions
         )
     }
 
@@ -596,7 +644,11 @@ final class PersonalWorkbenchRouter {
         AttachmentGalleryPage(
             id: material.id,
             thumbnailData: material.thumbnailData,
-            accessibilityLabel: material.name
+            accessibilityLabel: material.name,
+            // The header names the card exactly as the desk does. Work cards
+            // always carry a name, so unlike a chat attachment there is nothing
+            // to fall back from.
+            title: material.name
         )
     }
 
@@ -1291,73 +1343,19 @@ private struct WorkboardMaterialPreviewView: View {
     /// Share the page currently on screen. The gallery hands over the CURRENT
     /// selection's card id, so a swipe changes what a tap here shares.
     let onSharePage: (UUID) -> Void
-    /// The share state this sheet draws itself, because it covers the desk's.
+    /// The share state the gallery draws itself, because it covers the desk's.
     let share: WorkMaterialShareCoordinator
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @ViewBuilder
     var body: some View {
         switch presentation.content {
-        case .imageGallery(let pages, let startIndex):
-            AttachmentFullScreenView(
-                pages: pages,
-                startIndex: startIndex,
-                // Lazy, per page, and by card id: the gallery asks only for the
-                // page being looked at, and a card whose bytes are unreadable
-                // throws so that page offers Retry instead of spinning.
-                loadFullBytes: { materialID in
-                    try await PersonalWorkbenchRouter.imageBytes(materialID: materialID)
-                },
-                // A card captured before the desk sized its pictures still
-                // holds its original bytes, so a camera photo there is a 40+
-                // megapixel decode; a newer card is already at
-                // `Constants.workboardImageMaxPixel` and the bound is a no-op.
-                // The bound is what makes a desk-wide gallery affordable; the
-                // STRICT path behind it reports failure rather than silently
-                // falling back to an unbounded decode.
-                fullDecodeMaxPixel: 4096
-            ) { pageID in
-                // The ORIGINAL bytes, resolved by the coordinator from the card
-                // id — never the bounded image this gallery decoded to draw.
-                Button {
-                    onSharePage(pageID)
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 26))
-                        .foregroundStyle(Color.white)
-                        .padding(16)
-                        .contentShape(Rectangle())
-                }
-                .pointerIconButton(shape: .circle)
-                .accessibilityLabel(Text(LocalizedStringResource(
-                    "workboard.material.share",
-                    defaultValue: "Share"
-                )))
-            }
-            // The gallery's own copy of the share state. Without it a large
-            // original exports behind an opaque black sheet with nothing on
-            // screen, and a refusal lands on an alert nobody can see.
-            .overlay(alignment: .top) {
-                WorkShareStatusBanner(
-                    share: share,
-                    rendersFailure: true,
-                    reduceMotion: reduceMotion
-                )
-            }
-            // A picture wants the size it deserves rather than the floor a
-            // minimum-only sheet would open at. The main window's default is
-            // 1100x760, so 900x640 reads as a preview of the desk behind it
-            // rather than a second window.
-            .workboardDesktopSheetFrame(
-                minWidth: 640,
-                minHeight: 480,
-                idealWidth: 900,
-                idealHeight: 640,
-                maxWidth: .infinity,
-                maxHeight: .infinity
+        case .imageGallery(let selection):
+            WorkboardGallerySheet(
+                selection: selection,
+                onSharePage: onSharePage,
+                share: share
             )
-        case .note, .link:
+        case .note:
             textualPreview
         }
     }
@@ -1372,24 +1370,6 @@ private struct WorkboardMaterialPreviewView: View {
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(20)
-                    }
-                case .link(let url):
-                    ContentUnavailableView {
-                        Label(
-                            LocalizedStringResource("workboard.material.link", defaultValue: "Link"),
-                            systemImage: "link"
-                        )
-                    } description: {
-                        Text(verbatim: url.absoluteString)
-                            .textSelection(.enabled)
-                    } actions: {
-                        Link(destination: url) {
-                            Label(
-                                LocalizedStringResource("workboard.material.openLink", defaultValue: "Open Link"),
-                                systemImage: "arrow.up.right.square"
-                            )
-                        }
-                        .buttonStyle(.borderedProminent)
                     }
                 case .imageGallery:
                     // Unreachable: the gallery is drawn above, outside this
@@ -1407,6 +1387,253 @@ private struct WorkboardMaterialPreviewView: View {
             }
         }
         .workboardDesktopSheetFrame(minWidth: 360, minHeight: 340)
+    }
+}
+
+/// Work's gallery: the shared component, plus the two things only this surface
+/// has — the share state it must draw itself because the sheet covers the
+/// desk's, and the recording folded into the picture on screen.
+///
+/// IT OWNS THE CURSOR. `AttachmentGallerySelection` is created here and handed
+/// to the gallery, so the band below the picture and the Share control inside
+/// the header resolve the SAME page: a folded card's transport that read its
+/// own index would play the previous recording over the current picture after
+/// one swipe.
+private struct WorkboardGallerySheet: View {
+    let selection: PersonalWorkbenchRouter.GallerySelection
+    let onSharePage: (UUID) -> Void
+    let share: WorkMaterialShareCoordinator
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The one cursor. `@State` of a reference this view owns, so it survives
+    /// redraws and the gallery writes the value this view reads.
+    @State private var cursor: AttachmentGallerySelection
+
+    /// ONE player for the sheet, not one per band: the process-wide
+    /// exclusivity registry only means something while a surface holds a single
+    /// player, and two bands each holding a copy of the same clip is exactly
+    /// what it exists to prevent.
+    @State private var companionPlayer = WorkboardAudioCardPlayer()
+
+    init(
+        selection: PersonalWorkbenchRouter.GallerySelection,
+        onSharePage: @escaping (UUID) -> Void,
+        share: WorkMaterialShareCoordinator
+    ) {
+        self.selection = selection
+        self.onSharePage = onSharePage
+        self.share = share
+        _cursor = State(initialValue: AttachmentGallerySelection(
+            startIndex: selection.startIndex,
+            pageCount: selection.pages.count
+        ))
+    }
+
+    private var currentPageID: UUID? {
+        cursor.pageID(in: selection.pages)
+    }
+
+    private var currentCompanion: WorkboardCompanionSnapshot? {
+        selection.companion(forPage: currentPageID)
+    }
+
+    var body: some View {
+        AttachmentFullScreenView(
+            pages: selection.pages,
+            startIndex: selection.startIndex,
+            // Lazy, per page, and by card id: the gallery asks only for the
+            // page being looked at, and a card whose bytes are unreadable
+            // throws so that page offers Retry instead of spinning.
+            loadFullBytes: { materialID in
+                try await PersonalWorkbenchRouter.imageBytes(materialID: materialID)
+            },
+            // A card captured before the desk sized its pictures still holds
+            // its original bytes, so a camera photo there is a 40+ megapixel
+            // decode; a newer card is already at
+            // `Constants.workboardImageMaxPixel` and the bound is a no-op. The
+            // bound is what makes a desk-wide gallery affordable; the STRICT
+            // path behind it reports failure rather than silently falling back
+            // to an unbounded decode.
+            fullDecodeMaxPixel: 4096,
+            selection: cursor
+        ) { pageID in
+            // The ORIGINAL bytes, resolved by the coordinator from the card
+            // id — never the bounded image this gallery decoded to draw.
+            Button {
+                onSharePage(pageID)
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .pointerIconButton(size: 40, shape: .circle)
+            .accessibilityLabel(Text(LocalizedStringResource(
+                "workboard.material.share",
+                defaultValue: "Share"
+            )))
+        }
+        // The gallery's own copy of the share state. Without it a large
+        // original exports behind an opaque black sheet with nothing on
+        // screen, and a refusal lands on an alert nobody can see. Inset below
+        // the gallery's header, which owns that strip.
+        .overlay(alignment: .top) {
+            WorkShareStatusBanner(
+                share: share,
+                rendersFailure: true,
+                reduceMotion: reduceMotion
+            )
+            .padding(.top, AttachmentGalleryChrome.headerHeight)
+        }
+        // The folded card, opened as ONE sheet: the picture in the gallery, its
+        // recording's transport along the bottom of that page.
+        .overlay(alignment: .bottom) {
+            if let companion = currentCompanion {
+                WorkboardGalleryCompanionBand(
+                    companion: companion,
+                    player: companionPlayer
+                )
+            }
+        }
+        // Watched on the SHEET, not inside the band: moving from a folded
+        // picture to an ordinary one removes the band, and a paused player
+        // resumes the clip it already holds — so a player left alive here would
+        // start the previous picture's recording under the next one.
+        .onChange(of: currentCompanion?.id) { _, _ in companionPlayer.deactivate() }
+        .onDisappear { companionPlayer.deactivate() }
+    }
+}
+
+/// The recording's transport along the bottom of the picture it was captured
+/// with.
+///
+/// ACCESSIBILITY IS THIS VIEW'S OWN JOB. `WorkboardAudioTransport(.control)`
+/// hides itself from VoiceOver because on the board its card supplies the
+/// matching custom actions; there is no card here, so the band states what the
+/// recording is, what it is doing, and offers the one action itself.
+private struct WorkboardGalleryCompanionBand: View {
+    let companion: WorkboardCompanionSnapshot
+    let player: WorkboardAudioCardPlayer
+
+    /// The recording's OWN readability, never the picture's. A picture that
+    /// opened can be folded with a recording whose bytes are still arriving.
+    private var isPlayable: Bool {
+        WorkboardCardActionPolicy.allows(.play, when: companion.availability)
+    }
+
+    /// Why the transport is not offering to play, IN WORDS.
+    ///
+    /// The board's card carries this sentence beside its glyph and names the
+    /// repair in its menu; the gallery has neither, so without it the only
+    /// account a sighted person got of a dead control was a 13-point symbol.
+    /// `hasReattachAction: false` is the honest argument: reattachment is the
+    /// desk's flow — it picks a replacement file through the capture canvas's
+    /// own importer — and this sheet wires nothing to it, so the chip states
+    /// what is true ("Not on this device") instead of naming an action that
+    /// would do nothing here.
+    private var availabilityChip: WorkboardAudioCardChip? {
+        guard !isPlayable else { return nil }
+        return WorkboardAudioCardPresentation.chip(
+            for: companion.availability,
+            hasReattachAction: false
+        )
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            WorkboardAudioTransport(
+                materialID: companion.id,
+                player: player,
+                availability: companion.availability,
+                activation: .control,
+                dimension: 40,
+                placement: .scrim
+            )
+            let face = WorkboardCompanionBand.face(for: companion)
+            VStack(alignment: .leading, spacing: 3) {
+                if let lead = face.leadLine {
+                    Text(verbatim: lead)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.white)
+                        .lineLimit(1)
+                }
+                if let transcript = face.trailingExcerpt {
+                    Text(verbatim: transcript)
+                        .font(.caption)
+                        .foregroundStyle(Color.white.opacity(0.85))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                if let chip = availabilityChip {
+                    HStack(spacing: 4) {
+                        Image(systemName: chip.glyphName)
+                        Text(chip.label)
+                            .lineLimit(1)
+                    }
+                    .font(.caption2)
+                    // The scrim's own literals, not the semantic tint: what is
+                    // underneath is a photograph, exactly as for the words
+                    // above.
+                    .foregroundStyle(Color.white.opacity(0.85))
+                }
+                WorkboardAudioProgressTrack(player: player, placement: .scrim)
+            }
+            // Only the transport is a control. The words let the touch through
+            // to the picture underneath, exactly as the board's own band does.
+            .allowsHitTesting(false)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            LinearGradient(
+                colors: [.black.opacity(0), .black.opacity(0.6)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea(edges: .bottom)
+            .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: accessibilityLabel))
+        // The SAME sentence the board's folded card speaks — availability,
+        // what the transport is doing, and the clock once a clip has decoded.
+        .accessibilityValue(Text(verbatim: WorkboardCompanionBand.accessibilityValue(
+            for: companion,
+            phase: player.phase,
+            elapsed: player.elapsed,
+            duration: player.duration
+        )))
+        // Offered ONLY where it does something. The sheet deliberately keeps a
+        // companion whose bytes are still arriving — the label and the value
+        // say so — but an action that returns the moment it is invoked is a
+        // silent refusal, which is the one thing VoiceOver cannot report.
+        .accessibilityActions {
+            if isPlayable {
+                Button {
+                    play()
+                } label: {
+                    Text(WorkboardAudioTransport.actionTitle(for: player.phase))
+                }
+            }
+        }
+    }
+
+    private func play() {
+        guard isPlayable else { return }
+        let id = companion.id
+        player.toggle { try await ConversationStore.shared.loadWorkMaterialPayload(id: id) }
+    }
+
+    private var accessibilityLabel: String {
+        var parts = [String(localized: WorkboardCompanionBand.accessibilityKindLabel)]
+        // The same deduplicated pair the band draws: a recording named after
+        // its own opening line said that line twice here.
+        parts.append(contentsOf: WorkboardCompanionBand.face(for: companion).spokenParts)
+        return parts.joined(separator: ", ")
     }
 }
 

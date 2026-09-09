@@ -1137,8 +1137,17 @@ private struct WorkboardMaterialBoard: View {
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
     @State private var boardWidth: CGFloat = 0
+    /// The board's own origin in the space its frame is measured in, PUBLISHED
+    /// — written at the lift and then only while a card is in the air, because
+    /// a moving origin is what lets a stored pointer be re-derived while the
+    /// pointer itself holds still.
+    @State private var boardOrigin: CGPoint = .zero
+    /// The same frame, recorded unpublished on every geometry change so the
+    /// lift has a current origin to start from without any scroll having
+    /// invalidated the board.
+    @State private var boardFrame = BoardFrame()
     @State private var layoutMode = WorkboardLayoutMode.load()
-    @State private var dropLocation: CGPoint?
+    @State private var dragSession: DragSession?
     @State private var rowFrames: [UUID: CGRect] = [:]
     @State private var coordinateSpaceID = UUID()
     @State private var materialPendingRemoval: WorkboardMaterialSnapshot?
@@ -1162,12 +1171,39 @@ private struct WorkboardMaterialBoard: View {
         WorkboardMosaicEngine(metrics: metrics).unitSize(forWidth: boardWidth).height
     }
 
-    /// Placement is recomputed from the same inputs the `Layout` memoises, so
-    /// drop geometry can never disagree with the frames on screen.
-    private var placement: WorkboardMosaicEngine.Result {
-        WorkboardMosaicEngine(metrics: metrics).place(
-            sizes: item.materials.map { (id: $0.id, size: $0.cardSize) },
-            availableWidth: boardWidth
+    /// The cards the board displays, in order. A folded recording is not one
+    /// of them — it rides inside its picture — so this is the displayed order
+    /// the slot arithmetic and the commit both speak in.
+    private var displayedIDs: [UUID] {
+        item.materials.map(\.id)
+    }
+
+    /// The gap the lifted card would fall into, `0...count` in the CURRENT,
+    /// source-present order. Nil whenever nothing is lifted or the pointer is
+    /// off the board, which is also what takes the placeholder away.
+    ///
+    /// A committed slot outranks the pointer: between the drop and the moment
+    /// the view model's order arrives, the board keeps showing the destination
+    /// the person released on. Dropping that presentation early would put the
+    /// card back where it started for as long as the provider decode and the
+    /// desk's mutation lane take — a snap-back the person reads as a failure.
+    private var acceptedSlot: Int? {
+        guard let session = dragSession else { return nil }
+        if let committed = session.committedSlot { return committed }
+        guard let global = session.globalPoint else { return nil }
+        return slot(
+            at: WorkboardDragResolution.boardPoint(global: global, boardOrigin: boardOrigin),
+            in: session
+        )
+    }
+
+    /// What the board DRAWS: the lifted card gone from the sequence and a
+    /// placeholder standing in the slot it would land in.
+    private var dragEntries: [WorkboardDragArrangement.Entry] {
+        WorkboardDragArrangement.entries(
+            displayedIDs: displayedIDs,
+            sourceID: dragSession?.sourceID,
+            acceptedSlot: acceptedSlot
         )
     }
 
@@ -1179,42 +1215,8 @@ private struct WorkboardMaterialBoard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             arrangementControls
-            boardContent
-                .frame(maxWidth: .infinity)
-                // A real trailing drop region makes appending possible even
-                // when the final row occupies every grid column.
-                .padding(.bottom, 24)
-                .contentShape(Rectangle())
-                .coordinateSpace(name: coordinateSpaceID)
-                .onGeometryChange(for: CGFloat.self) { proxy in
-                    proxy.size.width
-                } action: { width in
-                    boardWidth = width
-                }
-                .onPreferenceChange(WorkboardRowFramesKey.self) { rowFrames = $0 }
-                .overlay(alignment: .topLeading) { insertionMarker }
-                .onDrop(
-                    of: [.conduckWorkboardMaterial],
-                    delegate: WorkboardReorderDropDelegate(
-                        isEnabled: workbenchDestinationIsActive && !viewModel.isCapturingIntoDesk,
-                        onLocation: { dropLocation = $0 },
-                        onDrop: drop
-                    )
-                )
+            boardSurface
         }
-        // A reflow is a frame change, not a leaf property, so it takes the
-        // value form. It is scoped to the board container and never reaches the
-        // navigation split view that hosts it.
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: arrangement)
-        .onChange(of: layoutMode) { _, mode in
-            dropLocation = nil
-            rowFrames = [:]
-            mode.save()
-        }
-        .onChange(of: workbenchDestinationIsActive) { _, active in
-            if !active { dropLocation = nil }
-        }
-        .onDisappear { dropLocation = nil }
         .confirmationDialog(
             String(localized: LocalizedStringResource(
                 "workboard.material.remove.confirm.title",
@@ -1260,6 +1262,82 @@ private struct WorkboardMaterialBoard: View {
                 material.name
             ))
         }
+    }
+
+    /// The board, everything a live drag reads from it, and everything that
+    /// ends one. Split off the body because the whole chain in one expression
+    /// is more than the type checker will solve in reasonable time.
+    private var boardSurface: some View {
+        boardDropSurface
+            // A reflow is a frame change, not a leaf property, so it takes the
+            // value form. It is scoped to the board container and never reaches
+            // the navigation split view that hosts it.
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: arrangement)
+            // The lifted card's neighbours move when — and only when — the slot
+            // the board accepted changes. Pointer movement inside one slot
+            // changes nothing to animate.
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: dragEntries)
+            .workboardDragFeedback(source: dragSession?.sourceID, slot: acceptedSlot)
+            .onChange(of: layoutMode) { _, mode in
+                endDrag()
+                rowFrames = [:]
+                mode.save()
+            }
+            // The desk moved under a live drag. Tiles rebase — their slot lines
+            // are a function of (count, width) and nothing else — but three
+            // changes end the drag instead, because no honest answer survives
+            // them: the lifted card left the board, the view model took the
+            // commit over, or a list's frozen row measurements stopped
+            // describing what is on screen.
+            .onChange(of: displayedIDs) { _, ids in
+                reconcileDrag(with: ids)
+            }
+            .onChange(of: workbenchDestinationIsActive) { _, active in
+                if !active { endDrag() }
+            }
+            .onDisappear { endDrag() }
+    }
+
+    private var boardDropSurface: some View {
+        boardContent
+            .frame(maxWidth: .infinity)
+            // A real trailing drop region makes appending possible even when
+            // the final row occupies every grid column.
+            .padding(.bottom, 24)
+            .contentShape(Rectangle())
+            .coordinateSpace(name: coordinateSpaceID)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { width in
+                boardWidth = width
+            }
+            // The board's own ORIGIN, which moves whenever the board scrolls.
+            // That movement is the only signal a STILL pointer gets that the
+            // slot under it has changed — a drop delegate reports nothing while
+            // the pointer holds still, which is exactly what a person does at
+            // the edge while waiting for the board to scroll.
+            //
+            // It is recorded into a reference, which costs no invalidation, and
+            // PUBLISHED only while a card is in the air. Publishing it always
+            // would rebuild this board's body at scroll rate for a number
+            // nothing but a live drag reads.
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .global)
+            } action: { frame in
+                boardFrame.rect = frame
+                if dragSession != nil, boardOrigin != frame.origin {
+                    boardOrigin = frame.origin
+                }
+            }
+            .onPreferenceChange(WorkboardRowFramesKey.self) { rowFrames = $0 }
+            .onDrop(
+                of: [.conduckWorkboardMaterial],
+                delegate: WorkboardReorderDropDelegate(
+                    isEnabled: workbenchDestinationIsActive && !viewModel.isCapturingIntoDesk,
+                    onLocation: { hover(at: $0) },
+                    onDrop: drop
+                )
+            )
     }
 
     private var arrangementControls: some View {
@@ -1313,90 +1391,350 @@ private struct WorkboardMaterialBoard: View {
         }
     }
 
-    /// The cards, in DISPLAYED order. A folded recording is not one of them —
-    /// it rides inside its picture's snapshot — so the enumerated index is a
-    /// card position and stays the right thing to hand a mosaic, a drag payload
-    /// and an accessibility position count.
+    /// The cards, in DISPLAYED order — with one of them missing and a
+    /// placeholder in its place whenever a drag is live.
     ///
+    /// A folded recording is not one of them: it rides inside its picture's
+    /// snapshot, so the index looked up here is a card POSITION and stays the
+    /// right thing to hand a drag payload, a Move Earlier row and an
+    /// accessibility position count. `WorkboardDragArrangement` decides what is
+    /// drawn; the layout below places whatever it returns, and because the
+    /// placeholder occupies the lifted card's footprint the number of tiles
+    /// never changes mid-drag — which is the whole reason the slot lines can be
+    /// treated as fixed.
     private var boardItems: some View {
-        ForEach(Array(item.materials.enumerated()), id: \.element.id) { index, material in
-            card(for: material, at: index)
-                .workboardMosaicCardSize(material.cardSize)
-                .background {
-                    if layoutMode == .list {
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: WorkboardRowFramesKey.self,
-                                value: [material.id: proxy.frame(in: .named(coordinateSpaceID))]
-                            )
-                        }
+        ForEach(dragEntries, id: \.self) { entry in
+            switch entry {
+            case .card(let id):
+                if let index = displayedIDs.firstIndex(of: id) {
+                    boardCard(item.materials[index], at: index)
+                }
+            case .placeholder:
+                dropPlaceholder
+            }
+        }
+    }
+
+    private func boardCard(_ material: WorkboardMaterialSnapshot, at index: Int) -> some View {
+        card(for: material, at: index)
+            .workboardMosaicCardSize(material.cardSize)
+            .background {
+                if layoutMode == .list {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: WorkboardRowFramesKey.self,
+                            value: [material.id: proxy.frame(in: .named(coordinateSpaceID))]
+                        )
                     }
                 }
-                .onDrag {
-                    guard workbenchDestinationIsActive,
-                          !viewModel.isCapturingIntoDesk else { return NSItemProvider() }
-                    return WorkMaterialDragPayload(
-                        itemID: Constants.workboardDeskItemID,
-                        materialID: material.id
-                    ).itemProvider()
-                }
-                .accessibilityIdentifier("workboard-material-\(material.id.uuidString)")
-        }
-    }
-
-    private func insertionIndex(at point: CGPoint) -> Int {
-        if layoutMode == .list {
-            for (index, material) in item.materials.enumerated() {
-                if let frame = rowFrames[material.id], point.y < frame.midY { return index }
             }
-            return item.materials.count
-        }
-        return WorkboardMosaicLayout.insertionIndex(
-            at: point,
-            in: placement,
-            containerWidth: boardWidth,
-            layoutDirection: layoutDirection
-        )
+            .onDrag {
+                guard workbenchDestinationIsActive,
+                      !viewModel.isCapturingIntoDesk else { return NSItemProvider() }
+                beginDrag(of: material)
+                return WorkMaterialDragPayload(
+                    itemID: Constants.workboardDeskItemID,
+                    materialID: material.id
+                ).itemProvider()
+            } preview: {
+                liftPreview(for: material)
+            }
+            #if os(macOS)
+            // The pointer says what the gesture is before it starts, which is
+            // the only lift language a Mac has: there is no long press to feel
+            // and no haptic to hear.
+            //
+            // The closed hand follows the live POINTER rather than the session.
+            // Nothing reports a drag ending outside the board, so a session can
+            // outlive the gesture that made it; the pointer leaving the board
+            // is reported, and a cursor that reverted then is right in every
+            // case a stale session would have left it closed over an idle
+            // board.
+            .pointerStyle(dragSession?.globalPoint == nil ? .grabIdle : .grabActive)
+            #endif
+            .accessibilityIdentifier("workboard-material-\(material.id.uuidString)")
     }
 
-    /// The marker describes a gap in the current order. Cards stay put while
-    /// hovering, so their moving targets cannot oscillate under a still finger.
+    /// The hole the lifted card left, standing in the slot it would land in.
+    ///
+    /// It is drawn rather than merely left empty because an empty slot in a
+    /// grid of cards is indistinguishable from the end of the board; and it is
+    /// a real participant in the layout rather than an overlay, so the cards
+    /// around it are actually displaced and the person reads the destination
+    /// off the arrangement instead of off a marker they have to interpret.
+    private var dropPlaceholder: some View {
+        let shape = RoundedRectangle(cornerRadius: 13, style: .continuous)
+        return shape
+            .fill(AppColors.brandAmber.opacity(0.10))
+            .overlay {
+                shape.strokeBorder(
+                    AppColors.brandAmber.opacity(0.75),
+                    style: StrokeStyle(lineWidth: 2, dash: [7, 5])
+                )
+            }
+            .frame(maxWidth: .infinity, maxHeight: layoutMode == .list ? nil : .infinity)
+            .frame(height: layoutMode == .list ? placeholderHeight(forSource: dragSession?.sourceID) : nil)
+            .workboardMosaicCardSize(WorkboardFootprint.uniform)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    /// What travels under the pointer.
+    ///
+    /// Deliberately NOT the card itself. `WorkboardSourceCard` and
+    /// `WorkboardAudioCardView` each own a player and a payload read, so a
+    /// second instance of one would mount a second reader for the same
+    /// recording purely to be dragged. The preview instead reads the same face
+    /// policy the card reads and draws its first two lines, so it says what the
+    /// card says with none of the card's machinery.
+    private func liftPreview(for material: WorkboardMaterialSnapshot) -> some View {
+        let face = WorkboardCardFacePolicy.face(for: material)
+        let shape = RoundedRectangle(cornerRadius: 13, style: .continuous)
+        let size = liftPreviewSize(for: material)
+        return HStack(alignment: .top, spacing: 10) {
+            liftPreviewArtwork(for: material)
+            VStack(alignment: .leading, spacing: 3) {
+                if let lead = face.leadLine {
+                    Text(verbatim: lead)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppColors.textPrimary)
+                        .lineLimit(3)
+                        .truncationMode(face.headingProtectsExtension ? .middle : .tail)
+                }
+                if let identity = face.identity {
+                    Text(verbatim: identity)
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textTertiary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .background(AppColors.cardBackgroundElevated, in: shape)
+        .overlay { shape.strokeBorder(AppColors.borderSubtle, lineWidth: 1) }
+        .clipShape(shape)
+    }
+
+    /// The preview decodes its thumbnail SYNCHRONOUSLY. A staged decode would
+    /// resolve after the system has already snapshotted the preview, so the
+    /// picture card would be dragged as an empty frame; the bytes here are an
+    /// `ImageProcessor` thumbnail, which is what makes that affordable.
     @ViewBuilder
-    private var insertionMarker: some View {
-        if let dropLocation, let marker = markerFrame(at: insertionIndex(at: dropLocation)) {
-            Capsule()
-                .fill(AppColors.brandAmber)
-                .frame(width: marker.width, height: marker.height)
-                .position(x: marker.midX, y: marker.midY)
-                .shadow(color: AppColors.brandAmber.opacity(0.3), radius: 4)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+    private func liftPreviewArtwork(for material: WorkboardMaterialSnapshot) -> some View {
+        let artworkShape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        if let data = material.thumbnailData, let image = Image.platformImage(from: data) {
+            image
+                .resizable()
+                .scaledToFill()
+                .frame(width: 40, height: 40)
+                .clipShape(artworkShape)
+        } else {
+            Image(systemName: WorkboardMaterialIcon.symbol(for: material))
+                .font(.system(size: 18))
+                .foregroundStyle(WorkboardMaterialIcon.tint(for: material))
+                .frame(width: 40, height: 40)
+                .background(AppColors.backgroundSecondary, in: artworkShape)
         }
     }
 
-    private func markerFrame(at index: Int) -> CGRect? {
-        guard !item.materials.isEmpty else { return nil }
-        let isEnd = index == item.materials.count
-        let targetIndex = min(index, item.materials.count - 1)
+    /// The size of the hole the card leaves, so what the pointer carries and
+    /// what the board is holding open for it are the same shape.
+    private func liftPreviewSize(for material: WorkboardMaterialSnapshot) -> CGSize {
         if layoutMode == .list {
-            guard let frame = rowFrames[item.materials[targetIndex].id] else { return nil }
-            return CGRect(x: frame.minX, y: (isEnd ? frame.maxY + 5 : frame.minY - 5) - 2,
-                          width: frame.width, height: 4)
+            let width = boardWidth.isFinite && boardWidth > 0 ? boardWidth : Self.fallbackPreviewEdge * 2
+            return CGSize(width: width, height: placeholderHeight(forSource: material.id))
         }
-        let result = placement
-        guard targetIndex < result.placements.count else { return nil }
-        let frame = WorkboardMosaicLayout.presentedFrame(
-            result.placements[targetIndex].frame,
-            contentWidth: result.contentSize.width,
+        let slot = WorkboardMosaicEngine(metrics: metrics)
+            .slotFrames(count: max(1, item.materials.count), width: boardWidth)
+            .first
+        guard let slot,
+              slot.width.isFinite, slot.height.isFinite,
+              slot.width > 0, slot.height > 0 else {
+            return CGSize(width: Self.fallbackPreviewEdge, height: Self.fallbackPreviewEdge)
+        }
+        return slot.size
+    }
+
+    /// A list row states a MINIMUM height and then grows with its text, so a
+    /// placeholder that guessed would move every row below it. The source's own
+    /// measured height is the only number that leaves them where they were.
+    private func placeholderHeight(forSource id: UUID?) -> CGFloat {
+        guard let id else { return Self.listRowMinimumHeight }
+        return WorkboardDragResolution.placeholderHeight(
+            for: id,
+            frames: dragSession?.rowFrames ?? rowFrames,
+            fallback: Self.listRowMinimumHeight
+        )
+    }
+
+    private static let listRowMinimumHeight: CGFloat = 88
+    private static let fallbackPreviewEdge: CGFloat = 160
+
+    /// The board's live frame, held in a reference on purpose: a scroll changes
+    /// it on every frame, and routing that through view state would rebuild the
+    /// board's body at scroll rate for a value only a live drag reads.
+    private final class BoardFrame {
+        var rect: CGRect = .zero
+    }
+
+    // MARK: - The live drag
+
+    /// One live drag, as a value.
+    ///
+    /// The SOURCE's lifetime is deliberately not the POINTER's. A drop delegate
+    /// reports the pointer leaving the board; it never reports the drag ending,
+    /// so a session torn down on exit could not resume when the pointer came
+    /// back with the same card still in the air — and a session torn down on a
+    /// timer would guess. What an exit clears is the pointer, which is what the
+    /// placeholder is drawn from: leaving the board takes the placeholder away,
+    /// returning puts it back, and a drag that ends elsewhere simply never
+    /// draws one again.
+    private struct DragSession: Equatable {
+        /// This drag, told apart from every other one.
+        ///
+        /// The commit's tail runs LONG after the board released the session:
+        /// the board holds the destination only until the view model's order
+        /// arrives, and the person may already be holding the next card in the
+        /// air by the time the provider decode and the mutation lane finish. A
+        /// tail that cleared unconditionally would take that new drag's
+        /// placeholder away and make its drop fail the session guard; a tail
+        /// that clears only its own token leaves it alone.
+        let token = UUID()
+        let sourceID: UUID
+        /// The displayed order at the lift. The frozen row frames below are
+        /// true of this order and of no other.
+        let listBaseline: [UUID]
+        /// List row frames as measured at the lift. The reflow moves every row,
+        /// so resolving against live frames would chase the cards it is moving.
+        let rowFrames: [UUID: CGRect]
+        /// The board width those frames were measured at. A row states a
+        /// minimum height and grows with its text, so a width change re-wraps
+        /// and re-measures every one of them.
+        let listWidth: CGFloat
+        /// The pointer, in the space the board's own frame is measured in — so
+        /// a scroll under a still pointer re-derives a new board-local point
+        /// instead of holding a stale slot. Nil while the pointer is off the
+        /// board.
+        var globalPoint: CGPoint? = nil
+        /// Set at the drop and held until the view model's order arrives.
+        var committedSlot: Int? = nil
+    }
+
+    /// The slot a board-local point is over, in the CURRENT source-present
+    /// order.
+    ///
+    /// The count is the DISPLAYED count throughout the drag, never one less:
+    /// the source is lifted rather than removed and the placeholder occupies
+    /// its footprint, so a count that dropped by one would slide every slot
+    /// line out from under a pointer that had not moved.
+    ///
+    /// Nil is a refusal, and only the list can answer it: its lines come from
+    /// measurements that are true of one order, and it declines rather than
+    /// resolve against measurements the board has outgrown.
+    private func slot(at point: CGPoint, in session: DragSession) -> Int? {
+        slot(
+            at: point,
+            baseline: session.listBaseline,
+            frames: session.rowFrames,
+            width: session.listWidth
+        )
+    }
+
+    /// The same question asked from measurements the caller names, so a board
+    /// that never lifted anything can still answer it — see `drop` for the one
+    /// caller that has no session of its own. A LIVE baseline and live frames
+    /// describe the board exactly as a frozen pair describes the board at the
+    /// lift, so both go through one implementation and neither can drift.
+    private func slot(
+        at point: CGPoint,
+        baseline: [UUID],
+        frames: [UUID: CGRect],
+        width: CGFloat
+    ) -> Int? {
+        guard !item.materials.isEmpty else { return nil }
+        if layoutMode == .list {
+            // The frozen map is true of one order AND of one set of heights.
+            // `listSlot` tests the order; this tests the measurements, which a
+            // resize, a Dynamic Type change or a row settling to a taller
+            // intrinsic height all move without touching the order at all.
+            guard WorkboardDragResolution.measuredRowsHold(
+                frozen: frames,
+                live: rowFrames,
+                frozenWidth: width,
+                liveWidth: boardWidth
+            ) else { return nil }
+            return WorkboardDragResolution.listSlot(
+                at: point,
+                baseline: baseline,
+                displayedIDs: displayedIDs,
+                frames: frames
+            )
+        }
+        return WorkboardMosaicEngine(metrics: metrics).insertionSlot(
+            at: point,
+            count: item.materials.count,
+            width: boardWidth,
             layoutDirection: layoutDirection
         )
-        let inset = WorkboardMosaicLayout.horizontalInset(
-            containerWidth: boardWidth, contentWidth: result.contentSize.width
+    }
+
+    private func beginDrag(of material: WorkboardMaterialSnapshot) {
+        // The published origin is only kept current while a drag is live, so
+        // the lift is where it is brought up to date.
+        boardOrigin = boardFrame.rect.origin
+        dragSession = DragSession(
+            sourceID: material.id,
+            listBaseline: displayedIDs,
+            rowFrames: rowFrames,
+            listWidth: boardWidth
         )
-        let leadingX = layoutDirection == .rightToLeft ? frame.maxX + 5 : frame.minX - 5
-        let trailingX = layoutDirection == .rightToLeft ? frame.minX - 5 : frame.maxX + 5
-        return CGRect(x: inset + (isEnd ? trailingX : leadingX) - 2,
-                      y: frame.minY, width: 4, height: frame.height)
+    }
+
+    /// A pointer position, or nil for a pointer that has left the board. A
+    /// committed drag ignores both: the destination it is holding is no longer
+    /// a question about where the pointer is.
+    private func hover(at location: CGPoint?) {
+        guard var session = dragSession, session.committedSlot == nil else { return }
+        session.globalPoint = location.map {
+            WorkboardDragResolution.globalPoint(board: $0, boardOrigin: boardOrigin)
+        }
+        dragSession = session
+    }
+
+    private func endDrag() {
+        dragSession = nil
+    }
+
+    /// End one PARTICULAR drag. Everything that finishes asynchronously ends
+    /// this way, because by the time it runs the session it belongs to may
+    /// already be gone and a different card may be in the air.
+    /// A nil token is a drag this board never drew — a lift in another window —
+    /// so there is no presentation of its own to take down.
+    private func endDrag(matching token: UUID?) {
+        guard let token, dragSession?.token == token else { return }
+        dragSession = nil
+    }
+
+    /// The desk moved while a card was in the air.
+    ///
+    /// Tiles rebase silently — their slot lines are a function of (count,
+    /// width) and of nothing the desk stores — so an arriving capture just
+    /// re-resolves. Three changes end the drag instead, because no honest
+    /// answer survives them.
+    private func reconcileDrag(with ids: [UUID]) {
+        guard let session = dragSession else { return }
+        guard WorkboardDragResolution.dragSurvives(
+            sourceID: session.sourceID,
+            listBaseline: session.listBaseline,
+            displayedIDs: ids,
+            isCommitted: session.committedSlot != nil,
+            resolvesByMeasuredRows: layoutMode == .list
+        ) else {
+            endDrag()
+            return
+        }
     }
 
     /// Which card one material draws. A voice note is a transport rather than a
@@ -1456,7 +1794,6 @@ private struct WorkboardMaterialBoard: View {
                 onOpen: { onOpen(material) },
                 onShare: { onShare(material) },
                 onReattach: { onReattach(material) },
-                onSetSize: { size in setSize(size, for: material) },
                 onMoveEarlier: onMoveEarlier,
                 onMoveLater: onMoveLater,
                 onRemove: { materialPendingRemoval = material }
@@ -1472,7 +1809,6 @@ private struct WorkboardMaterialBoard: View {
                 onOpen: { onOpen(material) },
                 onShare: { onShare(material) },
                 onReattach: { onReattach(material) },
-                onSetSize: { size in setSize(size, for: material) },
                 onMoveEarlier: onMoveEarlier,
                 onMoveLater: onMoveLater,
                 onRemove: { materialPendingRemoval = material },
@@ -1483,36 +1819,123 @@ private struct WorkboardMaterialBoard: View {
         }
     }
 
+    /// The release.
+    ///
+    /// The slot is resolved SYNCHRONOUSLY, while the arrangement the person was
+    /// looking at is still the arrangement, and immediately named by a
+    /// neighbour card and a side. Everything after this is asynchronous — the
+    /// provider decodes off the main actor and the view model then waits for
+    /// the desk's mutation lane — and an arrival landing in either gap silently
+    /// changes which gap an integer would have meant. A neighbour is re-found
+    /// in whatever order the planner eventually sees, and a neighbour that has
+    /// gone becomes a refusal the person can read.
+    ///
+    /// The board keeps drawing the destination across that whole interval. The
+    /// alternative — clearing on release — puts the card back where it started
+    /// until the write lands, so every successful drop would flash a snap-back
+    /// first.
     private func drop(_ provider: NSItemProvider, at location: CGPoint) -> Bool {
         guard workbenchDestinationIsActive,
               !viewModel.isCapturingIntoDesk,
-              !item.materials.isEmpty else { return false }
-        let index = insertionIndex(at: location)
-        // Capture the visible neighbour, not an integer that an intervening
-        // import or sync could silently turn into a different destination.
-        let targetID = item.materials[min(index, item.materials.count - 1)].id
-        let position: WorkboardReorderPlacement = index == item.materials.count ? .after : .before
+              !item.materials.isEmpty
+        else {
+            endDrag()
+            return false
+        }
+        // A LIFT IN ANOTHER WINDOW reaches this board with no session of its
+        // own. iPad runs several Work scenes (`UIApplicationSupportsMultipleScenes`)
+        // and so does the Mac, the drag crosses them, and `validateDrop` has
+        // already accepted a payload this process wrote — so requiring a local
+        // lift here would refuse a reorder the board can answer perfectly well.
+        // It can: the card was lifted from the OTHER window's sequence, not
+        // from the desk, so it is still displayed here and the live order and
+        // live row frames describe this board exactly as a frozen pair
+        // describes the window that started the drag.
+        //
+        // `flatMap`, not `map`: a session that cannot ANSWER must not swallow
+        // the fallback. `map` builds an `Int??` whose inner nil survives `??`,
+        // so a board merely HOLDING a session — including the one a local drag
+        // cancelled off the board leaves behind, which nothing clears — would
+        // refuse a foreign drop before the payload is even decoded, and the
+        // identity check below could never run. A frozen pair that has stopped
+        // describing this board is not a reason to refuse a drag it never
+        // belonged to; it is a reason to ask the same question of the
+        // measurements that DO describe the board. Those are honest here
+        // precisely BECAUSE the frozen pair refused: nothing is drawn lifted
+        // while `acceptedSlot` is nil, so the live order and the live frames
+        // are the arrangement the person released over. A frozen map that is
+        // still answering keeps its answer — this never second-guesses it.
+        let session = dragSession
+        let heldSlot = session.flatMap { slot(at: location, in: $0) }
+        let resolved = heldSlot ?? slot(
+            at: location,
+            baseline: displayedIDs,
+            frames: rowFrames,
+            width: boardWidth
+        )
+        guard let slot = resolved,
+              let target = WorkboardDragArrangement.commitTarget(
+                  slot: slot,
+                  displayedIDs: displayedIDs
+              )
+        else {
+            endDrag()
+            return false
+        }
+        // Only a LOCAL drag has a presentation to hold: this board drew the
+        // hole, so this board keeps drawing the destination until the view
+        // model's order arrives. A drag from another window displaced nothing
+        // here, so there is nothing to hold and nothing to release.
+        // The hold belongs to the session that RESOLVED the drop, which is why
+        // it is conditioned on `heldSlot` rather than on a session existing:
+        // a session whose frozen pair refused did not draw this destination and
+        // is about some other card, so committing the live slot onto it would
+        // open a hole at the wrong card until the decode disowned it.
+        var token: UUID?
+        var heldSourceID: UUID?
+        if heldSlot != nil, var session {
+            session.globalPoint = nil
+            session.committedSlot = slot
+            dragSession = session
+            token = session.token
+            heldSourceID = session.sourceID
+        }
         provider.loadDataRepresentation(forTypeIdentifier: UTType.conduckWorkboardMaterial.identifier) { data, _ in
             guard let data,
                   let moving = try? JSONDecoder().decode(WorkMaterialDragPayload.self, from: data),
-                  moving.itemID == Constants.workboardDeskItemID else { return }
+                  moving.itemID == Constants.workboardDeskItemID else {
+                Task { @MainActor in endDrag(matching: token) }
+                return
+            }
             Task { @MainActor in
-                guard workbenchDestinationIsActive else { return }
+                guard workbenchDestinationIsActive else {
+                    endDrag(matching: token)
+                    return
+                }
+                // The destination this board is holding describes the card
+                // that was lifted HERE. A payload naming a different material
+                // came from somewhere else — another window, or a gesture this
+                // board's own session outlived — so the presentation is about
+                // the wrong card and is released before the write rather than
+                // after it.
+                if let heldSourceID, moving.materialID != heldSourceID {
+                    endDrag(matching: token)
+                }
                 await viewModel.reorderMaterial(
                     moving.materialID,
-                    relativeTo: targetID,
-                    placement: position
+                    relativeTo: target.neighbourID,
+                    placement: target.placement
                 )
+                // A refused reorder leaves the desk's own order standing, so
+                // the order may never change and the held presentation has to
+                // be released by the operation ENDING as well as by the board
+                // moving. Whichever happens first wins; both are idempotent —
+                // and both release THIS drag only, never whichever one the
+                // person started while the write was in flight.
+                endDrag(matching: token)
             }
         }
         return true
-    }
-
-    private func setSize(_ size: WorkMaterialCardSize, for material: WorkboardMaterialSnapshot) {
-        guard workbenchDestinationIsActive else { return }
-        Task {
-            await viewModel.setMaterialCardSize(size, materialID: material.id)
-        }
     }
 
     /// Move Earlier/Later is the only non-drag path to arrange, so the new
@@ -1557,6 +1980,45 @@ private struct WorkboardMaterialBoard: View {
         }
     }
 }
+
+/// The lift language a drag has on each platform, stated side by side rather
+/// than buried in a board's modifier chain.
+///
+/// iOS gets haptics at the two moments the person's own hand is covering: the
+/// card coming free of the board, and the destination changing under a finger
+/// that cannot see past itself. macOS has neither — no long press to feel and
+/// nothing to hear — so it says the same two things with the pointer, which is
+/// why the grab cursors sit on the cards rather than here.
+private extension View {
+    func workboardDragFeedback(source: UUID?, slot: Int?) -> some View {
+        #if os(iOS)
+        return workboardLiftFeedback(source: source).workboardSlotFeedback(slot: slot)
+        #else
+        return self
+        #endif
+    }
+}
+
+#if os(iOS)
+private extension View {
+    func workboardLiftFeedback(source: UUID?) -> some View {
+        // Any new card coming free of the board, not only the first one after
+        // an idle board: a cancelled drag leaves no signal behind it, so a
+        // session can still be standing when the next lift happens, and a
+        // condition that demanded an idle board first would drop that lift's
+        // haptic.
+        sensoryFeedback(.impact(weight: .medium), trigger: source) { (previous: UUID?, current: UUID?) -> Bool in
+            current != nil && previous != current
+        }
+    }
+
+    func workboardSlotFeedback(slot: Int?) -> some View {
+        sensoryFeedback(.impact(weight: .light), trigger: slot) { (previous: Int?, current: Int?) -> Bool in
+            previous != nil && current != nil && previous != current
+        }
+    }
+}
+#endif
 
 /// How a card spends its tile: on a picture, or on a text column with artwork
 /// beside it.
@@ -1782,6 +2244,21 @@ enum WorkboardCompanionBand {
         return text
     }
 
+    /// The recording's two text slots, deduplicated by the SHARED face policy.
+    ///
+    /// Every surface that draws a folded recording draws this pair, so the
+    /// folded card gets the same rule the standalone audio card already had: a
+    /// title the transcript already says is dropped rather than stacked on top
+    /// of it. Without this the band, the list row and the gallery each showed
+    /// the recording's opening line twice — the one duplication the face policy
+    /// could not see, because the companion hangs off another material's card.
+    static func face(for companion: WorkboardCompanionSnapshot) -> WorkboardCardFace {
+        WorkboardCardFacePolicy.companionFace(
+            title: title(for: companion),
+            transcript: transcript(for: companion)
+        )
+    }
+
     /// How much of the transcript a footprint can carry. The smallest tile
     /// carries none — its band is compact and draws no words at all, because a
     /// single grid unit is already spending its height on the picture and its
@@ -1948,7 +2425,6 @@ private struct WorkboardSourceCard: View {
     let onOpen: () -> Void
     var onShare: (() -> Void)?
     var onReattach: (() -> Void)?
-    var onSetSize: ((WorkMaterialCardSize) -> Void)?
     var onMoveEarlier: (() -> Void)?
     var onMoveLater: (() -> Void)?
     var onRemove: (() -> Void)?
@@ -2196,11 +2672,22 @@ private struct WorkboardSourceCard: View {
     /// is a photograph, so it does not follow the appearance.
     private var imageForwardCaption: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(verbatim: material.name)
+            Text(verbatim: face.heading ?? material.name)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Color.white)
                 .lineLimit(2)
+            if let label = face.availability {
+                Label(label, systemImage: availabilityGlyphName)
+                    .font(.caption2)
+                    .foregroundStyle(Color.white)
+                    .lineLimit(2)
+                    .accessibilityHidden(true)
+            }
+            // The size and the age wait for the pointer, in space this block
+            // reserves either way: revealing them by ADDING a row would move
+            // the name every time the cursor crossed the card.
             footerRow(tint: Color.white.opacity(0.85))
+                .opacity(showsDemotedMeta ? 1 : 0)
         }
         // Padding FIRST, then the width: a `maxWidth: .infinity` frame taken
         // before the inset would make the block the tile's full width and THEN
@@ -2254,7 +2741,7 @@ private struct WorkboardSourceCard: View {
             WorkboardAudioTransport(
                 materialID: companion.id,
                 player: companionPlayer,
-                isPlayable: companionIsPlayable,
+                availability: companion.availability,
                 isEnabled: workbenchDestinationIsActive,
                 activation: .control,
                 dimension: isCompact ? compactMetrics.transport : 32,
@@ -2262,13 +2749,16 @@ private struct WorkboardSourceCard: View {
                 loadPayload: loadCompanionPayload
             )
             if !isCompact {
+                let companionFace = WorkboardCompanionBand.face(for: companion)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(verbatim: WorkboardCompanionBand.title(for: companion))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(onScrim ? Color.white : AppColors.textPrimary)
-                        .lineLimit(1)
+                    if let lead = companionFace.leadLine {
+                        Text(verbatim: lead)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(onScrim ? Color.white : AppColors.textPrimary)
+                            .lineLimit(1)
+                    }
                     if let limit = WorkboardCompanionBand.transcriptLineLimit(for: layoutSize),
-                       let transcript = WorkboardCompanionBand.transcript(for: companion) {
+                       let transcript = companionFace.trailingExcerpt {
                         Text(verbatim: transcript)
                             .font(.caption2)
                             .foregroundStyle(onScrim ? Color.white.opacity(0.85) : AppColors.textSecondary)
@@ -2349,7 +2839,21 @@ private struct WorkboardSourceCard: View {
     }
 
     private var openAction: (() -> Void)? {
-        permittedActions.contains(.open) ? onOpen : nil
+        guard permittedActions.contains(.open) else { return nil }
+        return { openMaterial() }
+    }
+
+    /// Opening the picture HANDS OVER the recording folded into it.
+    ///
+    /// The gallery presents its own transport for the same clip, so a board
+    /// player left running would put a Play control over audio that is already
+    /// sounding — and the sheet's own page-change teardown would then silence
+    /// only its copy, leaving the previous picture's recording audible behind
+    /// the next one. `deactivate` rather than a stop: a payload read still in
+    /// flight has to die here too, or it claims output after the handover.
+    private func openMaterial() {
+        companionPlayer.deactivate()
+        onOpen()
     }
 
     /// Share rides the SAME permission as Open — both read the card's bytes —
@@ -2382,98 +2886,84 @@ private struct WorkboardSourceCard: View {
         #endif
     }
 
-    /// The footprint the card draws into. A `large` card on a grid too narrow
-    /// to grant four columns is placed as a standard tile, so drawing the wide
-    /// banner would push its text column under the clip shape.
-    private var layoutSize: WorkMaterialCardSize {
-        size == .large && grantedColumns < WorkboardMosaicSpan.large.columns ? .standard : size
-    }
+    /// The footprint the card draws into, which is the SAME for every card on
+    /// the desk. The board grants one slot size, so a row still carrying a
+    /// stored `small` or `large` renders exactly like everything else rather
+    /// than reinstating a second density beside it. The stored column is left
+    /// readable on purpose — the footprint decision is reversible on evidence,
+    /// and the placement rules below still answer for all three.
+    private var layoutSize: WorkMaterialCardSize { .standard }
 
-    /// Small is a thumbnail with one line of name; standard keeps the vertical
-    /// card; large spends its extra width on bigger artwork beside more preview
-    /// text rather than on a taller tile, because the mosaic gives `large` the
-    /// same two-unit row band as `standard`.
-    @ViewBuilder
+    /// ONE drawing, at one footprint. The board grants every card the same
+    /// slot, so a card has no density to pick between; what changes between
+    /// kinds is which face slots are filled, and that is decided once in
+    /// `WorkboardCardFacePolicy` rather than three times here.
     private var cardBody: some View {
-        switch layoutSize {
-        case .small where material.companion != nil:
-            // One row, because the compact band is standing on the rest of the
-            // tile. The stacked layout below needs a 30-point thumbnail, a line
-            // of name and the spacing between them — more than a single grid
-            // unit has left once a band is on it — so a folded small card puts
-            // the same three things side by side instead of clipping them.
-            HStack(spacing: 6) {
-                artwork(
-                    dimension: compactMetrics.artwork,
-                    cornerRadius: 7
-                )
-                availabilityGlyph
-                Text(verbatim: material.name)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AppColors.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-            }
-        case .small:
-            VStack(alignment: .leading, spacing: 6) {
-                artwork(dimension: 30, cornerRadius: 8)
-                HStack(spacing: 4) {
-                    availabilityGlyph
-                    Text(verbatim: material.name)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer(minLength: 0)
-            }
-        case .standard:
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    artwork(dimension: 40, cornerRadius: 10)
-                    availabilityGlyph
-                    // The menu affordance owns this corner: keep content clear.
-                    Spacer(minLength: 26)
-                }
-                Text(verbatim: material.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppColors.textPrimary)
-                    .lineLimit(2)
-                previewBody(lineLimit: 2)
-                Spacer(minLength: 0)
-                cardFooter
-            }
-        case .large:
-            HStack(alignment: .top, spacing: 12) {
-                artwork(dimension: 92, cornerRadius: 12)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(verbatim: material.name)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(2)
-                    Text(material.kind.title)
-                        .font(.caption2)
-                        .foregroundStyle(AppColors.textTertiary)
-                    previewBody(lineLimit: 4)
-                    Spacer(minLength: 0)
-                    cardFooter
-                }
-                availabilityGlyph
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                artwork(dimension: 40, cornerRadius: 10)
+                // The menu affordance owns this corner: keep content clear.
                 Spacer(minLength: 26)
             }
+            faceText
+            Spacer(minLength: 0)
+            availabilityLine
+            cardFooter
         }
     }
 
+    /// The face's slots, in the order they read.
+    ///
+    /// A card whose heading the body already says leads with the BODY, in the
+    /// heading's own type size: a note then reads as one continuous excerpt
+    /// instead of as a title that happens to be missing, and the sentence the
+    /// person actually wrote is never the thing that gets dropped.
     @ViewBuilder
-    private func previewBody(lineLimit: Int) -> some View {
-        if let preview = previewText, !preview.isEmpty {
-            Text(verbatim: preview)
-                .font(.caption)
-                .foregroundStyle(AppColors.textSecondary)
-                .multilineTextAlignment(.leading)
-                .lineLimit(lineLimit)
+    private var faceText: some View {
+        if let heading = face.heading {
+            Text(verbatim: heading)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppColors.textPrimary)
+                .lineLimit(2)
+                .truncationMode(face.headingProtectsExtension ? .middle : .tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if let identity = face.identity {
+                Text(verbatim: identity)
+                    .font(.caption2)
+                    .foregroundStyle(AppColors.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let excerpt = face.excerpt {
+                Text(verbatim: excerpt)
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if let excerpt = face.excerpt {
+            Text(verbatim: excerpt)
+                .font(.subheadline)
+                .foregroundStyle(AppColors.textPrimary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Bytes that are not here, in WORDS and not only in a 12-point glyph. A
+    /// syncing card refuses the tap, so the glyph was the entire explanation a
+    /// sighted person got for a click that did nothing.
+    @ViewBuilder
+    private var availabilityLine: some View {
+        if let label = face.availability {
+            Label(label, systemImage: availabilityGlyphName)
+                .font(.caption2)
+                .foregroundStyle(availabilityGlyphTint)
+                .lineLimit(2)
+                .accessibilityHidden(true)
         }
     }
 
@@ -2481,50 +2971,53 @@ private struct WorkboardSourceCard: View {
         footerRow(tint: AppColors.textTertiary)
     }
 
-    /// Size and age, in one row. The tint is a parameter and not a constant
-    /// because the identical row is also drawn over a photograph, where the
-    /// tertiary text colour is unreadable.
-    private func footerRow(tint: Color) -> some View {
-        HStack(spacing: 6) {
-            if let byteCount = material.byteCount {
-                Text(ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file))
-            }
-            Spacer(minLength: 5)
-            Text(material.createdAt, format: .relative(presentation: .named))
-        }
-        .font(.caption2)
-        .foregroundStyle(tint)
-        .lineLimit(1)
-    }
-
+    /// The demoted row: whatever the face put in `meta`, and the capture time.
+    /// The tint is a parameter and not a constant because the identical row is
+    /// also drawn over a photograph, where the tertiary text colour is
+    /// unreadable.
     @ViewBuilder
-    private var availabilityGlyph: some View {
-        if material.availability != .available {
-            Image(systemName: availabilityGlyphName)
-                .font(.caption)
-                .foregroundStyle(availabilityGlyphTint)
-                .accessibilityHidden(true)
+    private func footerRow(tint: Color) -> some View {
+        if face.meta != nil || face.showsAge {
+            HStack(spacing: 6) {
+                if let meta = face.meta {
+                    Text(verbatim: meta)
+                }
+                Spacer(minLength: 5)
+                if face.showsAge {
+                    Text(material.createdAt, format: .relative(presentation: .named))
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(tint)
+            .lineLimit(1)
         }
     }
 
-    /// A card waiting for iCloud is not a card asking to be repaired, so it
-    /// carries the sync glyph in the tertiary tint rather than the paperclip in
-    /// the warning tint: only `unavailableOnThisDevice` is something the person
-    /// can act on.
+    /// One card, one face. The tile, the caption over a photograph and the
+    /// spoken label all read this, so no two of them can describe the same
+    /// card differently.
+    private var face: WorkboardCardFace {
+        WorkboardCardFacePolicy.face(for: material)
+    }
+
+    /// A picture's size and age are the least of what it says. On a pointer
+    /// platform they arrive with the pointer; on a touch platform there is no
+    /// hover state to reveal them with, so they simply stay.
+    private var showsDemotedMeta: Bool {
+        guard face.metaWaitsForPointer else { return true }
+        #if os(macOS)
+        return isHovering
+        #else
+        return true
+        #endif
+    }
+
     private var availabilityGlyphName: String {
-        switch material.availability {
-        case .localOnly: return "internaldrive"
-        case .syncPending: return "icloud.and.arrow.down"
-        case .available, .unavailableOnThisDevice: return "paperclip.badge.ellipsis"
-        }
+        WorkboardCardFacePolicy.availabilityGlyphName(for: material.availability)
     }
 
     private var availabilityGlyphTint: Color {
-        switch material.availability {
-        case .localOnly: return AppColors.brandTeal
-        case .syncPending: return AppColors.textTertiary
-        case .available, .unavailableOnThisDevice: return AppColors.warning
-        }
+        WorkboardCardFacePolicy.availabilityTint(for: material.availability)
     }
 
     /// The glyph stays 30pt so it never dominates a tile, but the tappable
@@ -2605,18 +3098,6 @@ private struct WorkboardSourceCard: View {
                 )
             }
         }
-        if let onSetSize {
-            Divider()
-            Picker(
-                LocalizedStringResource("workboard.material.card.size", defaultValue: "Card Size"),
-                selection: Binding(get: { size }, set: { onSetSize($0) })
-            ) {
-                ForEach(WorkMaterialCardSize.allCases, id: \.self) { option in
-                    Text(option.cardSizeTitle).tag(option)
-                }
-            }
-            .pickerStyle(.inline)
-        }
         if onMoveEarlier != nil || onMoveLater != nil {
             Divider()
             if let onMoveEarlier {
@@ -2691,13 +3172,6 @@ private struct WorkboardSourceCard: View {
                 action: onMoveLater
             )
         }
-        if let onSetSize {
-            ForEach(WorkMaterialCardSize.allCases.filter { $0 != size }, id: \.self) { option in
-                Button(option.cardSizeAccessibilityAction) {
-                    onSetSize(option)
-                }
-            }
-        }
         if let onRemove {
             Button(
                 LocalizedStringResource(
@@ -2726,9 +3200,13 @@ private struct WorkboardSourceCard: View {
         )
     }
 
+    /// Preview bytes the board ALREADY HOLDS, whatever kind wrote them — a PDF
+    /// that arrived with a thumbnail shows it. Nothing is rendered on demand:
+    /// this decodes stored bytes, so a card can never turn into a document
+    /// rasteriser while the person scrolls past it.
     @ViewBuilder
     private func artwork(dimension: CGFloat, cornerRadius: CGFloat) -> some View {
-        if material.kind == .image, let data = material.thumbnailData {
+        if let data = material.thumbnailData {
             stagedThumbnail(data: data) {
                 artworkPlaceholder(dimension: dimension, cornerRadius: cornerRadius)
             }
@@ -2753,14 +3231,9 @@ private struct WorkboardSourceCard: View {
             .accessibilityHidden(true)
     }
 
-    private var previewText: String? {
-        WorkboardCardAccessibility.previewText(for: material)
-    }
-
     private var accessibilitySummary: Text {
         Text(WorkboardCardAccessibility.summary(
             material: material,
-            cardSize: size,
             boardPosition: boardPosition,
             boardCount: boardCount
         ))
@@ -2778,19 +3251,16 @@ private struct WorkboardSourceCard: View {
 /// so the words are the whole card there, and a label built inside a view body
 /// cannot be asserted. The card is the only caller.
 enum WorkboardCardAccessibility {
-    /// `.audio` is listed for exhaustiveness only — a voice note draws
-    /// `WorkboardAudioCardView`, never this card.
-    static func previewText(for material: WorkboardMaterialSnapshot) -> String? {
-        switch material.kind {
-        case .note: return material.textContent
-        case .link: return material.urlString
-        case .image, .file, .audio: return material.detail
-        }
-    }
-
-    /// Kind, name, whatever preview there is, the availability the card is in,
-    /// its footprint, and its place on the board — in that order, and
-    /// independent of how the tile is drawn.
+    /// What the card IS, the face it draws, the availability it is in, and its
+    /// place on the board — in that order, and independent of how the tile is
+    /// drawn.
+    ///
+    /// The face is asked ONCE and spoken in its own order, which is what stops
+    /// the label saying the same thing twice: it used to append the name and
+    /// then the whole preview body, so a note whose title is its own first line
+    /// was read out and then read out again. The footprint is gone from the
+    /// sentence for the same reason — one board-wide footprint said on every
+    /// card is a word that distinguishes nothing.
     ///
     /// A folded card says what it IS before it says its name: "Image" would
     /// describe half of what the person is touching, and the recording's words
@@ -2798,29 +3268,22 @@ enum WorkboardCardAccessibility {
     /// hidden, the picture is a picture, and the words are why the pair exists.
     static func summary(
         material: WorkboardMaterialSnapshot,
-        cardSize: WorkMaterialCardSize,
         boardPosition: Int,
         boardCount: Int
     ) -> String {
-        var parts: [String]
+        let face = WorkboardCardFacePolicy.face(for: material)
+        var parts = [String(localized: material.companion == nil
+            ? material.kind.title
+            : WorkboardCompanionBand.accessibilityKindLabel)]
+        parts.append(contentsOf: face.spokenParts)
+        // The recording's own slots, said once: the SAME deduplicated pair the
+        // band draws, so what is heard and what is seen cannot disagree.
         if let companion = material.companion {
-            parts = [
-                String(localized: WorkboardCompanionBand.accessibilityKindLabel),
-                material.name,
-                WorkboardCompanionBand.transcript(for: companion)
-                    ?? WorkboardCompanionBand.title(for: companion)
-            ]
-        } else {
-            parts = [String(localized: material.kind.title), material.name]
+            parts.append(contentsOf: WorkboardCompanionBand.face(for: companion).spokenParts)
         }
-        if let preview = previewText(for: material)?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !preview.isEmpty {
-            parts.append(preview)
+        if let availability = face.availability {
+            parts.append(String(localized: availability))
         }
-        if material.availability != .available {
-            parts.append(String(localized: availabilityLabel(for: material.availability)))
-        }
-        parts.append(String(localized: cardSize.cardSizeTitle))
         // Arranging is what the board is for, so the position is part of the
         // card's identity: it is the only thing that changes when Move
         // Earlier/Later succeeds.
@@ -2841,63 +3304,18 @@ enum WorkboardCardAccessibility {
         )
     }
 
+    /// The words for an availability, from the face policy — the desk turns an
+    /// availability into a sentence in exactly one place. `.available` has no
+    /// sentence and every caller guards on it first; the repair phrase is the
+    /// fail-closed answer if one ever stops doing so.
     static func availabilityLabel(
         for availability: WorkboardMaterialAvailability
     ) -> LocalizedStringResource {
-        switch availability {
-        case .localOnly:
-            return LocalizedStringResource(
-                "workboard.material.localOnly",
-                defaultValue: "Available on this device"
-            )
-        case .syncPending:
-            return LocalizedStringResource(
-                "workboard.material.syncPending",
-                defaultValue: "Waiting for iCloud…"
-            )
-        case .available, .unavailableOnThisDevice:
-            return LocalizedStringResource(
+        WorkboardCardFacePolicy.availabilityLabel(for: availability)
+            ?? LocalizedStringResource(
                 "workboard.material.reattach.short",
                 defaultValue: "Reattach"
             )
-        }
-    }
-}
-
-extension WorkMaterialCardSize {
-    /// Board footprint as the person picks it. Presentation only — the stored
-    /// value carries no copy of its own.
-    var cardSizeTitle: LocalizedStringResource {
-        switch self {
-        case .small:
-            return LocalizedStringResource("workboard.material.card.size.small", defaultValue: "Small")
-        case .standard:
-            return LocalizedStringResource("workboard.material.card.size.standard", defaultValue: "Standard")
-        case .large:
-            return LocalizedStringResource("workboard.material.card.size.large", defaultValue: "Large")
-        }
-    }
-
-    /// The same three footprints as verbs, because an accessibility action is
-    /// an instruction rather than a selectable value.
-    var cardSizeAccessibilityAction: LocalizedStringResource {
-        switch self {
-        case .small:
-            return LocalizedStringResource(
-                "workboard.material.card.size.small.action",
-                defaultValue: "Make Card Small"
-            )
-        case .standard:
-            return LocalizedStringResource(
-                "workboard.material.card.size.standard.action",
-                defaultValue: "Make Card Standard"
-            )
-        case .large:
-            return LocalizedStringResource(
-                "workboard.material.card.size.large.action",
-                defaultValue: "Make Card Large"
-            )
-        }
     }
 }
 

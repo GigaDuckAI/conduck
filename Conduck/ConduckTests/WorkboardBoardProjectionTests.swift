@@ -198,7 +198,9 @@ final class WorkboardBoardProjectionTests: XCTestCase {
         removal: MutationGate? = nil,
         reorder: MutationGate? = nil
     ) -> WorkboardViewModel {
-        let reorderMaterials: (@MainActor ([UUID], Int64) async throws -> WorkboardItemSnapshot)?
+        let reorderMaterials: (
+            @MainActor ([UUID], WorkboardReorderBaseline) async throws -> WorkboardItemSnapshot
+        )?
         if let reorder {
             reorderMaterials = { _, _ in try await reorder.suspend() }
         } else {

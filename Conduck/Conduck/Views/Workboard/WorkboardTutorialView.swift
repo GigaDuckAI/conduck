@@ -86,7 +86,7 @@ struct WorkboardTutorialView: View {
                 symbol: "square.grid.2x2.fill",
                 text: LocalizedStringResource(
                     "workboard.tutorial.point.arrange",
-                    defaultValue: "Drag cards to rearrange them, and resize the ones that matter most."
+                    defaultValue: "Drag cards to rearrange them — the board keeps the order you leave them in."
                 )
             )
             point(
