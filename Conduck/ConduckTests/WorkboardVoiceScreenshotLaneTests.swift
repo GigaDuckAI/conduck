@@ -34,17 +34,32 @@ import XCTest
 final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
 
     private var inboxRoot: URL!
+    private var queueRoot: URL!
+
+    /// The device-local retry queue every Work capture parks into before its
+    /// speech hop. A real store over a temp container, because the park is now
+    /// phase one: a recorder whose queue refuses everything cannot finish a
+    /// capture at all, and `PendingRetryStore.shared` reads an App-Group
+    /// container this unsigned test host does not have.
+    private var queue: PendingRetryStore!
 
     override func setUpWithError() throws {
         try super.setUpWithError()
         inboxRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("conduck-voice-shot-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: inboxRoot, withIntermediateDirectories: true)
+        queueRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("conduck-voice-queue-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: queueRoot, withIntermediateDirectories: true)
+        queue = PendingRetryStore(containerURL: queueRoot, defaults: InMemoryDefaultsStore())
     }
 
     override func tearDownWithError() throws {
         if let inboxRoot { try? FileManager.default.removeItem(at: inboxRoot) }
         inboxRoot = nil
+        queue = nil
+        if let queueRoot { try? FileManager.default.removeItem(at: queueRoot) }
+        queueRoot = nil
         try super.tearDownWithError()
     }
 
@@ -52,13 +67,17 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
 
     /// One capture, two cards, in the order the crash window demands. The
     /// screenshot's card stands at the id DERIVED from the capture's — the
-    /// capture id already names the recording — and the desk read taken at the
-    /// start of the picture's publication proves the recording is not there
-    /// yet.
+    /// capture id already names the words — and the desk read taken at the
+    /// start of the picture's publication proves nothing else is there yet.
+    ///
+    /// The RECORDING is not one of the two cards and never was on this lane's
+    /// new terms: it is parked on the device while the words are bought and
+    /// deleted the moment they land.
     @MainActor
-    func testAStagedScreenshotBecomesItsOwnCardPublishedBeforeTheRecording() async throws {
+    func testAStagedScreenshotBecomesItsOwnCardPublishedBeforeTheWords() async throws {
         let store = ConversationStore(inMemory: true)
         let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.retryLaneForTesting = queue
         recorder.workStoreForTesting = store
         recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
         recorder.capturedAudioForTesting = Self.recordingBytes
@@ -104,8 +123,12 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
             """
         )
         XCTAssertEqual(
-            kindsAtTheHop, [.audio, .image],
-            "…and both artifacts are on the desk before a single word is asked for"
+            kindsAtTheHop, [.image],
+            """
+            MEASURED: the desk holds the picture and NOTHING else while the provider is thinking. \
+            A recording published here is a voice file on the person's private CloudKit for ever, \
+            for a capture whose words have not even been asked for yet.
+            """
         )
 
         let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
@@ -117,13 +140,25 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
             "one capture, two cards, and the picture is at its own derived id"
         )
 
-        let recording = try XCTUnwrap(desk.materials.first { $0.id == captureID })
-        XCTAssertEqual(recording.kind, .audio)
-        XCTAssertEqual(recording.textContent, "the ferry leaves at seven")
-        let recordingPayload = try await store.loadWorkMaterialPayload(id: captureID)
+        let spoken = try XCTUnwrap(desk.materials.first { $0.id == captureID })
+        XCTAssertEqual(spoken.kind, .transcript, "the words are the card this capture becomes")
+        XCTAssertEqual(spoken.textContent, "the ferry leaves at seven")
+        let spokenPayload = try await store.loadWorkMaterialPayload(id: captureID)
+        XCTAssertNil(
+            spokenPayload,
+            """
+            MEASURED: the card carries a payload. The words are the artifact — a `.metadataOnly` \
+            row — and any bytes here are a voice note syncing to every device the person owns.
+            """
+        )
+        let parkedAfterwards = await queue.pendingCount()
         XCTAssertEqual(
-            recordingPayload, Self.recordingBytes,
-            "the recording still holds the bytes that were spoken"
+            parkedAfterwards, 0,
+            """
+            MEASURED: the recording is still parked after its words landed. It is waste from that \
+            moment — the words are on the desk and they sync — and an entry left behind keeps \
+            audio on the device with nothing waiting for it.
+            """
         )
 
         let picture = try XCTUnwrap(desk.materials.first { $0.id == screenshotID })
@@ -132,9 +167,9 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         XCTAssertEqual(picturePayload, Self.jpegBytes)
 
         // ONE stop, one date. Both cards are published from the capture's own
-        // `createdAt` — the picture always was, and the recording is dated from
-        // it too rather than from a `Date()` taken at the moment it happens to
-        // be written. The desk orders by sequence, so this does not buy
+        // `createdAt` — the picture always was, and the words are dated from it
+        // too rather than from a `Date()` taken at the moment they happen to be
+        // written. The desk orders by sequence, so this does not buy
         // adjacency; what it buys is two cards from one stop that do not
         // disagree about when the person spoke.
         //
@@ -144,30 +179,34 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         // truncated. A recording dated at WRITE time would land a full
         // `normalizeDelay` later than that — which is why the normalize above
         // sleeps longer than the tolerance. Without the fix this reads ≥1.5s.
-        let spread = recording.createdAt.timeIntervalSince(picture.createdAt)
+        let spread = spoken.createdAt.timeIntervalSince(picture.createdAt)
         XCTAssertLessThan(
             abs(spread), 1,
             """
-            MEASURED: the recording's card is \(spread)s from the picture's, after a picture \
+            MEASURED: the words' card is \(spread)s from the picture's, after a picture \
             pipeline that took \(normalizeDelay)s. Two artifacts of ONE capture must carry that \
             capture's date, not the clock reading of whenever each one happened to be written.
             """
         )
         XCTAssertGreaterThanOrEqual(
-            recording.createdAt, beforeTheStop,
+            spoken.createdAt, beforeTheStop,
             "control: the shared date is this capture's own, not a zero or an inherited one"
         )
         XCTAssertEqual(
             recorder.workCaptureFacts,
             InAppAudioRecorder.WorkCaptureFacts(
-                recordingOnDesk: true,
+                recordingOnDesk: false,
                 wordsOnDesk: true,
                 screenshotStaged: true,
                 screenshotQueued: true,
                 screenshotOnDesk: true,
                 screenshotEverOnDesk: true
             ),
-            "every artifact landed, which is the ONE shape a receipt may describe as complete"
+            """
+            Every artifact landed, which is the ONE shape a receipt may describe as complete — and \
+            `recordingOnDesk` is false in it, because no recording of this lane's ever reaches the \
+            board.
+            """
         )
     }
 
@@ -175,20 +214,21 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
     /// The AUDIO's own crash window, declared so a quit cannot land inside it.
     ///
     /// `AudioRecorder.stopRecording()` hands back the bytes and deletes the
-    /// file, so from the stop until phase one copies them into the store the
-    /// recording exists nowhere but memory — through the compression, through
-    /// the whole picture pipeline the case above measures at a second and a
-    /// half. Nothing else can see that window: no gateway turn is involved, so
-    /// the quit guard's in-flight registry reads zero and ⌘Q terminates at once,
-    /// taking a recording with no card and no Try Again behind it.
+    /// file, so from the stop until phase one PARKS them the recording exists
+    /// nowhere but memory — through the compression, through the whole picture
+    /// pipeline the case above measures at a second and a half. Nothing else
+    /// can see that window: no gateway turn is involved, so the quit guard's
+    /// in-flight registry reads zero and ⌘Q terminates at once, taking a
+    /// recording with nothing anywhere and no Try Again behind it.
     ///
-    /// It closes at PHASE ONE, not at the end of the capture: after that the
-    /// desk holds the recording and only the words are outstanding, and a quit
-    /// should not wait out a speech hop to keep a promise already kept.
+    /// It closes at THE PARK, not at the end of the capture: after that the
+    /// device holds the recording and only the words are outstanding, and a
+    /// quit should not wait out a speech hop to keep a promise already kept.
     @MainActor
-    func testTheStoppedRecordingIsDeclaredInFlightUntilTheDeskHoldsIt() async throws {
+    func testTheStoppedRecordingIsDeclaredInFlightUntilItIsParked() async throws {
         let store = ConversationStore(inMemory: true)
         let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.retryLaneForTesting = queue
         recorder.workStoreForTesting = store
         recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
         recorder.capturedAudioForTesting = Self.recordingBytes
@@ -226,8 +266,8 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         XCTAssertEqual(
             declaredAtTheSpeechHop, 0,
             """
-            MEASURED: the declaration outlives phase one and holds a quit for the whole speech \
-            hop. The desk already has the recording by then; only the words are owed, and those \
+            MEASURED: the declaration outlives the park and holds a quit for the whole speech \
+            hop. The queue already has the recording by then; only the words are owed, and those \
             are retryable.
             """
         )
@@ -255,6 +295,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         for (label, stage) in stagings {
             let store = ConversationStore(inMemory: true)
             let recorder = InAppAudioRecorder(retryDestination: .work)
+            recorder.retryLaneForTesting = queue
             recorder.workStoreForTesting = store
             recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
             recorder.capturedAudioForTesting = Self.recordingBytes
@@ -275,12 +316,12 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
             )
             let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
             let desk = try XCTUnwrap(deskValue, label)
-            XCTAssertEqual(desk.materials.count, 1, "\(label): one card, the recording")
-            XCTAssertEqual(desk.materials.first?.kind, .audio, label)
+            XCTAssertEqual(desk.materials.count, 1, "\(label): one card, the words")
+            XCTAssertEqual(desk.materials.first?.kind, .transcript, label)
             XCTAssertEqual(
                 recorder.workCaptureFacts,
                 InAppAudioRecorder.WorkCaptureFacts(
-                    recordingOnDesk: true,
+                    recordingOnDesk: false,
                     wordsOnDesk: true,
                     screenshotStaged: false,
                     screenshotQueued: false,
@@ -304,6 +345,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
     func testACancelledRecordingPublishesNothingAndDropsTheStagedScreenshot() async throws {
         let store = ConversationStore(inMemory: true)
         let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.retryLaneForTesting = queue
         recorder.workStoreForTesting = store
         recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
         recorder.capturedAudioForTesting = Self.recordingBytes
@@ -333,7 +375,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(desk.materials.count, 1, "the second capture put ONE card on the desk")
-        XCTAssertEqual(desk.materials.first?.kind, .audio)
+        XCTAssertEqual(desk.materials.first?.kind, .transcript, "and it is the words")
     }
 
     /// The other way a capture stops before it starts. A microphone that never
@@ -344,6 +386,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
     func testARefusedMicrophoneDropsTheStagedPictureRatherThanArmingTheNextCapture() async throws {
         let store = ConversationStore(inMemory: true)
         let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.retryLaneForTesting = queue
         recorder.workStoreForTesting = store
         recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
         recorder.capturedAudioForTesting = Self.recordingBytes
@@ -377,8 +420,8 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         )
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(desk.materials.count, 1, "one card, the recording that did happen")
-        XCTAssertEqual(desk.materials.first?.kind, .audio)
+        XCTAssertEqual(desk.materials.count, 1, "one card, from the capture that did happen")
+        XCTAssertEqual(desk.materials.first?.kind, .transcript)
         XCTAssertFalse(
             recorder.workCaptureFacts.screenshotStaged,
             "the capture that did happen carried no picture, so its receipt names none"
@@ -387,15 +430,15 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
 
     // MARK: - A refused picture costs the picture and nothing else
 
-    /// The queue refuses the bytes. The recording still publishes and the words
-    /// still land on it — the picture costs neither — but the CAPTURE is not
+    /// The inbox refuses the picture. The recording is still parked and the
+    /// words still publish — the picture costs neither — but the CAPTURE is not
     /// finished, and that is the whole point: a capture reported successful is
     /// one no surface offers a retry for, so the picture would be lost with
     /// nothing anywhere to get it back. The answer is the retryable desk error,
     /// the debt is retained with the words attached, and the queue entry stands
     /// carrying the only copy of the picture.
     @MainActor
-    func testARefusedScreenshotHoldsTheCaptureRetryableWithTheWordsAlreadyOnTheCard() async throws {
+    func testARefusedScreenshotHoldsTheCaptureRetryableWithTheWordsAlreadyPublished() async throws {
         let store = ConversationStore(inMemory: true)
         let lane = RecordedScreenshotRetryLane()
         let recorder = InAppAudioRecorder(retryDestination: .work)
@@ -419,8 +462,8 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         XCTAssertEqual(
             surfaced.errorCode, AppError.workScreenshotWriteFailed.errorCode,
             """
-            The code names the artifact that is missing. 78's copy says the RECORDING was not \
-            saved, which contradicts the card standing on the desk with the words on it.
+            The code names the artifact that is missing. 78's copy says the recording could not \
+            be saved, which contradicts the words standing on the desk and the bytes parked here.
             """
         )
         XCTAssertTrue(surfaced.isRetryable, "the same bytes, published again, normally land")
@@ -441,8 +484,9 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(desk.materials.count, 1, "the recording landed; the picture did not")
+        XCTAssertEqual(desk.materials.count, 1, "the words landed; the picture did not")
         XCTAssertEqual(desk.materials.first?.id, captureID)
+        XCTAssertEqual(desk.materials.first?.kind, .transcript)
         XCTAssertEqual(
             desk.materials.first?.textContent, "the words that arrive anyway",
             "the words really are on the card, which is what the receipt may not deny"
@@ -451,7 +495,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         XCTAssertEqual(
             recorder.workCaptureFacts,
             InAppAudioRecorder.WorkCaptureFacts(
-                recordingOnDesk: true,
+                recordingOnDesk: false,
                 wordsOnDesk: true,
                 screenshotStaged: true,
                 screenshotQueued: false,
@@ -459,8 +503,8 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
                 screenshotEverOnDesk: false
             ),
             """
-            The one shape a single sentence cannot describe: two artifacts landed and one did \
-            not. "Nothing reached your desk" and "only the words are missing" are both false \
+            The one shape a single sentence cannot describe: the words landed and the picture \
+            did not. "Nothing reached your desk" and "only the words are missing" are both false \
             here, which is why the surface is handed facts rather than a verdict.
             """
         )
@@ -473,11 +517,28 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         )
         XCTAssertEqual(
             parked.metadata.publicationState, .published,
-            "the RECORDING's verdict is accurate — it really is a card — so no recovery republishes it"
+            "the verdict is accurate — the desk holds this capture's words — so no recovery republishes them"
         )
         XCTAssertEqual(
             parked.metadata.transcript, "the words that arrive anyway",
             "…and the words ride along, so finishing this entry buys nothing from a provider"
+        )
+        XCTAssertEqual(
+            parked.audio, Data(),
+            """
+            MEASURED: the re-park wrote the recording back. Its words are on the desk, so those \
+            bytes were retired at the publication — writing them again resurrects exactly what \
+            this lane exists to delete, on an entry the parked picture exempts from every clock.
+            """
+        )
+        let retired = await lane.retiredRecordings
+        XCTAssertEqual(
+            retired, [captureID],
+            """
+            The recording is retired the moment the words land, not at the end of the capture. \
+            The entry has to stay — its picture may be the only copy of itself — so without this \
+            the audio outlives the words it produced for as long as that picture is owed.
+            """
         )
         let cleared = await lane.clears
         XCTAssertTrue(
@@ -518,7 +579,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         XCTAssertFalse(recorder.workCaptureFacts.screenshotOnDesk)
         let firstDeskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let firstDesk = try XCTUnwrap(firstDeskValue)
-        XCTAssertEqual(firstDesk.materials.count, 1, "only the recording is standing")
+        XCTAssertEqual(firstDesk.materials.count, 1, "only the words are standing")
 
         // The queue comes back, and ONE tap settles what is left.
         recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
@@ -536,14 +597,14 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         XCTAssertEqual(
             recorder.workCaptureFacts,
             InAppAudioRecorder.WorkCaptureFacts(
-                recordingOnDesk: true,
+                recordingOnDesk: false,
                 wordsOnDesk: true,
                 screenshotStaged: true,
                 screenshotQueued: true,
                 screenshotOnDesk: true,
                 screenshotEverOnDesk: true
             ),
-            "everything landed in the end, and the facts say so"
+            "everything this lane publishes landed in the end, and the facts say so"
         )
         let discarded = await lane.discards
         XCTAssertEqual(
@@ -573,16 +634,17 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         )
     }
 
-    /// The verdict a refused picture writes must not outlive its own truth.
+    /// The verdict says what the DESK holds, and on this lane the desk holds
+    /// nothing until the words land.
     ///
-    /// The early record is armed BEFORE phase one runs, so the only thing it
-    /// can honestly say is that the desk holds no recording. That sentence
-    /// becomes false seconds later, and a great many exits — silence, a missing
-    /// key, an abandoned hop — end the capture without ever revisiting it. A
-    /// recovery reading `.phaseOneFailed` republishes the recording, which is
-    /// how a card the person deleted comes back.
+    /// A silent capture is the case that matters: the recording is parked, the
+    /// picture is parked, and the provider gave nothing — so the entry's bytes
+    /// are the only copy of what somebody said, and `.phaseOneFailed` is what
+    /// exempts them from the ten-minute transcription clock. A verdict that
+    /// moved when the RECORDING became durable would put those bytes on that
+    /// clock and delete them while their owner was still deciding.
     @MainActor
-    func testAPublishedRecordingCorrectsTheVerdictARefusedPictureArmed() async throws {
+    func testTheVerdictSaysPhaseOneFailedUntilTheWordsThemselvesLand() async throws {
         let store = ConversationStore(inMemory: true)
         let lane = RecordedScreenshotRetryLane()
         let recorder = InAppAudioRecorder(retryDestination: .work)
@@ -599,18 +661,13 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         _ = await recorder._finishCaptureForTesting()
 
         let saves = await lane.saves
-        let firstVerdict = try XCTUnwrap(saves.first).metadata.publicationState
-        let lastVerdict = try XCTUnwrap(saves.last).metadata.publicationState
-        XCTAssertEqual(
-            firstVerdict, .phaseOneFailed,
-            "the first record is armed before phase one runs, and says exactly that"
-        )
-        XCTAssertEqual(
-            lastVerdict, .published,
+        XCTAssertFalse(saves.isEmpty, "control: the capture really did park")
+        XCTAssertTrue(
+            saves.allSatisfy { $0.metadata.publicationState == .phaseOneFailed },
             """
-            MEASURED: the verdict is corrected the moment the recording lands, not at the end \
-            of a capture that may never get there. A stale `.phaseOneFailed` is licence for a \
-            recovery hours later to republish a card the person has since deleted.
+            MEASURED: some record claims the desk holds this capture. It holds nothing — the \
+            words never arrived — and a `.published` verdict there puts the only copy of what \
+            somebody said on the ten-minute clock.
             """
         )
         let latestSave = await lane.lastSave
@@ -618,6 +675,27 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         XCTAssertEqual(
             latest.workImageData, Self.rawScreenshot,
             "and the picture is still sheltered by that same entry"
+        )
+        XCTAssertEqual(
+            latest.audio, Self.recordingBytes,
+            "…as is the recording, which nothing has published and nothing may delete"
+        )
+
+        // THE CONTROL, and it is the other half of the rule: the moment the
+        // WORDS publish, the verdict moves — the desk holds this capture now,
+        // and the bytes behind it are a second copy on a budget.
+        recorder.transcriptionHopForTesting = { _ in .success("the ferry leaves at seven") }
+        _ = await recorder.retryWorkCapture()
+
+        let saveAfterTheWords = await lane.lastSave
+        let afterTheWords = try XCTUnwrap(saveAfterTheWords)
+        XCTAssertEqual(
+            afterTheWords.metadata.publicationState, .published,
+            "the words are on the desk, so the verdict is no longer that nothing is"
+        )
+        XCTAssertEqual(
+            afterTheWords.audio, Data(),
+            "…and the recording they came from is not written back"
         )
     }
 
@@ -640,7 +718,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
 
         recorder.stageWorkScreenshot(Self.rawScreenshot)
         _ = await recorder._finishCaptureForTesting()
-        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let captureID = try XCTUnwrap(recorder.pendingWorkCapture?.id)
 
         // The queue comes back; the words still do not.
         recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
@@ -672,8 +750,8 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
     /// …and the half of that the recorder cannot show: what the retirement does
     /// to the clock. The exemption is read off the FILE, so an entry whose
     /// picture is published is governed by a budget again — the DAY a published
-    /// Work capture waits, since its recording is a card and these bytes are a
-    /// second copy.
+    /// Work capture waits, since its words are on the desk and what remains is
+    /// bookkeeping.
     func testRetiringAPublishedPictureLetsItsEntryExpireOnTheDayBudget() async throws {
         let container = FileManager.default.temporaryDirectory
             .appendingPathComponent("conduck-shot-retire-\(UUID().uuidString)", isDirectory: true)
@@ -777,14 +855,18 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         XCTAssertEqual(
             recorder.workCaptureFacts,
             InAppAudioRecorder.WorkCaptureFacts(
-                recordingOnDesk: true,
+                recordingOnDesk: false,
                 wordsOnDesk: false,
                 screenshotStaged: true,
                 screenshotQueued: false,
                 screenshotOnDesk: false,
                 screenshotEverOnDesk: false
             ),
-            "the words are what silence cost, and the facts say so beside the error about the picture"
+            """
+            Silence cost the words, and the words are the only thing this lane publishes — so \
+            the desk holds nothing at all for this capture, and the facts say so beside the \
+            error about the picture.
+            """
         )
         let latestSave = await lane.lastSave
         let parked = try XCTUnwrap(latestSave, "a silent capture's picture is parked like any other")
@@ -805,7 +887,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         )
         XCTAssertTrue(recorder.workCaptureFacts.screenshotQueued, "the picture is durable now")
         let discarded = await lane.discards
-        XCTAssertEqual(discarded, [try XCTUnwrap(recorder.workRecordingMaterialID)])
+        XCTAssertEqual(discarded, [try XCTUnwrap(recorder.pendingWorkCapture?.id)])
     }
 
     /// A card deleted while recognition was in flight, on an exit that never
@@ -1332,7 +1414,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
     /// fact was about — least of all when the store cannot be read and the
     /// refresh has nothing to correct it with.
     @MainActor
-    func testARetryNeverResurrectsARecordingTheDeskAlreadySaidWasGone() async throws {
+    func testARetryNeverRepublishesTheWordsCardThePersonDeleted() async throws {
         let store = ConversationStore(inMemory: true)
         let lane = RecordedScreenshotRetryLane()
         let recorder = InAppAudioRecorder(retryDestination: .work)
@@ -1341,42 +1423,43 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         recorder.retryLaneForTesting = lane
         recorder.capturedAudioForTesting = Self.recordingBytes
         recorder.workScreenshotNormalizeForTesting = { _ in Self.jpegBytes }
+        var hops = 0
         recorder.transcriptionHopForTesting = { _ in
-            // The recording is cleared while the provider is waited on, so the
-            // attach step answers `.recordingMissing`.
-            let desk = try? await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-            if let card = desk?.materials.first {
-                try? await store.deleteWorkMaterial(id: card.id)
-            }
-            return .success("words with nowhere to land")
+            hops += 1
+            return .success("the ferry leaves at seven")
         }
 
         recorder.stageWorkScreenshot(Self.rawScreenshot)
         _ = await recorder._finishCaptureForTesting()
 
-        XCTAssertFalse(recorder.workCaptureFacts.recordingOnDesk, "the desk said so")
-        XCTAssertTrue(recorder.canRetryWorkCapture, "the picture is still owed")
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID, "the words landed")
+        XCTAssertTrue(recorder.canRetryWorkCapture, "…and the picture is still owed")
 
-        // The retry runs against a store that cannot be READ, so the refresh
-        // has no answer at all. Only the remembered verdict stands between the
-        // historical material id and a receipt claiming the recording is there.
-        let broken = try Self.unusableStore()
-        recorder.workStoreForTesting = broken
+        // The person clears their desk on another device, and the picture is
+        // still owed — so the capture is still retryable, and the retry runs
+        // over a card that is gone.
+        try await store.deleteWorkMaterial(id: captureID)
+
         let again = await recorder.retryWorkCapture()
 
         guard case .failure(let surfaced) = again else {
             return XCTFail("the picture is still refused, so the capture is not finished")
         }
         XCTAssertEqual(surfaced.errorCode, AppError.workScreenshotWriteFailed.errorCode)
-        XCTAssertFalse(
-            recorder.workCaptureFacts.recordingOnDesk,
+        XCTAssertEqual(hops, 1, "the words were settled once and are not bought again")
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertTrue(
+            deskValue?.materials.isEmpty ?? true,
             """
-            MEASURED: a confirmed absence survives the resume. Re-deriving presence from \
-            `materialID` — which is only a memory of a write — tells somebody who cleared \
-            their desk that the recording is waiting on it.
+            MEASURED: the retry put the words back on a desk the person had cleared. Phase two \
+            answered for them once; asking again turns every picture retry into a card the \
+            person deleted, arriving a second time.
             """
         )
-        XCTAssertFalse(recorder.workCaptureFacts.wordsOnDesk)
+        XCTAssertFalse(
+            recorder.workCaptureFacts.wordsOnDesk,
+            "and the receipt says what the desk says, not what the write once did"
+        )
     }
 
     /// Retiring a capture is news for the same reason arming one is: the
@@ -1410,10 +1493,10 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         await fulfillment(of: [announced], timeout: 2)
     }
 
-    /// An absence learned by the REFRESH, on an exit that never reaches the
-    /// attach step. It has to be latched onto the capture exactly as the attach
-    /// step's own verdict is: a later pass cannot ask again once the store has
-    /// stopped answering, and the material id outlives the card.
+    /// An absence learned by the REFRESH, on a capture whose words are settled
+    /// and whose picture is still owed. It has to be LATCHED onto the capture:
+    /// a later pass cannot ask again once the store has stopped answering, and
+    /// the material id outlives the card it names.
     @MainActor
     func testAnAbsenceLearnedByTheRefreshSurvivesTheResume() async throws {
         let store = ConversationStore(inMemory: true)
@@ -1424,26 +1507,25 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         recorder.retryLaneForTesting = lane
         recorder.capturedAudioForTesting = Self.recordingBytes
         recorder.workScreenshotNormalizeForTesting = { _ in Self.jpegBytes }
-        recorder.transcriptionHopForTesting = { _ in
-            // Cleared while the provider is waited on, and the words never
-            // arrive — so nothing asks the desk again on the way out.
-            let desk = try? await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-            if let card = desk?.materials.first {
-                try? await store.deleteWorkMaterial(id: card.id)
-            }
-            return .failure(.sttProviderUnreachable)
-        }
+        recorder.transcriptionHopForTesting = { _ in .success("the ferry leaves at seven") }
 
         recorder.stageWorkScreenshot(Self.rawScreenshot)
         _ = await recorder._finishCaptureForTesting()
+        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
 
-        XCTAssertFalse(recorder.workCaptureFacts.recordingOnDesk, "the lookup said so")
+        // Cleared on another device while the picture is still owed, then a
+        // retry that refuses the picture again — the exit whose only reading of
+        // the desk is the refresh.
+        try await store.deleteWorkMaterial(id: captureID)
+        _ = await recorder.retryWorkCapture()
+
+        XCTAssertFalse(recorder.workCaptureFacts.wordsOnDesk, "the lookup said so")
         XCTAssertEqual(
             recorder.pendingWorkCapture?.recordingConfirmedGone, true,
             """
-            MEASURED: the refresh LATCHED what it found. Only the attach step used to record \
-            an absence, and this exit never reaches it — so the verdict lived in a fact the \
-            next pass was free to overwrite.
+            MEASURED: the refresh LATCHED what it found. Without the memory the historical id is \
+            all a later pass has to go on, and a store that has stopped answering leaves it \
+            describing a card the person deleted.
             """
         )
 
@@ -1454,13 +1536,13 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         let again = await recorder.retryWorkCapture()
 
         guard case .failure = again else {
-            return XCTFail("neither artifact landed, so the capture is not finished")
+            return XCTFail("the picture never landed, so the capture is not finished")
         }
         XCTAssertFalse(
-            recorder.workCaptureFacts.recordingOnDesk,
-            "the recording is still gone, and no pass may say otherwise"
+            recorder.workCaptureFacts.wordsOnDesk,
+            "the card is still gone, and no pass may say otherwise"
         )
-        XCTAssertFalse(recorder.workCaptureFacts.wordsOnDesk)
+        XCTAssertFalse(recorder.workCaptureFacts.recordingOnDesk)
     }
 
     /// The menu-bar service's own half of a dismissed debt. It cannot be
@@ -1573,6 +1655,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
     func testAnAbortedRecordingWithNoPictureIsTheBareErrorItAlwaysWas() async throws {
         let store = ConversationStore(inMemory: true)
         let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.retryLaneForTesting = queue
         recorder.workStoreForTesting = store
         recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
         recorder.speechAuthorizationForTesting = .authorized
@@ -1617,7 +1700,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
     // MARK: - The clock does not retire a capture whose picture is still here
 
     /// The expiry budget is a budget for a TRANSCRIPTION, and it reads the
-    /// recording's verdict. A capture whose recording is a card and whose
+    /// capture's verdict. A capture whose words are on the desk and whose
     /// picture is not has a `.published` verdict and a screenshot that exists
     /// nowhere else — so the file, not the verdict, is what the clock has to
     /// ask before it deletes anything.
@@ -1692,13 +1775,14 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
 
     // MARK: - One press, two cards, and the card that says so
 
-    /// The RECORDING names the picture that came with it. Two materials, two
-    /// ids, two payloads — unchanged — plus one column on the recording that
-    /// says they were one press.
+    /// The WORDS name the picture that came with them. Two materials, two ids,
+    /// one payload — the picture's — plus one column on the words that says
+    /// they were one press.
     @MainActor
-    func testTheRecordingNamesThePictureThatWasCapturedWithIt() async throws {
+    func testTheWordsNameThePictureThatWasCapturedWithThem() async throws {
         let store = ConversationStore(inMemory: true)
         let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.retryLaneForTesting = queue
         recorder.workStoreForTesting = store
         recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
         recorder.capturedAudioForTesting = Self.recordingBytes
@@ -1714,17 +1798,17 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(
             Set(desk.materials.map(\.id)), [captureID, screenshotID],
-            "still TWO rows: one kind, one payload and one blob each, exactly as before"
+            "TWO rows: the words and the picture, one press"
         )
 
-        let recording = try XCTUnwrap(desk.materials.first { $0.id == captureID })
-        XCTAssertEqual(recording.kind, .audio)
+        let spoken = try XCTUnwrap(desk.materials.first { $0.id == captureID })
+        XCTAssertEqual(spoken.kind, .transcript)
         XCTAssertEqual(
-            recording.attachedToMaterialID, screenshotID,
+            spoken.attachedToMaterialID, screenshotID,
             """
-            MEASURED: the recording names the picture's derived id, so the desk can show one \
-            card for what was one press. It is written on the recording because that is the \
-            annotation — a picture is a thing in its own right and belongs to nothing.
+            MEASURED: the words name the picture's derived id, so the desk can show one card \
+            for what was one press. It is written on the words because that is the annotation \
+            — a picture is a thing in its own right and belongs to nothing.
             """
         )
 
@@ -1744,9 +1828,10 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
     /// to nothing — which is what makes the case above about the picture rather
     /// than about a value that is always written.
     @MainActor
-    func testARecordingCapturedWithNoPictureNamesNothing() async throws {
+    func testWordsCapturedWithNoPictureNameNothing() async throws {
         let store = ConversationStore(inMemory: true)
         let recorder = InAppAudioRecorder(retryDestination: .work)
+        recorder.retryLaneForTesting = queue
         recorder.workStoreForTesting = store
         recorder.workInboxForTesting = Self.workingInbox(under: inboxRoot)
         recorder.capturedAudioForTesting = Self.recordingBytes
@@ -1794,9 +1879,9 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         XCTAssertEqual(
             desk.materials.first?.attachedToMaterialID, screenshotID,
             """
-            MEASURED: the recording names a card that does not exist yet. A link written only \
-            on a picture that landed would leave every airplane-mode capture permanently two \
-            cards, because nothing re-opens a published recording to add one later.
+            MEASURED: the words name a card that does not exist yet. A link written only on a \
+            picture that landed would leave every airplane-mode capture permanently two cards, \
+            because nothing re-opens a published card to add one later.
             """
         )
     }
@@ -1805,9 +1890,9 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
     ///
     /// This is the case the field exists for. The picture is queued, so `save`
     /// is handed `workImageData: nil` and the entry shelters no image at all —
-    /// and the recording is still owed its words. A recovery that reconstructed
-    /// the link from what is left in the entry would find nothing and republish
-    /// the recording as a card of its own beside the picture it came from.
+    /// and the capture is still owed its words. A recovery that reconstructed
+    /// the link from what is left in the entry would find nothing and publish
+    /// the words as a card of their own beside the picture they came from.
     @MainActor
     func testTheParkedRecordKeepsTheLinkAfterItsPictureBytesAreDropped() async throws {
         let store = ConversationStore(inMemory: true)
@@ -1823,7 +1908,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         recorder.stageWorkScreenshot(Self.rawScreenshot)
         _ = await recorder._finishCaptureForTesting()
 
-        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let captureID = try XCTUnwrap(recorder.pendingWorkCapture?.id)
         let screenshotID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
         let latestSave = await lane.lastSave
         let parked = try XCTUnwrap(latestSave, "the failure must actually park a record")
@@ -1835,7 +1920,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
             parked.metadata.workAttachedToMaterialID, screenshotID,
             """
             MEASURED: the link is stored on its own terms and outlives the bytes. It is the only \
-            thing left in this entry that knows the recording belongs to a picture.
+            thing left in this entry that knows these words will belong to a picture.
             """
         )
     }
@@ -1892,7 +1977,7 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
         recorder.stageWorkScreenshot(Self.rawScreenshot)
         _ = await recorder._finishCaptureForTesting()
 
-        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let captureID = try XCTUnwrap(recorder.pendingWorkCapture?.id)
         let pictureID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
         let escapedID = WorkMaterialCollisionEscape.materialID(forCapture: pictureID)
         XCTAssertFalse(
@@ -2027,17 +2112,14 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
             decided.lowerBound, armed.lowerBound,
             """
             \(path) decides the link after arming, so an OS kill between the two leaves a \
-            durable record that has forgotten the picture — and this lane publishes the audio \
-            FIRST, so that window covers the whole speech hop.
+            durable record that has forgotten the picture — and the record is the only thing \
+            that survives that kill, because nothing of this capture is on the desk until its \
+            words are.
             """
         )
         XCTAssertNotNil(
             text.range(of: "workAttachedToMaterialID: workAttachedToMaterialID"),
             "\(path) arms a record that does not carry the link."
-        )
-        XCTAssertNotNil(
-            text.range(of: "attachedTo: workAttachedToMaterialID"),
-            "\(path) publishes the recording without naming the picture that came with it."
         )
         XCTAssertNotNil(
             text.range(of: "workAttachedToMaterialID: metadata.workAttachedToMaterialID"),
@@ -2188,8 +2270,14 @@ final class WorkboardVoiceScreenshotLaneTests: XCTestCase {
 /// drops `workImageData`, which is the one field these cases are about.
 private actor RecordedScreenshotRetryLane: PendingRetryLaneReserving {
 
-    /// Everything the recorder asked to park, newest last, bytes included.
-    private(set) var saves: [(metadata: PendingRetryMetadata, workImageData: Data?)] = []
+    /// Everything the recorder asked to park, newest last, bytes included —
+    /// the RECORDING's bytes as well as the picture's, because "what was
+    /// written back" is the question once a publication has retired the audio.
+    private(set) var saves: [(metadata: PendingRetryMetadata, audio: Data, workImageData: Data?)] = []
+
+    /// Every capture whose RECORDING was retired while its entry stayed, so a
+    /// case can prove the audio does not outlive the words it produced.
+    private(set) var retiredRecordings: [UUID] = []
 
     /// Every capture retired through a reservation, so a case can tell an entry
     /// that was finished from one that was merely handed back.
@@ -2200,7 +2288,9 @@ private actor RecordedScreenshotRetryLane: PendingRetryLaneReserving {
     /// — at the publication, not at the end of the capture.
     private(set) var discards: [UUID] = []
 
-    var lastSave: (metadata: PendingRetryMetadata, workImageData: Data?)? { saves.last }
+    var lastSave: (metadata: PendingRetryMetadata, audio: Data, workImageData: Data?)? {
+        saves.last
+    }
 
     private var leases: [UUID: UUID] = [:]
 
@@ -2209,7 +2299,7 @@ private actor RecordedScreenshotRetryLane: PendingRetryLaneReserving {
         metadata: PendingRetryMetadata,
         workImageData: Data?
     ) async throws {
-        saves.append((metadata, workImageData))
+        saves.append((metadata, audioData, workImageData))
     }
 
     func claim(id: UUID, duration: TimeInterval) async -> PendingRetryClaim? {
@@ -2255,6 +2345,22 @@ private actor RecordedScreenshotRetryLane: PendingRetryLaneReserving {
 
     func cancelOnDiscard(_ hook: @escaping @MainActor @Sendable () -> Void) {
         onDiscard = hook
+    }
+
+    /// The recording alone, exactly as the real store retires it: the entry,
+    /// its record and its parked picture stay, and only the audio goes.
+    @discardableResult
+    func retireRecording(_ claim: PendingRetryClaim) async -> Bool {
+        guard leases[claim.id] == claim.token else { return false }
+        guard saves.contains(where: { $0.metadata.id == claim.id }) else { return false }
+        retiredRecordings.append(claim.id)
+        for index in saves.indices where saves[index].metadata.id == claim.id {
+            saves[index].audio = Data()
+            saves[index].metadata = saves[index].metadata.recording(
+                transcript: nil, publicationState: .published
+            )
+        }
+        return true
     }
 
     @discardableResult

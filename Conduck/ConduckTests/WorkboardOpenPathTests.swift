@@ -517,4 +517,58 @@ final class WorkboardOpenPathTests: XCTestCase {
             """
         )
     }
+
+    /// The same band opened over a picture whose companion is WORDS. There is no
+    /// clip, so the sheet draws no transport, no availability chip and no
+    /// progress track — a control that fails on every tap, a sentence about
+    /// bytes that were never coming, and a bar that can never move — and it
+    /// spends that height on the text instead, because the sheet is where the
+    /// whole note is meant to be readable.
+    ///
+    /// A source check for the same reason the case above is one: the rules live
+    /// as modifiers and subviews inside a private SwiftUI view.
+    ///
+    /// Negative control: leaving the transport unconditional puts a dead 40pt
+    /// Play button on every words-only sheet — the branch count is 0 or 1 and
+    /// this fails.
+    func testAWordsOnlyCompanionOpensAsTextWithNoTransport() throws {
+        let source = try RefusalLaneSource.source(
+            at: "Conduck/Views/Workboard/PersonalWorkbenchView.swift"
+        )
+        let band = try XCTUnwrap(
+            source.range(of: "private struct WorkboardGalleryCompanionBand"),
+            "the folded card's bottom band must still be where this rule lives"
+        )
+        let tail = String(source[band.upperBound...])
+        let body = tail.range(of: "\nprivate struct ").map { String(tail[..<$0.lowerBound]) } ?? tail
+
+        XCTAssertEqual(
+            body.components(separatedBy: "if companion.kind == .audio {").count - 1, 2,
+            "the transport and the progress track are each drawn only for a recording"
+        )
+        XCTAssertTrue(
+            body.contains("guard companion.kind == .audio, !isPlayable else { return nil }"),
+            "the availability chip is about bytes, so words draw none"
+        )
+        // Playback is refused at the SAME gate the rotor action is offered
+        // behind, so a words-only companion advertises nothing it cannot do.
+        let playable = try XCTUnwrap(
+            body.range(of: "private var isPlayable: Bool {"),
+            "no `isPlayable` — update this guard"
+        )
+        let gate = String(body[playable.upperBound...].prefix(200))
+        XCTAssertTrue(gate.contains("companion.kind == .audio"), gate)
+        XCTAssertTrue(
+            gate.contains("WorkboardCardActionPolicy.allows(.play, when: companion.availability)"),
+            gate
+        )
+
+        // And the words get the height the transport gave up: a fixed two-line
+        // clamp here would truncate the very thing the picture was opened for.
+        XCTAssertTrue(body.contains("lineLimit(transcriptLineLimit)"), body)
+        XCTAssertTrue(
+            body.contains("companion.kind == .audio ? 2 : 8"),
+            "a recording's band captions the clip; a words-only band IS the note"
+        )
+    }
 }

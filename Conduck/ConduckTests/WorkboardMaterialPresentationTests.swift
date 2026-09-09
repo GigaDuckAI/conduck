@@ -59,6 +59,37 @@ final class WorkboardMaterialPresentationTests: XCTestCase {
         XCTAssertEqual(WorkboardMaterialIcon.symbol(for: note), WorkboardMaterialKind.note.systemImage)
     }
 
+    /// Spoken words carry their own glyph and the desk's amber. `waveform` is
+    /// reserved for the kinds that draw a transport, so the glyph never offers
+    /// playback for a card with no recording behind it; and the tint stays amber
+    /// because the blue is the link lane's alone.
+    func testSpokenWordsCarryTheirOwnGlyphAndTheDesksAmber() {
+        let spoken = material(kind: .transcript, name: "Ship the review before Friday")
+
+        XCTAssertEqual(
+            WorkboardMaterialIcon.symbol(for: spoken),
+            WorkboardMaterialKind.transcript.systemImage
+        )
+        XCTAssertEqual(WorkboardMaterialKind.transcript.systemImage, "text.quote")
+        XCTAssertEqual(WorkboardMaterialIcon.tint(for: spoken), AppColors.brandAmber)
+
+        XCTAssertNotEqual(
+            WorkboardMaterialKind.transcript.systemImage,
+            WorkboardMaterialKind.audio.systemImage,
+            "a card with nothing to play must not wear the transport's glyph"
+        )
+        XCTAssertNotEqual(
+            WorkboardMaterialKind.transcript.systemImage,
+            WorkboardMaterialKind.note.systemImage,
+            "spoken and typed are different things to be told you are looking at"
+        )
+        XCTAssertNotEqual(
+            String(localized: WorkboardMaterialKind.transcript.title),
+            String(localized: WorkboardMaterialKind.note.title)
+        )
+        XCTAssertEqual(String(localized: WorkboardMaterialKind.transcript.title), "Spoken note")
+    }
+
     /// A card that spends its whole tile on the photo hands VoiceOver no photo
     /// at all, so the words ARE the card there: the label has to keep naming the
     /// kind, the name and the availability it is in. The label is composed apart

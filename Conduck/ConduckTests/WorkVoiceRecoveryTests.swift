@@ -7,23 +7,25 @@
 // in another process, hours later, by a surface that cannot see what the
 // capture saw.
 //
-// The whole difficulty is that ONE observation has two opposite causes: an id
-// that names no card is either a publication the desk refused, in which case
-// the parked bytes are the only copy of the recording and belong back on the
-// desk, or a card a person deleted while recognition was in flight, in which
-// case bringing it back resurrects what they threw away. Only the retry
-// record's own publication verdict separates them, so these cases drive
-// `recover` across all three verdicts — known-published, known-failed, and the
-// legacy unknown — against a card that is standing, missing, or not a recording
-// at all.
+// The rule these cases hold is the founder's: the words are the artifact, and
+// the recording is kept only until they are written. So a recovery publishes
+// WORDS, wherever it finds room for them, and a recovery with no words yet
+// publishes nothing at all — the desk stays empty and the parked bytes stay
+// exactly where the only copy of them was.
 //
-// The third observation is an id that is REFUSED rather than answered: a card
-// of another kind already stands at the capture's own id, so the desk write
-// throws and never stops throwing. The recording goes back under the capture's
-// collision escape instead, the words follow it there, and a refusal of THAT id
-// too is the one state where nothing can carry them.
+// The difficulty is an id that is REFUSED rather than answered: a card of
+// another kind already stands at the capture's own id, so the desk write throws
+// and never stops throwing. The words go under the capture's collision escape
+// instead, and then under a last-resort id, and a card already standing at
+// EITHER has to be found rather than duplicated — which is the case that fails
+// if a publication only ever looks at the capture id.
 //
-// The second half is a queue ENTRY's lifetime, asserted through the recorder
+// The cards earlier builds left on people's desks are the other half: a
+// recording still standing takes the recovered words onto itself rather than
+// acquiring a second card beside it, and one the person deleted is never
+// brought back.
+//
+// The last section is a queue ENTRY's lifetime, asserted through the recorder
 // that owns it: a finished capture releases its own entry, a replaced one
 // releases it only once the replacement microphone is actually live, and a
 // second capture takes its place beside whatever is already waiting instead of
@@ -64,9 +66,72 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         super.tearDown()
     }
 
-    // MARK: - recover: a recording that is standing
+    // MARK: - recover: the ordinary capture
 
-    func testAKnownPublishedRecordingTakesTheRecoveredWords() async throws {
+    /// The state every fresh Work capture is parked in: the desk holds nothing,
+    /// and these bytes are the only copy of what was said. The recovery writes
+    /// the WORDS and nothing else — no recording ever reaches the board.
+    func testACaptureTheDeskHoldsNothingForBecomesAWordsOnlyCard() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+
+        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+            Self.claim(id: captureID, publicationState: .phaseOneFailed),
+            transcript: "  Ferry leaves at 07:30\nask about the bikes  ",
+            store: store,
+            queue: queue
+        )
+
+        XCTAssertEqual(outcome, .wordsPublished)
+        XCTAssertTrue(outcome.isTerminal, "the words are on the desk; the record may be released")
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let desk = try XCTUnwrap(deskValue)
+        XCTAssertEqual(desk.materials.count, 1, "one capture, one card")
+        let card = try XCTUnwrap(desk.materials.first)
+        XCTAssertEqual(card.id, captureID, "the words take the capture's own id, so a replay repairs them")
+        XCTAssertEqual(card.kind, .transcript)
+        XCTAssertEqual(card.storageMode, .metadataOnly)
+        XCTAssertFalse(
+            card.hasPayload,
+            "the recording is waste the moment the words exist; a card carrying it would sync for ever"
+        )
+        XCTAssertEqual(card.textContent, "Ferry leaves at 07:30\nask about the bikes")
+        XCTAssertEqual(card.title, "Ferry leaves at 07:30", "the card names itself from its first line")
+        XCTAssertFalse(
+            desk.materials.contains { $0.kind == .audio },
+            "MEASURED: no recording reaches the desk, whatever the parked entry carries"
+        )
+    }
+
+    /// The words were spoken somewhere other than the process publishing them,
+    /// which is the whole reason the record carries the value rather than the
+    /// writer deriving one.
+    func testTheWordsAreStampedWithTheSurfaceTheyWereSpokenAt() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+
+        _ = try await WorkVoiceCaptureCoordinator.recover(
+            Self.claim(
+                id: captureID, publicationState: .phaseOneFailed, sourceDevice: "watch"
+            ),
+            transcript: "said on the wrist",
+            store: store,
+            queue: queue
+        )
+
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertEqual(
+            deskValue?.materials.first?.sourceDevice, "watch",
+            """
+            MEASURED: a wrist recording is relayed to the phone and published there, so \
+            `SourceDevice.current` at the write would call it an iPhone note.
+            """
+        )
+    }
+
+    // MARK: - recover: a recording an earlier build published
+
+    func testAStandingLegacyRecordingTakesTheRecoveredWordsRatherThanACardBesideIt() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
         _ = try await Self.publish(captureID: captureID, in: store)
@@ -79,13 +144,19 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         )
 
         XCTAssertEqual(outcome, .attached)
-        XCTAssertTrue(outcome.isTerminal, "the words are on the desk; the record may be released")
+        XCTAssertTrue(outcome.isTerminal)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(desk.materials.count, 1, "a recovery never puts the same utterance up twice")
+        XCTAssertEqual(
+            desk.materials.count, 1,
+            """
+            One card. Publishing the words BESIDE a recording that is standing leaves a person \
+            with something to play and something to read, for one thing they said once.
+            """
+        )
         let card = try XCTUnwrap(desk.materials.first)
         XCTAssertEqual(card.id, captureID)
-        XCTAssertEqual(card.kind, .audio, "a recovered capture is still a recording")
+        XCTAssertEqual(card.kind, .audio, "a card an earlier build published is left as it is")
         XCTAssertEqual(card.textContent, "the ferry leaves at seven")
         let payload = try await store.loadWorkMaterialPayload(id: captureID)
         XCTAssertEqual(payload, Self.recordingBytes, "the bytes are untouched by a text edit")
@@ -105,10 +176,7 @@ final class WorkVoiceRecoveryTests: XCTestCase {
 
         XCTAssertEqual(
             outcome, .attached,
-            """
-            An unknown verdict is only a reason to be careful about ABSENCE. \
-            A card that is standing takes its words like any other.
-            """
+            "the verdict decides nothing here; what is STANDING on the desk does"
         )
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
@@ -119,9 +187,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         )
     }
 
-    // MARK: - recover: a recording that is not there
-
-    func testAKnownPublishedRecordingThatIsGoneIsADeletionAndIsNotResurrected() async throws {
+    /// A legacy card the person DELETED while recognition was in flight. The
+    /// words still land, as their own card, and nothing brings the recording
+    /// back — there is no code left that could.
+    func testALegacyRecordingThePersonDeletedIsNotResurrectedByItsWords() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
 
@@ -132,170 +201,23 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             queue: queue
         )
 
-        XCTAssertEqual(outcome, .fallbackNotePublished)
+        XCTAssertEqual(outcome, .wordsPublished)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(desk.materials.count, 1, "exactly one card: the words, and no revived recording")
         let card = try XCTUnwrap(desk.materials.first)
-        XCTAssertEqual(
-            card.id, WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID),
-            "the note takes the derived id; at the capture's own it would be answered and write nothing"
-        )
-        XCTAssertEqual(card.kind, .note)
-        XCTAssertEqual(card.textContent, "the words outlive the card")
-        XCTAssertEqual(
-            card.title, "the words outlive the card",
-            "the note names itself the way the recording would have, once it had words"
-        )
-        XCTAssertFalse(
-            desk.materials.contains { $0.kind == .audio },
-            """
-            Phase one is KNOWN to have landed, so a missing card is a deletion. \
-            Republishing here brings back a recording the person threw away.
-            """
-        )
-    }
-
-    func testALegacyRecordWhoseCardIsGoneLandsBesideItRatherThanRepublishingIt() async throws {
-        let store = ConversationStore(inMemory: true)
-        let captureID = UUID()
-
-        let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.claim(id: captureID, publicationState: nil),
-            transcript: "an old record, and no card to be found",
-            store: store,
-            queue: queue
-        )
-
-        XCTAssertEqual(outcome, .fallbackNotePublished)
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(desk.materials.count, 1)
-        XCTAssertFalse(
-            desk.materials.contains { $0.kind == .audio },
-            """
-            Unknown is not permission. A record that never carried its verdict \
-            takes the branch that cannot resurrect anything.
-            """
-        )
-    }
-
-    // MARK: - recover: a publication the desk refused
-
-    func testAKnownFailedPublicationIsRepublishedFromTheParkedBytesAndTakesItsWords() async throws {
-        let store = ConversationStore(inMemory: true)
-        let captureID = UUID()
-
-        let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.claim(id: captureID, publicationState: .phaseOneFailed),
-            transcript: "Ferry leaves at 07:30\nask about the bikes",
-            store: store,
-            queue: queue
-        )
-
-        XCTAssertEqual(outcome, .republishedAndAttached)
-        XCTAssertTrue(outcome.isTerminal)
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(desk.materials.count, 1, "one capture, one card — the one it was always going to have")
-        let card = try XCTUnwrap(desk.materials.first)
-        XCTAssertEqual(card.id, captureID, "the recording comes back under the capture's own id")
-        XCTAssertEqual(
-            card.kind, .audio,
-            "a capture the desk refused must not be downgraded to a note on the way back"
-        )
-        XCTAssertTrue(card.hasPayload)
-        let payload = try await store.loadWorkMaterialPayload(id: captureID)
-        XCTAssertEqual(
-            payload, Self.recordingBytes,
-            "the parked bytes ARE the recording; nothing else has a copy"
-        )
-        XCTAssertEqual(card.textContent, "Ferry leaves at 07:30\nask about the bikes")
-        XCTAssertEqual(card.title, "Ferry leaves at 07:30")
-        XCTAssertEqual(
-            card.mimeType, "audio/mp4",
-            "the container is read off the bytes, not assumed from the parked file's name"
-        )
-    }
-
-    /// The state a crash between the write and its confirmation leaves: the
-    /// verdict says the publication failed, and the card is nonetheless there.
-    /// The republication has to be a repair, not a second recording.
-    func testAKnownFailedPublicationThatActuallyLandedRepairsTheSameCard() async throws {
-        let store = ConversationStore(inMemory: true)
-        let captureID = UUID()
-        let standing = try await Self.publish(captureID: captureID, in: store)
-
-        let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.claim(id: captureID, publicationState: .phaseOneFailed),
-            transcript: "recovered after a crash between the write and its answer",
-            store: store,
-            queue: queue
-        )
-
-        XCTAssertEqual(outcome, .republishedAndAttached)
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(
-            desk.materials.count, 1,
-            "the desk write is idempotent by id; a replay is a repair, never a duplicate"
-        )
-        XCTAssertEqual(desk.materials.first?.id, standing.id)
-        let payload = try await store.loadWorkMaterialPayload(id: captureID)
-        XCTAssertEqual(payload, Self.recordingBytes)
-        XCTAssertEqual(
-            desk.materials.first?.textContent,
-            "recovered after a crash between the write and its answer"
-        )
-    }
-
-    // MARK: - recover: an id that names something else
-
-    func testACardThatIsNotARecordingTakesTheWordsBesideItRatherThanOntoIt() async throws {
-        let store = ConversationStore(inMemory: true)
-        let captureID = UUID()
-        _ = try await store.upsertDeskMaterial(
-            WorkMaterialDraft(
-                id: captureID,
-                kind: .image,
-                title: "screenshot.jpg",
-                filename: "screenshot.jpg",
-                mimeType: "image/jpeg",
-                payload: Data(repeating: 0x2A, count: 64)
-            )
-        )
-
-        let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.claim(id: captureID, publicationState: .published),
-            transcript: "spoken words that belong to a recording",
-            store: store,
-            queue: queue
-        )
-
-        XCTAssertEqual(outcome, .fallbackNotePublished)
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(desk.materials.count, 2, "the picture, and the words beside it")
-        let picture = try XCTUnwrap(desk.materials.first { $0.id == captureID })
-        XCTAssertEqual(picture.kind, .image, "the screenshot stays a screenshot")
-        XCTAssertNil(picture.textContent, "…and never acquires somebody's spoken words")
-        let note = try XCTUnwrap(
-            desk.materials.first {
-                $0.id == WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID)
-            }
-        )
-        XCTAssertEqual(note.textContent, "spoken words that belong to a recording")
+        XCTAssertEqual(card.id, captureID)
+        XCTAssertEqual(card.kind, .transcript)
+        XCTAssertFalse(desk.materials.contains { $0.kind == .audio })
     }
 
     // MARK: - recover: an id that is REFUSED rather than answered
 
     /// The desk does not ANSWER a colliding id, it throws — and the throw never
     /// stops, because the card of another kind standing there is not going
-    /// anywhere. A recovery that rethrew it left the capture in the queue
-    /// failing identically on every retry, for ever. The recording goes back
-    /// under the capture's collision escape instead, and the words follow it
-    /// there.
-    func testACaptureWhoseIdIsTakenLandsUnderItsEscapeAndTakesItsWords() async throws {
+    /// anywhere. The words go under the capture's collision escape instead, and
+    /// the card that was already there is not touched.
+    func testACaptureWhoseIdIsTakenLandsItsWordsUnderTheEscape() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
         let pictureBytes = Data(repeating: 0x2A, count: 64)
@@ -310,7 +232,7 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             queue: queue
         )
 
-        XCTAssertEqual(outcome, .republishedAndAttached)
+        XCTAssertEqual(outcome, .wordsPublished)
         XCTAssertTrue(
             outcome.isTerminal,
             """
@@ -323,12 +245,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(Set(desk.materials.map(\.id)), [captureID, escapeID])
 
-        let recording = try XCTUnwrap(desk.materials.first { $0.id == escapeID })
-        XCTAssertEqual(recording.kind, .audio, "the recording is still a recording")
-        XCTAssertEqual(recording.textContent, "Ferry leaves at 07:30\nask about the bikes")
-        XCTAssertEqual(recording.title, "Ferry leaves at 07:30")
-        let recovered = try await store.loadWorkMaterialPayload(id: escapeID)
-        XCTAssertEqual(recovered, Self.recordingBytes, "the parked bytes are the only copy")
+        let words = try XCTUnwrap(desk.materials.first { $0.id == escapeID })
+        XCTAssertEqual(words.kind, .transcript)
+        XCTAssertEqual(words.textContent, "Ferry leaves at 07:30\nask about the bikes")
+        XCTAssertEqual(words.title, "Ferry leaves at 07:30")
 
         let untouched = try XCTUnwrap(desk.materials.first { $0.id == captureID })
         XCTAssertEqual(untouched.kind, .image, "the card that was already there is unchanged")
@@ -339,9 +259,9 @@ final class WorkVoiceRecoveryTests: XCTestCase {
     }
 
     /// The escape is a pure function of the colliding id, so the second process
-    /// to reach this capture — or the same one after a crash — repairs the card
-    /// it already wrote instead of publishing the recording twice.
-    func testAReplayOfAnEscapedRecoveryRepairsTheSameCard() async throws {
+    /// to reach this capture — or the same one after a crash — answers with the
+    /// card it already wrote instead of publishing the words twice.
+    func testAReplayOfAnEscapedRecoveryAnswersWithTheSameCard() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
         _ = try await Self.foreignCard(at: captureID, in: store)
@@ -355,21 +275,20 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             claim, transcript: "said once", store: store, queue: queue
         )
 
-        XCTAssertEqual(first, .republishedAndAttached)
-        XCTAssertEqual(second, .republishedAndAttached)
+        XCTAssertEqual(first, .wordsPublished)
+        XCTAssertEqual(second, .wordsPublished)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(
             Set(desk.materials.map(\.id)), [captureID, escapeID],
-            "a derived id replayed is a repair; a fresh one each time is a second card"
+            "a derived id replayed is an answer; a fresh one each time is a second card"
         )
-        XCTAssertEqual(desk.materials.filter { $0.kind == .audio }.count, 1)
     }
 
-    /// The end of the line, and the reason there is no third id: both the
-    /// capture id and its escape name cards of another kind. The words go
-    /// beside them, the capture finishes, and neither foreign card is touched.
-    func testACaptureRefusedUnderBothIdsPutsItsWordsBesideThemAndFinishes() async throws {
+    /// The end of the line: the capture id and its escape both name cards of
+    /// another kind, so the words take the last-resort id. Neither foreign card
+    /// is touched, and no fourth id is ever derived.
+    func testACaptureRefusedUnderBothIdsTakesTheLastResortId() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
         let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
@@ -385,106 +304,64 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             queue: queue
         )
 
-        XCTAssertEqual(outcome, .fallbackNotePublished)
+        XCTAssertEqual(outcome, .wordsPublished)
         XCTAssertTrue(outcome.isTerminal, "the words are on the desk; nothing more can be done here")
-        let noteID = WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID)
+        let lastResortID = WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(Set(desk.materials.map(\.id)), [captureID, escapeID, noteID])
-        XCTAssertFalse(
-            desk.materials.contains { $0.kind == .audio },
-            "a chain of derived ids has no end; the second refusal is the last one"
-        )
-        XCTAssertEqual(
-            desk.materials.first { $0.id == noteID }?.textContent,
-            "the ferry leaves at seven"
-        )
+        XCTAssertEqual(Set(desk.materials.map(\.id)), [captureID, escapeID, lastResortID])
+        let words = try XCTUnwrap(desk.materials.first { $0.id == lastResortID })
+        XCTAssertEqual(words.kind, .transcript)
+        XCTAssertEqual(words.textContent, "the ferry leaves at seven")
         let firstPayload = try await store.loadWorkMaterialPayload(id: captureID)
         let secondPayload = try await store.loadWorkMaterialPayload(id: escapeID)
         XCTAssertEqual(firstPayload, firstBytes, "both cards that were there keep their own bytes")
         XCTAssertEqual(secondPayload, secondBytes)
     }
 
-    /// The same double refusal with no words yet. Nothing can carry the
-    /// recording and nothing can carry the words, so the capture stays queued
-    /// with the verdict that says its bytes are the only copy — a `.published`
-    /// written here would make it expirable and delete them.
-    func testACaptureRefusedUnderBothIdsWithNoWordsKeepsItsRetryAndWritesNothing() async throws {
-        let store = ConversationStore(inMemory: true)
-        let captureID = UUID()
-        let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
-        _ = try await Self.foreignCard(at: captureID, in: store)
-        _ = try await Self.foreignCard(at: escapeID, in: store)
-        let claim = try await armedClaim(id: captureID, publicationState: .phaseOneFailed)
-
-        let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            claim, transcript: nil, store: store, queue: queue
-        )
-
-        XCTAssertEqual(outcome, .retryKept(.noTranscript))
-        XCTAssertFalse(outcome.isTerminal, "nothing was written, so nothing may be released")
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(
-            Set(desk.materials.map(\.id)), [captureID, escapeID],
-            "no recording, and no note of silence beside two cards that are not this capture's"
-        )
-        let stillWaiting = await queuedRecord(captureID)
-        let queued = try XCTUnwrap(stillWaiting, "the capture is still waiting")
-        XCTAssertEqual(
-            queued.publicationState, .phaseOneFailed,
-            "the desk never took the recording, so the verdict that protects it is unchanged"
-        )
-        XCTAssertTrue(queued.isExemptFromExpiry, "…and a clock may not delete the only copy")
-    }
-
     /// The state an escape leaves behind, recovered again in another process:
-    /// the recording is standing under the ESCAPE id and the verdict says the
-    /// desk holds it. A recovery that looked only at the capture id would find
-    /// the foreign card, read it as "no recording of mine", and write the words
-    /// into a note beside a card that was there to carry them.
-    func testALaterRecoveryFindsTheRecordingUnderTheEscapeItAlreadyTook() async throws {
+    /// this capture's words are standing under the ESCAPE id. A recovery that
+    /// looked only at the capture id would find the foreign card, read it as
+    /// "nothing of mine here", and write a SECOND copy of the same words.
+    func testALaterRecoveryFindsTheWordsUnderTheEscapeItAlreadyTook() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
         let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
         _ = try await Self.foreignCard(at: captureID, in: store)
-        _ = try await Self.publish(captureID: escapeID, in: store)
+        let claim = Self.claim(id: captureID, publicationState: .phaseOneFailed)
+        _ = try await WorkVoiceCaptureCoordinator.recover(
+            claim, transcript: "the ferry leaves at seven", store: store, queue: queue
+        )
+        // The card that caused the escape is deleted, freeing the capture id.
+        try await store.deleteWorkMaterial(id: captureID)
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.claim(id: captureID, publicationState: .published),
-            transcript: "the ferry leaves at seven",
-            store: store,
-            queue: queue
+            claim, transcript: "the ferry leaves at seven", store: store, queue: queue
         )
 
-        XCTAssertEqual(outcome, .attached, "nothing was republished; the recording was already there")
+        XCTAssertEqual(outcome, .wordsPublished)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(
-            Set(desk.materials.map(\.id)), [captureID, escapeID],
-            "no note: the words found the recording they came from"
+            Set(desk.materials.map(\.id)), [escapeID],
+            """
+            MEASURED: the escaped card is FOUND, not duplicated. Inserting at the first FREE id \
+            publishes a second copy of the same words the moment the original blocker goes.
+            """
         )
-        XCTAssertEqual(
-            desk.materials.first { $0.id == escapeID }?.textContent,
-            "the ferry leaves at seven"
-        )
-        XCTAssertNil(desk.materials.first { $0.id == captureID }?.textContent)
     }
 
-    // MARK: - recover: the picture the recording belongs to
+    // MARK: - recover: the picture the words belong to
 
-    /// A republication names the picture of the ORIGINAL capture, and it says
-    /// so even when the RECORDING had to escape a colliding id.
+    /// The words name the picture of the ORIGINAL capture, and they say so even
+    /// when they had to escape a colliding id.
     ///
-    /// The two escapes are different derivations over different inputs. The
-    /// audio escapes to `WorkMaterialCollisionEscape.materialID(forCapture:)`
-    /// of the capture id; the picture's card is
+    /// The two derivations take different namespaces over the same input. The
+    /// words escape to `WorkMaterialCollisionEscape.materialID(forCapture:)` of
+    /// the capture id; the picture's card is
     /// `WorkVoiceScreenshotCoordinator.materialID(forCapture:)` of that same
-    /// capture id, and a collision on the audio side moves nothing about it.
-    /// Deriving the link inside `publishRecording` from its own `captureID`
-    /// parameter — which is the ESCAPED id on the second attempt — would name a
-    /// card nothing ever publishes.
-    func testAnEscapedRepublicationStillNamesThePictureOfTheOriginalCapture() async throws {
+    /// capture id, and a collision on the words' side moves nothing about it.
+    func testAnEscapedPublicationStillNamesThePictureOfTheOriginalCapture() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
         _ = try await Self.foreignCard(at: captureID, in: store)
@@ -500,67 +377,63 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             queue: queue
         )
 
-        XCTAssertEqual(outcome, .republishedAndAttached)
+        XCTAssertEqual(outcome, .wordsPublished)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
-        let recording = try XCTUnwrap(desk.materials.first { $0.id == escapeID })
+        let words = try XCTUnwrap(desk.materials.first { $0.id == escapeID })
         XCTAssertEqual(
-            recording.attachedToMaterialID, pictureID,
+            words.attachedToMaterialID, pictureID,
             """
-            MEASURED: the recording landed under its ESCAPE and still names the picture derived \
-            from the capture id it started from. The escape is the audio's, not the picture's.
+            MEASURED: the card landed under its ESCAPE and still names the picture derived from \
+            the capture id it started from. The escape is the words', not the picture's.
             """
         )
         XCTAssertNotEqual(
-            recording.attachedToMaterialID,
+            words.attachedToMaterialID,
             WorkVoiceScreenshotCoordinator.materialID(forCapture: escapeID),
             """
-            NEGATIVE CONTROL: the id a derivation taken INSIDE `publishRecording` would produce \
-            on the escape attempt. Nothing publishes a card there, so a fold keyed to it would \
-            never find a parent.
+            NEGATIVE CONTROL: the id a derivation taken from the ESCAPED id would produce. \
+            Nothing publishes a card there, so a fold keyed to it would never find a parent.
             """
         )
         XCTAssertNil(
             desk.materials.first { $0.id == captureID }?.attachedToMaterialID,
-            "the card that was already standing is not a recording and gains no link"
+            "the card that was already standing is not this capture's and gains no link"
         )
     }
 
-    /// The same republication for a capture that carried no picture. Nothing
-    /// names anything, which is what makes the case above about the link rather
-    /// than about a value that is always written.
-    func testARepublishedRecordingWithNoPictureNamesNothing() async throws {
+    /// The same publication for a capture that carried no picture. Nothing names
+    /// anything, which is what makes the case above about the link rather than
+    /// about a value that is always written.
+    func testAWordsCardWithNoPictureNamesNothing() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
 
-        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+        _ = try await WorkVoiceCaptureCoordinator.recover(
             Self.claim(id: captureID, publicationState: .phaseOneFailed),
             transcript: "the ferry leaves at seven",
             store: store,
             queue: queue
         )
 
-        XCTAssertEqual(outcome, .republishedAndAttached)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let recording = try XCTUnwrap(
-            deskValue?.materials.first { $0.id == captureID }
-        )
+        let card = try XCTUnwrap(deskValue?.materials.first { $0.id == captureID })
         XCTAssertNil(
-            recording.attachedToMaterialID,
+            card.attachedToMaterialID,
             "NEGATIVE CONTROL: no picture was ever taken, so there is nothing to belong to"
         )
     }
 
     /// The DURABLE record is the authority. A retry surface that states no link
-    /// still republishes a linked recording, because the link was written when
-    /// the capture was parked and travels with the entry — not with the picture
+    /// still publishes a linked card, because the link was written when the
+    /// capture was parked and travels with the entry — not with the picture
     /// bytes, which the surface has already published and discarded.
-    func testARepublicationTakesTheLinkFromTheRecordWhenTheCallerStatesNone() async throws {
+    func testAPublicationTakesTheLinkFromTheRecordWhenTheCallerStatesNone() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
         let pictureID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
 
-        let outcome = try await WorkVoiceCaptureCoordinator.recover(
+        _ = try await WorkVoiceCaptureCoordinator.recover(
             Self.claim(
                 id: captureID, publicationState: .phaseOneFailed, attachedTo: pictureID
             ),
@@ -569,130 +442,103 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             queue: queue
         )
 
-        XCTAssertEqual(outcome, .republishedAndAttached)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         XCTAssertEqual(
             deskValue?.materials.first { $0.id == captureID }?.attachedToMaterialID,
             pictureID,
             """
-            MEASURED: no `attachedTo:` was passed and the recording is linked anyway. A recovery \
-            that could only read a caller's argument would silently unlink every capture \
-            recovered from a queue after a relaunch.
-            """
-        )
-    }
-
-    /// The FALLBACK NOTE never carries a link, however much the capture that
-    /// produced it did. A note folded into a picture's card would lose the
-    /// full-text route that is the only way to read it, and this iteration
-    /// leaves text and pictures as two cards.
-    func testTheFallbackNoteCarriesNoLinkEvenForACaptureThatTookAPicture() async throws {
-        let store = ConversationStore(inMemory: true)
-        let captureID = UUID()
-        let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
-        _ = try await Self.foreignCard(at: captureID, in: store)
-        _ = try await Self.foreignCard(at: escapeID, in: store)
-        let pictureID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
-
-        let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.claim(
-                id: captureID, publicationState: .phaseOneFailed, attachedTo: pictureID
-            ),
-            transcript: "the ferry leaves at seven",
-            store: store,
-            queue: queue
-        )
-
-        XCTAssertEqual(outcome, .fallbackNotePublished)
-        let noteID = WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID)
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let note = try XCTUnwrap(deskValue?.materials.first { $0.id == noteID })
-        XCTAssertEqual(note.kind, .note, "the fixture must actually reach the note branch")
-        XCTAssertNil(
-            note.attachedToMaterialID,
-            """
-            MEASURED: the link belongs to recordings alone. The very same claim republishes a \
-            LINKED recording when an id is free (see the escape case above), so this nil is a \
-            rule about the note's kind and not about the claim.
+            MEASURED: no `attachedTo:` was passed and the card is linked anyway. A recovery that \
+            could only read a caller's argument would silently unlink every capture recovered \
+            from a queue after a relaunch.
             """
         )
     }
 
     // MARK: - recover: what it records about the capture it finished
 
-    /// r5a#6. A republication with no words yet answers `.retryKept`, so the
-    /// entry stays armed — and an entry still saying the desk refused this
-    /// recording is exempt from expiry for ever AND licenses the next retry to
-    /// republish a card the person may have deleted in between. The verdict is
-    /// recorded the moment it is true.
-    func testARepublicationWithNoWordsRecordsThatTheDeskHoldsTheRecording() async throws {
+    /// The verdict AND the words are stamped the moment the desk holds them. A
+    /// crash between this and the caller's clear then costs nothing: the replay
+    /// finds the card, buys no second transcription, and writes nothing twice.
+    func testAPublicationStampsTheVerdictAndTheWordsOnTheEntry() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
         let claim = try await armedClaim(id: captureID, publicationState: .phaseOneFailed)
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            claim, transcript: nil, store: store, queue: queue
+            claim, transcript: "the ferry leaves at seven", store: store, queue: queue
         )
 
-        XCTAssertEqual(outcome, .retryKept(.noTranscript))
-        XCTAssertFalse(outcome.isTerminal, "recognition still owes this capture its words")
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        let card = try XCTUnwrap(desk.materials.first)
-        XCTAssertEqual(card.id, captureID)
-        XCTAssertEqual(card.kind, .audio)
-        XCTAssertNil(card.textContent, "the card is honestly wordless until they arrive")
-
+        XCTAssertEqual(outcome, .wordsPublished)
         let stillWaiting = await queuedRecord(captureID)
-        let queued = try XCTUnwrap(stillWaiting, "the capture is still waiting")
+        let queued = try XCTUnwrap(stillWaiting, "nothing here clears the entry; the caller does")
         XCTAssertEqual(
             queued.publicationState, .published,
             """
-            The recording IS on the desk now. Left at `.phaseOneFailed`, a later \
-            retry reads the absence of a card the person has since deleted as a \
-            refused write and puts it back.
+            The desk holds this capture now. Left at `.phaseOneFailed` the entry is exempt from \
+            every clock for ever, over bytes that are no longer the only copy of anything.
             """
         )
-        XCTAssertNil(queued.transcript, "a nil transcript keeps what the record already carried")
-        XCTAssertFalse(
-            queued.isExemptFromExpiry,
-            "…and the recording no longer exists only here, so the clock may govern it again"
+        XCTAssertEqual(
+            queued.transcript, "the ferry leaves at seven",
+            "the words the provider was paid for, parked so a replay buys them once"
         )
-        // WHICH clock, though. The words are still owed and the person who owes
-        // them may be driving, so the budget is a day rather than the ten
-        // minutes a Chat transcription gets. The exemption above stays false on
-        // purpose: a longer clock still ends, and these bytes are a second copy
-        // of a card that is already on the desk.
+        XCTAssertFalse(queued.isExemptFromExpiry)
         XCTAssertEqual(
             queued.retryTTL, PendingRetryMetadata.publishedWorkRetryTTL,
             """
-            A published Work capture waits on the long budget. On the ten-minute one it \
-            is swept before a driver can reach the phone the acknowledgement named.
+            A published Work capture waits on the long budget. On the ten-minute one it is swept \
+            before a driver can reach the phone the acknowledgement named.
             """
         )
     }
 
+    /// The crash between the publication and the clear, replayed. Exactly one
+    /// card, and the entry is not written into a second time.
+    func testAReplayAfterACrashBetweenPublishAndClearWritesNothingTwice() async throws {
+        let store = ConversationStore(inMemory: true)
+        let captureID = UUID()
+        let claim = try await armedClaim(id: captureID, publicationState: .phaseOneFailed)
+        let first = try await WorkVoiceCaptureCoordinator.recover(
+            claim, transcript: "said once", store: store, queue: queue
+        )
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let published = try XCTUnwrap(deskValue?.materials.first)
+
+        let second = try await WorkVoiceCaptureCoordinator.recover(
+            claim, transcript: "said once", store: store, queue: queue
+        )
+
+        XCTAssertEqual(first, .wordsPublished)
+        XCTAssertEqual(second, .wordsPublished)
+        let replayedValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let replayed = try XCTUnwrap(replayedValue)
+        XCTAssertEqual(replayed.materials.count, 1, "the id is the capture's own, so a replay answers")
+        XCTAssertEqual(
+            replayed.materials.first?.updatedAt, published.updatedAt,
+            "MEASURED: the second pass writes nothing at all, so no board revision moves under it"
+        )
+    }
+
     /// The words the entry already carries are the ones a surface with none of
-    /// its own recovers with. Leaving them in the entry buys the same answer
-    /// from the provider a second time, and answers `.noTranscript` over a
-    /// capture whose words were never missing.
+    /// its own recovers with. Leaving them there buys the same answer from the
+    /// provider a second time, and answers `.noTranscript` over a capture whose
+    /// words were never missing.
     func testTheWordsAlreadyParkedFinishACaptureWhenTheSurfaceHasNone() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
-        _ = try await Self.publish(captureID: captureID, in: store)
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
             Self.claim(
                 id: captureID,
                 transcript: "the ferry leaves at seven",
-                publicationState: .published
+                publicationState: .phaseOneFailed
             ),
             transcript: nil,
             store: store,
             queue: queue
         )
 
-        XCTAssertEqual(outcome, .attached)
+        XCTAssertEqual(outcome, .wordsPublished)
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(desk.materials.first?.textContent, "the ferry leaves at seven")
@@ -700,14 +546,14 @@ final class WorkVoiceRecoveryTests: XCTestCase {
 
     // MARK: - recover: what must NOT be terminal
 
-    func testAStoreThatRefusesTheAttachRethrowsSoTheCallerKeepsItsRetry() async throws {
+    func testAStoreThatRefusesTheWriteRethrowsSoTheCallerKeepsItsRetry() async throws {
         let broken = try Self.unusableStore()
         let refuses = await Self.refusesWrites(broken)
         XCTAssertTrue(refuses, "the fixture must actually refuse a desk write")
 
         do {
             _ = try await WorkVoiceCaptureCoordinator.recover(
-                Self.claim(id: UUID(), publicationState: .published),
+                Self.claim(id: UUID(), publicationState: .phaseOneFailed),
                 transcript: "words that reached nothing",
                 store: broken,
                 queue: queue
@@ -716,25 +562,6 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         } catch {
             // The caller's `catch` is what keeps the durable record armed. An
             // outcome here would have it clear the only copy of the audio.
-        }
-    }
-
-    func testAStoreThatRefusesTheRepublicationRethrowsBeforeAnythingIsAttached() async throws {
-        let broken = try Self.unusableStore()
-        let refuses = await Self.refusesWrites(broken)
-        XCTAssertTrue(refuses)
-
-        do {
-            _ = try await WorkVoiceCaptureCoordinator.recover(
-                Self.claim(id: UUID(), publicationState: .phaseOneFailed),
-                transcript: "words for a recording that could not be put back",
-                store: broken,
-                queue: queue
-            )
-            XCTFail("a refused republication must not be swallowed into a note-shaped fallback")
-        } catch {
-            // Same rule one phase earlier: the parked bytes are the only copy,
-            // so the record has to survive this attempt.
         }
     }
 
@@ -754,16 +581,17 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         XCTAssertNil(desk, "a chat record must not so much as create the desk row")
     }
 
-    func testARecoveryWithNoWordsKeepsTheRetryAndWritesNothing() async throws {
+    /// The state a device with no working speech key stays in: the recording is
+    /// parked, the desk is empty, and it STAYS empty. Nothing half-finished
+    /// appears on the board, and the bytes are still where the only copy of them
+    /// was.
+    func testACaptureWithNoWordsKeepsItsRetryAndLeavesTheDeskEmpty() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
-        let published = try await Self.publish(captureID: captureID, in: store)
+        let claim = try await armedClaim(id: captureID, publicationState: .phaseOneFailed)
 
         let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.claim(id: captureID, publicationState: .published),
-            transcript: "   \n  ",
-            store: store,
-            queue: queue
+            claim, transcript: "   \n  ", store: store, queue: queue
         )
 
         XCTAssertEqual(outcome, .retryKept(.noTranscript))
@@ -771,77 +599,31 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             outcome.isTerminal,
             "recognition still owes this capture its words; releasing the record would lose the bytes"
         )
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(desk.materials.count, 1, "silence publishes nothing beside the recording")
-        XCTAssertEqual(desk.materials.first?.updatedAt, published.updatedAt, "and writes nothing to it")
-        XCTAssertNil(desk.materials.first?.textContent)
-    }
-
-    /// The recording is not held hostage by the words. A capture the desk
-    /// refused holds the only copy of what was said in its parked bytes, and
-    /// that is true before recognition has produced anything — so the bytes go
-    /// back on the desk and only the TRANSCRIPT is still owed.
-    func testAPublicationTheDeskRefusedIsPutBackEvenWhenNoWordsExistYet() async throws {
-        let store = ConversationStore(inMemory: true)
-        let captureID = UUID()
-
-        let outcome = try await WorkVoiceCaptureCoordinator.recover(
-            Self.claim(id: captureID, publicationState: .phaseOneFailed),
-            transcript: "   \n  ",
-            store: store,
-            queue: queue
-        )
-
-        XCTAssertEqual(
-            outcome, .retryKept(.noTranscript),
-            "recognition still owes this capture its words, so the record stays armed"
-        )
-        XCTAssertFalse(outcome.isTerminal)
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        let card = try XCTUnwrap(
-            desk.materials.first,
+        let desk = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertNil(
+            desk,
             """
-            Answering `.noTranscript` before the republication leaves the only \
-            copy of this recording in a queue entry and nothing on the desk — \
-            which is the state a device that never gets a working STT key stays \
-            in forever.
+            MEASURED: not one card, and not even the desk row. Silence has nothing to publish, \
+            and a wordless placeholder is exactly what this pipeline exists to stop showing.
             """
         )
-        XCTAssertEqual(card.id, captureID)
-        XCTAssertEqual(card.kind, .audio)
-        XCTAssertNil(card.textContent, "…and the card is honestly wordless until they arrive")
-        let payload = try await store.loadWorkMaterialPayload(id: captureID)
-        XCTAssertEqual(payload, Self.recordingBytes)
-    }
-
-    func testARepeatedRecoveryLandsOnTheNoteItAlreadyPublished() async throws {
-        let store = ConversationStore(inMemory: true)
-        let captureID = UUID()
-        let record = Self.claim(id: captureID, publicationState: .published)
-
-        let first = try await WorkVoiceCaptureCoordinator.recover(
-            record, transcript: "said once", store: store, queue: queue
-        )
-        let second = try await WorkVoiceCaptureCoordinator.recover(
-            record, transcript: "said once", store: store, queue: queue
-        )
-
-        XCTAssertEqual(first, .fallbackNotePublished)
-        XCTAssertEqual(second, .fallbackNotePublished)
-        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
+        let stillWaiting = await queuedRecord(captureID)
+        let queued = try XCTUnwrap(stillWaiting, "the capture is still waiting")
         XCTAssertEqual(
-            desk.materials.count, 1,
-            "the note id is derived, so a capture recovered twice still has one note"
+            queued.publicationState, .phaseOneFailed,
+            "the desk holds nothing, so the verdict that protects these bytes is unchanged"
+        )
+        XCTAssertTrue(queued.isExemptFromExpiry, "…and a clock may not delete the only copy")
+        let parked = await self.queue.load().first { $0.metadata.id == captureID }
+        XCTAssertEqual(
+            parked?.audioData, Self.recordingBytes,
+            "MEASURED: the recording is still parked, byte for byte"
         )
     }
 
     func testOnlyTheWrittenOutcomesReportThemselvesTerminal() {
+        XCTAssertTrue(WorkVoiceRecoveryOutcome.wordsPublished.isTerminal)
         XCTAssertTrue(WorkVoiceRecoveryOutcome.attached.isTerminal)
-        XCTAssertTrue(WorkVoiceRecoveryOutcome.republishedAndAttached.isTerminal)
-        XCTAssertTrue(WorkVoiceRecoveryOutcome.fallbackNotePublished.isTerminal)
         XCTAssertFalse(WorkVoiceRecoveryOutcome.retryKept(.notAWorkCapture).isTerminal)
         XCTAssertFalse(
             WorkVoiceRecoveryOutcome.retryKept(.noTranscript).isTerminal,
@@ -871,21 +653,30 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         }
 
         _ = await recorder._finishCaptureForTesting()
-        let cardID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let captureID = try XCTUnwrap(recorder.pendingWorkCapture?.id)
+        XCTAssertNil(
+            recorder.workRecordingMaterialID,
+            "the desk holds nothing for a capture whose words never arrived"
+        )
         let parked = await lane.armed
-        let armed = try XCTUnwrap(parked, "a failed capture parks its bytes")
-        XCTAssertEqual(armed.id, cardID, "one identity: the card, the capture and the record")
+        let armed = try XCTUnwrap(parked, "a capture parks its bytes before the speech hop")
+        XCTAssertEqual(armed.id, captureID, "one identity: the capture, the card and the record")
 
         let result = await recorder.retryWorkCapture()
 
         XCTAssertEqual(try result.get(), "recovered on the retry")
+        XCTAssertEqual(
+            recorder.workRecordingMaterialID, captureID,
+            "the words are the card, and it stands at the capture's own id"
+        )
         let afterRetry = await lane.armed
         XCTAssertNil(
             afterRetry,
             """
-            The words are on the card, so nothing is owed. Leaving the record \
-            armed is what makes the retry card offer to buy the same transcript \
-            again, and what lets an unrelated failure delete the audio behind it.
+            The words are on the desk, so the recording is waste and the entry is \
+            gone with it. Leaving the record armed is what makes the retry card \
+            offer to buy the same transcript again — and it leaves audio parked \
+            on a device after the words it produced have landed.
             """
         )
     }
@@ -912,9 +703,9 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         }
 
         _ = await recorder._finishCaptureForTesting()
-        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let captureID = try XCTUnwrap(recorder.pendingWorkCapture?.id)
         let bytesBefore = await lane.audio(id: captureID)
-        XCTAssertNotNil(bytesBefore, "the failed capture parked its bytes")
+        XCTAssertNotNil(bytesBefore, "the capture parked its bytes before the speech hop")
 
         // The menu bar — or a Shortcut host, or a second window — takes it over.
         await lane.reserveForAnotherSurface(id: captureID)
@@ -970,16 +761,22 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         }
 
         _ = await recorder._finishCaptureForTesting()
-        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let captureID = try XCTUnwrap(recorder.pendingWorkCapture?.id)
         XCTAssertEqual(
-            reservedDuringHop, [false],
-            "the FIRST run reserves nothing — there is no queue entry until it fails"
+            reservedDuringHop, [true],
+            """
+            The FIRST run holds the capture too. Its recording is parked before a \
+            single word is asked for — the bytes exist nowhere else — so from \
+            that moment the retry card and the menu bar can see the entry, and \
+            an unreserved entry is one either of them may start transcribing \
+            while this run is doing exactly that.
+            """
         )
 
         _ = await recorder.retryWorkCapture()
 
         XCTAssertEqual(
-            reservedDuringHop, [false, true],
+            reservedDuringHop, [true, true],
             """
             The retry has to hold the capture while it transcribes. Reserving \
             after the hop protects nothing: the window this closes is exactly \
@@ -987,14 +784,19 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             """
         )
         let reservationsTaken = await lane.reservations
-        XCTAssertEqual(reservationsTaken, [captureID], "and it reserved THIS capture, not the newest one")
+        XCTAssertEqual(
+            reservationsTaken, [captureID, captureID],
+            "both runs reserved THIS capture, not the newest one"
+        )
         let handedBack = await lane.releases
         XCTAssertEqual(
-            handedBack, [captureID],
+            handedBack, [captureID, captureID],
             """
-            A retry that failed leaves the capture waiting, so the hold goes \
-            back at once. Keeping it would make the retry card refuse the person \
-            their own recording for the length of the lease.
+            EVERY run that ends without finishing the capture gives the hold \
+            back at once — the first one as much as the retry. Kept, it is \
+            renewed for as long as this recorder lives: the entry stops counting \
+            as waiting, the retry card stops drawing the row that offers it, and \
+            the recording is unreachable to every other surface.
             """
         )
         let stillHeld = await lane.isReserved(id: captureID)
@@ -1014,7 +816,7 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         recorder.transcriptionHopForTesting = { _ in .failure(.sttProviderUnreachable) }
 
         _ = await recorder._finishCaptureForTesting()
-        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let captureID = try XCTUnwrap(recorder.pendingWorkCapture?.id)
         let bytesBefore = await lane.audio(id: captureID)
 
         // Another surface is finishing it when the person taps Record Again.
@@ -1046,16 +848,17 @@ final class WorkVoiceRecoveryTests: XCTestCase {
     /// Record Again replaces a capture. Until the replacement microphone is
     /// actually live there is nothing to replace it WITH, so a refused start
     /// must leave the first capture — and the record that can still finish it —
-    /// exactly where they were.
+    /// exactly where they were. And when the microphone DOES come up, the
+    /// replaced capture is handed back to the queue rather than deleted.
     @MainActor
-    func testRecordAgainKeepsTheCaptureUntilTheReplacementMicrophoneStarts() async throws {
+    func testRecordAgainHandsTheReplacedCaptureBackToTheQueue() async throws {
         let store = ConversationStore(inMemory: true)
         let lane = RecordingRetryLane()
         let recorder = Self.workRecorder(store: store, lane: lane)
         recorder.transcriptionHopForTesting = { _ in .failure(.sttProviderUnreachable) }
 
         _ = await recorder._finishCaptureForTesting()
-        let cardID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let captureID = try XCTUnwrap(recorder.pendingWorkCapture?.id)
         let parked = await lane.armed
         XCTAssertNotNil(parked)
 
@@ -1069,11 +872,10 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             recorder.canRetryWorkCapture,
             "a refused microphone is not a reason to abandon a capture that is still finishable"
         )
-        XCTAssertEqual(recorder.pendingWorkCapture?.id, cardID)
-        XCTAssertEqual(recorder.workRecordingMaterialID, cardID, "the card it published is still its own")
+        XCTAssertEqual(recorder.pendingWorkCapture?.id, captureID)
         let stillArmed = await lane.armed
         XCTAssertEqual(
-            stillArmed?.id, cardID,
+            stillArmed?.id, captureID,
             "and the only durable copy of its bytes is still there"
         )
 
@@ -1090,13 +892,28 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             "the replaced capture is no longer this sheet's subject"
         )
         XCTAssertNil(recorder.workRecordingMaterialID, "a new capture can never claim the old one's card")
-        let afterReplacement = await lane.armed
-        XCTAssertNil(
+        let afterReplacement = await lane.entry(id: captureID)
+        XCTAssertNotNil(
             afterReplacement,
             """
-            The single slot belongs to the capture in hand. A replaced capture \
-            keeps its playable card on the desk and gives the slot up, rather \
-            than waiting to be displaced by the recording that replaced it.
+            MEASURED: Record Again DELETED the recording. Nothing of that capture \
+            is on the desk — this lane publishes the words and only the words, \
+            and the words are what it never got — so the entry it clears is the \
+            only copy of what somebody said. Record Again means "I am not \
+            waiting for this one", never "throw it away".
+            """
+        )
+        let bytesAfterReplacement = await lane.audio(id: captureID)
+        XCTAssertEqual(
+            bytesAfterReplacement, Self.recordingBytes,
+            "byte for byte, and it is the retry card that offers it now"
+        )
+        let handedBack = await lane.isReserved(id: captureID)
+        XCTAssertFalse(
+            handedBack,
+            """
+            …and the hold went with it. An entry left reserved by a recorder that \
+            has moved on is one no surface can take and none can finish.
             """
         )
     }
@@ -1116,7 +933,7 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         _ = await recorder._finishCaptureForTesting()
 
         let workID = try XCTUnwrap(
-            recorder.workRecordingMaterialID, "phase one still published the recording"
+            recorder.pendingWorkCapture?.id, "phase one still parked the recording"
         )
         let queued = await lane.queued
         XCTAssertEqual(
@@ -1135,8 +952,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         )
         let saves = await lane.saves
         XCTAssertEqual(
-            saves.map(\.id), [workID],
-            "exactly one write, and it names the arriving capture — nothing touched the incumbent"
+            Set(saves.map(\.id)), [workID],
+            "every write names the arriving capture — nothing touched the incumbent"
         )
         XCTAssertTrue(
             recorder.canRetryWorkCapture,
@@ -1196,9 +1013,9 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(
             Set(desk.materials.map(\.id)), [first.id, second.id],
-            "two captures, two playable cards — neither recovery landed on the other's"
+            "two captures, two cards — neither recovery landed on the other's"
         )
-        XCTAssertTrue(desk.materials.allSatisfy { $0.kind == .audio })
+        XCTAssertTrue(desk.materials.allSatisfy { $0.kind == .transcript })
         XCTAssertEqual(
             Set(desk.materials.compactMap(\.textContent)),
             ["the ferry leaves at seven", "ask about the bikes"]
@@ -1215,7 +1032,11 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let chat = Self.claim(id: UUID(), destination: .chat, publicationState: nil)
         let lane = RecordingRetryLane(seeded: chat.entry.metadata, audio: Data(repeating: 0x11, count: 32))
         let recorder = Self.workRecorder(store: broken, lane: lane)
-        recorder.transcriptionHopForTesting = { _ in .success("never reached") }
+        // REACHED, and that is the order: the park is a file in the App-Group
+        // container, not a desk write, so a store that refuses everything does
+        // not stop this capture being transcribed. What it stops is the
+        // publication that comes after.
+        recorder.transcriptionHopForTesting = { _ in .success("the ferry leaves at seven") }
 
         let result = await recorder._finishCaptureForTesting()
 
@@ -1238,18 +1059,26 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         XCTAssertEqual(
             armed.publicationState, .phaseOneFailed,
             """
-            The verdict is what lets a later recovery put this recording back \
-            instead of reading its absence as a deletion.
+            The desk holds nothing for this capture, and the verdict says so — \
+            which is what exempts these bytes from the ten-minute clock that \
+            governs a capture the board already has.
             """
         )
-        XCTAssertNil(armed.transcript, "recognition was never attempted, so there are no words to park")
+        XCTAssertEqual(
+            armed.transcript, "the ferry leaves at seven",
+            """
+            The words were bought and the publication refused them, so they are \
+            parked with the bytes. Without this the retry pays a provider a \
+            second time for the answer it already has.
+            """
+        )
     }
 
-    /// The words are bought once. A capture whose card refused them parks them
-    /// with its bytes, so a recovery after a kill attaches instead of paying a
-    /// provider for the answer it already has.
+    /// The words are bought once. A capture whose publication the desk refused
+    /// parks them with its bytes, so a recovery after a kill publishes instead
+    /// of paying a provider for the answer it already has.
     @MainActor
-    func testAnAttachFailureParksTheWordsAndTheVerdictWithTheCapture() async throws {
+    func testAPublicationFailureParksTheWordsAndTheVerdictWithTheCapture() async throws {
         let store = ConversationStore(inMemory: true)
         let broken = try Self.unusableStore()
         let refuses = await Self.refusesWrites(broken)
@@ -1257,8 +1086,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let lane = RecordingRetryLane()
         let recorder = Self.workRecorder(store: store, lane: lane)
         recorder.transcriptionHopForTesting = { [weak recorder] _ in
-            // The card is published by now; break the store between the phases
-            // so the attachment — and only the attachment — fails.
+            // The bytes are parked by now; break the store between the phases so
+            // the publication — and only the publication — fails.
             recorder?.workStoreForTesting = broken
             return .success("the ferry leaves at seven")
         }
@@ -1267,7 +1096,11 @@ final class WorkVoiceRecoveryTests: XCTestCase {
 
         let parked = await lane.armed
         let armed = try XCTUnwrap(parked)
-        XCTAssertEqual(armed.id, recorder.workRecordingMaterialID)
+        XCTAssertEqual(armed.id, recorder.pendingWorkCapture?.id)
+        XCTAssertNil(
+            recorder.workRecordingMaterialID,
+            "control: the desk refused the words, so no card names them"
+        )
         XCTAssertEqual(
             armed.transcript, "the ferry leaves at seven",
             """
@@ -1276,8 +1109,21 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             """
         )
         XCTAssertEqual(
-            armed.publicationState, .published,
-            "the card is standing, so a later absence is a deletion and not a refused write"
+            armed.publicationState, .phaseOneFailed,
+            """
+            The desk holds nothing for this capture, which is what the verdict has \
+            to say: these bytes are still the only copy of what was said, and an \
+            entry that claimed otherwise would be swept on the ten-minute clock.
+            """
+        )
+        let stamps = await lane.stamps
+        XCTAssertEqual(
+            stamps.map(\.transcript), ["the ferry leaves at seven"],
+            """
+            MEASURED: the words reached the entry only through the failure path. \
+            They are parked BEFORE the desk write, so a process death in that gap \
+            costs a store round trip and not the transcription.
+            """
         )
     }
 
@@ -1317,7 +1163,7 @@ final class WorkVoiceRecoveryTests: XCTestCase {
                 : .success("the words this run bought")
         }
         _ = await recorder._finishCaptureForTesting()
-        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let captureID = try XCTUnwrap(recorder.pendingWorkCapture?.id)
 
         // The provider has answered and the write has not happened yet — the
         // exact gap a lapsed hold is discovered in. Another surface takes the
@@ -1336,14 +1182,12 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             "the one honest sentence here is that the recording is being finished somewhere else"
         )
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let desk = try XCTUnwrap(deskValue)
-        let card = try XCTUnwrap(desk.materials.first { $0.id == captureID })
-        XCTAssertNil(
-            card.textContent,
+        XCTAssertTrue(
+            deskValue?.materials.isEmpty ?? true,
             """
-            MEASURED: this run wrote its words onto a card it no longer owned. The surface that \
-            claimed the capture is transcribing the same recording, and whichever of the two \
-            finishes last silently replaces the other's answer.
+            MEASURED: this run published words for a capture it no longer owned. The surface that \
+            claimed it is transcribing the same recording, and whichever of the two finishes last \
+            silently replaces the other's answer on one card.
             """
         )
         let stillQueued = await lane.entry(id: captureID)
@@ -1367,7 +1211,7 @@ final class WorkVoiceRecoveryTests: XCTestCase {
                 : .success("the words this run bought")
         }
         _ = await recorder._finishCaptureForTesting()
-        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let captureID = try XCTUnwrap(recorder.pendingWorkCapture?.id)
 
         var pausedAtTheWrite = false
         recorder.transcriptAttachPauseForTesting = { pausedAtTheWrite = true }
@@ -1381,6 +1225,7 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         let desk = try XCTUnwrap(deskValue)
         let card = try XCTUnwrap(desk.materials.first { $0.id == captureID })
         XCTAssertEqual(card.textContent, "the words this run bought")
+        XCTAssertEqual(card.kind, .transcript, "and it is the words-only card, not a recording")
     }
 
     /// A refused claim may not PARK the capture it was refused.
@@ -1408,9 +1253,11 @@ final class WorkVoiceRecoveryTests: XCTestCase {
                 : .success("the words this run bought")
         }
         _ = await recorder._finishCaptureForTesting()
-        let captureID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let captureID = try XCTUnwrap(recorder.pendingWorkCapture?.id)
         let armed = await lane.entry(id: captureID)
-        XCTAssertNotNil(armed, "control: the first failure parked the capture")
+        XCTAssertNotNil(armed, "control: the first run parked the capture")
+        let savesBeforeTheRefusal = await lane.saves.filter { $0.id == captureID }.count
+        let releasesBeforeTheRefusal = await lane.releases.filter { $0 == captureID }.count
 
         // The other surface does not merely hold the capture — it FINISHES it,
         // which retires the entry. That is what this run must not undo.
@@ -1435,37 +1282,34 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         )
         let saveIDs = await lane.saves.map(\.id)
         XCTAssertEqual(
-            saveIDs.filter { $0 == captureID }.count, 1,
-            "exactly the ONE save the first failure made; the refusal writes nothing"
+            saveIDs.filter { $0 == captureID }.count, savesBeforeTheRefusal,
+            "exactly the writes the first run made; the refusal writes nothing"
         )
-        let released = await lane.releases
-        XCTAssertFalse(
-            released.contains(captureID),
+        let released = await lane.releases.filter { $0 == captureID }.count
+        XCTAssertEqual(
+            released, releasesBeforeTheRefusal,
             "there is nothing to hand back — the lapsed claim was dropped before the refusal"
         )
     }
 
-    /// A capture still in hand does not prove its card is standing.
+    /// A cancelled transcription leaves the desk EMPTY and the capture in hand.
     ///
-    /// Cancelling the transcription keeps the capture — that is what its Try
-    /// Again is for — while the card it published can have been deleted on
-    /// another device in the same window. The recorder's own refresh answers
-    /// that question, and this is the pair a receipt must be told from: retained
-    /// AND confirmed gone. `WorkboardVoiceCaptureView`'s stopped state reads the
-    /// fact, never the retention.
-    func testACancelledTranscriptionKeepsACaptureWhoseCardTheDeskSaysIsGone() async throws {
+    /// "Cancel Transcription" is a promise about the words, and in this lane the
+    /// words are the only thing that ever reaches the desk — so a cancel lands
+    /// on a capture with nothing published, and it must publish nothing after
+    /// the press either. What survives is the parked recording and the Try Again
+    /// that can still turn it into a card, which is what the sheet's stopped
+    /// state describes.
+    func testACancelledTranscriptionLeavesTheDeskEmptyAndKeepsTheCapture() async throws {
         let store = ConversationStore(inMemory: true)
         let lane = RecordingRetryLane()
         let recorder = Self.workRecorder(store: store, lane: lane)
 
+        var deskAtTheHop: [WorkMaterialKind] = []
         recorder.transcriptionHopForTesting = { [weak recorder] _ in
-            // Deleted while the words are being bought — the synced deletion the
-            // person made on another device.
             let desk = try? await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-            if let card = desk?.materials.first {
-                try? await store.deleteWorkMaterial(id: card.id)
-            }
-            // …and "Cancel transcription" pressed on this one.
+            deskAtTheHop = desk?.materials.map(\.kind) ?? []
+            // "Cancel transcription" pressed while the provider is thinking.
             recorder?.cancelProcessing()
             return .success("words nobody is waiting for any more")
         }
@@ -1474,17 +1318,30 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         guard case .failure(.unknown(let underlying)) = outcome, underlying is CancellationError else {
             return XCTFail("a cancelled transcription answers as a cancellation, with no banner")
         }
+        XCTAssertEqual(
+            deskAtTheHop, [],
+            "control: nothing of this capture was on the desk when the press landed"
+        )
         XCTAssertTrue(
             recorder.canRetryWorkCapture,
-            "control: the capture is retained, which is the only thing a receipt used to read"
+            "the capture is retained, and its Try Again is what finishes it"
+        )
+        let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertTrue(
+            deskValue?.materials.isEmpty ?? true,
+            """
+            MEASURED: a withdrawn request put a card on the board anyway. The press is a promise \
+            about the words, and the words are the whole of what this lane publishes.
+            """
         )
         XCTAssertFalse(
-            recorder.workCaptureFacts.recordingOnDesk,
-            """
-            MEASURED: the desk's own answer and the capture's retention disagree, and only the \
-            first is about the card. A stopped-state receipt told from the retention promises a \
-            recording the person deleted.
-            """
+            recorder.workCaptureFacts.wordsOnDesk,
+            "and the receipt says so — nothing landed"
+        )
+        let stillParked = await lane.entry(id: try XCTUnwrap(recorder.pendingWorkCapture?.id))
+        XCTAssertNotNil(
+            stillParked,
+            "…while the recording, which is the only copy of what was said, is waiting for it"
         )
     }
 
@@ -1510,7 +1367,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         destination: PendingRetryDestination = .work,
         transcript: String? = nil,
         publicationState: PendingRetryPublicationState?,
-        attachedTo: UUID? = nil
+        attachedTo: UUID? = nil,
+        sourceDevice: String? = nil
     ) -> PendingRetryMetadata {
         PendingRetryMetadata(
             id: id,
@@ -1522,7 +1380,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
             destination: destination,
             transcript: transcript,
             publicationState: publicationState,
-            workAttachedToMaterialID: attachedTo
+            workAttachedToMaterialID: attachedTo,
+            sourceDevice: sourceDevice
         )
     }
 
@@ -1539,7 +1398,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         transcript: String? = nil,
         publicationState: PendingRetryPublicationState?,
         audio: Data = recordingBytes,
-        attachedTo: UUID? = nil
+        attachedTo: UUID? = nil,
+        sourceDevice: String? = nil
     ) -> PendingRetryClaim {
         PendingRetryClaim(
             entry: PendingRetryEntry(
@@ -1549,7 +1409,8 @@ final class WorkVoiceRecoveryTests: XCTestCase {
                     destination: destination,
                     transcript: transcript,
                     publicationState: publicationState,
-                    attachedTo: attachedTo
+                    attachedTo: attachedTo,
+                    sourceDevice: sourceDevice
                 ),
                 workImageData: nil
             ),
@@ -1610,17 +1471,26 @@ final class WorkVoiceRecoveryTests: XCTestCase {
         )
     }
 
+    /// A recording on the desk, as an EARLIER BUILD published it. Nothing in
+    /// the app writes one any more — the coordinator has no function that
+    /// could — so the fixture goes through the desk's own door, exactly as an
+    /// audio file a person attaches does. The cases that use it are about the
+    /// cards those builds left behind on people's desks.
     @discardableResult
     private static func publish(
         captureID: UUID,
         in store: ConversationStore
     ) async throws -> WorkMaterialRecord {
-        try await WorkVoiceCaptureCoordinator.publishRecording(
-            captureID: captureID,
-            audio: recordingBytes,
-            fileExtension: "m4a",
-            mimeType: "audio/mp4",
-            store: store
+        try await store.upsertDeskMaterial(
+            WorkMaterialDraft(
+                id: captureID,
+                kind: .audio,
+                title: "Voice note",
+                filename: "voice-note.m4a",
+                mimeType: "audio/mp4",
+                payload: recordingBytes,
+                byteSize: Int64(recordingBytes.count)
+            )
         )
     }
 
@@ -1674,6 +1544,7 @@ final class WorkVoiceRecoveryTests: XCTestCase {
 /// a retired one (`PendingRetryLeaseTests` pins the real store's own version).
 private actor RecordingRetryLane: PendingRetryLaneReserving {
     private var entries: [(metadata: PendingRetryMetadata, audio: Data)] = []
+
     private var leases: [UUID: (token: UUID, expiresAt: Date, duration: TimeInterval)] = [:]
 
     /// Every metadata this lane was ASKED to write, so a test can tell "the
@@ -1692,6 +1563,15 @@ private actor RecordingRetryLane: PendingRetryLaneReserving {
     /// Every renewal this lane was asked for, so a case can prove a live retry
     /// keeps extending the hold it took.
     private(set) var renewals: [UUID] = []
+
+    /// Every verdict written onto an entry through its reservation, newest
+    /// last, so a case can tell words parked BEFORE a desk write from words
+    /// that only reached the record after it failed.
+    private(set) var stamps: [(id: UUID, transcript: String?, state: PendingRetryPublicationState)] = []
+
+    /// Every capture whose RECORDING was retired while its entry stayed, so a
+    /// case can prove the audio does not outlive the words it produced.
+    private(set) var retiredRecordings: [UUID] = []
 
     init(seeded: PendingRetryMetadata? = nil, audio: Data = Data()) {
         if let seeded { entries = [(seeded, audio)] }
@@ -1809,6 +1689,44 @@ private actor RecordingRetryLane: PendingRetryLaneReserving {
         guard entries.contains(where: { $0.metadata.id == claim.id }) else { return false }
         entries.removeAll { $0.metadata.id == claim.id }
         leases[claim.id] = nil
+        return true
+    }
+
+    /// Metadata only, and under the lease like every other write here: the
+    /// recording is not touched and no other capture is read back. The real
+    /// store's `recording(transcript:publicationState:)` keeps what a nil
+    /// argument does not state, and so does this.
+    @discardableResult
+    func recordPublicationState(
+        _ claim: PendingRetryClaim,
+        transcript: String?,
+        publicationState: PendingRetryPublicationState
+    ) async -> Bool {
+        guard leases[claim.id]?.token == claim.token else { return false }
+        guard let index = entries.firstIndex(where: { $0.metadata.id == claim.id }) else {
+            return false
+        }
+        entries[index].metadata = entries[index].metadata.recording(
+            transcript: transcript, publicationState: publicationState
+        )
+        stamps.append((claim.id, transcript, publicationState))
+        return true
+    }
+
+    /// The recording alone. The entry, its record and its parked picture stay —
+    /// which is the whole point: the picture may be the only copy of itself,
+    /// and the audio is waste the moment the words land.
+    @discardableResult
+    func retireRecording(_ claim: PendingRetryClaim) async -> Bool {
+        guard leases[claim.id]?.token == claim.token else { return false }
+        guard let index = entries.firstIndex(where: { $0.metadata.id == claim.id }) else {
+            return false
+        }
+        entries[index].metadata = entries[index].metadata.recording(
+            transcript: nil, publicationState: .published
+        )
+        entries[index].audio = Data()
+        retiredRecordings.append(claim.id)
         return true
     }
 }

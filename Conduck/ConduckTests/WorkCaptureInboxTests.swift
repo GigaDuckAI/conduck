@@ -7,6 +7,13 @@
 // metadata, cross-process wire parity, atomic claim/release/acknowledge, strict
 // payload containment, and crash reconciliation. No gateway, Keychain, network,
 // Core Data, or notification permission is touched.
+//
+// Two cases here read the share extensions' SOURCE instead. Each appex is its
+// own process and its own compiled target, so the rules that have to hold on
+// both sides of a share — the vocabulary, and the boundary that refuses a
+// recording into Work while leaving Chat's forward alone — are unreachable from
+// a test that runs the app. Targeted regression checks on shape, not proofs of
+// absence: a novel construction they do not name would pass.
 
 import XCTest
 @testable import Conduck
@@ -308,6 +315,7 @@ final class WorkCaptureInboxTests: XCTestCase {
             "share.work.error.unavailable",
             "share.work.error.invalidContent",
             "share.work.error.unsupportedItem",
+            "share.work.error.audioRefused",
         ]
         // Work is ONE desk: the Add to Work button names no card, so neither appex
         // may carry a Work target list, a "New Work" row or an untitled-card
@@ -369,6 +377,13 @@ final class WorkCaptureInboxTests: XCTestCase {
                 source.contains("snapshot.recentWorkItems"),
                 "\(relativePath) must not read Work targets — the snapshot publishes none"
             )
+            // Work refuses a recording and Chat does not, so the verdict has to
+            // exist as its own failure the sheet can name. A view that lost the
+            // case would fall back to a sentence about something else.
+            XCTAssertTrue(
+                source.contains("case audioRefused"),
+                "\(relativePath) must carry the refused-recording failure"
+            )
         }
 
         for relativePath in [
@@ -419,6 +434,106 @@ final class WorkCaptureInboxTests: XCTestCase {
         )
         XCTAssertTrue(iosCatalog.contains("\"share.destination.title\" :"))
         XCTAssertFalse(macCatalog.contains("\"share.destination.title\" :"))
+    }
+
+    /// The recording boundary, read out of the two appexes' own source.
+    ///
+    /// Work keeps an audio file only when a person attaches it at the desk
+    /// itself, so neither share sheet may put one there — while Chat must go on
+    /// forwarding a recording to a conversation exactly as before. Three things
+    /// carry that split, and all three are invisible to a test that only runs
+    /// the app: the refusal lives inside `writeWorkCaptureEnvelope` and NOT in
+    /// `loadOne`, which the send lane shares; each controller declares the
+    /// verdict as its own error case; and each Info.plist still accepts audio,
+    /// because narrowing the activation rule would drop the appex out of the
+    /// share sheet entirely and refuse Chat's forward with no sentence at all.
+    func testBothShareExtensionsRefuseARecordingInTheWorkLaneOnly() throws {
+        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let projectDirectory = testsDirectory.deletingLastPathComponent()
+
+        for relativePath in [
+            "ConduckShareExtension/ShareViewController.swift",
+            "ConduckShareExtensionMac/ShareViewController.swift",
+        ] {
+            let source = try String(
+                contentsOf: projectDirectory.appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+            XCTAssertTrue(
+                source.contains("case audioRefused"),
+                "\(relativePath) must declare the refused-recording verdict"
+            )
+            XCTAssertTrue(
+                source.contains("failure = .audioRefused"),
+                "\(relativePath) must map the verdict onto the sheet's own failure"
+            )
+
+            // The refusal has to live in the Work-only method. Both halves are
+            // pinned inside that method's source — the provider question asked
+            // before a byte is copied, and the annotation sniffer for a source
+            // that declared nothing.
+            let workLane = try XCTUnwrap(
+                Self.body(ofMethodNamed: "writeWorkCaptureEnvelope", in: source),
+                "\(relativePath) must still assemble the Work envelope in its own method"
+            )
+            XCTAssertTrue(
+                workLane.contains("hasItemConformingToTypeIdentifier(UTType.audio.identifier)"),
+                "\(relativePath) must ask the provider before copying its bytes"
+            )
+            XCTAssertTrue(
+                workLane.contains("WorkCaptureEnvelope.isAudioPayload("),
+                "\(relativePath) must read the envelope's own rule, not a second spelling"
+            )
+            XCTAssertTrue(
+                workLane.contains("throw ShareError.audioRefused"),
+                "\(relativePath) must refuse the whole Work capture"
+            )
+
+            let sendLane = try XCTUnwrap(
+                Self.body(ofMethodNamed: "loadOne", in: source),
+                "\(relativePath) must still load providers in one shared method"
+            )
+            XCTAssertFalse(
+                sendLane.contains("audioRefused"),
+                "\(relativePath): `loadOne` is shared with Send — a rule there refuses audio for Chat too"
+            )
+        }
+
+        // Activation stays as wide as it is. iOS accepts any file through
+        // `public.data`; macOS through the file key. Narrowing either is how a
+        // recording would vanish from the share sheet with no explanation.
+        let iosActivation = try String(
+            contentsOf: projectDirectory.appendingPathComponent("ConduckShareExtension/Info.plist"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            iosActivation.contains("UTI-CONFORMS-TO \"public.data\""),
+            "the iOS appex must keep accepting any file, recordings included, for Chat"
+        )
+        let macActivation = try String(
+            contentsOf: projectDirectory.appendingPathComponent("ConduckShareExtensionMac/Info.plist"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            macActivation.contains("NSExtensionActivationSupportsFileWithMaxCount"),
+            "the macOS appex must keep accepting any file, recordings included, for Chat"
+        )
+    }
+
+    /// The source of one method, from its declaration to the closing brace at
+    /// its own indentation. Enough to ask which of two sibling methods a rule
+    /// lives in, which is the only question the case above puts to it.
+    private static func body(ofMethodNamed name: String, in source: String) -> String? {
+        let lines = source.components(separatedBy: .newlines)
+        guard let start = lines.firstIndex(where: { $0.contains("func \(name)(") }) else {
+            return nil
+        }
+        let indent = lines[start].prefix { $0 == " " }
+        let closing = String(indent) + "}"
+        guard let end = lines[(start + 1)...].firstIndex(where: { $0 == closing }) else {
+            return nil
+        }
+        return lines[start...end].joined(separator: "\n")
     }
 
     // MARK: - The share sheet sends only on a press, and remembers nothing

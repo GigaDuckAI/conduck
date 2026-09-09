@@ -143,15 +143,17 @@ final class PendingRetryQueueTests: XCTestCase {
         XCTAssertEqual(chat.retryTTL, PendingRetryMetadata.transcriptionRetryTTL)
     }
 
-    /// A published Work capture is on a clock too — its recording is a card, so
-    /// these bytes are a second copy and the queue may not keep them for ever —
-    /// but on a DAY rather than ten minutes.
+    /// A published Work capture is on a clock too — `.published` means the
+    /// words card is already written and only the clear is outstanding, so the
+    /// entry holds nothing that exists nowhere else — but the clock runs for a
+    /// DAY rather than ten minutes.
     ///
     /// Ten minutes is a budget for somebody holding the device that failed. The
     /// car is where that is never true: a drive is hours and the phone may stay
-    /// locked until the driver is home, so a ten-minute sweep makes "add the
-    /// words on your iPhone" false before it can be acted on, and nothing on
-    /// the desk can transcribe an audio card afterwards.
+    /// locked until the driver is home, so a ten-minute sweep would retire the
+    /// entry, and its diagnostic with it, while the drive is still going. An
+    /// UNPUBLISHED Work capture answers to no clock at all — its recording is
+    /// the only copy of what was said.
     func testAPublishedWorkCaptureGetsADayRatherThanTenMinutes() {
         let armed = Date(timeIntervalSince1970: 1_700_000_000)
         let published = Self.metadata(

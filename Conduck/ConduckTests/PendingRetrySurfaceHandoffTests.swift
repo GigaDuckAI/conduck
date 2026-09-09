@@ -348,9 +348,12 @@ final class PendingRetrySurfaceHandoffTests: XCTestCase {
                       + "surface no longer holds.")
         XCTAssertTrue(finish.contains("PendingRetryGuard.cancelDeferredNotification(for: claim.id)"),
                       "The deferred `Recording Saved` notice survives the capture it announces.")
-        XCTAssertTrue(finish.contains("PendingRetryStore.shared.pendingCount()"),
-                      "The card no longer re-reads the count after finishing one, so a card left "
-                      + "standing for the NEXT capture reads as a retry that failed.")
+        XCTAssertTrue(finish.contains("PendingRetryStore.shared.waitingCount()"),
+                      "The card no longer re-reads what is WAITING after finishing one. "
+                      + "`pendingCount()` is the queue's depth and counts a capture its own lane "
+                      + "still holds, so the card flashes a Try Again through every successful "
+                      + "recording somebody makes; no re-read at all leaves a card standing for "
+                      + "the NEXT capture reading as a retry that failed.")
 
         // The reservation is taken when the button is tapped, BEFORE the
         // confirmation is raised, so the dialog is bound to one exact capture;
@@ -530,8 +533,10 @@ final class PendingRetrySurfaceHandoffTests: XCTestCase {
             "A change consumed but not cleared is consumed again at the next exit."
         )
         XCTAssertTrue(
-            consume.contains("PendingRetryStore.shared.pendingCount()"),
-            "The consumption reads nothing from the queue, so the count it is for stays stale."
+            consume.contains("PendingRetryStore.shared.waitingCount()"),
+            "The consumption reads nothing from the queue, so the count it is for stays stale — "
+            + "and it has to read what is WAITING, or a capture another surface is mid-way "
+            + "through raises this card over a recording that is going fine."
         )
     }
 

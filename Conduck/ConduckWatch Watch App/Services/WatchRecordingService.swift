@@ -90,10 +90,10 @@ enum WatchWorkCaptureOutcome: Equatable, Sendable {
     /// that predates the Work destination). The words are on the desk; the
     /// recording is not.
     case savedWordsOnly
-    /// The iPhone published the recording and had no words for it —
-    /// transcription settled against this clip, so none are coming. The
-    /// opposite half of `savedWordsOnly`: the card is playable on the desk and
-    /// the words have to be added there.
+    /// The iPhone holds the recording and had no words for it — transcription
+    /// settled against this clip, so none are coming from here. The opposite
+    /// half of `savedWordsOnly`: nothing is on the desk, and the phone's retry
+    /// card is where the note gets made.
     case savedWithoutWords
     /// Refused, with the sentence to show. Carries the message rather than a
     /// code so the capture view renders one line without a second switch.
@@ -783,8 +783,8 @@ final class WatchRecordingService {
     // The wrist's second lane. It shares the microphone, the compressor and the
     // relay with Chat and NOTHING else: no target is resolved, no gateway is
     // consulted, no conversation is pinned or minted, and no converse hop is
-    // reachable from anything it produces. The iPhone publishes the recording;
-    // this watch only carries it there.
+    // reachable from anything it produces. The iPhone parks the recording and
+    // publishes its words; this watch only carries the clip there.
 
     /// Why a Work capture cannot start, or nil when it can. The UI asks FIRST
     /// so the refusal is a sentence on a button press rather than a discovery

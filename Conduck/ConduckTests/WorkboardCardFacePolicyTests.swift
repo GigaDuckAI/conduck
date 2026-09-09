@@ -117,6 +117,37 @@ final class WorkboardCardFacePolicyTests: XCTestCase {
         XCTAssertEqual(face.excerpt, transcript)
     }
 
+    /// A spoken note leads with its words rather than repeating its name. Its
+    /// title is the same generated lead line, written by the same publication
+    /// lane, so the suppression rule that fixes a typed note and a recording has
+    /// to fix this shape too — otherwise the one card the voice lanes now write
+    /// is the one card that says its first line twice.
+    func testASpokenNoteLeadsWithItsWordsRatherThanRepeatingItsName() {
+        let words = "Ship the review before Friday\nthen look at the winter timetable"
+        let name = WorkVoiceCaptureCoordinator.title(forTranscript: words)
+        XCTAssertEqual(name, "Ship the review before Friday", "the name the publication lane writes")
+
+        let spoken = WorkboardMaterialSnapshot(kind: .transcript, name: name, textContent: words)
+        let face = WorkboardCardFacePolicy.face(for: spoken)
+        XCTAssertNil(face.heading)
+        XCTAssertEqual(face.excerpt, words)
+        XCTAssertTrue(face.showsAge, "when the words were spoken is part of what the card says")
+    }
+
+    /// The same boundary the recording has: a title nothing generated is the
+    /// person's own row and survives, however much of the body it repeats.
+    func testASpokenNoteKeepsATitleTheCaptureLaneDidNotGenerate() {
+        let body = "Ship the review before Friday, then look at the winter timetable"
+        let spoken = WorkboardMaterialSnapshot(
+            kind: .transcript,
+            name: "Ship the review",
+            textContent: body
+        )
+        let face = WorkboardCardFacePolicy.face(for: spoken)
+        XCTAssertEqual(face.heading, "Ship the review")
+        XCTAssertEqual(face.excerpt, body)
+    }
+
     /// The boundary the other way: a name that is SOME prefix of the body but
     /// not the one capture generates is a title somebody chose, so it stays.
     /// Suppression mirrors a known capture rule; it is not a substring test.

@@ -816,4 +816,68 @@ final class WorkboardDeskUpsertTests: XCTestCase {
         )
     }
 
+
+    // MARK: - The words-only half of a voice press
+
+    /// A words-only card is an ordinary desk write that keeps the link to the
+    /// picture of the same press, and the board build is what turns that link
+    /// into one card. Held here, through the real store and the real board
+    /// build, because the fold's own unit tests are given snapshots: a store
+    /// that dropped `attachedToMaterialID` for this kind, or a projection that
+    /// did not carry it, would leave the fold correct and the desk wrong.
+    ///
+    /// Negative control: a draft whose link the write discards fetches back
+    /// with a nil link and the board draws two cards — both halves fail.
+    @MainActor
+    func testAWordsOnlyCardKeepsItsPictureLinkAndTheBoardFoldsThePair() async throws {
+        let store = isolated.make()
+        let inboxURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workboard-desk-upsert-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: inboxURL) }
+
+        let picture = try await store.upsertDeskMaterial(WorkMaterialDraft(
+            kind: .image,
+            title: "screenshot.jpg",
+            filename: "screenshot.jpg",
+            mimeType: "image/jpeg",
+            payload: Data("picture".utf8)
+        ))
+        let spoken = try await store.upsertDeskMaterial(WorkMaterialDraft(
+            kind: .transcript,
+            title: "Ship the review",
+            textContent: "Ship the carrier review by Friday",
+            storageMode: .metadataOnly,
+            sourceDevice: "carplay",
+            attachedToMaterialID: picture.id
+        ))
+
+        XCTAssertEqual(spoken.kind, .transcript)
+        XCTAssertEqual(spoken.storageMode, .metadataOnly)
+        XCTAssertEqual(spoken.attachedToMaterialID, picture.id)
+        XCTAssertFalse(spoken.hasPayload, "words carry no bytes of their own")
+
+        let storedValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let stored = try XCTUnwrap(storedValue)
+        XCTAssertEqual(stored.materials.count, 2, "the premise: two materials are stored")
+        let readBack = try XCTUnwrap(stored.materials.first { $0.id == spoken.id })
+        XCTAssertEqual(readBack.attachedToMaterialID, picture.id, "the link survives the round trip")
+        XCTAssertEqual(readBack.textContent, "Ship the carrier review by Friday")
+        XCTAssertEqual(readBack.sourceDevice, "carplay")
+
+        let repository = WorkboardLiveRepository(
+            store: store,
+            captureInbox: WorkCaptureInbox(baseURL: inboxURL),
+            openMaterial: { _ in }
+        )
+        let deskValue = try await repository.makeDependencies().loadDesk()
+        let desk = try XCTUnwrap(deskValue)
+
+        XCTAssertEqual(desk.materials.map(\.id), [picture.id], "the pair is one card")
+        let companion = try XCTUnwrap(desk.materials.first?.companion)
+        XCTAssertEqual(companion.id, spoken.id)
+        XCTAssertEqual(companion.kind, .transcript)
+        XCTAssertEqual(companion.availability, .available, "text is always readable")
+        XCTAssertEqual(companion.textContent, "Ship the carrier review by Friday")
+    }
+
 }

@@ -59,10 +59,11 @@
 //     desk decision through — where the transcript has become durable without
 //     any gateway. The blackout arm sitting beside the first one disarms
 //     nothing — an unlock makes those exact bytes recover.
-//     BOTH pre-transcript disarms carry a second gate, on the PUBLICATION
-//     verdict: `.phaseOneFailed` means the desk never took the recording, so the
-//     queued bytes are its only copy and a verdict about the key or the audio
-//     may end the transcription without deleting what was said.
+//     BOTH pre-transcript disarms carry a second gate, on the DESTINATION:
+//     Work publishes nothing until its words land, so a Work capture's parked
+//     bytes are the only copy of the recording for the whole of `perform()`, and
+//     a verdict about the key or the audio may end the transcription without
+//     deleting what was said.
 //
 //   Rule 2 — the disarm that does run sits BELOW the destination resolve and
 //     BELOW the store append, so every refusal on the way is still armed.
@@ -101,9 +102,9 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
     ///      that cannot succeed until a key is entered would otherwise sit in
     ///      the queue offering a retry that reaches the same refusal. Its twin,
     ///      the blackout arm, must NOT disarm — those bytes succeed the moment
-    ///      the device is unlocked. And it is itself gated on the publication
-    ///      verdict: a key that is absent says nothing about a recording the
-    ///      desk never took.
+    ///      the device is unlocked. And it is itself gated on the DESTINATION:
+    ///      a key that is absent says nothing about a Work recording no card
+    ///      carries.
     ///
     ///   2. the WORK boundary, taken on a TERMINAL outcome from the shared
     ///      recovery — the words are on a card, so nothing is left to protect.
@@ -119,7 +120,7 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
         let disarms = body.components(separatedBy: "PendingRetryGuard.disarm").count - 1
         XCTAssertEqual(disarms, 3,
                        "`perform()` must hold exactly THREE disarms — provable absence, the durable "
-                       + "Work publication boundary, and the gated catch chain. Any other placement can "
+                       + "Work terminal boundary, and the gated catch chain. Any other placement can "
                        + "delete audio before either terminal destination owns the words.")
 
         XCTAssertEqual(
@@ -147,17 +148,17 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
             + "spoken words are gone (I6)."
         )
         XCTAssertTrue(
-            body.contains("if !transcriptCaptured, workPublicationState != .phaseOneFailed"),
-            "The catch chain's disarm is no longer gated on the PUBLICATION verdict as well as the "
-            + "transcript. `.phaseOneFailed` means the desk never took the recording, so the queued "
-            + "bytes are the only copy of it — and a bad-input verdict about the AUDIO (silence, a "
-            + "clip the provider cannot read) lands here with `transcriptCaptured` still false and "
-            + "deletes exactly that."
+            body.contains("if !transcriptCaptured, destination != .work"),
+            "The catch chain's disarm is no longer gated on the DESTINATION as well as the "
+            + "transcript. Work publishes nothing until its words land, so a Work capture's parked "
+            + "bytes are the only copy of the recording for the whole of `perform()` — and a "
+            + "bad-input verdict about the AUDIO (silence, a clip the provider cannot read) lands "
+            + "here with `transcriptCaptured` still false and deletes exactly that."
         )
         XCTAssertTrue(
-            Self.armGuardsOnTheFailedPublication(arm: "case .notConfigured:",
-                                                 throwToken: "throw AppError.sttMissingAPIKey",
-                                                 in: body),
+            Self.armGuardsOnTheWorkDestination(arm: "case .notConfigured:",
+                                               throwToken: "throw AppError.sttMissingAPIKey",
+                                               in: body),
             "The provable-absence arm disarms unconditionally again. Code 23 is a verdict about the "
             + "KEY: it may end this capture's transcription, and it may not delete a recording no "
             + "card carries."
@@ -165,7 +166,7 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
         let firstDisarm = try XCTUnwrap(body.range(of: "PendingRetryGuard.disarm"))
         let workDisarm = try XCTUnwrap(
             body.range(of: "PendingRetryGuard.disarm", range: firstDisarm.upperBound..<body.endIndex),
-            "The Work publication boundary no longer clears its completed retry."
+            "The Work terminal boundary no longer clears its completed retry."
         )
         let catchDisarm = try XCTUnwrap(
             body.range(of: "PendingRetryGuard.disarm", range: workDisarm.upperBound..<body.endIndex),
@@ -248,7 +249,7 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
                                               in: compliant), false)
 
         // The second gate the absence arm carries, on the same pair of shapes:
-        // it may spend the guard only when phase one LANDED.
+        // it may spend the guard only when the capture is NOT bound for Work.
         let ungatedAbsence = """
         case .notConfigured:
             await PendingRetryGuard.disarm(guardToken)
@@ -256,23 +257,23 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
         """
         let gatedAbsence = """
         case .notConfigured:
-            if workPublicationState != .phaseOneFailed {
+            if destination != .work {
                 await PendingRetryGuard.disarm(guardToken)
             }
             throw AppError.sttMissingAPIKey
         """
-        XCTAssertFalse(Self.armGuardsOnTheFailedPublication(
+        XCTAssertFalse(Self.armGuardsOnTheWorkDestination(
             arm: "case .notConfigured:",
             throwToken: "throw AppError.sttMissingAPIKey",
             in: ungatedAbsence),
                        "Control: the unconditional shape really does delete a recording no card "
                        + "carries, so the check must fail on it.")
-        XCTAssertTrue(Self.armGuardsOnTheFailedPublication(
+        XCTAssertTrue(Self.armGuardsOnTheWorkDestination(
             arm: "case .notConfigured:",
             throwToken: "throw AppError.sttMissingAPIKey",
             in: gatedAbsence),
                       "Control: the gated shape must pass, or the check is unsatisfiable.")
-        XCTAssertFalse(Self.armGuardsOnTheFailedPublication(
+        XCTAssertFalse(Self.armGuardsOnTheWorkDestination(
             arm: "case .notConfigured:",
             throwToken: "throw AppError.sttMissingAPIKey",
             in: "case .unreadable: throw AppError.sttKeyUnreadable"),
@@ -308,7 +309,7 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
     /// `recover` takes a reservation because a retry SURFACE holds one. This
     /// process holds one too — but it took it BY ID at `arm`, over the entry it
     /// minted and wrote, and it still holds the only in-memory copy of the bytes
-    /// and the phase-one verdict. Reaching for the store's SELECTION primitive
+    /// and of the words. Reaching for the store's SELECTION primitive
     /// here would be wrong twice over. It answers "the newest UNRESERVED
     /// capture", which is not this capture whenever anything armed after it — so
     /// an intent could put a hold on a recording it will never finish, and
@@ -346,14 +347,15 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
         )
         XCTAssertLessThan(heldAt, recoverAt)
 
-        // The verdict this lane writes is its own, through the reservation it
-        // took at `arm` — the half of the bookkeeping the recovery cannot do for
-        // it, because the recovery does not know what phase one answered.
+        // The WORDS this lane parks are its own, written through the
+        // reservation it took at `arm` — the half of the bookkeeping the
+        // recovery cannot do for it, because until this write the transcript
+        // exists only in this process's memory.
         XCTAssertTrue(
             body.contains("Self.recordRecoveryState("),
-            "`perform()` stopped writing the publication verdict to the queue entry, so a retry an "
-            + "app launch later cannot tell a recording the desk never took from a card the person "
-            + "deleted — and the two call for opposite acts."
+            "`perform()` stopped parking the recognised words on the queue entry, so a death "
+            + "between the speech hop and the desk write costs a second speech call on bytes that "
+            + "are already parked."
         )
 
         // …and the value it hands over carries the REAL reservation. A claim
@@ -721,12 +723,12 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
         return body[start..<end].contains("PendingRetryGuard.disarm")
     }
 
-    /// Whether the disarm inside that arm is conditional on phase one having
-    /// LANDED. A verdict about the key or the bytes may end a capture's
-    /// transcription; it may not delete a recording the desk never took, whose
-    /// only copy is the queued audio. Scoped to the arm for the same reason
-    /// `armSpendsTheGuard` is.
-    private static func armGuardsOnTheFailedPublication(
+    /// Whether the disarm inside that arm spares a WORK capture. A verdict
+    /// about the key or the bytes may end a capture's transcription; it may not
+    /// delete a recording the desk never took, whose only copy is the queued
+    /// audio — and for Work that is every capture, from the arm until the words
+    /// land. Scoped to the arm for the same reason `armSpendsTheGuard` is.
+    private static func armGuardsOnTheWorkDestination(
         arm: String,
         throwToken: String,
         in body: String
@@ -735,7 +737,7 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
               let end = body.range(of: throwToken, range: start..<body.endIndex)?.lowerBound else {
             return false
         }
-        return body[start..<end].contains("workPublicationState != .phaseOneFailed")
+        return body[start..<end].contains("destination != .work")
     }
 
     /// The `do` block that ENCLOSES `anchor`, brace-matched from the nearest

@@ -6,14 +6,20 @@
 // The Shortcuts / Action-Button lane that lands a Work voice capture, and the
 // identities a capture needs beyond its own.
 //
-// One capture can produce three cards, and the whole subject here is that they
-// are three IDENTITIES. The recording is named by the capture id; a screenshot
-// and a note-shaped fallback are named by ids DERIVED from it. A material id
-// names ONE card, so an artifact published at the recording's id is a
-// COLLISION: the counterfactuals below measure the desk refusing it outright,
-// which leaves the screenshot and the recovered words with nowhere to go on
-// every attempt. A capture may not lean on that refusal — it is the last line,
-// not the plan.
+// One capture can produce two cards, and the whole subject here is that they
+// are separate IDENTITIES. The WORDS are named by the capture id; the
+// screenshot is named by an id DERIVED from it, and a last-resort id derived
+// the same way is where the words go when a card of another kind already
+// stands at the capture's own. A material id names ONE card, so an artifact
+// published at the words' id is a COLLISION: the counterfactuals below measure
+// the desk refusing it outright, which leaves the screenshot and the recovered
+// words with nowhere to go on every attempt. A capture may not lean on that
+// refusal — it is the last line, not the plan.
+//
+// No card holds the recording. The audio is parked in the device-local retry
+// lane until the words exist and is deleted when they land, so the cases here
+// that stand a legacy `.audio` card on the desk are measuring the collision
+// rule against an older build's card, not a card this lane writes.
 //
 // The intent's own ordering cannot be driven from this suite: `perform()` takes
 // an `IntentFile` the Shortcuts runtime supplies and drives a live `STTClient`
@@ -35,55 +41,65 @@ import XCTest
 /// The rules the Shortcuts Work lane's `perform()` has to satisfy, named so a
 /// failure says which one broke rather than which string moved.
 enum WorkVoiceIntentLaneRule: String, CaseIterable {
-    /// The card is attempted with the recording ALREADY preserved, so a store
-    /// that refuses costs the card and never the bytes.
-    case armedBeforeThePublication
-    /// The card must hold the bytes the transcription was made from.
-    case compressedBeforeThePublication
+    /// The bytes are compressed BEFORE they are parked, or the copy that waits
+    /// on the device is not the copy the transcription was made from.
+    case compressedBeforeTheArm
     /// A key that cannot be read is a transcription failure, and such a failure
-    /// has to leave a playable card behind.
-    case publishedBeforeTheKeyVerdict
-    /// Publishing after the upload is the defect: an OS kill, an outage or an
+    /// has to leave the recording somewhere it can be tried again from. Parking
+    /// after the verdict loses it.
+    case armedBeforeTheKeyVerdict
+    /// Parking after the upload is the defect: an OS kill, an outage or an
     /// abandoned request between the two loses the recording entirely.
-    case publishedBeforeTheUpload
-    /// The recovery writes onto the card phase one made; reversed, onto nothing.
-    case publishedBeforeTheRecovery
+    case armedBeforeTheUpload
+    /// The park is written into the retry record as `.phaseOneFailed` — "the
+    /// desk holds nothing, these bytes are the only copy". Without it the entry
+    /// is on the ordinary transcription clock and a sweep takes the only copy
+    /// of a recording no card carries.
+    case theParkIsRecorded
+    /// Speech recognition runs BEFORE anything reaches the desk. Reversed, a
+    /// card exists for a capture whose words do not.
+    case transcribedBeforeTheDeskWrite
+    /// The words are written onto the entry BEFORE the card is attempted. They
+    /// were paid for and live only in this process's memory until then, so a
+    /// death in between costs a second speech call on bytes that are already
+    /// parked.
+    case theWordsAreParkedBeforeTheDeskWrite
+    /// No recording ever becomes a card. The desk takes the words; the audio
+    /// lives in the device-local retry lane and is deleted when they land.
+    case noRecordingIsEverPublished
     /// One capture, one identity — minted once, before anything durable exists.
     case oneCaptureIdentity
-    /// Compressed once: a second pass is a second payload, and only one of them
-    /// can be on the card.
+    /// Compressed once: a second pass is a second payload, and a retry that
+    /// transcribes bytes the entry does not hold is transcribing something else.
     case oneCompressionPass
     /// Every payload this lane hands to something durable is the ONE compressed
-    /// copy — the preserved retry copy, the desk card and the recovery record
-    /// at least — and never a second set of bytes beside them. Preserving the
-    /// Shortcut's original while carding the compressed one gives a retry that
-    /// transcribes a payload the card does not hold.
+    /// copy — the preserved retry copy and the recovery record at least — and
+    /// never a second set of bytes beside them. Preserving the Shortcut's
+    /// original while uploading the compressed one gives a retry that
+    /// transcribes a payload the words were not made from.
     case onePayloadForEveryUse
     /// Chat retains no audio, so its upload stays the Shortcut's own recording.
     case chatKeepsItsOwnRecording
-    /// A publication the desk REFUSED is written into the retry record. Without
-    /// it a later recovery cannot tell bytes that never reached the desk from a
-    /// card a person deleted, and the two call for opposite acts.
-    case aRefusedPublicationIsRecorded
     /// The recovery is handed the capture's OWN record — its metadata and its
     /// payload — not a fresh one that names nothing.
     case theRecoveryCarriesTheCapturesRecord
     /// The durable record is released only on an outcome that says a card holds
-    /// the words. Disarming on the mere absence of an error deletes the audio
-    /// whenever the desk answered "not yet".
+    /// the words. Disarming on the mere absence of an error deletes the only
+    /// copy of the recording whenever the desk answered "not yet".
     case releasedOnlyOnATerminalOutcome
 }
 
 /// One predicate for every rule, over a comment-stripped function body.
 ///
 /// A MISSING anchor is a violation, never a silent pass: "the lane no longer
-/// publishes a recording at all" is precisely the shape these rules exist to
+/// parks the recording at all" is precisely the shape these rules exist to
 /// refuse, and an ordering comparison that cannot find its operands would
 /// otherwise report it as compliant.
 enum WorkVoiceIntentLaneValidator {
 
-    private static let publish = "WorkVoiceCaptureCoordinator.publishRecording("
+    private static let arm = "PendingRetryGuard.arm"
     private static let recover = "WorkVoiceCaptureCoordinator.recover("
+    private static let transcribe = "STTClient.shared.transcribe"
 
     static func violations(in body: String) -> Set<WorkVoiceIntentLaneRule> {
         var found: Set<WorkVoiceIntentLaneRule> = []
@@ -101,33 +117,57 @@ enum WorkVoiceIntentLaneValidator {
             if body.components(separatedBy: token).count - 1 != count { found.insert(rule) }
         }
 
-        require("PendingRetryGuard.arm", before: publish, .armedBeforeThePublication)
-        require("Self.compressForWork(", before: publish, .compressedBeforeThePublication)
-        require(publish, before: "STTKeyReadiness.resolve", .publishedBeforeTheKeyVerdict)
-        require(publish, before: "STTClient.shared.transcribe", .publishedBeforeTheUpload)
-        require(publish, before: recover, .publishedBeforeTheRecovery)
+        require("Self.compressForWork(", before: arm, .compressedBeforeTheArm)
+        require(arm, before: "STTKeyReadiness.resolve", .armedBeforeTheKeyVerdict)
+        require(arm, before: transcribe, .armedBeforeTheUpload)
+        require(transcribe, before: recover, .transcribedBeforeTheDeskWrite)
 
         require("let captureID = UUID()", appears: 1, .oneCaptureIdentity)
         require("Self.compressForWork(", appears: 1, .oneCompressionPass)
 
         // Counted rather than fixed at a number: the lane may hand the one
         // payload to further durable writes over time, and it may never hand a
-        // different one to any of them. Three is the floor a capture cannot do
-        // without — the retry copy, the card, the record it is recovered from.
+        // different one to any of them. Two is the floor a capture cannot do
+        // without — the parked copy, and the record it is recovered from. The
+        // desk is no longer one of them, which is the point of this round: the
+        // words are the artifact and the bytes reach no card.
         //
-        // Two labels, one handoff: `audio:` is what the guard and the desk
-        // publication take, `audioData:` what a queue ENTRY takes. The rule is
-        // about which bytes are handed over, never about which label carries
-        // them, so a lane that packages its record differently is not thereby
-        // exempt from it.
+        // Two labels, one handoff: `audio:` is what the guard and the held
+        // record take, `audioData:` what a queue ENTRY takes. The rule is about
+        // which bytes are handed over, never about which label carries them, so
+        // a lane that packages its record differently is not thereby exempt
+        // from it.
         let payloads = ["audio: ", "audioData: "].flatMap {
             body.components(separatedBy: $0).dropFirst()
         }
-        if payloads.count < 3 || payloads.contains(where: { !$0.hasPrefix("uploadData") }) {
+        if payloads.count < 2 || payloads.contains(where: { !$0.hasPrefix("uploadData") }) {
             found.insert(.onePayloadForEveryUse)
         }
 
-        if !body.contains(".phaseOneFailed") { found.insert(.aRefusedPublicationIsRecorded) }
+        // The state the entry is parked in, stated AT the park rather than
+        // decided after it. Ordering is the whole assertion: an entry armed
+        // without it is on the ordinary transcription clock for as long as it
+        // takes a later statement to arrive, and that window is where a sweep
+        // takes the only copy of a recording no card carries.
+        require(".phaseOneFailed", before: arm, .theParkIsRecorded)
+
+        // The words go onto the entry before the desk is written, and the same
+        // statement has to carry them: a stamp with no `transcript:` parks a
+        // verdict and loses what was said.
+        let park = "Self.recordRecoveryState("
+        if let parked = at(park), let deskWrite = at(recover), parked < deskWrite,
+           arguments(of: park, in: body)?.contains("transcript:") == true {
+            // The words are durable before anything is attempted with them.
+        } else {
+            found.insert(.theWordsAreParkedBeforeTheDeskWrite)
+        }
+
+        // Neither shape, and both halves matter: `publishRecording(` is the
+        // seam that put a recording on the desk, and `kind: .audio` is the
+        // draft that would put one there without it.
+        if body.contains("publishRecording(") || body.contains("kind: .audio") {
+            found.insert(.noRecordingIsEverPublished)
+        }
 
         // Read off the RECOVERY's own first argument rather than off a type
         // name: whatever wraps the capture — a record, a claim over its queue
@@ -246,10 +286,11 @@ final class WorkboardVoiceLaneTests: XCTestCase {
     // MARK: - The Shortcuts lane, against the rules themselves
 
     /// The lane the finding is about: a Shortcut or Action-Button capture bound
-    /// to Work used to reach the desk only AFTER speech recognition returned, so
-    /// every way that hop can fail took the recording with it — and when phase
-    /// one failed, the words landed as a note while the retry that held the
-    /// only copy of the audio was disarmed.
+    /// to Work publishes the WORDS and never the recording. The audio is parked
+    /// in the device-local retry lane before anything can refuse it, spends its
+    /// life there, and is deleted when the words land — so a compressed voice
+    /// note, which sits far below the sync ceiling, no longer rides the
+    /// person's private iCloud as a desk payload for ever.
     func testTheShortcutsLaneSatisfiesEveryRuleOfTheWorkVoiceLane() throws {
         let violations = WorkVoiceIntentLaneValidator.violations(in: try Self.performBody())
         XCTAssertEqual(
@@ -281,34 +322,38 @@ final class WorkboardVoiceLaneTests: XCTestCase {
             )
         }
 
-        // …and the shape this round replaced — a lane that reached the desk
-        // through `attachTranscript` with no publication verdict recorded —
-        // fails on the three rules that carry the fix.
-        let shipped = Self.compliantIntentBody
-            .replacingOccurrences(of: Self.recordChunk, with: "")
-            .replacingOccurrences(
-                of: Self.recoverChunk,
-                with: """
-                switch try await WorkVoiceCaptureCoordinator.attachTranscript(transcript, toRecording: captureID) {
-                case .attached: break
-                case .recordingMissing, .notAudio:
-                    _ = try await WorkCaptureRetryCoordinator.publish(transcript: transcript)
-                }
-                await PendingRetryGuard.disarm(guardToken)
-                """
-            )
-            .replacingOccurrences(of: "workPublicationState = .phaseOneFailed", with: "")
+        // …and the shape this round replaced — the recording published as a
+        // playable card BEFORE speech recognition, the words attached to it
+        // afterwards — fails on the five rules that carry the fix. It is the
+        // whole reason the audio ever reached iCloud: a card holds its payload
+        // for ever, and every voice capture bound for Work made one.
+        let shipped = [
+            Self.payloadChunk, Self.identityChunk, Self.metadataChunk, Self.armChunk,
+            """
+            _ = try await WorkVoiceCaptureCoordinator.publishRecording(captureID: captureID, audio: uploadData)
+            """,
+            Self.keyChunk, Self.uploadChunk, Self.flagChunk,
+            """
+            switch try await WorkVoiceCaptureCoordinator.attachTranscript(transcript, toRecording: captureID) {
+            case .attached: break
+            case .recordingMissing, .notAudio:
+                _ = try await WorkCaptureRetryCoordinator.publish(transcript: transcript)
+            }
+            await PendingRetryGuard.disarm(guardToken)
+            """,
+        ].joined(separator: "\n")
         XCTAssertEqual(
             WorkVoiceIntentLaneValidator.violations(in: shipped).map(\.rawValue).sorted(),
             [
-                WorkVoiceIntentLaneRule.aRefusedPublicationIsRecorded,
-                .onePayloadForEveryUse,
-                .publishedBeforeTheRecovery,
+                WorkVoiceIntentLaneRule.noRecordingIsEverPublished,
                 .releasedOnlyOnATerminalOutcome,
                 .theRecoveryCarriesTheCapturesRecord,
+                .theWordsAreParkedBeforeTheDeskWrite,
+                .transcribedBeforeTheDeskWrite,
             ].map(\.rawValue).sorted(),
-            "Control: the shape that shipped really did decide for itself, record no verdict, and "
-            + "disarm on the absence of an error."
+            "Control: the shape that shipped really did put the recording on the desk, decide the "
+            + "words' fate for itself, park nothing before writing, and disarm on the absence of an "
+            + "error."
         )
     }
 
@@ -325,7 +370,7 @@ final class WorkboardVoiceLaneTests: XCTestCase {
 
     // MARK: - The screenshot's own identity
 
-    /// The capture id names the recording, so the screenshot cannot have it. The
+    /// The capture id names the words, so the screenshot cannot have it. The
     /// derivation is deterministic (a replay repairs one card rather than adding
     /// a second), differs per capture, and lands in neither of the other two
     /// identities this capture can need.
@@ -334,10 +379,10 @@ final class WorkboardVoiceLaneTests: XCTestCase {
         let screenshotID = WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
 
         XCTAssertNotEqual(screenshotID, captureID,
-                          "the recording already stands at the capture id")
+                          "the words card already stands at the capture id")
         XCTAssertNotEqual(screenshotID,
                           WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID),
-                          "…and the note-shaped fallback of the same capture stands at its own")
+                          "…and the last-resort id of the same capture stands at its own")
         XCTAssertEqual(screenshotID,
                        WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID),
                        "deterministic, so a replayed capture repairs the same card")
@@ -347,13 +392,13 @@ final class WorkboardVoiceLaneTests: XCTestCase {
     }
 
     /// End to end: a capture that carries both artifacts leaves TWO cards, and
-    /// the recording's bytes are untouched by the picture's arrival.
-    func testTheScreenshotBecomesASecondCardBesideTheRecording() async throws {
+    /// the words are untouched by the picture's arrival.
+    func testTheScreenshotBecomesASecondCardBesideTheWordsCard() async throws {
         let store = ConversationStore(inMemory: true)
         let inbox = WorkCaptureInbox(baseURL: root)
         let captureID = UUID()
-        let recording = Self.recordingBytes
-        _ = try await Self.publishRecording(captureID: captureID, audio: recording, in: store)
+        let words = Self.spokenWords
+        _ = try await Self.publishWords(words, captureID: captureID, in: store)
 
         let picture = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46])
         let published = try await WorkVoiceScreenshotCoordinator.publish(
@@ -374,9 +419,15 @@ final class WorkboardVoiceLaneTests: XCTestCase {
                        "one capture, two cards")
 
         let card = try XCTUnwrap(desk.materials.first { $0.id == captureID })
-        XCTAssertEqual(card.kind, .audio, "the recording is still a recording")
-        let recordingPayload = try await store.loadWorkMaterialPayload(id: captureID)
-        XCTAssertEqual(recordingPayload, recording, "and still holds the bytes that were spoken")
+        XCTAssertEqual(card.kind, .transcript, "the capture's own card is the words")
+        XCTAssertEqual(card.textContent, words, "and it still reads what was said")
+        let wordsPayload = try await store.loadWorkMaterialPayload(id: captureID)
+        XCTAssertNil(
+            wordsPayload,
+            "MEASURED: the words card is metadata-only. No audio rides the desk — which is the "
+            + "whole boundary this round moved: a compressed voice note sits far below the sync "
+            + "ceiling, so a payload here would ride the person's private iCloud for ever."
+        )
 
         let image = try XCTUnwrap(desk.materials.first { $0.id == screenshotID })
         XCTAssertEqual(image.kind, .image)
@@ -407,11 +458,11 @@ final class WorkboardVoiceLaneTests: XCTestCase {
     /// picture reaches nothing — a capture that used this identity would fail
     /// its screenshot on every attempt, and would have done far worse before the
     /// desk learned to refuse it.
-    func testAScreenshotPublishedAtTheCaptureIdIsRefusedRatherThanBecomingTheRecording() async throws {
+    func testAScreenshotPublishedAtTheCaptureIdIsRefusedRatherThanBecomingTheWords() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
-        let recording = Self.recordingBytes
-        _ = try await Self.publishRecording(captureID: captureID, audio: recording, in: store)
+        let words = Self.spokenWords
+        _ = try await Self.publishWords(words, captureID: captureID, in: store)
 
         let picture = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46])
         do {
@@ -426,7 +477,7 @@ final class WorkboardVoiceLaneTests: XCTestCase {
                     byteSize: Int64(picture.count)
                 )
             )
-            XCTFail("a picture at the recording's own id must not be written")
+            XCTFail("a picture at the words card's own id must not be written")
         } catch WorkboardStoreError.invalidMaterialOwner {
             // The id already names a card of another kind.
         }
@@ -434,12 +485,13 @@ final class WorkboardVoiceLaneTests: XCTestCase {
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
         XCTAssertEqual(desk.materials.count, 1, "no second card — the id was already taken")
-        XCTAssertEqual(desk.materials.first?.kind, .audio, "and the card there is still the recording")
+        XCTAssertEqual(desk.materials.first?.kind, .transcript, "and the card there is still the words")
+        XCTAssertEqual(desk.materials.first?.textContent, words)
         let stored = try await store.loadWorkMaterialPayload(id: captureID)
-        XCTAssertEqual(
-            stored, recording,
+        XCTAssertNil(
+            stored,
             """
-            MEASURED: the recording keeps its own bytes because the collision was REFUSED. The \
+            MEASURED: the words card takes no payload because the collision was REFUSED. The \
             refusal is what stands between this identity and the picture, which is the state \
             `WorkVoiceScreenshotCoordinator.materialID(forCapture:)` exists to make unreachable — \
             a capture cannot rely on a store's refusal to publish its own artifacts correctly.
@@ -448,64 +500,67 @@ final class WorkboardVoiceLaneTests: XCTestCase {
         XCTAssertNotEqual(stored, picture)
     }
 
-    // MARK: - The fallback note's own identity
+    // MARK: - The last-resort identity
 
-    /// The other half of the same defect. When a capture owns no recording card
-    /// the recovered words are published note-shaped — and at the capture's own
-    /// id that publication collides with whatever already stands there and is
-    /// refused, so the words reach nothing and no retry of it can ever land
-    /// them.
-    func testTheFallbackNoteLandsBesideTheRecordingRatherThanVanishingIntoIt() async throws {
+    /// The other half of the same defect, and the end of the line. When a
+    /// FOREIGN card already stands at the capture's own id AND at its escape,
+    /// the words take the last-resort id rather than colliding a third time —
+    /// because a publication the desk refuses reaches nothing, and no retry of
+    /// it can ever land the words.
+    ///
+    /// Driven through the seam itself, so what is measured is the escape the
+    /// lane actually performs rather than a hand-written imitation of it.
+    func testTheWordsTakeTheLastResortIdWhenBothEarlierIdentitiesAreForeign() async throws {
         let store = ConversationStore(inMemory: true)
         let captureID = UUID()
-        _ = try await Self.publishRecording(captureID: captureID, audio: Self.recordingBytes, in: store)
-        let words = "Ferry leaves at 07:30"
+        let escapeID = WorkMaterialCollisionEscape.materialID(forCapture: captureID)
+        let lastResortID = WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID)
+        XCTAssertEqual(Set([captureID, escapeID, lastResortID]).count, 3,
+                       "the three identities are distinct, or there is nothing to escape to")
 
-        // The shape the finding names: the fallback minted at the capture id.
-        do {
+        // Two strangers' cards, standing where this capture's words would go.
+        for occupied in [captureID, escapeID] {
             _ = try await store.upsertDeskMaterial(
                 WorkMaterialDraft(
-                    id: captureID,
-                    kind: .note,
-                    title: "Voice capture",
-                    textContent: words,
-                    storageMode: .metadataOnly
+                    id: occupied,
+                    kind: .image,
+                    title: "someone-elses.jpg",
+                    filename: "someone-elses.jpg",
+                    mimeType: "image/jpeg",
+                    payload: Data([0xFF, 0xD8, 0xFF, 0xE0]),
+                    byteSize: 4
                 )
             )
-            XCTFail("a note at the recording's own id must not be written")
-        } catch WorkboardStoreError.invalidMaterialOwner {
-            // MEASURED: the desk refuses an id that already names a recording.
         }
-        let deskAfterCollision = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
-        let collided = try XCTUnwrap(
-            deskAfterCollision?.materials.first { $0.id == captureID }
-        )
-        XCTAssertEqual(collided.kind, .audio,
-                       "MEASURED: the recording standing there is untouched")
-        XCTAssertNil(collided.textContent, "…and the recovered words are written nowhere at all")
 
-        // The shape it takes now.
-        let noteID = WorkVoiceCaptureCoordinator.fallbackNoteID(forCapture: captureID)
-        XCTAssertNotEqual(noteID, captureID)
-        let note = try await store.upsertDeskMaterial(
-            WorkMaterialDraft(
-                id: noteID,
-                kind: .note,
-                title: "Voice capture",
-                textContent: words,
-                storageMode: .metadataOnly
-            )
-        )
-        XCTAssertEqual(note.kind, .note)
-        XCTAssertEqual(note.textContent, words)
+        let words = "Ferry leaves at 07:30"
+        let landed = try await Self.publishWords(words, captureID: captureID, in: store)
+        XCTAssertEqual(landed, lastResortID,
+                       "the words escape twice and stop at the last-resort id")
 
         let deskValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
         let desk = try XCTUnwrap(deskValue)
-        XCTAssertEqual(Set(desk.materials.map(\.id)), [captureID, noteID],
-                       "the words stand beside the recording instead of inside it")
-        let recordingPayload = try await store.loadWorkMaterialPayload(id: captureID)
-        XCTAssertEqual(recordingPayload, Self.recordingBytes,
-                       "and a metadata-only note carries no bytes that could disturb the recording")
+        XCTAssertEqual(Set(desk.materials.map(\.id)), [captureID, escapeID, lastResortID],
+                       "the words stand beside the two foreign cards instead of inside either")
+        let card = try XCTUnwrap(desk.materials.first { $0.id == lastResortID })
+        XCTAssertEqual(card.kind, .transcript)
+        XCTAssertEqual(card.textContent, words)
+
+        for foreign in [captureID, escapeID] {
+            let stranger = try XCTUnwrap(desk.materials.first { $0.id == foreign })
+            XCTAssertEqual(stranger.kind, .image,
+                           "MEASURED: the card standing there is untouched")
+            XCTAssertNil(stranger.textContent,
+                         "…and no stranger's card is rewritten with somebody else's words")
+        }
+
+        // Replay: a second surface finishing the same capture answers the card
+        // that is already there rather than minting a fourth id.
+        let replayed = try await Self.publishWords(words, captureID: captureID, in: store)
+        XCTAssertEqual(replayed, lastResortID)
+        let afterValue = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        let after = try XCTUnwrap(afterValue)
+        XCTAssertEqual(after.materials.count, 3, "three cards, however many surfaces recovered it")
     }
 
     // MARK: - A recovered recording is described by what it actually is
@@ -617,7 +672,12 @@ final class WorkboardVoiceLaneTests: XCTestCase {
 
     /// Stands in for a compressed 16 kHz mono AAC voice note: small, so the
     /// storage policy picks the synced lane exactly as it does in the app.
+    /// Nothing publishes it any more — it is what a retry surface STAGES, which
+    /// is where the container rules below read it.
     private static let recordingBytes = Data(repeating: 0x5A, count: 4_096)
+
+    /// What the desk actually takes from a voice capture.
+    private static let spokenWords = "Book the ferry before Friday"
 
     /// RIFF/WAVE header — what `AudioCompressor` returns when AAC encoding
     /// fails, and the container a `.m4a` name misdescribes.
@@ -629,19 +689,21 @@ final class WorkboardVoiceLaneTests: XCTestCase {
     /// CarPlay's PCM tap file.
     private static let cafBytes = Data("caff\u{0}\u{1}\u{0}\u{0}".utf8)
 
+    /// The card this lane actually writes: the words, at the capture's own id.
     @discardableResult
-    private static func publishRecording(
+    private static func publishWords(
+        _ transcript: String,
         captureID: UUID,
-        audio: Data,
+        attachedTo: UUID? = nil,
         in store: ConversationStore
-    ) async throws -> WorkMaterialRecord {
-        try await WorkVoiceCaptureCoordinator.publishRecording(
-            captureID: captureID,
-            audio: audio,
-            fileExtension: "m4a",
-            mimeType: "audio/mp4",
+    ) async throws -> UUID {
+        try await WorkVoiceCaptureCoordinator.publishTranscript(
+            transcript,
+            forCapture: captureID,
+            createdAt: Date(),
+            attachedTo: attachedTo,
             store: store
-        )
+        ).materialID
     }
 
     private static func publishScreenshot(
@@ -706,22 +768,11 @@ final class WorkboardVoiceLaneTests: XCTestCase {
     private static let identityChunk = "let captureID = UUID()"
 
     private static let metadataChunk =
-        "let pendingMetadata = PendingRetryMetadata(id: captureID, destination: retryDestination)"
+        "let pendingMetadata = PendingRetryMetadata(id: captureID, destination: retryDestination"
+        + ", publicationState: .phaseOneFailed)"
 
     private static let armChunk =
         "let guardToken = await PendingRetryGuard.arm(audio: uploadData, metadata: pendingMetadata)"
-
-    private static let publishChunk = """
-    var workPublicationState: PendingRetryPublicationState?
-    if destination == .work, let workAudioMIMEType {
-        do {
-            _ = try await WorkVoiceCaptureCoordinator.publishRecording(captureID: captureID, audio: uploadData)
-            workPublicationState = .published
-        } catch {
-            workPublicationState = .phaseOneFailed
-        }
-    }
-    """
 
     private static let keyChunk = "let keyReadiness = await STTKeyReadiness.resolve(presetID: snapshot.presetID)"
 
@@ -729,9 +780,13 @@ final class WorkboardVoiceLaneTests: XCTestCase {
 
     private static let flagChunk = "transcriptCaptured = true"
 
+    private static let parkChunk =
+        "let parkedWords = await Self.recordRecoveryState(.phaseOneFailed, on: guardToken, "
+        + "transcript: transcript)"
+
     private static let recordChunk = """
     let record = Self.heldCapture(
-        Self.stamped(pendingMetadata, publicationState: workPublicationState),
+        Self.stamped(pendingMetadata, transcript: transcript),
         audio: uploadData,
         reservation: guardToken
     )
@@ -745,34 +800,57 @@ final class WorkboardVoiceLaneTests: XCTestCase {
     """
 
     private static var compliantIntentBody: String {
-        [payloadChunk, identityChunk, metadataChunk, armChunk, publishChunk,
-         keyChunk, uploadChunk, flagChunk, recordChunk, recoverChunk].joined(separator: "\n")
+        [payloadChunk, identityChunk, metadataChunk, armChunk,
+         keyChunk, uploadChunk, flagChunk, parkChunk, recordChunk, recoverChunk]
+            .joined(separator: "\n")
     }
 
     /// One fixture per rule, each breaking exactly that rule.
     private static var brokenIntentBodies: [(WorkVoiceIntentLaneRule, String)] {
         [
-            (.armedBeforeThePublication,
-             [payloadChunk, identityChunk, metadataChunk, publishChunk, armChunk,
-              keyChunk, uploadChunk, flagChunk, recordChunk, recoverChunk].joined(separator: "\n")),
+            (.compressedBeforeTheArm,
+             [identityChunk, metadataChunk, armChunk, payloadChunk,
+              keyChunk, uploadChunk, flagChunk, parkChunk, recordChunk, recoverChunk]
+                .joined(separator: "\n")),
 
-            (.compressedBeforeThePublication,
-             [identityChunk, metadataChunk, armChunk, publishChunk, payloadChunk,
-              keyChunk, uploadChunk, flagChunk, recordChunk, recoverChunk].joined(separator: "\n")),
+            (.armedBeforeTheKeyVerdict,
+             [payloadChunk, identityChunk, metadataChunk, keyChunk, armChunk,
+              uploadChunk, flagChunk, parkChunk, recordChunk, recoverChunk]
+                .joined(separator: "\n")),
 
-            (.publishedBeforeTheKeyVerdict,
-             [payloadChunk, identityChunk, metadataChunk, armChunk, keyChunk, publishChunk,
-              uploadChunk, flagChunk, recordChunk, recoverChunk].joined(separator: "\n")),
+            (.armedBeforeTheUpload,
+             [payloadChunk, identityChunk, metadataChunk, uploadChunk, armChunk,
+              keyChunk, flagChunk, parkChunk, recordChunk, recoverChunk]
+                .joined(separator: "\n")),
 
-            (.publishedBeforeTheUpload,
-             [payloadChunk, identityChunk, metadataChunk, armChunk, uploadChunk, publishChunk,
-              keyChunk, flagChunk, recordChunk, recoverChunk].joined(separator: "\n")),
+            // The park keeps its position; only the STATE it is armed with goes
+            // missing, so the first `.phaseOneFailed` in the body is the one the
+            // words are stamped with — after the arm, which is the window a
+            // sweep can take the recording in.
+            (.theParkIsRecorded,
+             compliantIntentBody.replacingOccurrences(
+                of: ", publicationState: .phaseOneFailed", with: "")),
 
-            // The publication stays above the key verdict and the upload — only
-            // the recovery moves above IT, so exactly one rule breaks.
-            (.publishedBeforeTheRecovery,
-             [payloadChunk, identityChunk, metadataChunk, armChunk, recordChunk, recoverChunk,
-              publishChunk, keyChunk, uploadChunk, flagChunk].joined(separator: "\n")),
+            // The arm stays above both pre-flights — only the upload moves below
+            // the desk write, so exactly one rule breaks.
+            (.transcribedBeforeTheDeskWrite,
+             [payloadChunk, identityChunk, metadataChunk, armChunk, keyChunk,
+              flagChunk, parkChunk, recordChunk, recoverChunk, uploadChunk]
+                .joined(separator: "\n")),
+
+            // Parked in the right place and carrying the wrong thing: a stamp
+            // with no words leaves the transcript in memory, which is the half
+            // of this rule an ordering check alone would never see.
+            (.theWordsAreParkedBeforeTheDeskWrite,
+             compliantIntentBody.replacingOccurrences(
+                of: parkChunk,
+                with: "let parkedWords = await Self.recordRecoveryState(.phaseOneFailed, "
+                    + "on: guardToken)")),
+
+            (.noRecordingIsEverPublished,
+             compliantIntentBody
+                + "\n_ = try await WorkVoiceCaptureCoordinator.publishRecording("
+                + "captureID: captureID, audio: uploadData)"),
 
             (.oneCaptureIdentity,
              compliantIntentBody.replacingOccurrences(
@@ -791,14 +869,9 @@ final class WorkboardVoiceLaneTests: XCTestCase {
              compliantIntentBody.replacingOccurrences(
                 of: "uploadData = originalAudioData", with: "uploadData = Data()")),
 
-            (.aRefusedPublicationIsRecorded,
-             compliantIntentBody.replacingOccurrences(
-                of: "workPublicationState = .phaseOneFailed",
-                with: "Self.log.error(\"not published\")")),
-
             (.theRecoveryCarriesTheCapturesRecord,
              compliantIntentBody.replacingOccurrences(
-                of: "Self.stamped(pendingMetadata, publicationState: workPublicationState),",
+                of: "Self.stamped(pendingMetadata, transcript: transcript),",
                 with: "PendingRetryMetadata(id: UUID(), destination: .work),")),
 
             (.releasedOnlyOnATerminalOutcome,

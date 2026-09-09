@@ -266,8 +266,8 @@ final class WatchRelayQueueRetryabilityTests: XCTestCase {
     /// NEGATIVE CONTROL: the same helper MUST still dispatch the hop for a chat
     /// ask, or the assertion above would pass on a settlement path that had
     /// simply stopped working. An ordinary chat reply carries no Work stamp —
-    /// the iPhone writes one from a single line (`workSaved = workCardID !=
-    /// nil`) and only for a capture it published to the desk.
+    /// the iPhone writes one from a single line (`workSaved = parkedClip !=
+    /// nil`) and only for a capture whose recording it holds.
     func testAChatReplyStillClaimsAndDispatchesTheHop() async {
         var hops: [String] = []
         var writes = 0
@@ -729,12 +729,12 @@ final class WatchRelayQueueRetryabilityTests: XCTestCase {
 
     // MARK: - 1e. A stamped reply with no words
     //
-    // The iPhone publishes the recording BEFORE it transcribes, so a
-    // transcription that settles against the clip leaves a playable card on the
-    // desk and no words on it. That reply is success-shaped with an EMPTY
-    // transcript, and it has to settle the wrist: the phone holds the durable
-    // copy, so a retained entry is a clip nothing will ever claim — and Work
-    // entries never age out, so "never" is literal.
+    // The iPhone parks the recording BEFORE it transcribes, so a transcription
+    // that fails settles against a clip the phone already holds and leaves no
+    // words anywhere. That reply is success-shaped with an EMPTY transcript,
+    // and it has to settle the wrist: the phone holds the durable copy, so a
+    // retained entry is a clip nothing will ever claim — and Work entries never
+    // age out, so "never" is literal.
 
     func testAStampedReplyWithNoWordsStillSettlesTheEntry() async {
         for transcript in ["", "   ", "\n"] {

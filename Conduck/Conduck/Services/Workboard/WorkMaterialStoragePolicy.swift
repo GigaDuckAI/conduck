@@ -8,9 +8,9 @@
 // storage-mode choice through here, so the sync ceiling is enforced by
 // construction on the lanes that have no UI to warn from.
 //
-// The answer is deliberately kind-independent: a screenshot, a document and a
-// voice note under the ceiling all sync, and everything above it stays in the
-// device-local vault with reattach. `kind` is part of the question because the
+// The answer is deliberately kind-independent: a screenshot, a document and an
+// attached audio file under the ceiling all sync, and everything above it stays
+// in the device-local vault with reattach. `kind` is part of the question because the
 // decision belongs to the material as a whole, not to its byte count alone.
 
 import Foundation

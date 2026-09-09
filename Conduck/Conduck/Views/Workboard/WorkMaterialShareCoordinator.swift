@@ -295,10 +295,11 @@ final class WorkMaterialShareCoordinator {
         bytes: WorkMaterialExportBytes
     ) async throws -> PreparedWorkShare {
         switch material.kind {
-        case .note:
+        case .note, .transcript:
             // The card's own text, and its title when the body is empty. A
             // share sheet opened on an empty string offers a person nothing to
-            // choose between.
+            // choose between. Spoken words share as words: there is no
+            // recording behind them to hand over instead.
             let body = material.textContent ?? material.detail ?? ""
             return .text(body.isEmpty ? material.name : body)
         case .link:
