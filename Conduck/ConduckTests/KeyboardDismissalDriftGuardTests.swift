@@ -2,31 +2,14 @@
 // Conduck
 // KeyboardDismissalDriftGuardTests.swift
 //
-// SOURCE DRIFT GUARD over the one sanctioned tap-to-dismiss and the two
-// surfaces that carry it: Chat's thread and Work's board.
-//
-// Three facts decide whether the keyboard can be put away on a short list, and
-// none of them can fail anywhere else. (1) `dismissesKeyboardOnScrollOrTap()`
-// carries all three pieces — always-on bounce (so `.interactively` has a pan to
-// ride when the content is shorter than the viewport), the interactive
-// dismissal mode, and a plain child-first tap — with the bounce and the tap
-// compiled for iOS only, because always-on bounce rubber-bands a short thread
-// on the Mac for no keyboard. (2) The tap is a PLAIN `.onTapGesture`: a
-// high-priority or simultaneous gesture would steal or shadow every Button,
-// link and card underneath it, and a window-wide `endEditing` cannot exclude
-// them at all. (3) Each surface applies the modifier to its ScrollView BEFORE
-// the `.safeAreaInset` that hosts its composer, so the text field sits outside
-// the tap-bearing view — a field inside it would need two taps to focus and
-// would lose focus to its own surroundings.
-//
-// These are SwiftUI expressions whose behaviour is decided by structure rather
-// than by values a unit test could call into, so each invariant is asserted
-// where it is written: over the file's text with comments stripped and
-// compilation directives intact (`RefusalLaneSource`), scoped to one
-// declaration's closure. Platform ownership is read by exact spelling through
-// `WorkboardSourceDirectives`, never by substring. A guard that fails because
-// the shape legitimately changed is a guard to update, not a bug to route
-// around.
+// Source integration guards for Chat and Work keyboard dismissal. In particular,
+// a new Chat renders the host's empty state WITHOUT a ConversationThreadView,
+// so guarding only the thread misses the first place a person types a draft.
+// Keep the empty-state gestures after its full-size frame and keep composers
+// outside all dismissal gestures. Scroll dismissal is immediate on iOS, and
+// its tap hit region explicitly includes blank viewport space.
+// These checks read source, not touch events or keyboard visibility. They catch
+// omitted wiring and platform/placement drift; they do not replace device QA.
 
 import XCTest
 
@@ -61,8 +44,7 @@ final class KeyboardDismissalDriftGuardTests: XCTestCase {
 
     // MARK: - The modifier
 
-    /// All three pieces are present, and the two that change how a short list
-    /// feels compile for iOS only.
+    /// Scroll-start dismissal and blank-space taps are iOS-only.
     func testModifierCarriesAllThreePiecesAndGatesTheIOSOnes() throws {
         let source = try RefusalLaneSource.source(at: Self.modifierPath)
         let body = try RefusalLaneSource.body(
@@ -73,11 +55,11 @@ final class KeyboardDismissalDriftGuardTests: XCTestCase {
 
         XCTAssertTrue(
             body.contains("scrollBounceBehavior(.always)"),
-            "Without always-on bounce a scroll view shorter than the viewport never starts the pan that `.interactively` rides, and drag-to-dismiss silently does nothing on a one-message thread."
+            "Short threads and boards must still participate in scrolling."
         )
         XCTAssertTrue(
-            body.contains("scrollDismissesKeyboard(.interactively)"),
-            "The modifier replaces the bare mode at both call sites, so it must still carry it."
+            body.contains("scrollDismissesKeyboard(.immediately)"),
+            "Ordinary scrolling must dismiss without requiring a drag into the keyboard."
         )
         XCTAssertTrue(
             body.contains(".onTapGesture"),
@@ -90,6 +72,15 @@ final class KeyboardDismissalDriftGuardTests: XCTestCase {
             "Always-on bounce rubber-bands a short thread on the Mac, a visible change for no keyboard."
         )
         XCTAssertEqual(
+            try ownership(of: "scrollDismissesKeyboard(.immediately)", in: body),
+            .exclusive(.iOS)
+        )
+        let hitShape = try XCTUnwrap(body.range(of: ".contentShape(Rectangle())"))
+        let tap = try XCTUnwrap(body.range(of: ".onTapGesture"))
+        XCTAssertLessThan(hitShape.lowerBound, tap.lowerBound,
+                          "The tap's hit region must include the whole blank viewport.")
+        XCTAssertEqual(try ownership(of: ".contentShape(Rectangle())", in: body), .exclusive(.iOS))
+        XCTAssertEqual(
             try ownership(of: ".onTapGesture", in: body),
             .exclusive(.iOS),
             "The Mac has no software keyboard; a tap layer there is a side effect for nothing."
@@ -99,6 +90,39 @@ final class KeyboardDismissalDriftGuardTests: XCTestCase {
             .exclusive(.iOS),
             "UIKit is an iOS import; the resign helper must not reach the Mac build."
         )
+    }
+
+    // MARK: - A Chat before its first send
+
+    func testNewChatHostsDismissWithoutAMountedThread() throws {
+        for path in ["Conduck/ContentView.swift", "Conduck/Views/Conversation/ConversationLibraryView.swift"] {
+            let source = try RefusalLaneSource.source(at: path)
+            let threadContent = try RefusalLaneSource.trailingClosure(
+                after: "private var threadContent: some View", in: source, path: path
+            )
+            XCTAssertTrue(threadContent.contains("startEmptyState"))
+            let emptyState = try RefusalLaneSource.trailingClosure(
+                after: "private var startEmptyState: some View", in: source, path: path
+            )
+            let frame = try XCTUnwrap(emptyState.range(of: ".frame(maxWidth: .infinity, maxHeight: .infinity)"))
+            let modifier = try XCTUnwrap(emptyState.range(of: ".dismissesKeyboardOnEmptySpaceInteraction()"),
+                                         "New Chat must dismiss before any thread exists: \(path)")
+            XCTAssertLessThan(frame.lowerBound, modifier.lowerBound,
+                              "The gesture must cover the full empty area, not just the mascot and text.")
+            XCTAssertFalse(emptyState.contains("Composer"), "The composer must remain outside this gesture.")
+        }
+    }
+
+    func testNonScrollableEmptyStateHasItsOwnIOSOnlyDragAndTap() throws {
+        let source = try RefusalLaneSource.source(at: Self.modifierPath)
+        let body = try RefusalLaneSource.body(
+            ofFunction: "dismissesKeyboardOnEmptySpaceInteraction", in: source, path: Self.modifierPath
+        )
+        for gesturePiece in ["contentShape(Rectangle())", ".onTapGesture", "DragGesture()", ".onChanged"] {
+            XCTAssertEqual(try ownership(of: gesturePiece, in: body), .exclusive(.iOS))
+        }
+        XCTAssertFalse(body.contains("scrollDismissesKeyboard"),
+                       "A scroll modifier cannot dismiss on drag when no ScrollView exists.")
     }
 
     /// The tap never outranks a child: no high-priority or simultaneous gesture,

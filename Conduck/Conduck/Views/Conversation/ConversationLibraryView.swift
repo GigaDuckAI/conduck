@@ -951,6 +951,7 @@ struct ConversationLibraryView: View {
                 .foregroundStyle(AppColors.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .dismissesKeyboardOnEmptySpaceInteraction()
     }
 }
 #endif
