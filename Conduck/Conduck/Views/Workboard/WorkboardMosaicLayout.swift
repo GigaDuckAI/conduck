@@ -6,7 +6,23 @@
 // Unit-grid mosaic placement for the material board. The placement engine is a
 // pure value type so it can be exercised without a view hierarchy; the SwiftUI
 // `Layout` is a thin shell that resolves a width from the proposal, memoises one
-// engine result per (spans, width, metrics) key and mirrors x for right-to-left.
+// engine result per (spans, width, metrics, footprint) key and mirrors x for
+// right-to-left.
+//
+// THE BOARD DRAWS ONE FOOTPRINT. `WorkboardFootprint` is the single switch that
+// says so, and the engine's default `Footprint.enforced` reads it, so every
+// production placement grants the same tile whatever a row stores. The
+// mixed-span path is still compiled and still tested — a caller states
+// `footprint: .mixed` to get it — because one footprint is a product bet that
+// has to be reversible on evidence rather than a deletion.
+//
+// Uniformity is what makes a drag cheap: with one tile size the slot rectangles
+// are a pure function of (count, width, metrics), so `slotFrames` and
+// `insertionSlot` answer from the count alone and the lines a pointer crosses
+// stay still while a card is lifted out of them. Slot geometry deliberately
+// does NOT consult the footprint switch — it always answers for the uniform
+// grid, so a caller flipping to mixed selects the placement path instead of
+// hitting a half-defined one.
 //
 // Reading order is a hard invariant: a later card is never placed above an
 // earlier one. Placement is a plain row-band fill — a band's height is the
@@ -32,6 +48,57 @@ nonisolated struct WorkboardMosaicSpan: Sendable, Hashable {
     static let small = WorkboardMosaicSpan(columns: 1, rows: 1)
     static let standard = WorkboardMosaicSpan(columns: 2, rows: 2)
     static let large = WorkboardMosaicSpan(columns: 4, rows: 2)
+}
+
+// MARK: - One footprint
+
+/// The board's footprint decision, in ONE place.
+///
+/// Every card draws `standard`. A row that still stores `small` or `large` —
+/// written by a build that offered the control, or by a device that still does
+/// — renders like its neighbours instead of reinstating a second density; the
+/// stored column is left exactly as it is, so nobody's rows are rewritten and
+/// the decision costs nothing to undo. `isUniform` is that undo: flip it and
+/// the engine's default returns to the mixed-span path, which stays compiled
+/// and tested for precisely that reason.
+///
+/// Enforcement has to be TOTAL. If any surface can still draw a card wider than
+/// this, the fixed-slot geometry below is false and the drag built on it aims
+/// at lines that are not there — so a card face asks `rendered(_:)` rather than
+/// reading the stored size.
+///
+/// THE SWITCH IS NOT THE WHOLE REVERSAL, and pretending otherwise is the one
+/// way this arrangement fails silently. Flipping `isUniform` returns the ENGINE
+/// to mixed spans. Two things it does not return:
+///
+///   * THE CARD FACES. `WorkboardSourceCard` and `WorkboardAudioCardView` each
+///     resolve `layoutSize` to `.standard` outright — correct while one
+///     footprint is enforced, and wrong the moment it is not, because standard
+///     content and a standard companion band would be drawn into a one-unit
+///     tile. They have to route through `rendered(_:)` and get their
+///     compact/wide branches back.
+///   * THE DROP RESOLUTION. The canvas aims at `slotFrames`/`insertionSlot`,
+///     which answer for the uniform grid only. A mixed board's gaps are
+///     understood by `WorkboardMosaicLayout.insertionIndex(at:in:containerWidth:layoutDirection:)`
+///     and nothing else, so the canvas has to resolve through that instead.
+///
+/// `WorkboardMosaicEngineTests.testFlippingTheFootprintSwitchAloneWouldNotReturnTheCardFaces`
+/// holds that coupling: it pins the hardcoded faces while the board is uniform
+/// and fails, naming both files, the day the switch flips without them.
+nonisolated enum WorkboardFootprint {
+    /// Flip to `false` to restore mixed footprints across the whole board.
+    static let isUniform = true
+
+    /// The one tile the board grants.
+    static let uniform: WorkMaterialCardSize = .standard
+
+    /// The footprint a card actually draws into, given what its row stores.
+    static func rendered(_ stored: WorkMaterialCardSize) -> WorkMaterialCardSize {
+        isUniform ? uniform : stored
+    }
+
+    /// The uniform tile as a grid span — the unit of every slot rectangle.
+    static var uniformSpan: WorkboardMosaicSpan { uniform.mosaicSpan }
 }
 
 extension WorkMaterialCardSize {
@@ -149,6 +216,29 @@ nonisolated struct WorkboardMosaicMetrics: Sendable, Hashable {
 /// Pure placement. No view types, no environment, no state: the same inputs
 /// always produce the same frames, which is what makes the layout cacheable.
 nonisolated struct WorkboardMosaicEngine: Sendable {
+    /// Which span a card is granted. `.uniform` ignores what a row stores and
+    /// grants every card the same tile; `.mixed` honours the stored span. The
+    /// default is `.enforced`, so a caller that says nothing gets the board's
+    /// actual decision and only a caller that deliberately asks for the
+    /// mixed-span path can reach it.
+    nonisolated enum Footprint: Sendable, Hashable {
+        case uniform(WorkboardMosaicSpan)
+        case mixed
+
+        /// What `WorkboardFootprint` currently decides. Reading it here rather
+        /// than at each call site is what makes the switch total.
+        static var enforced: Footprint {
+            WorkboardFootprint.isUniform ? .uniform(WorkboardFootprint.uniformSpan) : .mixed
+        }
+
+        func span(for stored: WorkboardMosaicSpan) -> WorkboardMosaicSpan {
+            switch self {
+            case .uniform(let granted): return granted
+            case .mixed: return stored
+            }
+        }
+    }
+
     nonisolated struct Item: Sendable, Hashable {
         let id: UUID
         let span: WorkboardMosaicSpan
@@ -237,9 +327,14 @@ nonisolated struct WorkboardMosaicEngine: Sendable {
     }
 
     let metrics: WorkboardMosaicMetrics
+    let footprint: Footprint
 
-    init(metrics: WorkboardMosaicMetrics = .standard) {
+    init(
+        metrics: WorkboardMosaicMetrics = .standard,
+        footprint: Footprint = .enforced
+    ) {
         self.metrics = metrics
+        self.footprint = footprint
     }
 
     func place(_ items: [Item], availableWidth: CGFloat) -> Result {
@@ -309,6 +404,94 @@ nonisolated struct WorkboardMosaicEngine: Sendable {
         return min(width, 100_000)
     }
 
+    // MARK: - Slots
+
+    /// How many whole cards a row holds at this width. The grid counts UNITS
+    /// and the uniform tile is two of them, so this is the number a person
+    /// actually sees per row — two on a phone, six on a wide Mac.
+    func cardsPerRow(forWidth width: CGFloat) -> Int {
+        max(1, columnCount(forWidth: width) / max(1, WorkboardFootprint.uniformSpan.columns))
+    }
+
+    /// The board a drag aims at: `count` uniform tiles at this width.
+    ///
+    /// Deliberately independent of the footprint switch and of whatever the
+    /// cards currently store — a slot is a place on the grid, not a card. That
+    /// is what keeps the lines still while one card is lifted out of them and a
+    /// placeholder stands in its place: the count does not change, so neither
+    /// does the geometry.
+    ///
+    /// A board flipped to mixed footprints has no fixed slots to target, so it
+    /// resolves drops through the placed result instead —
+    /// `WorkboardMosaicLayout.insertionIndex(at:in:containerWidth:layoutDirection:)`
+    /// — which is why that path is still here rather than replaced by this one.
+    func uniformResult(count: Int, width: CGFloat) -> Result {
+        let spans = Array(repeating: WorkboardFootprint.uniformSpan, count: max(0, count))
+        return WorkboardMosaicEngine(metrics: metrics, footprint: .uniform(WorkboardFootprint.uniformSpan))
+            .place(spans: spans, availableWidth: width)
+    }
+
+    /// The slot rectangles, in the engine's left-to-right grid space with the
+    /// origin at (0, 0). `presentedSlotFrames` is the form a view can draw.
+    func slotFrames(count: Int, width: CGFloat) -> [CGRect] {
+        uniformResult(count: count, width: width).placements.map(\.frame)
+    }
+
+    /// The same rectangles in the coordinate space of the view that owns the
+    /// board: right-to-left mirrored and shifted by the centring inset, so a
+    /// placeholder can be positioned from them without re-deriving either.
+    func presentedSlotFrames(
+        count: Int,
+        width: CGFloat,
+        layoutDirection: LayoutDirection
+    ) -> [CGRect] {
+        let result = uniformResult(count: count, width: width)
+        let inset = WorkboardMosaicLayout.horizontalInset(
+            containerWidth: width,
+            contentWidth: result.contentSize.width
+        )
+        return result.placements.map { placement in
+            let frame = WorkboardMosaicLayout.presentedFrame(
+                placement.frame,
+                contentWidth: result.contentSize.width,
+                layoutDirection: layoutDirection
+            )
+            return frame.offsetBy(dx: inset, dy: 0)
+        }
+    }
+
+    /// The slot a pointer at `point` is over: a gap in the CURRENT order,
+    /// `0...count`, where `count` appends.
+    ///
+    /// `point` is in the coordinate space of the view that owns the board, so
+    /// the centring inset and any right-to-left mirror are undone first.
+    /// Resolution is by BOUNDARY — the row band containing the point picks the
+    /// line, and the first slot in that band whose horizontal midpoint is past
+    /// the point picks the gap. With one footprint those boundaries are fixed
+    /// for a given (count, width, metrics), so a pointer holds its slot until
+    /// it crosses the next one's line and there is no packing-dependent
+    /// hysteresis left to add: the older mosaic needed one because the lines
+    /// themselves moved as spans repacked.
+    ///
+    /// The slot is a position in the order the pointer was over. It is NOT a
+    /// commit: an arrival can change what an integer means while the drag is
+    /// still resolving, which is why the commit path names a neighbour card
+    /// instead (`WorkboardDragArrangement.commitTarget`).
+    func insertionSlot(
+        at point: CGPoint,
+        count: Int,
+        width: CGFloat,
+        layoutDirection: LayoutDirection
+    ) -> Int {
+        guard count > 0 else { return 0 }
+        return WorkboardMosaicLayout.insertionIndex(
+            at: point,
+            in: uniformResult(count: count, width: width),
+            containerWidth: width,
+            layoutDirection: layoutDirection
+        )
+    }
+
     private func place(
         entries: [(id: UUID?, span: WorkboardMosaicSpan)],
         availableWidth: CGFloat
@@ -337,9 +520,14 @@ nonisolated struct WorkboardMosaicEngine: Sendable {
         var bandHeight = 0
 
         for (index, entry) in entries.enumerated() {
+            // The footprint decides BEFORE the grid clamps: a stored `large`
+            // that the uniform board never grants must not reach the clamp and
+            // come back as a card two units wide on a narrow phone and four on
+            // a Mac.
+            let granted = footprint.span(for: entry.span)
             let span = WorkboardMosaicSpan(
-                columns: min(entry.span.columns, columns),
-                rows: entry.span.rows
+                columns: min(granted.columns, columns),
+                rows: granted.rows
             )
             if column > 0, column + span.columns > columns {
                 bandRow += bandHeight
@@ -410,12 +598,16 @@ extension View {
 nonisolated struct WorkboardMosaicLayout: Layout {
     var metrics: WorkboardMosaicMetrics = .standard
     var layoutDirection: LayoutDirection = .leftToRight
+    /// Carried rather than read at placement time so the memo key can hold it:
+    /// two boards differing only in footprint must not share a cached result.
+    var footprint: WorkboardMosaicEngine.Footprint = .enforced
 
     nonisolated struct Cache {
         nonisolated struct Key: Hashable {
             let spans: [WorkboardMosaicSpan]
             let width: CGFloat
             let metrics: WorkboardMosaicMetrics
+            let footprint: WorkboardMosaicEngine.Footprint
         }
 
         var key: Key?
@@ -541,12 +733,17 @@ nonisolated struct WorkboardMosaicLayout: Layout {
         subviews: Subviews,
         cache: inout Cache
     ) -> WorkboardMosaicEngine.Result {
+        // The layout value stays RAW — what the row stores — and the engine's
+        // footprint decides what it is granted. Normalising here instead would
+        // erase the stored span even for a caller that deliberately asked for
+        // the mixed path.
         let spans = subviews.map { $0[WorkboardMosaicCardSizeKey.self].mosaicSpan }
-        let key = Cache.Key(spans: spans, width: width, metrics: metrics)
+        let key = Cache.Key(spans: spans, width: width, metrics: metrics, footprint: footprint)
         if let cached = cache.key, cached == key {
             return cache.result
         }
-        let placed = WorkboardMosaicEngine(metrics: metrics).place(spans: spans, availableWidth: width)
+        let placed = WorkboardMosaicEngine(metrics: metrics, footprint: footprint)
+            .place(spans: spans, availableWidth: width)
         cache.key = key
         cache.result = placed
         return placed

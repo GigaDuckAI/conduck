@@ -321,6 +321,279 @@ final class WorkboardPersistenceTests: XCTestCase {
         }
     }
 
+    // MARK: - Reorder rebase
+
+    /// The drag's guard, end to end against the real store: a capture landed
+    /// while the move was saving, and BOTH survive. The revision has certainly
+    /// moved — that is what the plain compare-and-swap would have refused on —
+    /// so the baseline is the only thing asked about.
+    func testAReorderRebasesOntoACaptureThatLandedWhileItWasSaving() async throws {
+        let store = isolated.make()
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Rebase"))
+        )
+        var ids: [UUID] = []
+        for index in 0..<3 {
+            let material = try await store.addWorkMaterial(
+                WorkMaterialDraft(kind: .note, title: "Card \(index)", sequence: index),
+                to: item.id
+            )
+            ids.append(material.id)
+        }
+        let planned = WorkboardReorderBaseline(orderedIDs: ids)
+
+        // The arrival, after the drag read its baseline and before it commits.
+        let arrival = try await store.addWorkMaterial(
+            WorkMaterialDraft(kind: .note, title: "Arrived", sequence: 3),
+            to: item.id
+        )
+
+        let after = try await store.reorderWorkMaterials(
+            itemID: item.id,
+            orderedMaterialIDs: [ids[2], ids[0], ids[1]],
+            baseline: planned
+        )
+        XCTAssertEqual(
+            after.materials
+                .sorted { ($0.sequence, $0.createdAt, $0.id.uuidString) < ($1.sequence, $1.createdAt, $1.id.uuidString) }
+                .map(\.id),
+            [ids[2], ids[0], ids[1], arrival.id],
+            "the move is kept and the arrival keeps its place after it"
+        )
+    }
+
+    /// A desk that moved some OTHER way is refused, and the refusal is the same
+    /// `staleRevision` the board already knows how to answer — it just answers
+    /// it with a note now instead of an alert.
+    ///
+    /// Negative control: a superset check accepts this and silently undoes the
+    /// concurrent reorder.
+    func testAReorderIsRefusedWhenTheDeskItselfWasRearranged() async throws {
+        let store = isolated.make()
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Conflict"))
+        )
+        var ids: [UUID] = []
+        for index in 0..<3 {
+            let material = try await store.addWorkMaterial(
+                WorkMaterialDraft(kind: .note, title: "Card \(index)", sequence: index),
+                to: item.id
+            )
+            ids.append(material.id)
+        }
+        let planned = WorkboardReorderBaseline(orderedIDs: ids)
+        _ = try await store.reorderWorkMaterials(
+            itemID: item.id,
+            orderedMaterialIDs: [ids[2], ids[1], ids[0]]
+        )
+
+        do {
+            _ = try await store.reorderWorkMaterials(
+                itemID: item.id,
+                orderedMaterialIDs: [ids[1], ids[0], ids[2]],
+                baseline: planned
+            )
+            XCTFail("a rearranged desk cannot replay a move planned on the old one")
+        } catch WorkboardStoreError.staleRevision {
+            // Expected.
+        }
+
+        let refreshedValue = try await store.fetchWorkItem(id: item.id)
+        let refreshed = try XCTUnwrap(refreshedValue)
+        XCTAssertEqual(
+            refreshed.materials.sorted { $0.sequence < $1.sequence }.map(\.id),
+            [ids[2], ids[1], ids[0]],
+            "the desk kept the order it had"
+        )
+    }
+
+    /// A recording arriving for a picture the drag was planned around changes
+    /// which CARDS exist, not just how many materials there are. The canonical
+    /// prefix survives — it appended — so only the companion links carried in
+    /// the baseline can see it.
+    func testAReorderIsRefusedWhenARecordingArrivesForABaselinePicture() async throws {
+        let store = isolated.make()
+        let picture = try await store.upsertDeskMaterial(WorkMaterialDraft(
+            kind: .image,
+            title: "screenshot.jpg",
+            filename: "screenshot.jpg",
+            mimeType: "image/jpeg",
+            payload: Data("picture".utf8)
+        ))
+        let other = try await store.upsertDeskMaterial(
+            WorkMaterialDraft(kind: .note, title: "Other", textContent: "Other")
+        )
+        let planned = WorkboardReorderBaseline(orderedIDs: [picture.id, other.id])
+
+        _ = try await store.upsertDeskMaterial(WorkMaterialDraft(
+            kind: .audio,
+            title: "Ship the review",
+            filename: "clip.m4a",
+            mimeType: "audio/m4a",
+            payload: Data("clip".utf8),
+            attachedToMaterialID: picture.id
+        ))
+
+        do {
+            _ = try await store.reorderWorkMaterials(
+                itemID: Constants.workboardDeskItemID,
+                orderedMaterialIDs: [other.id, picture.id],
+                baseline: planned
+            )
+            XCTFail("the picture folded a recording into itself, so the board is not the one that was dragged")
+        } catch WorkboardStoreError.staleRevision {
+            // Expected.
+        }
+    }
+
+    /// Codex's counterexample, held as a regression: a reorder must not decide
+    /// which duplicate of a merged card a read answers from.
+    ///
+    /// Every physical row is re-ranked, and stamping all of them with one
+    /// instant would flatten the `revision` key `WorkMaterialCanonicalOrder`
+    /// decides on — the tie then falls through to the content hash, and a card
+    /// silently starts naming the other duplicate's payload because somebody
+    /// moved it.
+    ///
+    /// Negative control: stamping every changed row makes the second assertion
+    /// report the duplicate's hash.
+    func testAReorderDoesNotChangeWhichDuplicateRowACardAnswersFrom() async throws {
+        let store = isolated.make()
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Merged"))
+        )
+        var ids: [UUID] = []
+        for index in 0..<2 {
+            let material = try await store.addWorkMaterial(
+                WorkMaterialDraft(kind: .note, title: "Card \(index)", sequence: index),
+                to: item.id
+            )
+            ids.append(material.id)
+        }
+        // A losing duplicate: older, and carrying a hash that would outrank the
+        // winner's on every key below `revision`.
+        await store._duplicateWorkMaterialRowForTesting(
+            id: ids[0],
+            updatedAt: Date(timeIntervalSince1970: 1),
+            contentHash: "zzzz"
+        )
+        let beforeValue = try await store.fetchWorkItem(id: item.id)
+        let before = try XCTUnwrap(beforeValue)
+        let winningHash = try XCTUnwrap(before.materials.first { $0.id == ids[0] }).contentHash
+
+        _ = try await store.reorderWorkMaterials(
+            itemID: item.id,
+            orderedMaterialIDs: [ids[1], ids[0]]
+        )
+
+        let afterValue = try await store.fetchWorkItem(id: item.id)
+        let after = try XCTUnwrap(afterValue)
+        let movedRows = await store._workMaterialRowsForTesting(id: ids[0])
+        XCTAssertEqual(
+            Set(movedRows.map(\.sequence)), [1],
+            "every physical row still takes the new rank"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(after.materials.first { $0.id == ids[0] }).contentHash,
+            winningHash,
+            "moving a card must not promote the duplicate it was not answering from"
+        )
+    }
+
+    /// The same defect from the other side, and the one a wall-clock stamp
+    /// walks straight into: a duplicate dated AHEAD of this device's clock.
+    ///
+    /// A peer whose clock ran fast writes an `updatedAt` in the future and
+    /// CloudKit hands it over verbatim. Stamping the canonical row with
+    /// `Date()` therefore LOWERS it — under a duplicate that is merely less far
+    /// ahead — and the loser becomes the row every read answers from, so the
+    /// card reports the other duplicate's payload because somebody moved it.
+    ///
+    /// Negative control: replacing `advancedWriteStamp` with a plain `Date()`
+    /// makes the content assertion report the loser's hash.
+    func testAReorderDoesNotPromoteADuplicateDatedFurtherAheadThanThisClock() async throws {
+        let store = isolated.make()
+        let item = try await store.createWorkItem(
+            WorkItemDraft(content: WorkItemContent(title: "Skewed"))
+        )
+        var ids: [UUID] = []
+        for index in 0..<2 {
+            let material = try await store.addWorkMaterial(
+                WorkMaterialDraft(kind: .note, title: "Card \(index)", sequence: index),
+                to: item.id
+            )
+            ids.append(material.id)
+        }
+        // Both duplicates are dated ahead of this device. The winner is the one
+        // further ahead; the loser carries a hash that outranks it on every key
+        // below `revision`, so a lowered winner is visible in the projection.
+        let now = Date()
+        await store._duplicateWorkMaterialRowForTesting(
+            id: ids[0],
+            updatedAt: now.addingTimeInterval(120),
+            contentHash: "aaaa"
+        )
+        await store._duplicateWorkMaterialRowForTesting(
+            id: ids[0],
+            updatedAt: now.addingTimeInterval(60),
+            contentHash: "zzzz"
+        )
+        let beforeValue = try await store.fetchWorkItem(id: item.id)
+        let before = try XCTUnwrap(beforeValue)
+        XCTAssertEqual(
+            try XCTUnwrap(before.materials.first { $0.id == ids[0] }).contentHash,
+            "aaaa",
+            "the fixture needs the further-ahead duplicate to be the one a read answers from"
+        )
+
+        _ = try await store.reorderWorkMaterials(
+            itemID: item.id,
+            orderedMaterialIDs: [ids[1], ids[0]]
+        )
+
+        let afterValue = try await store.fetchWorkItem(id: item.id)
+        let after = try XCTUnwrap(afterValue)
+        XCTAssertEqual(
+            try XCTUnwrap(after.materials.first { $0.id == ids[0] }).contentHash,
+            "aaaa",
+            "a move must not hand the card to the duplicate it was outranking"
+        )
+        let rows = await store._workMaterialRowsForTesting(id: ids[0])
+        XCTAssertEqual(
+            Set(rows.map(\.sequence)), [1],
+            "every physical row still takes the new rank"
+        )
+        XCTAssertTrue(
+            rows.contains { ($0.updatedAt ?? .distantPast) > now.addingTimeInterval(120) },
+            "the winner came out of the write above every duplicate it was standing on"
+        )
+    }
+
+    /// The stamp rule itself, proved without a store: never below what it
+    /// replaces, and otherwise the plain local instant.
+    func testAWriteStampIsMonotoneAgainstWhatItReplaces() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        XCTAssertEqual(
+            ConversationStore.advancedWriteStamp(now, notBelow: []),
+            now,
+            "nothing to stand on, so nothing to advance past"
+        )
+        XCTAssertEqual(
+            ConversationStore.advancedWriteStamp(
+                now,
+                notBelow: [now.addingTimeInterval(-5), now.addingTimeInterval(-1)]
+            ),
+            now,
+            "an ordinary write keeps the wall clock"
+        )
+        let ahead = now.addingTimeInterval(120)
+        XCTAssertGreaterThan(
+            ConversationStore.advancedWriteStamp(now, notBelow: [ahead, now.addingTimeInterval(60)]),
+            ahead,
+            "a future-dated row is stepped PAST, not matched"
+        )
+    }
+
     // MARK: - Companion link
 
     /// The link round-trips through the write door and the board projection,

@@ -122,6 +122,58 @@ enum WorkboardAudioCardChip: Equatable, Sendable {
     case notOnThisDevice
 
     var isAction: Bool { self == .reattach }
+
+    /// The availability this chip stands for, which is what its glyph and its
+    /// tint are decided from — so a recording and a picture in the same state
+    /// are never drawn differently.
+    var availability: WorkboardMaterialAvailability {
+        switch self {
+        case .localOnly: return .localOnly
+        case .syncPending: return .syncPending
+        case .reattach, .notOnThisDevice: return .unavailableOnThisDevice
+        }
+    }
+
+    var glyphName: String {
+        WorkboardCardFacePolicy.availabilityGlyphName(for: availability)
+    }
+
+    /// `@MainActor` because the palette is; the words and the glyph stay
+    /// reachable from anywhere.
+    @MainActor
+    var tint: Color {
+        WorkboardCardFacePolicy.availabilityTint(for: availability)
+    }
+
+    /// Only the WORDS are the chip's own: `.notOnThisDevice` is the sentence
+    /// for a surface that wired no repair, which the shared availability policy
+    /// has no reason to know about. Stated here rather than in the card, because
+    /// the gallery's companion band draws the same chip and a second spelling
+    /// is exactly the duplication the face policy exists to prevent.
+    var label: LocalizedStringResource {
+        switch self {
+        case .localOnly:
+            return LocalizedStringResource(
+                "workboard.material.localOnly",
+                defaultValue: "Available on this device"
+            )
+        case .syncPending:
+            return LocalizedStringResource(
+                "workboard.material.syncPending",
+                defaultValue: "Waiting for iCloud…"
+            )
+        case .reattach:
+            return LocalizedStringResource(
+                "workboard.material.reattach.short",
+                defaultValue: "Reattach"
+            )
+        case .notOnThisDevice:
+            return LocalizedStringResource(
+                "workboard.audio.unavailableHere",
+                defaultValue: "Not on this device"
+            )
+        }
+    }
 }
 
 /// The card's presentation decisions as pure functions. They live outside the
@@ -652,9 +704,15 @@ struct WorkboardAudioTransport: View {
     /// The one player of the surface drawing this. Passed in, never created
     /// here — see the type's note on exclusivity.
     let player: WorkboardAudioCardPlayer
-    /// What the recording's OWN availability permits. A folded card asks about
-    /// the companion, never about the picture it sits on.
-    var isPlayable: Bool = true
+    /// The recording's OWN availability. A folded card asks about the
+    /// companion, never about the picture it sits on.
+    ///
+    /// The AVAILABILITY and not a `Bool`: "cannot play" is two different
+    /// answers — bytes on their way through iCloud, and bytes this device no
+    /// longer holds — and a transport handed only the boolean drew the waiting
+    /// glyph over both. Playability is then derived here rather than at each
+    /// call site, so no surface can offer a control the policy refuses.
+    var availability: WorkboardMaterialAvailability = .available
     /// A hidden-but-mounted workbench must not start audio.
     var isEnabled: Bool = true
     var activation: Activation = .tile
@@ -682,8 +740,15 @@ struct WorkboardAudioTransport: View {
         }
     }
 
+    /// Bytes this device cannot read are not a transport. The board's one
+    /// permission policy names the readable cases, so a state added later fails
+    /// closed rather than opening a control over nothing.
+    private var isPlayable: Bool {
+        WorkboardCardActionPolicy.allows(.play, when: availability)
+    }
+
     private var glyph: some View {
-        Image(systemName: Self.symbolName(phase: player.phase, isPlayable: isPlayable))
+        Image(systemName: Self.symbolName(phase: player.phase, availability: availability))
             .font(.system(size: max(13, dimension * 0.44), weight: .semibold))
             .foregroundStyle(glyphTint)
             .frame(width: dimension, height: dimension)
@@ -715,9 +780,17 @@ struct WorkboardAudioTransport: View {
     }
 
     /// The glyph for a phase. Bytes this device cannot read are not a transport
-    /// at all, so they say what they are waiting for rather than offering play.
-    static func symbolName(phase: WorkboardAudioPhase, isPlayable: Bool) -> String {
-        guard isPlayable else { return "icloud.and.arrow.down" }
+    /// at all, so they say what they are waiting for rather than offering play
+    /// — and WHICH wait they are: the availability's own glyph separates a
+    /// recording arriving from iCloud from one whose bytes have to be pointed
+    /// at again, which a single cloud symbol reported as the same thing.
+    static func symbolName(
+        phase: WorkboardAudioPhase,
+        availability: WorkboardMaterialAvailability
+    ) -> String {
+        guard WorkboardCardActionPolicy.allows(.play, when: availability) else {
+            return WorkboardCardFacePolicy.availabilityGlyphName(for: availability)
+        }
         switch phase {
         case .playing: return "pause.fill"
         case .loading: return "hourglass"
@@ -895,7 +968,6 @@ struct WorkboardAudioCardView: View {
     /// availability corner states the fact instead of naming an action the card
     /// cannot perform.
     var onReattach: (() -> Void)? = nil
-    var onSetSize: ((WorkMaterialCardSize) -> Void)?
     var onMoveEarlier: (() -> Void)?
     var onMoveLater: (() -> Void)?
     var onRemove: (() -> Void)?
@@ -976,90 +1048,69 @@ struct WorkboardAudioCardView: View {
         #endif
     }
 
-    private var layoutSize: WorkMaterialCardSize {
-        size == .large && grantedColumns < WorkboardMosaicSpan.large.columns ? .standard : size
-    }
+    /// The footprint every card on the desk draws into. The board grants one
+    /// slot size, so a row still carrying a stored `small` or `large` renders
+    /// exactly like its neighbours instead of reinstating a second density.
+    private var layoutSize: WorkMaterialCardSize { .standard }
 
-    @ViewBuilder
+    /// ONE drawing, at one footprint, with the words the shared face policy
+    /// decided. The board grants every card the same slot, so this card has no
+    /// density to pick between.
     private var cardBody: some View {
-        switch layoutSize {
-        case .small:
-            VStack(alignment: .leading, spacing: 6) {
-                transport(dimension: 30)
-                Text(verbatim: material.name)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AppColors.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                progressBar
-                Spacer(minLength: 0)
-            }
-        case .standard:
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    transport(dimension: 40)
-                    availabilityChip
-                    // The menu affordance owns this corner: keep content clear.
-                    Spacer(minLength: 26)
-                }
-                Text(verbatim: material.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppColors.textPrimary)
-                    .lineLimit(2)
-                progressBar
-                caption(lineLimit: 2)
-                Spacer(minLength: 0)
-                cardFooter
-            }
-        case .large:
-            HStack(alignment: .top, spacing: 12) {
-                transport(dimension: 56)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(verbatim: material.name)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(2)
-                    progressBar
-                    caption(lineLimit: 4)
-                    Spacer(minLength: 0)
-                    cardFooter
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                transport(dimension: 40)
                 availabilityChip
+                // The menu affordance owns this corner: keep content clear.
                 Spacer(minLength: 26)
             }
+            faceText
+            progressBar
+            transportStatus
+            Spacer(minLength: 0)
+            cardFooter
         }
     }
 
-    /// The play/pause affordance. Not a control of its own — the card is the
-    /// button — so it is drawn in the transport's `tile` activation, which
-    /// carries no accessibility and lets the card's own label state the phase.
-    private func transport(dimension: CGFloat) -> some View {
-        WorkboardAudioTransport(
-            materialID: material.id,
-            player: player,
-            isPlayable: isPlayable,
-            activation: .tile,
-            dimension: dimension,
-            loadPayload: loadPayload
-        )
-    }
-
-    /// The same track the companion band draws, which is why it is not stated
-    /// here: a card and a band showing one recording must agree about how far
-    /// through it is.
-    private var progressBar: some View {
-        WorkboardAudioProgressTrack(player: player)
-    }
-
-    private var clockText: String {
-        WorkboardAudioTransport.clockText(elapsed: player.elapsed, duration: player.duration)
-    }
-
-    /// The transcript, once one exists. A note that has not been transcribed —
-    /// or whose transcription failed — draws no caption at all rather than a
-    /// placeholder: the card is the recording, and the caption is an extra.
+    /// The transcript carries the weight.
+    ///
+    /// A recording's title IS its transcript's lead line — the publication lane
+    /// writes it there — so a card that drew the name above the words said the
+    /// same sentence twice. The face suppresses the heading in exactly that
+    /// case and the words become the card; with no words the name stands on its
+    /// own, which is all an undecoded clip can honestly offer.
     @ViewBuilder
-    private func caption(lineLimit: Int) -> some View {
+    private var faceText: some View {
+        if let heading = face.heading {
+            Text(verbatim: heading)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppColors.textPrimary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let excerpt = face.excerpt {
+                Text(verbatim: excerpt)
+                    .font(.caption)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if let excerpt = face.excerpt {
+            Text(verbatim: excerpt)
+                .font(.subheadline)
+                .foregroundStyle(AppColors.textPrimary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Why a tap produced no audio. It is drawn BESIDE the words rather than
+    /// instead of them: a refusal is about the transport, and losing the
+    /// transcript to explain it would take away the only thing on the card
+    /// that says which recording this is.
+    @ViewBuilder
+    private var transportStatus: some View {
         if player.phase == .failed {
             Text(LocalizedStringResource(
                 "workboard.audio.failed",
@@ -1077,18 +1128,38 @@ struct WorkboardAudioCardView: View {
                 .foregroundStyle(AppColors.textTertiary)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        } else if let transcript, !transcript.isEmpty {
-            Text(verbatim: transcript)
-                .font(.caption)
-                .foregroundStyle(AppColors.textSecondary)
-                .multilineTextAlignment(.leading)
-                .lineLimit(lineLimit)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private var transcript: String? {
-        material.textContent?.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// One card, one face, shared with the mosaic tile, the list row and the
+    /// spoken label.
+    private var face: WorkboardCardFace {
+        WorkboardCardFacePolicy.face(for: material)
+    }
+
+    /// The play/pause affordance. Not a control of its own — the card is the
+    /// button — so it is drawn in the transport's `tile` activation, which
+    /// carries no accessibility and lets the card's own label state the phase.
+    private func transport(dimension: CGFloat) -> some View {
+        WorkboardAudioTransport(
+            materialID: material.id,
+            player: player,
+            availability: material.availability,
+            activation: .tile,
+            dimension: dimension,
+            loadPayload: loadPayload
+        )
+    }
+
+    /// The same track the companion band draws, which is why it is not stated
+    /// here: a card and a band showing one recording must agree about how far
+    /// through it is.
+    private var progressBar: some View {
+        WorkboardAudioProgressTrack(player: player)
+    }
+
+    private var clockText: String {
+        WorkboardAudioTransport.clockText(elapsed: player.elapsed, duration: player.duration)
     }
 
     /// Why a tap produced no audio when the recording itself is fine.
@@ -1099,13 +1170,18 @@ struct WorkboardAudioCardView: View {
         )
     }
 
+    /// The demoted row. A recording's length is deliberately absent: nothing
+    /// on the record measures it, and the clock the transport shows exists only
+    /// once a clip has actually been decoded.
     private var cardFooter: some View {
         HStack(spacing: 6) {
-            if let byteCount = material.byteCount {
-                Text(ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file))
+            if let meta = face.meta {
+                Text(verbatim: meta)
             }
             Spacer(minLength: 5)
-            Text(material.createdAt, format: .relative(presentation: .named))
+            if face.showsAge {
+                Text(material.createdAt, format: .relative(presentation: .named))
+            }
         }
         .font(.caption2)
         .foregroundStyle(AppColors.textTertiary)
@@ -1134,12 +1210,12 @@ struct WorkboardAudioCardView: View {
 
     private func chipContent(_ chip: WorkboardAudioCardChip) -> some View {
         HStack(spacing: 3) {
-            Image(systemName: chipGlyphName(chip))
-            Text(chipLabel(chip))
+            Image(systemName: chip.glyphName)
+            Text(chip.label)
                 .lineLimit(1)
         }
         .font(.caption2)
-        .foregroundStyle(chipTint(chip))
+        .foregroundStyle(chip.tint)
         // The card's own label carries the availability; a second reading of
         // the chip would repeat it. The reattach ACTION stays reachable as a
         // custom action on the card, which a nested control inside an
@@ -1152,47 +1228,6 @@ struct WorkboardAudioCardView: View {
             for: material.availability,
             hasReattachAction: onReattach != nil
         )
-    }
-
-    private func chipGlyphName(_ chip: WorkboardAudioCardChip) -> String {
-        switch chip {
-        case .localOnly: return "internaldrive"
-        case .syncPending: return "icloud.and.arrow.down"
-        case .reattach, .notOnThisDevice: return "paperclip.badge.ellipsis"
-        }
-    }
-
-    private func chipTint(_ chip: WorkboardAudioCardChip) -> Color {
-        switch chip {
-        case .localOnly: return AppColors.brandTeal
-        case .syncPending: return AppColors.textTertiary
-        case .reattach, .notOnThisDevice: return AppColors.warning
-        }
-    }
-
-    private func chipLabel(_ chip: WorkboardAudioCardChip) -> LocalizedStringResource {
-        switch chip {
-        case .localOnly:
-            return LocalizedStringResource(
-                "workboard.material.localOnly",
-                defaultValue: "Available on this device"
-            )
-        case .syncPending:
-            return LocalizedStringResource(
-                "workboard.material.syncPending",
-                defaultValue: "Waiting for iCloud…"
-            )
-        case .reattach:
-            return LocalizedStringResource(
-                "workboard.material.reattach.short",
-                defaultValue: "Reattach"
-            )
-        case .notOnThisDevice:
-            return LocalizedStringResource(
-                "workboard.audio.unavailableHere",
-                defaultValue: "Not on this device"
-            )
-        }
     }
 
     /// Bytes that are not readable on this device cannot be played on it. The
@@ -1276,18 +1311,6 @@ struct WorkboardAudioCardView: View {
                 )
             }
         }
-        if let onSetSize {
-            Divider()
-            Picker(
-                LocalizedStringResource("workboard.material.card.size", defaultValue: "Card Size"),
-                selection: Binding(get: { size }, set: { onSetSize($0) })
-            ) {
-                ForEach(WorkMaterialCardSize.allCases, id: \.self) { option in
-                    Text(option.cardSizeTitle).tag(option)
-                }
-            }
-            .pickerStyle(.inline)
-        }
         if onMoveEarlier != nil || onMoveLater != nil {
             Divider()
             if let onMoveEarlier {
@@ -1360,13 +1383,6 @@ struct WorkboardAudioCardView: View {
                 action: onMoveLater
             )
         }
-        if let onSetSize {
-            ForEach(WorkMaterialCardSize.allCases.filter { $0 != size }, id: \.self) { option in
-                Button(option.cardSizeAccessibilityAction) {
-                    onSetSize(option)
-                }
-            }
-        }
         if let onRemove {
             Button(
                 LocalizedStringResource(
@@ -1403,14 +1419,14 @@ struct WorkboardAudioCardView: View {
     private var accessibilityLabel: Text {
         // The kind's own copy, never a second name for the same thing: the
         // enum owns what a voice note is called everywhere else on the board.
-        var parts = [String(localized: material.kind.title), material.name]
+        // Everything after it is the FACE the tile draws, said once — a name
+        // that repeats the transcript is suppressed there, so it can no longer
+        // be spoken and then spoken again.
+        var parts = [String(localized: material.kind.title)]
         if isPlayable {
             parts.append(String(localized: transportActionTitle))
         }
-        if let transcript, !transcript.isEmpty {
-            parts.append(transcript)
-        }
-        parts.append(String(localized: size.cardSizeTitle))
+        parts.append(contentsOf: face.spokenParts)
         if boardCount > 0, boardPosition > 0 {
             parts.append(Self.boardPositionLabel(position: boardPosition, count: boardCount))
         }
@@ -1420,7 +1436,7 @@ struct WorkboardAudioCardView: View {
     private var accessibilityValue: Text {
         var parts: [String] = []
         if let chip = availabilityChipKind {
-            parts.append(String(localized: chipLabel(chip)))
+            parts.append(String(localized: chip.label))
         }
         switch player.phase {
         case .loading:

@@ -31,6 +31,35 @@ enum WorkboardCardAction: Hashable, Sendable {
     case reattach
 }
 
+/// Why a card offers no primary action, in the words a card face can draw.
+///
+/// A CLICK IS NEVER SILENT. `primaryAction` is nil for exactly one state, and a
+/// tile that answers a tap with nothing is indistinguishable from a broken one.
+/// The refusal already exists in VoiceOver; this is the same sentence for
+/// everybody else, and it is a value rather than a string inside a view so the
+/// card, the list row and the tests all say it once.
+///
+/// It names only what OPENING is waiting for. Arranging, resizing and removing
+/// a waiting card are not blocked and never were — a surface that dimmed the
+/// whole card on this value would take away three verbs the person still has.
+enum WorkboardCardBlockedReason: Hashable, Sendable {
+    /// The bytes ride the person's own private CloudKit and have not landed on
+    /// this device yet. Nothing to repair — it resolves by waiting.
+    case waitingForICloud
+
+    /// What a card face draws. The same row the availability glyph already
+    /// speaks, so the visible sentence and the spoken one cannot drift.
+    var label: LocalizedStringResource {
+        switch self {
+        case .waitingForICloud:
+            return LocalizedStringResource(
+                "workboard.material.syncPending",
+                defaultValue: "Waiting for iCloud…"
+            )
+        }
+    }
+}
+
 enum WorkboardCardActionPolicy {
     /// Everything this availability state permits.
     ///
@@ -72,6 +101,26 @@ enum WorkboardCardActionPolicy {
         if permitted.contains(.open) { return .open }
         if permitted.contains(.reattach) { return .reattach }
         return nil
+    }
+
+    /// Why a tap on this card does nothing, or nil when it does something.
+    ///
+    /// Derived from `primaryAction` rather than from a second switch on
+    /// availability: the card that draws this and the tap funnel that refuses
+    /// it are then answering from one rule, so a state can never be silent in
+    /// the funnel while looking actionable on the tile.
+    static func blockedReason(
+        for availability: WorkboardMaterialAvailability
+    ) -> WorkboardCardBlockedReason? {
+        guard primaryAction(for: availability) == nil else { return nil }
+        switch availability {
+        case .syncPending:
+            return .waitingForICloud
+        case .available, .localOnly, .unavailableOnThisDevice:
+            // Unreachable while those three states permit a primary action; the
+            // switch is exhaustive so a state added later has to decide here.
+            return nil
+        }
     }
 
     /// Performs that one thing. The desk canvas and its tests drive THIS, so the

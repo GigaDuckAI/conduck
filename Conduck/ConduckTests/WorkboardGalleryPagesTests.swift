@@ -172,6 +172,82 @@ final class WorkboardGalleryPagesTests: XCTestCase {
         )
     }
 
+    // MARK: - The recording folded into a page
+
+    private func recording(
+        _ name: String,
+        availability: WorkboardMaterialAvailability = .available,
+        transcript: String? = nil,
+        attachedTo picture: UUID
+    ) -> WorkboardCompanionSnapshot {
+        WorkboardCompanionSnapshot(WorkboardMaterialSnapshot(
+            kind: .audio,
+            name: name,
+            textContent: transcript,
+            mimeType: "audio/mp4",
+            availability: availability,
+            attachedToMaterialID: picture
+        ))
+    }
+
+    /// A folded card opens as ONE sheet, so the recording has to travel with
+    /// the page rather than being left on the desk behind it. Keyed by the
+    /// PICTURE's id, which is what the gallery's cursor names.
+    func testAFoldedPicturesRecordingTravelsWithItsPage() {
+        let plain = image("Photo 1")
+        var folded = image("Screenshot")
+        folded.companion = recording("Voice note", transcript: "check the lease", attachedTo: folded.id)
+
+        let selection = PersonalWorkbenchRouter.gallerySelection(
+            desk: [plain, folded],
+            tapped: plain
+        )
+
+        XCTAssertEqual(selection.pages.map(\.id), [plain.id, folded.id])
+        XCTAssertEqual(
+            selection.companion(forPage: folded.id)?.name,
+            "Voice note",
+            "the page the cursor lands on answers with its own recording"
+        )
+        XCTAssertNil(
+            selection.companion(forPage: plain.id),
+            "a picture nothing was recorded with carries no transport"
+        )
+        XCTAssertNil(selection.companion(forPage: nil))
+    }
+
+    /// The recording's readability is not the picture's. A picture whose bytes
+    /// are here can be folded with a recording whose bytes are still arriving,
+    /// and the band that says so is better than one that vanishes.
+    func testARecordingWhoseBytesAreNotHereStillTravelsWithItsPicture() {
+        var folded = image("Screenshot")
+        folded.companion = recording("Voice note", availability: .syncPending, attachedTo: folded.id)
+
+        let selection = PersonalWorkbenchRouter.gallerySelection(desk: [folded], tapped: folded)
+
+        XCTAssertEqual(selection.companion(forPage: folded.id)?.availability, .syncPending)
+        XCTAssertFalse(
+            WorkboardCardActionPolicy.allows(.play, when: .syncPending),
+            "and the band asks the recording's own state for permission to play"
+        )
+    }
+
+    /// The map is built from the pages that ACTUALLY open, so the lone-card
+    /// fallback keeps its recording: a board that reloaded underneath the
+    /// gesture must not open the picture stripped of half of what it is.
+    func testTheLoneCardFallbackKeepsItsRecording() {
+        var folded = image("Screenshot")
+        folded.companion = recording("Voice note", attachedTo: folded.id)
+
+        let selection = PersonalWorkbenchRouter.gallerySelection(
+            desk: (1...3).map { image("Photo \($0)") },
+            tapped: folded
+        )
+
+        XCTAssertEqual(selection.pages.map(\.id), [folded.id])
+        XCTAssertEqual(selection.companion(forPage: folded.id)?.name, "Voice note")
+    }
+
     // MARK: - What one page carries
 
     /// The label VoiceOver speaks is the card's own name — the words the person
@@ -186,5 +262,10 @@ final class WorkboardGalleryPagesTests: XCTestCase {
         XCTAssertEqual(page.id, card.id, "the id is the key the loader resolves the original with")
         XCTAssertEqual(page.thumbnailData, thumbnail)
         XCTAssertEqual(page.accessibilityLabel, "Kitchen sketch")
+        XCTAssertEqual(
+            page.title,
+            "Kitchen sketch",
+            "the header names the card exactly as the desk does"
+        )
     }
 }
