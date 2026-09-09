@@ -976,6 +976,7 @@ struct ContentView: View {
                 .padding(.horizontal, 32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .dismissesKeyboardOnEmptySpaceInteraction()
     }
 
     private var backgroundGradient: some View {
