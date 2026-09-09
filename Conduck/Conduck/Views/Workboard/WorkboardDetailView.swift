@@ -58,7 +58,7 @@ struct WorkboardDetailView: View {
             .frame(maxWidth: WorkboardMetrics.contentMaxWidth)
             .frame(maxWidth: .infinity)
         }
-        .scrollDismissesKeyboard(.interactively)
+        .dismissesKeyboardOnScrollOrTap()
         .safeAreaInset(edge: .bottom, spacing: 0) {
             WorkboardCaptureCanvas(
                 viewModel: viewModel,

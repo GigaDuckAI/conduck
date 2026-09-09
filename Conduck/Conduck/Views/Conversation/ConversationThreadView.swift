@@ -571,7 +571,7 @@ struct ConversationThreadView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
             }
             .scrollContentBackground(.hidden)
-            .scrollDismissesKeyboard(.interactively)
+            .dismissesKeyboardOnScrollOrTap()
             .onChange(of: viewModel.messages.count) { _, newCount in
                 handleMessageCountChange(newCount, proxy: proxy)
             }
