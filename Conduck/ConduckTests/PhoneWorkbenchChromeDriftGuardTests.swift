@@ -2,34 +2,11 @@
 // Conduck
 // PhoneWorkbenchChromeDriftGuardTests.swift
 //
-// SOURCE DRIFT GUARD over the iPhone chat bar in `ContentView.phoneLayout`:
-// the leading Conversations button and the trailing New conversation button.
-//
-// The leading button carries a `sidebar.leading` glyph for family resemblance
-// with the system sidebar toggle the iPad split view and the macOS window both
-// pin leading-most — one app, one leading affordance across three shells. It is
-// a RESEMBLANCE and not the same control: the phone has no second column, so
-// this button presents the conversation list as a sheet. That gap between what
-// the glyph looks like and what the button does is exactly what a later edit
-// gets wrong, and each of the four facts it can get wrong is silent:
-//
-//   • the SHEET ACTION (`showingList = true`) — swap it for a sidebar toggle
-//     the phone does not have and the button compiles and does nothing.
-//   • the SPOKEN IDENTITY (`.accessibilityLabel("Conversations")`) — a label
-//     renamed after the glyph announces "sidebar" for a control that opens a
-//     list, which is the one description VoiceOver users get.
-//   • the QA TARGET (`.accessibilityIdentifier("toolbar.conversations")`) —
-//     non-localized on purpose; renaming it silently unhooks every UI probe
-//     that reaches this button.
-//   • PLACEMENT — Conversations leading, New conversation trailing. The two
-//     swap without a compiler complaint.
-//
-// Asserting a glyph or an identifier anywhere in a 1,500-line file proves none
-// of this: what matters is that ONE button in the leading slot combines all
-// four. So every assertion is scoped to the single `ToolbarItem` it is about,
-// over the file's text with comments stripped (`RefusalLaneSource`). A guard
-// that fails because the chrome legitimately changed is a guard to update, not
-// a bug to route around.
+// Source guards for the compact conversation bar. Conversations still opens a
+// sheet and New Chat still starts a fresh conversation, with stable spoken and
+// QA identities. Only iPhone moves New Chat beside Conversations; compact iPad
+// keeps it trailing. The phone section trigger is the last content sibling so
+// a populated thread's Copy action cannot push it away from the right edge.
 
 import XCTest
 
@@ -39,6 +16,17 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
 
     private func occurrences(of needle: String, in haystack: String) -> Int {
         haystack.components(separatedBy: needle).count - 1
+    }
+
+    private func topLevel(of closure: String) -> String {
+        var result = ""
+        var depth = 0
+        for character in closure {
+            if character == "{" { depth += 1; continue }
+            if character == "}" { depth = max(0, depth - 1); continue }
+            if depth == 0 { result.append(character) }
+        }
+        return result
     }
 
     /// The phone bar's toolbar closure — the one bar the compact shell declares.
@@ -68,9 +56,7 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
 
         XCTAssertEqual(
             occurrences(of: "ToolbarItem(placement: .topBarLeading)", in: toolbar), 1,
-            "The phone bar declares a number of `.topBarLeading` items other than one. Conversations "
-            + "is the phone's single leading affordance; a second item beside it is a leading edge "
-            + "that no longer reads as the iPad's and the Mac's."
+            "Conversations must keep its unconditional leading slot; New Chat chooses its slot by platform."
         )
 
         let leading = try RefusalLaneSource.trailingClosure(
@@ -92,7 +78,9 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
             path: Self.path
         )
         XCTAssertEqual(
-            action.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t}")), "showingList = true",
+            action.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t}"))
+                .split(whereSeparator: \.isWhitespace).joined(separator: " "),
+            "phoneWorkbenchRouter?.dismissPhoneSection(for: .chats) showingList = true",
             "The Conversations button no longer presents the conversation list. The phone has no "
             + "second column to reveal, so the sheet IS the destination — a button that toggles "
             + "anything else here compiles and leaves the user with no way to reach their threads."
@@ -124,43 +112,44 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
         )
     }
 
-    /// New conversation stays the phone bar's one trailing action.
-    func testNewConversationRemainsTrailing() throws {
+    /// New Chat joins Conversations only when the phone navigation is present.
+    func testNewConversationMovesLeadingOnlyOnPhoneAndRetainsItsAction() throws {
         let toolbar = try phoneToolbar()
 
+        let placement = "ToolbarItem(placement: phoneWorkbenchRouter == nil ? .topBarTrailing : .topBarLeading)"
         XCTAssertEqual(
-            occurrences(of: "ToolbarItem(placement: .topBarTrailing)", in: toolbar), 1,
-            "The phone bar declares a number of `.topBarTrailing` items other than one. Settings "
-            + "lives in the conversation-list footer and Clone is folded into the centered gateway "
-            + "title, so New conversation is the trailing edge's sole action."
+            occurrences(of: placement, in: toolbar), 1,
+            "New Chat must be leading on iPhone and retain its trailing slot on compact iPad."
         )
 
-        let trailing = try RefusalLaneSource.trailingClosure(
-            after: "ToolbarItem(placement: .topBarTrailing)",
+        let newChat = try RefusalLaneSource.trailingClosure(
+            after: placement,
             in: toolbar,
             path: Self.path
         )
 
         XCTAssertEqual(
-            occurrences(of: "Button", in: trailing), 1,
-            "The trailing toolbar item no longer holds exactly one `Button`, so its action, glyph "
+            occurrences(of: "Button", in: newChat), 1,
+            "The New Chat toolbar item no longer holds exactly one `Button`, so its action, glyph "
             + "and names can no longer be read as belonging to one control."
         )
 
         let action = try RefusalLaneSource.trailingClosure(
             after: "Button",
-            in: trailing,
+            in: newChat,
             path: Self.path
         )
         XCTAssertEqual(
-            action.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t}")), "startNewConversation()",
-            "The trailing button no longer calls `startNewConversation()`. That call is the phone's "
+            action.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t}"))
+                .split(whereSeparator: \.isWhitespace).joined(separator: " "),
+            "phoneWorkbenchRouter?.dismissPhoneSection(for: .chats) startNewConversation()",
+            "The New Chat button no longer calls `startNewConversation()`. That call is the phone's "
             + "whole compose path — it clears the selection so the next turn mints a fresh thread."
         )
 
         let label = try RefusalLaneSource.trailingClosure(
             after: "} label:",
-            in: trailing,
+            in: newChat,
             path: Self.path
         )
         XCTAssertTrue(
@@ -170,14 +159,69 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
         )
 
         XCTAssertTrue(
-            trailing.contains(".accessibilityLabel(\"New conversation\")"),
-            "The New conversation button's spoken name changed, so the one action on the phone's "
-            + "trailing edge announces itself as something else."
+            newChat.contains(".accessibilityLabel(\"New conversation\")"),
+            "The New conversation button must retain its spoken identity after changing placement."
         )
         XCTAssertTrue(
-            trailing.contains(".accessibilityIdentifier(\"toolbar.newConversation\")"),
+            newChat.contains(".accessibilityIdentifier(\"toolbar.newConversation\")"),
             "The New conversation button lost its `toolbar.newConversation` identifier — the "
             + "non-localized handle every UI probe uses to start a thread on the phone."
         )
+    }
+
+    func testPhoneSectionHostIsLastAndOnlyContributesToActiveChats() throws {
+        let source = try RefusalLaneSource.source(at: Self.path)
+        let phone = try RefusalLaneSource.trailingClosure(
+            after: "private var phoneLayout: some View", in: source, path: Self.path
+        )
+        let navigation = try RefusalLaneSource.trailingClosure(
+            after: "NavigationStack", in: phone, path: Self.path
+        )
+        let stack = try RefusalLaneSource.trailingClosure(
+            after: "ZStack", in: navigation, path: Self.path
+        )
+        XCTAssertEqual(occurrences(of: "phoneSectionControlHost", in: stack), 1)
+        let siblings = topLevel(of: stack)
+        XCTAssertEqual(
+            occurrences(of: "phoneSectionControlHost", in: siblings), 1,
+            "The phone section host must be a direct sibling, after the subtree containing the thread."
+        )
+        let hostRange = try XCTUnwrap(stack.range(of: "phoneSectionControlHost"))
+        let threadRange = try XCTUnwrap(stack.range(of: "threadContent"))
+        XCTAssertLessThan(threadRange.lowerBound, hostRange.lowerBound)
+        XCTAssertEqual(
+            stack[hostRange.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " \n\t}")),
+            "#endif",
+            "The section host must be the final sibling after the thread's conditional Copy toolbar item."
+        )
+
+        let host = try RefusalLaneSource.trailingClosure(
+            after: "private var phoneSectionControlHost: some View", in: source, path: Self.path
+        )
+        let active = try RefusalLaneSource.trailingClosure(
+            after: "if let router = phoneWorkbenchRouter, router.destination == .chats",
+            in: host, path: Self.path
+        )
+        XCTAssertEqual(occurrences(of: "PhoneWorkbenchSectionButton(", in: host), 1)
+        XCTAssertTrue(active.contains("ToolbarItem(placement: .primaryAction)"))
+        XCTAssertTrue(active.contains("PhoneWorkbenchSectionButton(router: router, destination: .chats)"))
+        XCTAssertTrue(
+            navigation.contains("PhoneWorkbenchSectionOverlay(router: router, destination: .chats)"),
+            "The button must have a dropdown in the conversation root, including above the composer."
+        )
+    }
+
+    func testCopyConversationDismissesThePhoneMenuBeforeCopying() throws {
+        let path = "Conduck/Views/Conversation/ConversationThreadView.swift"
+        let source = try RefusalLaneSource.source(at: path)
+        let action = try RefusalLaneSource.trailingClosure(
+            after: "private func copyAllTapped()", in: source, path: path
+        )
+        let dismissal = "phoneWorkbenchRouter?.dismissPhoneSection(for: .chats)"
+        let dismissalAt = try XCTUnwrap(action.range(of: dismissal)?.lowerBound)
+        let copyAt = try XCTUnwrap(action.range(of: "viewModel.copyEntireConversation()")?.lowerBound)
+        XCTAssertLessThan(dismissalAt, copyAt, "Copy is outside the dropdown and must close it before acting.")
+        let conditions = try XCTUnwrap(WorkboardSourceDirectives.enclosingConditions(of: dismissal, in: action))
+        XCTAssertEqual(WorkboardSourceDirectives.ownership(of: conditions), .exclusive(.iOS))
     }
 }

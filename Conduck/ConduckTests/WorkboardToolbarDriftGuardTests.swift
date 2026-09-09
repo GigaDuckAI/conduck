@@ -10,12 +10,11 @@
 // navigation container, so an item declared above one reaches no bar at all —
 // the exact shape that left the section control invisible and Work a one-way
 // trip on iPad. (2) Declaration order is left-to-right order within one
-// placement: the view menu first, the section control last, so Work's trailing
-// edge reads the way the Mac window's does. (3) The section item alone is gated
-// on the router; the view menu is NOT. The phone injects no router, so a menu
-// that drifted inside that gate would leave iPhone's Work with no Tiles / List
-// choice at all — the picker left the scrolling band, and the bar is now the
-// only place it lives.
+// placement: the view menu first, the section control last. On iPhone the view
+// menu moves leading and its expandable section control stays trailing; iPad
+// keeps its existing menu and wide section control. (3) Each section item is
+// gated by its own router; the view menu is not. Compact iPad has neither router
+// and still needs Tiles / List in the bar, the only place that choice lives.
 //
 // The whole bar is `#if os(iOS)`: the Mac's bar belongs to the window shell,
 // which builds its own, so a Work-owned bar compiled there is a second bar.
@@ -121,11 +120,11 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
             path: Self.path
         )
 
-        XCTAssertEqual(
-            occurrences(of: "ToolbarItem(placement: .primaryAction)", in: active), 1,
-            "Work's bar declares a number of primary-action items other than one. The view menu is "
-            + "the only one it owns; the section control brings its own `ToolbarContent`."
+        let menuPlacement = "ToolbarItem(placement: phoneWorkbenchRouter == nil ? .primaryAction : .topBarLeading)"
+        let menu = try RefusalLaneSource.trailingClosure(
+            after: menuPlacement, in: active, path: Self.path
         )
+        XCTAssertTrue(menu.contains("WorkboardLayoutMenu(viewModel: viewModel, isActive: isActive)"))
         let menuAt = try XCTUnwrap(
             active.range(of: "WorkboardLayoutMenu(")?.lowerBound,
             "Work's bar no longer holds the Tiles / List menu. The in-band picker is macOS-only, so "
@@ -161,25 +160,24 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
         )
         XCTAssertEqual(
             occurrences(of: "WorkbenchSectionToolbarItem(", in: gated), 1,
-            "The router gate no longer protects exactly one section control. Presence of the router "
-            + "is the whole contract for whether this bar carries a section switch, so a control "
-            + "outside the gate ships one on the phone, whose tab bar is already the section switch."
+            "The wide router must protect exactly one wide control; exposing it on iPhone "
+            + "would duplicate the expandable section control."
         )
         XCTAssertFalse(
             gated.contains("WorkboardLayoutMenu("),
-            "The view menu moved inside the router gate. The compact iPhone shell injects no router — "
-            + "its tab bar is the section switch — so a gated menu leaves the phone's Work bar with no "
-            + "Tiles / List choice, and the picker no longer sits in the scrolling band either."
+            "The view menu must remain available without the wide router, including compact iPad."
         )
 
-        for placement in [".topBarLeading", ".navigationBarLeading", ".cancellationAction"] {
-            XCTAssertFalse(
-                active.contains(placement),
-                "Work's bar declares a leading item (`\(placement)`). Work's leading edge stays empty "
-                + "on iOS: the shell owns section switching, and a leading affordance here would read "
-                + "as a second, competing one."
-            )
-        }
+        let phone = try RefusalLaneSource.trailingClosure(
+            after: "if let router = phoneWorkbenchRouter", in: active, path: Self.path
+        )
+        XCTAssertEqual(occurrences(of: "PhoneWorkbenchSectionButton(", in: active), 1)
+        XCTAssertTrue(phone.contains("ToolbarItem(placement: .primaryAction)"))
+        XCTAssertTrue(phone.contains("PhoneWorkbenchSectionButton(router: router, destination: .work)"))
+        XCTAssertFalse(phone.contains("WorkboardLayoutMenu("))
+        XCTAssertTrue(stack.contains("PhoneWorkbenchSectionOverlay(router: router, destination: .work)"))
+        let phoneControlAt = try XCTUnwrap(active.range(of: "PhoneWorkbenchSectionButton(")?.lowerBound)
+        XCTAssertLessThan(menuAt, phoneControlAt)
     }
 
     /// NEGATIVE CONTROL over the platform reader both this class and

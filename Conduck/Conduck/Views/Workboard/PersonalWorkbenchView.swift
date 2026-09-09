@@ -22,7 +22,7 @@ import SwiftUI
 import QuickLook
 import UniformTypeIdentifiers
 #if canImport(UIKit)
-// For `UITabBar.appearance()`: the phone tab bar's brand colour is installed on
+// For `UITabBar.appearance()`: the native tab bar's brand colour is installed on
 // the UIKit proxy rather than written as a SwiftUI tint. See
 // `WorkbenchTabBarTint`.
 import UIKit
@@ -32,9 +32,9 @@ import UIKit
 /// The macOS window shell reads it so both modes inhabit one persistent
 /// NavigationSplitView; the wide iOS shell injects it into BOTH of its mounted
 /// layers, and each layer's own navigation container is what declares the
-/// section control. Presence is the whole contract: the compact iPhone shell
-/// injects nothing, so a host that finds no model draws no control and the tab
-/// bar stays the only section switch. The optional default also keeps
+/// wide section control. Compact layouts omit this model; iPhone supplies its
+/// own `phoneWorkbenchRouter` for the expandable section control, while compact
+/// iPad uses the native tab bar. The optional default also keeps
 /// MainWindowView usable in isolated previews and tests.
 private struct PersonalWorkbenchModelKey: EnvironmentKey {
     static let defaultValue: PersonalWorkbenchModel? = nil
@@ -438,10 +438,14 @@ final class PersonalWorkbenchRouter {
 
     // Preserve Conduck's existing launch behavior. Chat owns OnLaunchMode and
     // must be mounted first so voice/text launch choices remain immediately
-    // visible; Workboard is still one top-level tap away.
+    // visible; the section control routes through this same destination.
     var destination: Destination = .chats {
         didSet {
-            guard destination != oldValue, destination != .work else { return }
+            guard destination != oldValue else { return }
+            #if os(iOS)
+            dismissPhoneSection()
+            #endif
+            guard destination != .work else { return }
             // A Work preview is transient presentation, not workspace state.
             // Switching to Chats cancels an in-flight load and removes any
             // disposable preview copy so it cannot surface over the other app
@@ -453,6 +457,38 @@ final class PersonalWorkbenchRouter {
             if previewNotice != nil { previewNotice = nil }
         }
     }
+
+    #if os(iOS)
+    /// Expansion belongs to the section that opened it. A deep link or a stale
+    /// button from the departing tab cannot reopen or select on its behalf.
+    private(set) var expandedPhoneSection: Destination?
+
+    func isPhoneSectionExpanded(for owner: Destination) -> Bool {
+        expandedPhoneSection == owner && destination == owner
+    }
+
+    func togglePhoneSection(for owner: Destination) {
+        guard destination == owner else { return }
+        expandedPhoneSection = isPhoneSectionExpanded(for: owner) ? nil : owner
+    }
+
+    func dismissPhoneSection() {
+        expandedPhoneSection = nil
+    }
+
+    /// A departing tab may finish disappearing after the next one is active.
+    /// Its cleanup can close only its own expansion, never the next tab's.
+    func dismissPhoneSection(for owner: Destination) {
+        guard expandedPhoneSection == owner else { return }
+        dismissPhoneSection()
+    }
+
+    func selectPhoneSection(_ selection: Destination) {
+        guard isPhoneSectionExpanded(for: destination) else { return }
+        dismissPhoneSection()
+        destination = selection
+    }
+    #endif
     var materialPresentation: MaterialPresentation?
     var previewNotice: PreviewNotice?
 
@@ -989,7 +1025,8 @@ final class PersonalWorkbenchModel {
 }
 
 #if !os(macOS)
-/// The phone's tab bar wears the brand amber, and nothing else in the app does.
+/// The native tab bar uses brand amber without tinting the content it hosts.
+/// Compact iPad displays this bar; iPhone hides it in favor of its own chooser.
 ///
 /// The colour goes on the UIKit tab-bar appearance rather than on a SwiftUI
 /// `.tint(AppColors.brandAmber)` written on the `TabView`, because that tint
@@ -999,7 +1036,7 @@ final class PersonalWorkbenchModel {
 /// through it, so ambient-tint controls inside the tabs turn amber as well —
 /// `PendingRetryCard`'s `.borderedProminent` Retry button, which names no tint
 /// of its own, and the composer's own text selection. The same controls render
-/// in the system accent on iPad, which builds no `TabView`, and inside a
+/// in the system accent on wide iPad, which builds no `TabView`, and inside a
 /// presented sheet, which sits outside the bar's view tree. Measured on iOS
 /// 26.5 by classifying the composer's selection highlight: amber under the
 /// SwiftUI tint, system blue here. Writing the environment tint back to the
@@ -1103,6 +1140,9 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 reconcileDurableWorkStorage()
             }
             .onChange(of: scenePhase) { _, phase in
+                #if os(iOS)
+                if phase != .active { model.router.dismissPhoneSection() }
+                #endif
                 if phase == ScenePhase.active {
                     model.scheduleRefresh(includeCaptureDrain: true)
                     reconcileDurableWorkStorage()
@@ -1260,7 +1300,9 @@ struct PersonalWorkbenchView<Chats: View>: View {
         // hands that geometry the two-layer wide shell while ContentView keeps
         // it on `phoneLayout` — one device, two shells disagreeing about which
         // chrome exists. Gating on the iPad idiom keeps every phone geometry,
-        // portrait and landscape, on the tab bar.
+        // portrait and landscape, on the same tab lifecycle. Only its visible
+        // chrome changes: iPhone routes from a compact top-right control while
+        // compact iPad retains its native bottom bar.
         if horizontalSizeClass == .regular && DeviceCapabilities.isiPad {
             mountedWideDestinations
         } else {
@@ -1282,6 +1324,8 @@ struct PersonalWorkbenchView<Chats: View>: View {
                             \.workbenchDestinationIsActive,
                             model.router.destination == .chats
                         )
+                        .environment(\.phoneWorkbenchRouter, DeviceCapabilities.isiPad ? nil : model.router)
+                        .toolbar(DeviceCapabilities.isiPad ? .visible : .hidden, for: .tabBar)
                 }
 
                 Tab(
@@ -1294,6 +1338,8 @@ struct PersonalWorkbenchView<Chats: View>: View {
                             \.workbenchDestinationIsActive,
                             model.router.destination == .work
                         )
+                        .environment(\.phoneWorkbenchRouter, DeviceCapabilities.isiPad ? nil : model.router)
+                        .toolbar(DeviceCapabilities.isiPad ? .visible : .hidden, for: .tabBar)
                 }
             }
         }
@@ -1324,9 +1370,8 @@ struct PersonalWorkbenchView<Chats: View>: View {
         // HOSTS instead, each inside its own container — `ConversationLibraryView`'s
         // detail column for Chats, `WorkboardExperience`'s stack for Work — and
         // this shell's whole job is handing them the router. Presence is the
-        // flag: the compact iPhone shell injects nothing, a host that finds no
-        // model draws no control, and that is what keeps the control off the
-        // phone without a single platform check in either host.
+        // flag for the wide control. The compact shell uses a separate phone
+        // router, so the wide control never appears alongside the phone one.
         ZStack {
             WorkboardView(viewModel: model.workboardViewModel)
                 .environment(

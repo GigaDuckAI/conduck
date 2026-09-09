@@ -77,6 +77,9 @@ struct ConversationThreadView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
+    #if os(iOS)
+    @Environment(\.phoneWorkbenchRouter) private var phoneWorkbenchRouter
+    #endif
 
     /// A marker write this view owed and could not take, because the thread was
     /// not exposed at the moment the event that owed it arrived. Drives the
@@ -1481,6 +1484,9 @@ struct ConversationThreadView: View {
     }
 
     private func copyAllTapped() {
+        #if os(iOS)
+        phoneWorkbenchRouter?.dismissPhoneSection(for: .chats)
+        #endif
         viewModel.copyEntireConversation()
         withAnimation(.easeOut(duration: 0.15)) { didCopyAll = true }
         Task {
