@@ -592,6 +592,16 @@ enum WorkboardWorkspaceCaptureLogic {
 @Observable
 @MainActor
 final class WorkboardViewModel {
+    /// Kept beside the capture draft so macOS hiding Work cannot discard an
+    /// unfinished project editor or allow a second handoff owner on return.
+    @ObservationIgnored private var cachedDeskWorkspace: WorkDeskWorkspaceState?
+    var deskWorkspace: WorkDeskWorkspaceState {
+        if let cachedDeskWorkspace { return cachedDeskWorkspace }
+        let workspace = WorkDeskWorkspaceState()
+        cachedDeskWorkspace = workspace
+        return workspace
+    }
+
     /// No operation names an owner: Work is one desk at a compile-time id, so
     /// the adapter behind these closures addresses it and this model never
     /// carries a board identity it could get wrong.

@@ -11,6 +11,53 @@
 
 import SwiftUI
 
+/// A shell that supplies Work's project-navigation control sets this only on
+/// its Work layer. The in-pane header then avoids drawing a second toggle.
+private struct WorkDeskSidebarHostKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var workDeskSidebarIsHosted: Bool {
+        get { self[WorkDeskSidebarHostKey.self] }
+        set { self[WorkDeskSidebarHostKey.self] = newValue }
+    }
+}
+
+/// System-styled window toolbar control. Its observed workspace is the same
+/// persistent state the desk reads, so a toolbar closure never captures a stale
+/// visibility value. Compact windows open the project picker instead.
+struct WorkDeskSidebarToolbarButton: View {
+    @Bindable var workspace: WorkDeskWorkspaceState
+    let isActive: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var label: LocalizedStringResource {
+        if !workspace.presentsSidebarInline {
+            return LocalizedStringResource("workdesk.projects", defaultValue: "Projects")
+        }
+        return workspace.showsSidebar
+            ? LocalizedStringResource("workdesk.sidebar.hide", defaultValue: "Hide project sidebar")
+            : LocalizedStringResource("workdesk.sidebar.show", defaultValue: "Show project sidebar")
+    }
+
+    var body: some View {
+        Button {
+            guard isActive else { return }
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) {
+                workspace.toggleProjectNavigation()
+            }
+        } label: {
+            Image(systemName: "sidebar.leading")
+        }
+        // The native toolbar supplies its hit area, hover and glass style.
+        .disabled(!isActive)
+        .accessibilityLabel(Text(label))
+        .help(String(localized: label))
+        .accessibilityIdentifier("workdesk-sidebar-toggle")
+    }
+}
+
 struct WorkboardView: View {
     @Bindable var viewModel: WorkboardViewModel
 
@@ -49,6 +96,7 @@ struct WorkboardExperience: View {
         NavigationStack {
             detailColumn
                 #if os(iOS)
+                .environment(\.workDeskSidebarIsHosted, true)
                 .toolbar { workbenchToolbar }
                 .overlay {
                     if let router = phoneWorkbenchRouter {
@@ -68,9 +116,9 @@ struct WorkboardExperience: View {
     /// navigation container reaches no bar at all — which is why this belongs
     /// here rather than on whichever host mounts the surface.
     ///
-    /// The section control is always trailing-most. iPhone puts its view menu
-    /// on the leading edge to leave the expandable control its own space;
-    /// iPad keeps the view menu followed by the wide section control.
+    /// Project navigation leads on both iPhone and iPad; the section control
+    /// stays trailing-most. Layout selection belongs to the named workspace
+    /// header control, which describes the layout the current scope can show.
     ///
     /// No `ToolbarSpacer` between the two. A fixed spacer exists to break the
     /// ONE shared glass capsule the system wraps around adjacent items of a
@@ -84,8 +132,8 @@ struct WorkboardExperience: View {
     @ToolbarContentBuilder
     private var workbenchToolbar: some ToolbarContent {
         if isActive {
-            ToolbarItem(placement: phoneWorkbenchRouter == nil ? .primaryAction : .topBarLeading) {
-                WorkboardLayoutMenu(viewModel: viewModel, isActive: isActive)
+            ToolbarItem(placement: .topBarLeading) {
+                WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)
                     .simultaneousGesture(TapGesture().onEnded {
                         phoneWorkbenchRouter?.dismissPhoneSection(for: .work)
                     })
@@ -122,49 +170,6 @@ struct WorkboardExperience: View {
         )
     }
 }
-
-#if os(iOS)
-/// Work's view menu: the board's Tiles / List choice, held in the bar instead of
-/// in the scrolling band, so the cards start at the top of the pane and the
-/// choice stays reachable however far the board is scrolled. The Mac keeps its
-/// in-band picker — its window has the width for it.
-///
-/// The mode is read HERE, inside a view's body, and not inside the `.toolbar`
-/// closure that carries this item: a toolbar closure is not an Observation
-/// tracking scope, so a glyph read there would never follow the change the menu
-/// itself just made.
-private struct WorkboardLayoutMenu: View {
-    @Bindable var viewModel: WorkboardViewModel
-
-    let isActive: Bool
-
-    private static let label = LocalizedStringResource(
-        "workboard.layout.label",
-        defaultValue: "Board view"
-    )
-
-    var body: some View {
-        Menu {
-            Picker(selection: $viewModel.layoutMode) {
-                ForEach(WorkboardLayoutMode.allCases, id: \.self) { mode in
-                    Label(mode.title, systemImage: mode.symbol).tag(mode)
-                }
-            } label: {
-                Text(Self.label)
-            }
-            // Inline puts both options in the menu itself with a checkmark on
-            // the current one — the Files-style view menu — rather than behind
-            // one more level of submenu.
-            .pickerStyle(.inline)
-        } label: {
-            Image(systemName: viewModel.layoutMode.symbol)
-        }
-        .disabled(!isActive)
-        .accessibilityLabel(Text(Self.label))
-        .accessibilityIdentifier("workboard-layout")
-    }
-}
-#endif
 
 /// Work's durable presentation chain — the one-time tutorial, the capture toast
 /// and the notice alert. It rides the host's persistent shell rather than the

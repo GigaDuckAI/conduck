@@ -10,11 +10,11 @@
 // navigation container, so an item declared above one reaches no bar at all —
 // the exact shape that left the section control invisible and Work a one-way
 // trip on iPad. (2) Declaration order is left-to-right order within one
-// placement: the view menu first, the section control last. On iPhone the view
-// menu moves leading and its expandable section control stays trailing; iPad
-// keeps its existing menu and wide section control. (3) Each section item is
-// gated by its own router; the view menu is not. Compact iPad has neither router
-// and still needs Tiles / List in the bar, the only place that choice lives.
+// placement: project navigation leads, and the section control stays last.
+// Both iPhone and iPad share the same project-navigation button. (3) Each section
+// item is gated by its own router; project navigation is not. Compact iPad has
+// neither router and still needs access to the project picker. Layout selection
+// lives once in the named workspace header control, not in this native bar.
 //
 // The whole bar is `#if os(iOS)`: the Mac's bar belongs to the window shell,
 // which builds its own, so a Work-owned bar compiled there is a second bar.
@@ -53,9 +53,9 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
         return count
     }
 
-    /// Work's bar is owned by Work's own stack, is iOS-only, and reads menu
-    /// first, section control last — with only the control behind the router.
-    func testActiveIOSStackHostsMenuBeforeOptionalSectionControl() throws {
+    /// Work's iOS-only bar keeps project navigation leading and its optional
+    /// section control last, without borrowing the wide router for navigation.
+    func testActiveIOSStackHostsProjectNavigationBeforeOptionalSectionControl() throws {
         let source = try workSource()
         let experience = try RefusalLaneSource.trailingClosure(
             after: "struct WorkboardExperience: View",
@@ -100,7 +100,7 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
         )
         let declaration = try XCTUnwrap(
             WorkboardSourceDirectives.enclosingConditions(of: "private var workbenchToolbar", in: source),
-            "`workbenchToolbar` is gone. Work's view menu and its section control both live there."
+            "`workbenchToolbar` is gone. Work's project navigation and section control both live there."
         )
         XCTAssertEqual(
             WorkboardSourceDirectives.ownership(of: declaration), .exclusive(.iOS),
@@ -120,38 +120,25 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
             path: Self.path
         )
 
-        let menuPlacement = "ToolbarItem(placement: phoneWorkbenchRouter == nil ? .primaryAction : .topBarLeading)"
-        let menu = try RefusalLaneSource.trailingClosure(
-            after: menuPlacement, in: active, path: Self.path
+        let navigationPlacement = "ToolbarItem(placement: .topBarLeading)"
+        let navigation = try RefusalLaneSource.trailingClosure(
+            after: navigationPlacement, in: active, path: Self.path
         )
-        XCTAssertTrue(menu.contains("WorkboardLayoutMenu(viewModel: viewModel, isActive: isActive)"))
-        let menuAt = try XCTUnwrap(
-            active.range(of: "WorkboardLayoutMenu(")?.lowerBound,
-            "Work's bar no longer holds the Tiles / List menu. The in-band picker is macOS-only, so "
-            + "losing it here leaves iOS with no way to change the board's view at all."
-        )
-        let controlAt = try XCTUnwrap(
-            active.range(of: "WorkbenchSectionToolbarItem(")?.lowerBound,
-            "Work's bar no longer holds the section control, so an external capture that lands in "
-            + "Work on iPad strands the person there with no way back to Chats."
-        )
-        XCTAssertEqual(
-            occurrences(of: "WorkboardLayoutMenu(", in: toolbar), 1,
-            "Work's bar declares a number of view menus other than one. The bar is the only place "
-            + "the Tiles / List choice lives on iOS, and two of them are two controls for it."
-        )
-        XCTAssertEqual(
-            occurrences(of: "WorkbenchSectionToolbarItem(", in: toolbar), 1,
-            "Work's bar declares a number of section controls other than one. Each copy draws its own "
-            + "filled capsule into the same placement, so a duplicate reads as two Chats | Work "
-            + "switches side by side — and only one of them can be the one the router gate holds."
-        )
-        XCTAssertLessThan(
-            menuAt, controlAt,
-            "The section control is declared before the view menu. Declaration order IS left-to-right "
-            + "order within one placement, so this ships the control inboard of the menu while the Mac "
-            + "window keeps it trailing-most: the same two sections, two different bars."
-        )
+        XCTAssertTrue(navigation.contains("WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)"))
+        XCTAssertTrue(navigation.contains("phoneWorkbenchRouter?.dismissPhoneSection(for: .work)"))
+        let navigationAt = try XCTUnwrap(active.range(of: "WorkDeskSidebarToolbarButton(")?.lowerBound)
+        let controlAt = try XCTUnwrap(active.range(of: "WorkbenchSectionToolbarItem(")?.lowerBound)
+        XCTAssertEqual(occurrences(of: "WorkDeskSidebarToolbarButton(", in: toolbar), 1,
+                       "The native Work bar must own exactly one project-navigation control")
+        XCTAssertEqual(occurrences(of: "WorkbenchSectionToolbarItem(", in: toolbar), 1,
+                       "The wide Work/Chats section switch must keep one stable toolbar slot")
+        XCTAssertLessThan(navigationAt, controlAt)
+        XCTAssertTrue(stack.contains(".environment(\\.workDeskSidebarIsHosted, true)"),
+                      "Native navigation must suppress the duplicate in-pane project toggle")
+        XCTAssertFalse(source.contains("WorkboardLayoutMenu"),
+                       "The stale layout glyph menu must not coexist with the named workspace layout control")
+        XCTAssertFalse(toolbar.contains("layoutMode"),
+                       "The native bar must not describe a saved layout that this search/scope cannot show")
 
         let gated = try RefusalLaneSource.trailingClosure(
             after: "if let personalWorkbenchModel",
@@ -164,8 +151,8 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
             + "would duplicate the expandable section control."
         )
         XCTAssertFalse(
-            gated.contains("WorkboardLayoutMenu("),
-            "The view menu must remain available without the wide router, including compact iPad."
+            gated.contains("WorkDeskSidebarToolbarButton("),
+            "Project navigation must remain available without the wide router, including compact iPad."
         )
 
         let phone = try RefusalLaneSource.trailingClosure(
@@ -174,10 +161,10 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
         XCTAssertEqual(occurrences(of: "PhoneWorkbenchSectionButton(", in: active), 1)
         XCTAssertTrue(phone.contains("ToolbarItem(placement: .primaryAction)"))
         XCTAssertTrue(phone.contains("PhoneWorkbenchSectionButton(router: router, destination: .work)"))
-        XCTAssertFalse(phone.contains("WorkboardLayoutMenu("))
+        XCTAssertFalse(phone.contains("WorkDeskSidebarToolbarButton("))
         XCTAssertTrue(stack.contains("PhoneWorkbenchSectionOverlay(router: router, destination: .work)"))
         let phoneControlAt = try XCTUnwrap(active.range(of: "PhoneWorkbenchSectionButton(")?.lowerBound)
-        XCTAssertLessThan(menuAt, phoneControlAt)
+        XCTAssertLessThan(navigationAt, phoneControlAt)
     }
 
     /// NEGATIVE CONTROL over the platform reader both this class and
@@ -216,47 +203,25 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
         )
     }
 
-    /// The menu is a view of the board's own state, not a copy of it.
-    func testLayoutMenuUsesTheBoardModel() throws {
+    /// The toolbar observes the desk's own persistent navigation state. Width
+    /// determines whether the same action controls the rail or opens a picker.
+    func testProjectNavigationUsesTheCachedDeskAndRefusesHiddenActions() throws {
         let source = try workSource()
-        let menu = try RefusalLaneSource.trailingClosure(
-            after: "private struct WorkboardLayoutMenu: View",
-            in: source,
-            path: Self.path
+        let navigation = try RefusalLaneSource.trailingClosure(
+            after: "struct WorkDeskSidebarToolbarButton: View", in: source, path: Self.path
         )
-
-        XCTAssertTrue(
-            menu.contains("Picker(selection: $viewModel.layoutMode)"),
-            "The view menu no longer writes through to `WorkboardViewModel.layoutMode`. That property "
-            + "is what the cards read and what persists the choice, so a menu bound to anything else "
-            + "changes a checkmark and nothing on the board."
-        )
-        XCTAssertTrue(
-            menu.contains("ForEach(WorkboardLayoutMode.allCases"),
-            "The menu no longer enumerates `WorkboardLayoutMode.allCases`, so a third board view would "
-            + "ship unreachable from the bar."
-        )
-        XCTAssertTrue(
-            menu.contains(".tag(mode)"),
-            "The menu's rows no longer tag their mode, so the picker cannot match its selection to a "
-            + "row and shows no checkmark."
-        )
-        XCTAssertTrue(
-            menu.contains("Image(systemName: viewModel.layoutMode.symbol)"),
-            "The menu's glyph is no longer derived from the model, so the bar stops showing which view "
-            + "the board is actually in."
-        )
-        XCTAssertTrue(
-            menu.contains(".pickerStyle(.inline)"),
-            "The menu's picker left the inline style, which puts both options one tap away with a "
-            + "checkmark on the current one instead of behind a further submenu."
-        )
-        XCTAssertTrue(
-            menu.contains(".accessibilityIdentifier(\"workboard-layout\")"),
-            "The view menu lost its `workboard-layout` identifier — the name the Mac's in-band picker "
-            + "answers to as well, and the one stable QA target for the board's view choice."
-        )
+        XCTAssertTrue(navigation.contains("@Bindable var workspace: WorkDeskWorkspaceState"))
+        XCTAssertTrue(navigation.contains("workspace.toggleProjectNavigation()"))
+        XCTAssertTrue(navigation.contains("workspace.presentsSidebarInline"))
+        XCTAssertTrue(navigation.contains("workspace.showsSidebar"))
+        XCTAssertTrue(navigation.contains("guard isActive else { return }"))
+        XCTAssertTrue(navigation.contains(".disabled(!isActive)"))
+        XCTAssertTrue(navigation.contains(".accessibilityIdentifier(\"workdesk-sidebar-toggle\")"))
+        XCTAssertFalse(navigation.contains("layoutMode"))
+        XCTAssertFalse(navigation.contains(".pointerIconButton"),
+                       "A native toolbar keeps the platform's own button treatment")
     }
+
 }
 
 /// Which `#if` conditions compile a given line, and whether that stack hands the

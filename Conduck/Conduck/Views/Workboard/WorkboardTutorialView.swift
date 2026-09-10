@@ -86,7 +86,14 @@ struct WorkboardTutorialView: View {
                 symbol: "square.grid.2x2.fill",
                 text: LocalizedStringResource(
                     "workboard.tutorial.point.arrange",
-                    defaultValue: "Drag cards to rearrange them — the board keeps the order you leave them in."
+                    defaultValue: "Move cards by their handles. Overlap ideas to start a project, or use Select."
+                )
+            )
+            point(
+                symbol: "arrow.up.forward",
+                text: LocalizedStringResource(
+                    "workdesk.tutorial.prepare",
+                    defaultValue: "Shape a project brief, choose your AI, then review before sending."
                 )
             )
             point(
