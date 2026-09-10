@@ -44,28 +44,37 @@ final class WorkDeskWorkspaceState {
 
     var currentProject: WorkDeskProjectRecord? {
         guard case .project(let id) = scope else { return nil }
-        return organization.projects.first { $0.id == id }
+        return organization.project(id: id)
     }
 
+    var isSearching: Bool { !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     func visibleMaterials(in materials: [WorkboardMaterialSnapshot]) -> [WorkboardMaterialSnapshot] {
-        materials.filter { material in
-            let belongs: Bool
-            switch scope {
-            case .desk: belongs = organization.projectID(for: material.id) == nil
-            case .all: belongs = true
-            case .pinned: belongs = organization.placements[material.id]?.isPinned == true
-            case .project(let id): belongs = organization.projectID(for: material.id) == id
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matchingProjects = Set(organization.projects.lazy.filter {
+            !query.isEmpty && $0.title.localizedStandardContains(query)
+        }.map(\.id))
+        return materials.filter { material in
+            let projectID = organization.projectID(for: material.id)
+            // Search is a way back to anything on the desk, including a note
+            // filed in a project. Clearing it restores the person's scope.
+            if !query.isEmpty {
+                if let projectID, matchingProjects.contains(projectID) { return true }
+                return [material.name, material.textContent ?? "", material.detail ?? "",
+                        material.companion?.textContent ?? ""]
+                    .contains { $0.localizedStandardContains(query) }
             }
-            guard belongs else { return false }
-            let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-            return query.isEmpty || [material.name, material.textContent ?? "", material.detail ?? "",
-                                     material.companion?.textContent ?? ""]
-                .contains { $0.localizedStandardContains(query) }
+            switch scope {
+            case .desk: return projectID == nil
+            case .all: return true
+            case .pinned: return organization.placements[material.id]?.isPinned == true
+            case .project(let id): return projectID == id
+            }
         }
     }
 
     var supportsSpatialLayout: Bool {
-        guard search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        guard !isSearching else { return false }
         return switch scope {
         case .desk, .project: true
         case .all, .pinned: false
@@ -113,7 +122,40 @@ final class WorkDeskWorkspaceState {
     }
 
     func beginProject(materialIDs: [UUID] = [], position: WorkDeskPoint? = nil) {
-        presentEditor(WorkDeskProjectEditorRequest(project: nil, materialIDs: materialIDs, position: position))
+        presentEditor(WorkDeskProjectEditorRequest(project: nil, materialIDs: materialIDs,
+            position: position ?? projectCreationPosition(materialIDs: materialIDs)))
+    }
+
+    /// Freeze the intended spot before presenting the editor. A delayed save
+    /// or a later camera movement must not relocate the project being named.
+    private func projectCreationPosition(materialIDs: [UUID]) -> WorkDeskPoint {
+        let selectedPoints = Set(materialIDs).compactMap { id -> WorkDeskPoint? in
+            guard organization.projectID(for: id) == nil else { return nil }
+            return organization.placements[id]?.position
+        }
+        if !selectedPoints.isEmpty {
+            return WorkDeskPoint(
+                x: selectedPoints.reduce(0) { $0 + $1.x } / Double(selectedPoints.count),
+                y: selectedPoints.reduce(0) { $0 + $1.y } / Double(selectedPoints.count)
+            )
+        }
+        if let point = canvasSession(for: .desk).projectInsertionPoint { return point }
+
+        let materialFrames = organization.placements.values.compactMap { placement -> CGRect? in
+            guard organization.projectID(for: placement.materialID) == nil,
+                  let point = placement.position else { return nil }
+            return WorkDeskCanvasGeometry.frame(at: point,
+                bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: 1)
+        }
+        let projectFrames = organization.projects.compactMap { project -> CGRect? in
+            guard let point = project.position else { return nil }
+            return WorkDeskCanvasGeometry.frame(at: point,
+                bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: 1)
+        }
+        return WorkDeskCanvasGeometry.availablePoint(occupied: materialFrames + projectFrames,
+            columns: canvasSession(for: .desk).columns,
+            bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: 1)
+            ?? WorkDeskCanvasGeometry.defaultPoint(index: 0, columns: 1)
     }
 
     func editProject(_ project: WorkDeskProjectRecord) {

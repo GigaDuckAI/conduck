@@ -22,6 +22,7 @@ enum WorkDeskLayoutPresentation {
 struct WorkDeskLayoutControl: View {
     @Bindable var viewModel: WorkboardViewModel
     let supportsSpatialLayout: Bool
+    var compact = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.workbenchDestinationIsActive) private var isActive
 
@@ -52,8 +53,10 @@ struct WorkDeskLayoutControl: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: renderedMode.symbol)
-                Text(renderedMode.title)
-                    .fixedSize(horizontal: true, vertical: false)
+                if !compact {
+                    Text(renderedMode.title)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
                 Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
             }
             .font(.subheadline.weight(.medium))

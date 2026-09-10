@@ -190,9 +190,9 @@ final class WorkDeskOrganizationTests: XCTestCase {
         } catch { XCTAssertEqual(error as? WorkDeskStoreError, .contentTooLong) }
         XCTAssertEqual(WorkDeskPoint(x: .infinity, y: .nan), WorkDeskPoint(x: 0, y: 0))
         XCTAssertEqual(WorkDeskPoint(x: -20, y: .greatestFiniteMagnitude),
-                       WorkDeskPoint(x: 0, y: WorkDeskPoint.coordinateLimit))
+                       WorkDeskPoint(x: -20, y: WorkDeskPoint.coordinateLimit))
         let decoded = try JSONDecoder().decode(WorkDeskPoint.self, from: Data(#"{"x":-10,"y":30000}"#.utf8))
-        XCTAssertEqual(decoded, WorkDeskPoint(x: 0, y: WorkDeskPoint.coordinateLimit))
+        XCTAssertEqual(decoded, WorkDeskPoint(x: -10, y: WorkDeskPoint.coordinateLimit))
     }
 
     @MainActor

@@ -20,14 +20,16 @@ struct WorkDeskSourceBoard: View {
     private var materials: [WorkboardMaterialSnapshot] { workspace.visibleMaterials(in: item.materials) }
 
     private var projects: [WorkDeskCanvasProject] {
-        guard workspace.scope == .desk else { return [] }
+        let query = workspace.search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let counts = workspace.organization.materialCounts(in: item.materials)
         return workspace.organization.projects.filter { project in
-            workspace.search.isEmpty || project.title.localizedStandardContains(workspace.search)
-        }.map { project in
-            WorkDeskCanvasProject(record: project, materialCount: item.materials.filter {
-                workspace.organization.projectID(for: $0.id) == project.id
-            }.count)
-        }
+            if !query.isEmpty { return project.title.localizedStandardContains(query) }
+            switch workspace.scope {
+            case .desk: return true
+            case .pinned: return project.isPinned
+            case .all, .project: return false
+            }
+        }.map { WorkDeskCanvasProject(record: $0, materialCount: counts[$0.id] ?? 0) }
     }
 
     private var renderedLayout: WorkboardLayoutMode {
@@ -38,10 +40,15 @@ struct WorkDeskSourceBoard: View {
 
     var body: some View {
         Group {
-            if materials.isEmpty && projects.isEmpty {
-                emptyState
-            } else if renderedLayout == .desk {
+            if renderedLayout == .desk {
                 spatialBoard
+                    .overlay {
+                        if materials.isEmpty && projects.isEmpty {
+                            emptyState.allowsHitTesting(false)
+                        }
+                    }
+            } else if materials.isEmpty && projects.isEmpty {
+                emptyState
             } else {
                 readableBoard
             }
@@ -68,6 +75,7 @@ struct WorkDeskSourceBoard: View {
 
     private var spatialBoard: some View {
         let visible = materials
+        let visibleIDs = visible.map(\.id)
         let indices = Dictionary(visible.enumerated().map { ($0.element.id, $0.offset + 1) }, uniquingKeysWith: { first, _ in first })
         let projectID = workspace.currentProject?.id
         return WorkDeskCanvas(
@@ -92,16 +100,22 @@ struct WorkDeskSourceBoard: View {
             onTogglePin: togglePin,
             onSeedPositions: { materials, projects in
                 await workspace.organization.seedPositions(materials: materials, projects: projects)
-            }
+            },
+            onCreateProject: workspace.scope == .desk ? { point in
+                workspace.beginProject(position: point)
+            } : nil
         ) { material, size in
-            sourceCard(material, spatial: true, position: indices[material.id] ?? 1, count: visible.count)
+            sourceCard(material, spatial: true, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
                 .frame(width: size.width, height: size.height)
         }
         .id(workspace.scope)
     }
 
     private var readableBoard: some View {
-        ScrollView {
+        let visible = materials
+        let visibleIDs = visible.map(\.id)
+        let indices = Dictionary(visibleIDs.enumerated().map { ($0.element, $0.offset + 1) }, uniquingKeysWith: { first, _ in first })
+        return ScrollView {
             LazyVStack(spacing: 12) {
                 ForEach(projects) { project in
                     Button { workspace.selectScope(.project(project.record.id)) } label: {
@@ -118,20 +132,20 @@ struct WorkDeskSourceBoard: View {
                 }
                 if renderedLayout == .tiles {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 250), spacing: 16)], spacing: 16) {
-                        ForEach(materials) { material in
+                        ForEach(visible) { material in
                             VStack(spacing: 0) {
                                 organizationControls(material)
-                                sourceCard(material).frame(height: 190)
+                                sourceCard(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs).frame(height: 190)
                             }
                             .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 14))
                             .overlay(RoundedRectangle(cornerRadius: 14).stroke(workspace.selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2))
                         }
                     }
                 } else {
-                    ForEach(materials) { material in
+                    ForEach(visible) { material in
                         VStack(spacing: 0) {
                             organizationControls(material)
-                            sourceRow(material)
+                            sourceRow(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
                         }
                         .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 14))
                         .overlay(RoundedRectangle(cornerRadius: 14).stroke(workspace.selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2))
@@ -146,12 +160,19 @@ struct WorkDeskSourceBoard: View {
 
     private func organizationControls(_ material: WorkboardMaterialSnapshot) -> some View {
         HStack(spacing: 4) {
-            Button { workspace.toggleSelection(material.id) } label: {
-                Image(systemName: workspace.selectedIDs.contains(material.id) ? "checkmark.circle.fill" : "circle")
-                    .frame(width: 44, height: 44)
+            if workspace.isSelecting {
+                Button { workspace.toggleSelection(material.id) } label: {
+                    Image(systemName: workspace.selectedIDs.contains(material.id) ? "checkmark.circle.fill" : "circle")
+                        .frame(width: 44, height: 44)
+                }
+                .pointerIconButton(size: 44)
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.material.select", defaultValue: "Select material")))
             }
-            .pointerIconButton(size: 44)
-            .accessibilityLabel(Text(LocalizedStringResource("workdesk.material.select", defaultValue: "Select material")))
+            if let projectID = workspace.organization.projectID(for: material.id),
+               let project = workspace.organization.project(id: projectID) {
+                Text(verbatim: project.title).font(.caption).lineLimit(1)
+                    .foregroundStyle(AppColors.textSecondary).padding(.leading, 8)
+            }
             Spacer()
             Button { togglePin(material.id) } label: {
                 Image(systemName: workspace.organization.placements[material.id]?.isPinned == true ? "pin.fill" : "pin")
@@ -184,16 +205,16 @@ struct WorkDeskSourceBoard: View {
         Task { await workspace.organization.setPinned(!pinned, materialID: id) }
     }
 
-    private func sourceCard(_ material: WorkboardMaterialSnapshot, spatial: Bool = false, position: Int? = nil, count: Int? = nil) -> some View {
+    private func sourceCard(_ material: WorkboardMaterialSnapshot, spatial: Bool = false, position: Int, visibleIDs: [UUID]) -> some View {
         WorkboardSourceCard(
             material: material,
-            boardPosition: position ?? ((materials.firstIndex(where: { $0.id == material.id }) ?? 0) + 1),
-            boardCount: count ?? materials.count,
+            boardPosition: position,
+            boardCount: visibleIDs.count,
             onOpen: { if workspace.isSelecting { workspace.toggleSelection(material.id) } else { onOpen(material) } },
             onShare: { onShare(material) },
             onReattach: { onReattach(material) },
-            onMoveEarlier: spatial ? nil : moveAction(material, direction: .earlier),
-            onMoveLater: spatial ? nil : moveAction(material, direction: .later),
+            onMoveEarlier: spatial ? nil : moveAction(material, direction: .earlier, position: position, visibleIDs: visibleIDs),
+            onMoveLater: spatial ? nil : moveAction(material, direction: .later, position: position, visibleIDs: visibleIDs),
             onRemove: { pendingRemoval = material },
             onOpenCompanion: material.companion.map { companion in { onOpen(companion.material) } },
             onShareCompanion: material.companion.map { companion in { onShare(companion.material) } },
@@ -203,16 +224,16 @@ struct WorkDeskSourceBoard: View {
         .overlay { if workspace.isSelecting { selectionShield(material) } }
     }
 
-    private func sourceRow(_ material: WorkboardMaterialSnapshot) -> some View {
+    private func sourceRow(_ material: WorkboardMaterialSnapshot, position: Int, visibleIDs: [UUID]) -> some View {
         WorkboardMaterialListRow(
             material: material,
-            boardPosition: (materials.firstIndex(where: { $0.id == material.id }) ?? 0) + 1,
-            boardCount: materials.count,
+            boardPosition: position,
+            boardCount: visibleIDs.count,
             onOpen: { if workspace.isSelecting { workspace.toggleSelection(material.id) } else { onOpen(material) } },
             onShare: { onShare(material) },
             onReattach: { onReattach(material) },
-            onMoveEarlier: moveAction(material, direction: .earlier),
-            onMoveLater: moveAction(material, direction: .later),
+            onMoveEarlier: moveAction(material, direction: .earlier, position: position, visibleIDs: visibleIDs),
+            onMoveLater: moveAction(material, direction: .later, position: position, visibleIDs: visibleIDs),
             onRemove: { pendingRemoval = material },
             onOpenCompanion: material.companion.map { companion in { onOpen(companion.material) } },
             onShareCompanion: material.companion.map { companion in { onShare(companion.material) } },
@@ -232,8 +253,10 @@ struct WorkDeskSourceBoard: View {
         .accessibilityAddTraits(workspace.selectedIDs.contains(material.id) ? .isSelected : [])
     }
 
-    private func moveAction(_ material: WorkboardMaterialSnapshot, direction: WorkboardMoveDirection) -> (() -> Void)? {
-        guard let target = WorkDeskWorkspaceState.moveTarget(material.id, direction: direction, visibleIDs: materials.map(\.id)) else { return nil }
+    private func moveAction(_ material: WorkboardMaterialSnapshot, direction: WorkboardMoveDirection, position: Int, visibleIDs: [UUID]) -> (() -> Void)? {
+        let targetIndex = direction == .earlier ? position - 2 : position
+        guard visibleIDs.indices.contains(targetIndex) else { return nil }
+        let target = visibleIDs[targetIndex]
         return {
             Task {
                 _ = await viewModel.reorderMaterial(material.id, relativeTo: target,
@@ -244,14 +267,16 @@ struct WorkDeskSourceBoard: View {
 
     private var emptyState: some View {
         VStack(spacing: 14) {
-            Image(systemName: workspace.search.isEmpty ? "square.stack.3d.up" : "magnifyingglass")
+            Image(systemName: !workspace.isSearching ? "square.stack.3d.up" : "magnifyingglass")
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(AppColors.accent)
-            Text(LocalizedStringResource("workdesk.empty.title", defaultValue: "Room to think"))
+            Text(workspace.isSearching
+                 ? LocalizedStringResource("workdesk.search.empty.title", defaultValue: "Nothing found")
+                 : LocalizedStringResource("workdesk.empty.title", defaultValue: "Room to think"))
                 .font(.title2.weight(.semibold))
-            Text(workspace.search.isEmpty
+            Text(!workspace.isSearching
                 ? LocalizedStringResource("workdesk.empty.message", defaultValue: "Capture a thought below, or bring ideas together in a project. Everything starts on your desk.")
-                : LocalizedStringResource("workdesk.search.empty", defaultValue: "No matching materials here. Try another word or look in All materials."))
+                : LocalizedStringResource("workdesk.search.empty", defaultValue: "No ideas, files or projects match this search. Try another word."))
                 .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 340)
         }

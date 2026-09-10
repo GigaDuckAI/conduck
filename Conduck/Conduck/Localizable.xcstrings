@@ -1,6 +1,83 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "workdesk.search.show" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show results"
+          }
+        }
+      }
+    },
+    "workdesk.search.results" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search results"
+          }
+        }
+      }
+    },
+    "workdesk.search.empty.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing found"
+          }
+        }
+      }
+    },
+    "workdesk.search.clear" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear search"
+          }
+        }
+      }
+    },
+    "workdesk.capture.prompt" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to your desk…"
+          }
+        }
+      }
+    },
+    "workdesk.capture.destination.short" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Captures go to Your desk"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.moveObjectHint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drag anywhere on a card to arrange your desk"
+          }
+        }
+      }
+    },
     "settings.about.review.openHint" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -23966,12 +24043,11 @@
       }
     },
     "workboard.tutorial.point.arrange" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Move cards by their handles. Overlap ideas to start a project, or use Select."
+            "value" : "Drag anywhere on a card to arrange it. Hold it over another idea to create a project, or use Select."
           }
         }
       }
@@ -24427,17 +24503,6 @@
         }
       }
     },
-    "workdesk.aggregate.hint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A readable overview across projects. Open a project to arrange its cards."
-          }
-        }
-      }
-    },
     "workdesk.all" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24856,17 +24921,6 @@
         }
       }
     },
-    "workdesk.canvas.moveHint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Drag this handle to arrange your desk"
-          }
-        }
-      }
-    },
     "workdesk.canvas.moveLeft" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24962,17 +25016,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Zoom out"
-          }
-        }
-      }
-    },
-    "workdesk.capture.destination" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New captures land on your desk. Move them into a project whenever you’re ready."
           }
         }
       }
@@ -25478,7 +25521,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No matching materials here. Try another word or look in All materials."
+            "value" : "No ideas, files or projects match this search. Try another word."
           }
         }
       }

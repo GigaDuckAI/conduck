@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Spatial card chrome, separate from the material's existing preview, playback,
-// repair and share controls. Only the visible grip moves the card. Selection
-// and pin controls keep their screen-sized targets as the desk zooms out. The
-// containing canvas owns drop captions so they stay above a lifted card. Escape
-// cancels only this handle's drag and suppresses updates until physical release.
+// repair and share controls. The entire object can move after a deliberate
+// drag threshold; ordinary taps still reach its preview and buttons. Selection
+// and pin controls keep their screen-sized targets as the desk zooms out. Escape
+// cancels the held gesture and suppresses updates until physical release.
 
 import SwiftUI
 
@@ -16,21 +16,16 @@ struct WorkDeskCard<Content: View>: View {
     let isSelecting: Bool
     let isLifted: Bool
     let isGroupTarget: Bool
-    let coordinateSpace: UUID
     let onSelect: () -> Void
     let onTogglePin: () -> Void
-    let onDragChanged: (CGSize) -> Void
-    let onDragEnded: (CGSize) -> Void
-    let onDragCancelled: () -> Void
     let onNudge: (CGSize) -> Void
     var isNavigating: Bool = false
-    var cancellationGeneration: Int = 0
-    var onDragLocation: (CGPoint) -> Void = { _ in }
     var onActivate: () -> Void = {}
     @ViewBuilder var content: () -> Content
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.workbenchDestinationIsActive) private var isActive
+    @State private var isHovering = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,15 +49,21 @@ struct WorkDeskCard<Content: View>: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isGroupTarget)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isSelected)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isLifted)
-        // Activating the containing card must not replace a nested preview,
-        // menu or audio button's action, or claim its drag region.
+        // A tap raises the card while its nested control still owns the action.
         .simultaneousGesture(TapGesture().onEnded { onActivate() })
+        .onHover { isHovering = $0 }
         .accessibilityElement(children: .contain)
+        .accessibilityActions {
+            Button(LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material"), action: onSelect)
+            Button(isPinned
+                ? LocalizedStringResource("workdesk.canvas.unpin", defaultValue: "Unpin material")
+                : LocalizedStringResource("workdesk.canvas.pin", defaultValue: "Pin material"), action: onTogglePin)
+        }
     }
 
     private var handleBar: some View {
         HStack(spacing: 0) {
-            if WorkDeskCardHeaderPolicy.showsSelection(width: width) {
+            if WorkDeskCardHeaderPolicy.showsSelection(width: width), isSelecting || isSelected {
                 Button(action: onSelect) {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 17, weight: .medium))
@@ -79,18 +80,13 @@ struct WorkDeskCard<Content: View>: View {
 
             WorkDeskDragGrip(
                 title: title,
-                coordinateSpace: coordinateSpace,
-                onChanged: onDragChanged,
-                onEnded: onDragEnded,
-                onCancelled: onDragCancelled,
                 onNudge: onNudge,
-                cancellationGeneration: cancellationGeneration,
-                onLocation: onDragLocation,
+                isLifted: isLifted,
                 onActivate: onActivate
             )
             .frame(minWidth: WorkDeskCardHeaderPolicy.targetSize, maxWidth: .infinity)
 
-            if WorkDeskCardHeaderPolicy.showsPin(width: width) {
+            if WorkDeskCardHeaderPolicy.showsPin(width: width), isPinned || isSelecting || isHovering {
                 Button(action: onTogglePin) {
                     Image(systemName: isPinned ? "pin.fill" : "pin")
                         .font(.system(size: 14, weight: .medium))
@@ -105,7 +101,7 @@ struct WorkDeskCard<Content: View>: View {
             }
         }
         .frame(height: WorkDeskCardHeaderPolicy.targetSize)
-        .background(AppColors.brandAmber.opacity(isSelecting || isLifted ? 0.09 : 0.035))
+        .background(AppColors.brandAmber.opacity(isSelecting || isLifted ? 0.09 : 0))
     }
 }
 
@@ -163,64 +159,125 @@ nonisolated enum WorkDeskGripKeyboardPolicy {
     }
 }
 
-/// A dedicated grip leaves taps and playback on the mature material card
-/// untouched. GestureState also ends a cancelled drag, which onEnded alone
-/// cannot observe (for example, when Work loses focus mid-gesture).
+/// The handle remains a discoverable keyboard and accessibility control. The
+/// containing object's one gesture owns movement everywhere, including here.
 struct WorkDeskDragGrip: View {
     let title: String
-    let coordinateSpace: UUID
-    let onChanged: (CGSize) -> Void
-    let onEnded: (CGSize) -> Void
-    let onCancelled: () -> Void
     let onNudge: (CGSize) -> Void
-    var cancellationGeneration: Int = 0
-    var onLocation: (CGPoint) -> Void = { _ in }
+    var isLifted: Bool = false
     var onActivate: () -> Void = {}
 
-    @GestureState private var isDragging = false
-    @State private var dragState = WorkDeskGripDragState()
     @FocusState private var isFocused: Bool
     @Environment(\.workbenchDestinationIsActive) private var isActive
 
     var body: some View {
         Image(systemName: "circle.grid.3x2.fill")
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(isFocused || dragState.isActive ? AppColors.brandAmber : AppColors.textSecondary)
+            .foregroundStyle(isFocused || isLifted ? AppColors.brandAmber : AppColors.textTertiary.opacity(0.55))
             .frame(minWidth: WorkDeskCardHeaderPolicy.targetSize, maxWidth: .infinity,
                    minHeight: WorkDeskCardHeaderPolicy.targetSize)
             .background {
                 RoundedRectangle(cornerRadius: 7)
-                    .fill(AppColors.textPrimary.opacity(isFocused || dragState.isActive ? 0.09 : 0.04))
+                    .fill(AppColors.textPrimary.opacity(isFocused || isLifted ? 0.09 : 0))
                     .padding(.horizontal, 4).padding(.vertical, 7)
             }
-            .contentShape(Rectangle())
             .pointerHoverWash(cornerRadius: 8)
             .focusable(isActive)
             .focused($isFocused)
-            .onTapGesture { activate() }
-            .gesture(
-                DragGesture(minimumDistance: 3, coordinateSpace: .named(coordinateSpace))
+            .onTapGesture { guard isActive else { return }; isFocused = true; onActivate() }
+            .onChange(of: isActive) { _, active in if !active { isFocused = false } }
+            .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow, .escape]) { press in
+                guard isActive, !isLifted,
+                      press.modifiers.intersection([.command, .control, .option]).isEmpty else { return .ignored }
+                if press.key == .escape { isFocused = false; return .handled }
+                guard let translation = WorkDeskGripKeyboardPolicy.translation(for: press.key, modifiers: press.modifiers) else { return .ignored }
+                onActivate()
+                onNudge(translation)
+                return .handled
+            }
+            #if os(macOS)
+            .pointerStyle(isLifted ? .grabActive : .grabIdle)
+            #endif
+            .help(Text(LocalizedStringResource("workdesk.canvas.moveObjectHint", defaultValue: "Drag anywhere on a card to arrange your desk")))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.move", defaultValue: "Move material")))
+            .accessibilityValue(Text(verbatim: title))
+            .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.moveObjectHint", defaultValue: "Drag anywhere on a card to arrange your desk")))
+            .accessibilityActions {
+                Button(LocalizedStringResource("workdesk.canvas.moveLeft", defaultValue: "Move left")) { nudge(.leftArrow) }
+                Button(LocalizedStringResource("workdesk.canvas.moveRight", defaultValue: "Move right")) { nudge(.rightArrow) }
+                Button(LocalizedStringResource("workdesk.canvas.moveUp", defaultValue: "Move up")) { nudge(.upArrow) }
+                Button(LocalizedStringResource("workdesk.canvas.moveDown", defaultValue: "Move down")) { nudge(.downArrow) }
+            }
+    }
+
+    private func nudge(_ key: KeyEquivalent) {
+        guard isActive, !isLifted,
+              let translation = WorkDeskGripKeyboardPolicy.translation(for: key, modifiers: []) else { return }
+        onActivate()
+        onNudge(translation)
+    }
+}
+
+extension View {
+    /// One high-priority gesture for the whole object, outside its preview and
+    /// header. Until movement crosses the threshold, nested buttons keep taps.
+    func workDeskObjectDrag(
+        coordinateSpace: UUID, isEnabled: Bool, cancellationGeneration: Int,
+        onChanged: @escaping (CGSize) -> Void, onEnded: @escaping (CGSize) -> Void,
+        onCancelled: @escaping () -> Void, onNudge: @escaping (CGSize) -> Void,
+        onLocation: @escaping (CGPoint) -> Void, onActivate: @escaping () -> Void
+    ) -> some View {
+        modifier(WorkDeskObjectDragModifier(coordinateSpace: coordinateSpace, isEnabled: isEnabled,
+            cancellationGeneration: cancellationGeneration, onChanged: onChanged, onEnded: onEnded,
+            onCancelled: onCancelled, onNudge: onNudge, onLocation: onLocation, onActivate: onActivate))
+    }
+}
+
+private struct WorkDeskObjectDragModifier: ViewModifier {
+    let coordinateSpace: UUID
+    let isEnabled: Bool
+    let cancellationGeneration: Int
+    let onChanged: (CGSize) -> Void
+    let onEnded: (CGSize) -> Void
+    let onCancelled: () -> Void
+    let onNudge: (CGSize) -> Void
+    let onLocation: (CGPoint) -> Void
+    let onActivate: () -> Void
+
+    @GestureState private var isDragging = false
+    @State private var dragState = WorkDeskGripDragState()
+    @FocusState private var isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .focusable(isEnabled)
+            .focused($isFocused)
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 6, coordinateSpace: .named(coordinateSpace))
                     .updating($isDragging) { _, active, _ in active = true }
                     .onChanged { value in
-                        guard isActive else { return }
+                        guard isEnabled else { return }
                         let wasActive = dragState.isActive
                         guard dragState.beginUpdate() else { return }
-                        if !wasActive { activate() }
+                        if !wasActive { isFocused = true; onActivate() }
                         onLocation(value.location)
                         onChanged(value.translation)
                     }
                     .onEnded { value in
                         if dragState.release() {
-                            if isActive { onLocation(value.location); onEnded(value.translation) }
+                            if isEnabled { onLocation(value.location); onEnded(value.translation) }
                             else { onCancelled() }
                         }
-                    }
+                    },
+                including: isEnabled ? .all : .none
             )
             .onChange(of: isDragging) { _, active in
                 if !active, dragState.release() { onCancelled() }
             }
-            .onChange(of: isActive) { _, active in
-                if !active {
+            .onChange(of: isEnabled) { _, enabled in
+                if !enabled {
                     if dragState.cancel() { onCancelled() }
                     isFocused = false
                 }
@@ -230,7 +287,8 @@ struct WorkDeskDragGrip: View {
             }
             .onDisappear { if dragState.release() { onCancelled() } }
             .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow, .escape]) { press in
-                guard isActive, press.modifiers.intersection([.command, .control, .option]).isEmpty else { return .ignored }
+                guard isEnabled, isFocused,
+                      press.modifiers.intersection([.command, .control, .option]).isEmpty else { return .ignored }
                 if press.key == .escape {
                     if dragState.cancel() { onCancelled() }
                     else if !dragState.isSuppressed { isFocused = false }
@@ -242,32 +300,5 @@ struct WorkDeskDragGrip: View {
                 onNudge(translation)
                 return .handled
             }
-            #if os(macOS)
-            .pointerStyle(dragState.isActive ? .grabActive : .grabIdle)
-            #endif
-            .help(Text(LocalizedStringResource("workdesk.canvas.moveHint", defaultValue: "Drag this handle to arrange your desk")))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.move", defaultValue: "Move material")))
-            .accessibilityValue(Text(verbatim: title))
-            .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.moveHint", defaultValue: "Drag this handle to arrange your desk")))
-            .accessibilityActions {
-                Button(LocalizedStringResource("workdesk.canvas.moveLeft", defaultValue: "Move left")) { nudge(.leftArrow) }
-                Button(LocalizedStringResource("workdesk.canvas.moveRight", defaultValue: "Move right")) { nudge(.rightArrow) }
-                Button(LocalizedStringResource("workdesk.canvas.moveUp", defaultValue: "Move up")) { nudge(.upArrow) }
-                Button(LocalizedStringResource("workdesk.canvas.moveDown", defaultValue: "Move down")) { nudge(.downArrow) }
-            }
-    }
-
-    private func activate() {
-        guard isActive else { return }
-        isFocused = true
-        onActivate()
-    }
-
-    private func nudge(_ key: KeyEquivalent) {
-        guard isActive, !isDragging,
-              let translation = WorkDeskGripKeyboardPolicy.translation(for: key, modifiers: []) else { return }
-        onActivate()
-        onNudge(translation)
     }
 }

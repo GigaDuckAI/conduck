@@ -13,9 +13,22 @@ final class WorkDeskCanvasSession {
     var transform = WorkDeskCanvasTransform()
     var isInitialized = false
     var columns = 3
+    var viewportSize: CGSize = .zero
     private(set) var layerRevision = 0
     @ObservationIgnored private var layers: [WorkDeskCanvasItemID: Int] = [:]
     @ObservationIgnored private var nextLayer = 0
+
+    /// A new project belongs to the part of the desk the person is looking at.
+    /// Convert its visible center back to world coordinates at the current zoom.
+    var projectInsertionPoint: WorkDeskPoint? {
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return nil }
+        let camera = WorkDeskCanvasGeometry.normalized(transform)
+        let size = WorkDeskCanvasGeometry.screenSize(bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: camera.scale)
+        return WorkDeskPoint(
+            x: Double((viewportSize.width / 2 - size.width / 2 - camera.offset.width) / camera.scale),
+            y: Double((viewportSize.height / 2 - size.height / 2 - camera.offset.height) / camera.scale)
+        )
+    }
 
     func layer(for id: WorkDeskCanvasItemID) -> Double {
         _ = layerRevision
@@ -94,6 +107,7 @@ nonisolated struct WorkDeskDropHover {
     }
 
     mutating func reset() {
+        guard target != nil || isReady else { return }
         target = nil
         generation = UUID()
         isReady = false

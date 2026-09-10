@@ -37,12 +37,24 @@ final class WorkDeskCanvasInteractionTests: XCTestCase {
     func testGroupMovementClampsOneDeltaAndPreservesSpacingAtBothEdges() {
         let a = UUID(), b = UUID()
         let origins = [a: WorkDeskPoint(x: 20, y: 50), b: WorkDeskPoint(x: 200, y: 300)]
-        let left = WorkDeskCanvasGeometry.translated(origins, by: CGSize(width: -500, height: -500))
-        XCTAssertEqual(left[a], WorkDeskPoint(x: 0, y: 0))
-        XCTAssertEqual(left[b], WorkDeskPoint(x: 180, y: 250))
+        let left = WorkDeskCanvasGeometry.translated(origins, by: CGSize(width: -50_000, height: -50_000))
+        XCTAssertEqual(left[a], WorkDeskPoint(x: -20_000, y: -20_000))
+        XCTAssertEqual(left[b], WorkDeskPoint(x: -19_820, y: -19_750))
         let right = WorkDeskCanvasGeometry.translated(origins, by: CGSize(width: 50_000, height: 50_000))
         XCTAssertEqual(right[b], WorkDeskPoint(x: 20_000, y: 20_000))
         XCTAssertEqual(right[a], WorkDeskPoint(x: 19_820, y: 19_750))
+    }
+
+    func testDraggingAcrossTheOriginKeepsTheObjectUnderThePointer() {
+        let id = WorkDeskCanvasItemID.material(UUID())
+        let start = WorkDeskCanvasTransform(scale: 0.8, offset: CGSize(width: 250, height: 200))
+        var drag = WorkDeskCanvasDrag(lead: id, origins: [id: .init(x: 20, y: 30)], startTransform: start)
+        drag.translation = CGSize(width: -160, height: -80)
+        let moved = drag.positions(transform: start)[id]!
+        XCTAssertEqual(moved, .init(x: -180, y: -70))
+        let screen = WorkDeskCanvasGeometry.screenPoint(moved, transform: start)
+        XCTAssertEqual(screen.x, 106, accuracy: 0.001)
+        XCTAssertEqual(screen.y, 144, accuracy: 0.001)
     }
 
     func testDragFreezesMembersAndCompensatesForCameraMovement() {
@@ -98,6 +110,38 @@ final class WorkDeskCanvasInteractionTests: XCTestCase {
         XCTAssertFalse(hover.isReady)
         hover.update(second)
         XCTAssertFalse(hover.isReady)
+    }
+
+    func testEmptyHoverResetDoesNotRestartItsDwellTaskAtPointerRate() {
+        var hover = WorkDeskDropHover()
+        let generation = hover.generation
+        hover.reset()
+        hover.update(nil)
+        hover.reset()
+        XCTAssertEqual(hover.generation, generation)
+        hover.update(.material(UUID()))
+        let targetGeneration = hover.generation
+        hover.reset()
+        XCTAssertNotEqual(hover.generation, targetGeneration)
+        XCTAssertNil(hover.target)
+    }
+
+    func testNewProjectInsertionUsesTheCurrentVisibleDeskCenter() {
+        let session = WorkDeskCanvasSession()
+        XCTAssertNil(session.projectInsertionPoint)
+        session.viewportSize = CGSize(width: 900, height: 640)
+        session.transform = .init(scale: 0.8, offset: CGSize(width: 500, height: -300))
+        let point = session.projectInsertionPoint!
+        XCTAssertLessThan(point.x, 0, "The visible desk extends left of the original origin.")
+        let frame = WorkDeskCanvasGeometry.screenFrame(at: point,
+            bodySize: WorkDeskCanvasGeometry.projectBodySize, transform: session.transform)
+        XCTAssertEqual(frame.midX, 450, accuracy: 0.001)
+        XCTAssertEqual(frame.midY, 320, accuracy: 0.001)
+        session.transform = .init(scale: 0.15, offset: CGSize(width: -700, height: -400))
+        let overview = WorkDeskCanvasGeometry.screenFrame(at: session.projectInsertionPoint!,
+            bodySize: WorkDeskCanvasGeometry.projectBodySize, transform: session.transform)
+        XCTAssertEqual(overview.midX, 450, accuracy: 0.001)
+        XCTAssertEqual(overview.midY, 320, accuracy: 0.001)
     }
 
     func testCancelledDwellCannotArmTheSameTargetAfterReentry() {

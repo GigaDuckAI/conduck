@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Deterministic contracts behind the spatial handle. A narrow card must leave
+// Deterministic contracts behind whole-object movement. A narrow card must leave
 // room to drag, and Escape must suppress the rest of the same physical gesture
 // rather than allowing a later update to commit the cancelled move. Keyboard
 // shortcuts remain local and must not consume application-level modifiers.
@@ -21,6 +21,23 @@ final class WorkDeskCardInteractionTests: XCTestCase {
         XCTAssertFalse(WorkDeskCardHeaderPolicy.showsSelection(width: 81.2))
         XCTAssertFalse(WorkDeskCardHeaderPolicy.showsPin(width: 131.9))
         XCTAssertTrue(WorkDeskCardHeaderPolicy.showsPin(width: 132))
+    }
+
+    func testMaterialsProjectsAndOverviewShareTheWholeSurfaceDragOwner() throws {
+        let source = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskCanvas.swift")
+        for method in ["materialCard", "projectPile"] {
+            let body = try RefusalLaneSource.body(ofFunction: method, in: source, path: "WorkDeskCanvas.swift")
+            let gesture = try XCTUnwrap(body.range(of: ".workDeskObjectDrag("))
+            let position = try XCTUnwrap(body.range(of: ".position(x: frame.midX"))
+            XCTAssertLessThan(gesture.lowerBound, position.lowerBound)
+            XCTAssertTrue(body.contains("onLocation: recordDragPointer"))
+        }
+        let card = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskCard.swift")
+        XCTAssertTrue(card.contains(".highPriorityGesture("))
+        XCTAssertTrue(card.contains("DragGesture(minimumDistance: 6, coordinateSpace: .named(coordinateSpace))"),
+            "Taps must reach nested buttons until movement deliberately becomes a drag.")
+        XCTAssertEqual(card.components(separatedBy: "DragGesture(").count - 1, 1,
+            "The header must not compete with the containing object's gesture.")
     }
 
     func testEscapeSuppressesUpdatesUntilTheHeldGestureReleases() {

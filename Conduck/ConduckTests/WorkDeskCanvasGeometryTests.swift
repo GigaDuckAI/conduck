@@ -63,10 +63,22 @@ final class WorkDeskCanvasGeometryTests: XCTestCase {
         XCTAssertEqual(point.x, 0)
         XCTAssertEqual(point.y, 0)
         let outside = WorkDeskCanvasGeometry.bounded(WorkDeskPoint(x: -1, y: 90_000))
-        XCTAssertEqual(outside.x, 0)
+        XCTAssertEqual(outside.x, -1)
         XCTAssertEqual(outside.y, WorkDeskCanvasGeometry.coordinateLimit)
         XCTAssertEqual(WorkDeskCanvasGeometry.boundedScale(.nan), 1)
         XCTAssertEqual(WorkDeskCanvasGeometry.boundedScale(0), WorkDeskCanvasGeometry.minimumScale)
+    }
+
+    func testBackgroundCreationPointConvertsTheHoveredPositionAtAnyZoom() {
+        for scale: CGFloat in [0.15, 0.8, 1.6] {
+            let camera = WorkDeskCanvasTransform(scale: scale, offset: CGSize(width: 440, height: -150))
+            let location = CGPoint(x: 180, y: 240)
+            let point = WorkDeskCanvasGeometry.worldPoint(location, transform: camera)
+            XCTAssertLessThan(point.x, 0)
+            let rendered = WorkDeskCanvasGeometry.screenPoint(point, transform: camera)
+            XCTAssertEqual(rendered.x, location.x, accuracy: 0.001)
+            XCTAssertEqual(rendered.y, location.y, accuracy: 0.001)
+        }
     }
 
     func testFitBringsSeparatedCardsIntoTheViewport() {

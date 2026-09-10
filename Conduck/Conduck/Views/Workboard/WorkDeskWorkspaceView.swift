@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The responsive management desk: a project rail on wide windows and a picker
-// on phones, with equivalent selection actions beside the spatial canvas.
+// on phones. Search stays in that navigation rail so the canvas remains a desk;
+// a compact picker submits its query back to the same global result surface.
 // Capturing remains independent of the selected project. Only the explicit
 // brief sheet can create a conversation; deleting a project only ungroups it.
 
@@ -11,6 +12,8 @@ struct WorkDeskWorkspaceView: View {
     @Bindable var viewModel: WorkboardViewModel
     let item: WorkboardItemSnapshot
     @Bindable var workspace: WorkDeskWorkspaceState
+    @FocusState private var searchFocused: Bool
+    @State private var requestsSearchFocus = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.workDeskConversationResolver) private var conversationResolver
@@ -28,7 +31,7 @@ struct WorkDeskWorkspaceView: View {
                     Divider().opacity(0.35)
                 }
                 VStack(spacing: 0) {
-                    header(isWide: geometry.size.width >= 850)
+                    header(isCompact: geometry.size.width < 600)
                     WorkboardCaptureCanvas(
                         viewModel: viewModel,
                         item: item,
@@ -58,7 +61,11 @@ struct WorkDeskWorkspaceView: View {
         .onChange(of: isActive) { _, active in
             workspace.isActive = active
             if active { Task { await reloadOrganization() } }
-            else { workspace.suspend() }
+            else {
+                searchFocused = false
+                requestsSearchFocus = false
+                workspace.suspend()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .conversationsDidChange)) { _ in
             if isActive { Task { await reloadOrganization() } }
@@ -88,8 +95,8 @@ struct WorkDeskWorkspaceView: View {
             get: { isActive ? workspace.projectEditor : nil },
             set: { if isActive { workspace.projectEditor = $0 } }
         )) { request in
-            WorkDeskProjectEditor(request: request, organization: workspace.organization, title: $workspace.editorTitle) { id in
-                workspace.selectScope(.project(id))
+            WorkDeskProjectEditor(request: request, organization: workspace.organization, title: $workspace.editorTitle) { _ in
+                if request.project == nil { workspace.selectScope(.desk) }
             }
         }
         .sheet(isPresented: Binding(
@@ -125,6 +132,17 @@ struct WorkDeskWorkspaceView: View {
 
     var body: some View {
         presentedWorkspace
+        .background {
+            Button(LocalizedStringResource("workdesk.search", defaultValue: "Find an idea or file")) {
+                requestsSearchFocus = true
+                if workspace.presentsSidebarInline { workspace.showsSidebar = true }
+                else { workspace.showsProjectPicker = true }
+                searchFocused = true
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .disabled(!isActive)
+            .hidden()
+        }
         .alert(Text(LocalizedStringResource("workdesk.update.failed", defaultValue: "Couldn’t update the desk")),
                isPresented: Binding(
                 get: { isActive && workspace.organization.errorMessage != nil && workspace.projectEditor == nil && workspace.preparingProjectID == nil },
@@ -163,7 +181,10 @@ struct WorkDeskWorkspaceView: View {
     }
 
     private var title: String {
-        switch workspace.scope {
+        if workspace.isSearching {
+            return String(localized: LocalizedStringResource("workdesk.search.results", defaultValue: "Search results"))
+        }
+        return switch workspace.scope {
         case .desk: String(localized: LocalizedStringResource("workdesk.desk", defaultValue: "Your desk"))
         case .all: String(localized: LocalizedStringResource("workdesk.all", defaultValue: "All materials"))
         case .pinned: String(localized: LocalizedStringResource("workdesk.pinned", defaultValue: "Pinned"))
@@ -171,108 +192,116 @@ struct WorkDeskWorkspaceView: View {
         }
     }
 
-    private func header(isWide: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
+    private func header(isCompact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
                 if !sidebarIsHosted {
                     Button {
                         withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) {
                             workspace.toggleProjectNavigation()
                         }
                     } label: {
-                        Image(systemName: "sidebar.left")
-                            .frame(width: 44, height: 44)
+                        Image(systemName: "sidebar.left").frame(width: 44, height: 44)
                     }
                     .pointerIconButton(size: 44)
                     .accessibilityLabel(Text(LocalizedStringResource("workdesk.projects.browse", defaultValue: "Browse projects")))
                 }
-
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: title).font(.title3.weight(.semibold)).lineLimit(1)
-                    Text(WorkDeskCopy.materialCount(workspace.visibleMaterials(in: item.materials).count))
-                        .font(.caption).foregroundStyle(AppColors.textSecondary)
+                    Text(verbatim: title).font(.headline).lineLimit(1)
+                    if !item.materials.isEmpty || workspace.isSearching {
+                        Text(WorkDeskCopy.materialCount(workspace.visibleMaterials(in: item.materials).count))
+                            .font(.caption).foregroundStyle(AppColors.textSecondary)
+                    }
                 }
                 Spacer(minLength: 0)
-                if isWide {
+                if workspace.isSearching {
+                    Button {
+                        workspace.search = ""
+                        searchFocused = false
+                    } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                    .pointerIconButton(size: 44)
+                    .accessibilityLabel(Text(LocalizedStringResource("workdesk.search.clear", defaultValue: "Clear search")))
+                } else if !isCompact || workspace.currentProject == nil {
                     WorkDeskLayoutControl(viewModel: viewModel,
-                        supportsSpatialLayout: workspace.supportsSpatialLayout)
+                        supportsSpatialLayout: workspace.supportsSpatialLayout,
+                        compact: workspace.currentProject != nil)
                 }
-                if workspace.currentProject != nil {
+                Button {
+                    workspace.isSelecting.toggle()
+                    if !workspace.isSelecting { workspace.selectedIDs = [] }
+                } label: {
+                    Image(systemName: workspace.isSelecting ? "checkmark.circle.fill" : "checkmark.circle")
+                        .frame(width: 44, height: 44)
+                }
+                .pointerIconButton(size: 44)
+                .foregroundStyle(workspace.isSelecting ? AppColors.accent : AppColors.textSecondary)
+                .accessibilityLabel(Text(workspace.isSelecting
+                    ? LocalizedStringResource("common.done", defaultValue: "Done")
+                    : LocalizedStringResource("workdesk.select", defaultValue: "Select")))
+                .accessibilityIdentifier("workdesk-select")
+                if workspace.currentProject != nil && !workspace.isSearching {
                     Button {
                         guard let project = workspace.currentProject else { return }
                         _ = workspace.briefDraft(for: project, resolver: conversationResolver)
                         workspace.preparingProjectID = project.id
                     } label: {
-                        Label(LocalizedStringResource("workdesk.prepare", defaultValue: "Prepare"), systemImage: "arrow.up.forward")
+                        Group {
+                            if isCompact { Image(systemName: "arrow.up.forward") }
+                            else { Label(LocalizedStringResource("workdesk.prepare", defaultValue: "Prepare"), systemImage: "arrow.up.forward") }
+                        }
                             .font(.subheadline.weight(.semibold))
                             .padding(.horizontal, 12).frame(height: 40)
                             .background(AppColors.accent, in: Capsule())
                             .foregroundStyle(.black)
                     }
                     .primaryCTAButton()
+                    .accessibilityLabel(Text(LocalizedStringResource("workdesk.prepare", defaultValue: "Prepare")))
                     .accessibilityIdentifier("workdesk-prepare")
-                } else {
-                    Button { workspace.beginProject() } label: {
-                        Image(systemName: "folder.badge.plus").frame(width: 44, height: 44)
-                    }
-                    .pointerIconButton(size: 44)
-                    .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.new", defaultValue: "New project")))
-                }
-                if workspace.currentProject != nil { workspaceMenu }
-            }
-            HStack(spacing: 10) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(AppColors.textTertiary)
-                    TextField(text: $workspace.search) {
-                        Text(LocalizedStringResource("workdesk.search", defaultValue: "Find an idea or file"))
-                    }
-                    .textFieldStyle(.plain)
-                    .submitLabel(.search)
-                    .onSubmit {
-                        #if os(iOS)
-                        KeyboardDismissal.dismissKeyboard()
-                        #endif
-                    }
-                }
-                .font(.subheadline)
-                .padding(.horizontal, 12).frame(height: 38)
-                .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 11))
-
-                Button {
-                    workspace.isSelecting.toggle()
-                    if !workspace.isSelecting { workspace.selectedIDs = [] }
-                } label: {
-                    Text(workspace.isSelecting
-                         ? LocalizedStringResource("common.done", defaultValue: "Done")
-                         : LocalizedStringResource("workdesk.select", defaultValue: "Select"))
-                        .font(.subheadline.weight(.medium)).frame(minHeight: 44)
-                }
-                .pointerIconButton(size: 44, horizontalPadding: 8)
-                .foregroundStyle(AppColors.accent)
-            }
-            if !isWide {
-                HStack {
-                    WorkDeskLayoutControl(viewModel: viewModel,
-                        supportsSpatialLayout: workspace.supportsSpatialLayout)
-                    Spacer(minLength: 0)
+                    workspaceMenu
                 }
             }
             if workspace.isSelecting { selectionBar }
-            if workspace.scope == .all || workspace.scope == .pinned {
-                Text(LocalizedStringResource("workdesk.aggregate.hint", defaultValue: "A readable overview across projects. Open a project to arrange its cards."))
-                    .font(.caption).foregroundStyle(AppColors.textTertiary)
+        }
+        .padding(.horizontal, 12).padding(.bottom, 6)
+        .background(AppColors.background)
+    }
+
+    // This is an explicit rail, not a NavigationSplitView column. SwiftUI's
+    // searchable(.sidebar) would fall back into the window toolbar here.
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(AppColors.textTertiary)
+            TextField(text: $workspace.search) {
+                Text(LocalizedStringResource("workdesk.search", defaultValue: "Find an idea or file"))
             }
-            if workspace.currentProject != nil {
-                Text(LocalizedStringResource("workdesk.capture.destination", defaultValue: "New captures land on your desk. Move them into a project whenever you’re ready."))
-                    .font(.caption).foregroundStyle(AppColors.textTertiary)
+            .textFieldStyle(.plain)
+            .focused($searchFocused)
+            .submitLabel(.search)
+            .onSubmit {
+                searchFocused = false
+                workspace.showsProjectPicker = false
+            }
+            .accessibilityIdentifier("workdesk-search")
+            if !workspace.search.isEmpty {
+                Button { workspace.search = ""; searchFocused = true } label: {
+                    Image(systemName: "xmark.circle.fill").frame(width: 32, height: 36)
+                }
+                .pointerIconButton(size: 32)
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.search.clear", defaultValue: "Clear search")))
             }
         }
-        .padding(.horizontal, 16).padding(.bottom, 12)
-        .background(AppColors.background)
+        .font(.subheadline)
+        .padding(.leading, 12).padding(.trailing, 4).frame(minHeight: 40)
+        .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 10))
+        .onAppear {
+            if requestsSearchFocus { searchFocused = true; requestsSearchFocus = false }
+        }
     }
 
     private var workspaceMenu: some View {
         Menu {
+            WorkDeskLayoutControl(viewModel: viewModel,
+                supportsSpatialLayout: workspace.supportsSpatialLayout)
             if let project = workspace.currentProject {
                 Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
                     workspace.editProject(project)
@@ -319,13 +348,25 @@ struct WorkDeskWorkspaceView: View {
     }
 
     private var projectRail: some View {
-        ScrollView {
+        let counts = workspace.organization.materialCounts(in: item.materials)
+        return VStack(spacing: 0) {
+            searchField.padding(12)
+            if !workspace.presentsSidebarInline && workspace.isSearching {
+                Button(LocalizedStringResource("workdesk.search.show", defaultValue: "Show results")) {
+                    searchFocused = false
+                    workspace.showsProjectPicker = false
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(.bottom, 8)
+            }
+            ScrollView {
             VStack(alignment: .leading, spacing: 6) {
                 railRow(title: String(localized: LocalizedStringResource("workdesk.desk", defaultValue: "Your desk")), symbol: "square.grid.2x2", scope: .desk,
-                        count: item.materials.filter { workspace.organization.projectID(for: $0.id) == nil }.count)
+                        count: counts[nil] ?? 0)
                 railRow(title: String(localized: LocalizedStringResource("workdesk.all", defaultValue: "All materials")), symbol: "tray.full", scope: .all, count: item.materials.count)
                 railRow(title: String(localized: LocalizedStringResource("workdesk.pinned", defaultValue: "Pinned")), symbol: "pin", scope: .pinned,
-                        count: item.materials.filter { workspace.organization.placements[$0.id]?.isPinned == true }.count)
+                        count: item.materials.filter { workspace.organization.placements[$0.id]?.isPinned == true }.count
+                            + workspace.organization.projects.filter(\.isPinned).count)
                 HStack {
                     Text(LocalizedStringResource("workdesk.projects", defaultValue: "Projects"))
                         .font(.caption.weight(.semibold)).foregroundStyle(AppColors.textTertiary)
@@ -338,7 +379,7 @@ struct WorkDeskWorkspaceView: View {
                 }.padding(.leading, 12).padding(.top, 18)
                 ForEach(workspace.organization.projects) { project in
                     railRow(title: project.title, symbol: project.isPinned ? "pin.fill" : "folder", scope: .project(project.id),
-                            count: item.materials.filter { workspace.organization.projectID(for: $0.id) == project.id }.count)
+                            count: counts[project.id] ?? 0)
                         .contextMenu {
                             Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project")) {
                                 workspace.editProject(project)
@@ -359,7 +400,8 @@ struct WorkDeskWorkspaceView: View {
             }
             .padding(12)
         }
-        .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.interactively)
+        }
     }
 
     private func railRow(title: String, symbol: String, scope: WorkDeskScope, count: Int) -> some View {

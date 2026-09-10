@@ -7,7 +7,8 @@
 // owns a material or its bytes; each material's placement is an independently
 // mirrored row. Missing projects therefore cannot hide captured work. Project
 // deletion leaves an identity-only tombstone so an offline placement arriving
-// later cannot bring a deleted project back.
+// later cannot bring a deleted project back. Desk positions extend in every
+// direction from the origin, with finite bounds for malformed imported values.
 
 import Foundation
 
@@ -22,7 +23,7 @@ nonisolated struct WorkDeskPoint: Codable, Hashable, Sendable {
     }
 
     private static func bounded(_ value: Double) -> Double {
-        value.isFinite ? min(max(value, 0), coordinateLimit) : 0
+        value.isFinite ? min(max(value, -coordinateLimit), coordinateLimit) : 0
     }
 
     init(from decoder: Decoder) throws {

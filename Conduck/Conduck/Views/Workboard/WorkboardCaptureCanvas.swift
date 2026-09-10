@@ -403,8 +403,22 @@ struct WorkboardCaptureCanvas: View {
     /// The host's material band is unaffected: the modifier's second frame
     /// re-expands to `.infinity`, so the band still reaches both window edges even
     /// though the card inside it does not.
+    private var captureNeedsDeskDirection: Bool {
+        guard let deskWorkspace else { return false }
+        return deskWorkspace.scope != .desk || deskWorkspace.isSearching
+    }
+
     private var pinnedComposer: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 6) {
+            if captureNeedsDeskDirection, let deskWorkspace {
+                Button { deskWorkspace.selectScope(.desk) } label: {
+                    Label(LocalizedStringResource("workdesk.capture.destination.short", defaultValue: "Captures go to Your desk"),
+                          systemImage: "arrow.turn.up.left")
+                        .font(.caption)
+                }
+                .inlineLinkButton()
+                .foregroundStyle(AppColors.textSecondary)
+            }
             if usesComposerCard {
                 #if os(macOS)
                 composerCard
@@ -509,7 +523,9 @@ struct WorkboardCaptureCanvas: View {
         inCard: Bool = false
     ) -> some View {
         TextField(
-            String(localized: destination.composerPrompt),
+            String(localized: captureNeedsDeskDirection
+                ? LocalizedStringResource("workdesk.capture.prompt", defaultValue: "Add to your desk…")
+                : destination.composerPrompt),
             text: composerTextBinding,
             axis: .vertical
         )

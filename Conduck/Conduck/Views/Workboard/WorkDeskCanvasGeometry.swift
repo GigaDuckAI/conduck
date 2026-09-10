@@ -56,8 +56,8 @@ nonisolated enum WorkDeskCanvasGeometry {
 
     static func bounded(_ point: WorkDeskPoint) -> WorkDeskPoint {
         WorkDeskPoint(
-            x: point.x.isFinite ? min(max(point.x, 0), coordinateLimit) : 0,
-            y: point.y.isFinite ? min(max(point.y, 0), coordinateLimit) : 0
+            x: point.x.isFinite ? min(max(point.x, -coordinateLimit), coordinateLimit) : 0,
+            y: point.y.isFinite ? min(max(point.y, -coordinateLimit), coordinateLimit) : 0
         )
     }
 
@@ -139,6 +139,12 @@ nonisolated enum WorkDeskCanvasGeometry {
         )
     }
 
+    static func worldPoint(_ point: CGPoint, transform: WorkDeskCanvasTransform) -> WorkDeskPoint {
+        let camera = normalized(transform)
+        return WorkDeskPoint(x: Double((point.x - camera.offset.width) / camera.scale),
+                             y: Double((point.y - camera.offset.height) / camera.scale))
+    }
+
     /// Zoom around the chosen screen point, keeping its desk point stationary.
     static func zoomed(_ transform: WorkDeskCanvasTransform, to requested: CGFloat, anchor: CGPoint) -> WorkDeskCanvasTransform {
         let transform = normalized(transform)
@@ -185,8 +191,8 @@ nonisolated enum WorkDeskCanvasGeometry {
     static func translated<ID: Hashable>(_ origins: [ID: WorkDeskPoint], by delta: CGSize) -> [ID: WorkDeskPoint] {
         guard !origins.isEmpty, delta.width.isFinite, delta.height.isFinite else { return origins }
         let points = Array(origins.values)
-        let dx = min(max(Double(delta.width), -(points.map(\.x).min() ?? 0)), coordinateLimit - (points.map(\.x).max() ?? 0))
-        let dy = min(max(Double(delta.height), -(points.map(\.y).min() ?? 0)), coordinateLimit - (points.map(\.y).max() ?? 0))
+        let dx = min(max(Double(delta.width), -coordinateLimit - (points.map(\.x).min() ?? 0)), coordinateLimit - (points.map(\.x).max() ?? 0))
+        let dy = min(max(Double(delta.height), -coordinateLimit - (points.map(\.y).min() ?? 0)), coordinateLimit - (points.map(\.y).max() ?? 0))
         return origins.mapValues { WorkDeskPoint(x: $0.x + dx, y: $0.y + dy) }
     }
 
@@ -194,8 +200,13 @@ nonisolated enum WorkDeskCanvasGeometry {
     /// edge also blocks dropping through it into a hidden project underneath.
     static func foregroundTarget(movingFrame: CGRect, candidates: [WorkDeskDropCandidate]) -> WorkDeskCanvasItemID? {
         let centre = CGPoint(x: movingFrame.midX, y: movingFrame.midY)
-        let front = candidates.filter { $0.frame.contains(centre) }.max {
-            $0.layer == $1.layer ? $0.id.sortKey < $1.id.sortKey : $0.layer < $1.layer
+        var front: WorkDeskDropCandidate?
+        for candidate in candidates where candidate.frame.contains(centre) {
+            if let current = front {
+                if candidate.layer > current.layer || (candidate.layer == current.layer && candidate.id.sortKey > current.id.sortKey) {
+                    front = candidate
+                }
+            } else { front = candidate }
         }
         guard let front,
               front.frame.insetBy(dx: front.frame.width * 0.18, dy: front.frame.height * 0.18).contains(centre) else { return nil }

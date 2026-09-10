@@ -31,7 +31,7 @@ final class WorkDeskBatchMoveTests: XCTestCase {
         try await store.applyWorkDeskMutation(.moveMaterials(positions: positions, expectedProjectID: project.id))
 
         let saved = try await store.fetchWorkDeskOrganization()
-        XCTAssertEqual(saved.placements[one.id]?.position, WorkDeskPoint(x: 0, y: 900))
+        XCTAssertEqual(saved.placements[one.id]?.position, WorkDeskPoint(x: -40, y: 900))
         XCTAssertEqual(saved.placements[two.id]?.position, WorkDeskPoint(x: 800, y: WorkDeskPoint.coordinateLimit))
         XCTAssertEqual(saved.placements[one.id]?.projectID, project.id)
         XCTAssertEqual(saved.placements[two.id]?.projectID, project.id)

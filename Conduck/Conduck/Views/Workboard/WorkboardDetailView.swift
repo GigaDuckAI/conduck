@@ -36,7 +36,8 @@ struct WorkboardDetailView: View {
             WorkboardCaptureCanvas(
                 viewModel: viewModel,
                 item: desk.item,
-                mode: .composer
+                mode: .composer,
+                deskWorkspace: viewModel.deskWorkspace
             )
             // The bar owns its own inset (Chat's 16/12). Only the full-bleed
             // material belongs here: the board scrolls UNDER this inset, so

@@ -18,6 +18,7 @@ final class WorkDeskOrganization {
     private(set) var placements: [UUID: WorkDeskPlacementRecord] = [:]
     private(set) var isSaving = false
     var errorMessage: String?
+    private var projectsByID: [UUID: WorkDeskProjectRecord] = [:]
 
     @ObservationIgnored private let fetch: @Sendable () async throws -> WorkDeskOrganizationSnapshot
     @ObservationIgnored private let apply: @Sendable (WorkDeskMutation) async throws -> WorkDeskOrganizationSnapshot
@@ -43,8 +44,19 @@ final class WorkDeskOrganization {
 
     func projectID(for materialID: UUID) -> UUID? {
         guard let id = placements[materialID]?.projectID,
-              projects.contains(where: { $0.id == id }) else { return nil }
+              projectsByID[id] != nil else { return nil }
         return id
+    }
+
+    func project(id: UUID) -> WorkDeskProjectRecord? { projectsByID[id] }
+
+    /// Count the visible capture groups in one pass. Project rails must not
+    /// rescan every card and project for each row on a pointer-driven refresh.
+    /// A missing project's cards belong to the loose desk, just as in the canvas.
+    func materialCounts(in materials: [WorkboardMaterialSnapshot]) -> [UUID?: Int] {
+        var counts: [UUID?: Int] = [:]
+        for material in materials { counts[projectID(for: material.id), default: 0] += 1 }
+        return counts
     }
 
     func reload() async {
@@ -152,8 +164,13 @@ final class WorkDeskOrganization {
     }
 
     private func publish(_ snapshot: WorkDeskOrganizationSnapshot) {
-        projects = snapshot.projects
-        placements = snapshot.placements
+        // A position seed often finds that all its slots are already saved.
+        // Publishing identical arrays still invalidates the whole desk's views.
+        if projects != snapshot.projects {
+            projects = snapshot.projects
+            projectsByID = snapshot.projects.reduce(into: [:]) { $0[$1.id] = $1 }
+        }
+        if placements != snapshot.placements { placements = snapshot.placements }
     }
 
     private func report(_ error: Error) {
