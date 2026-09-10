@@ -264,6 +264,7 @@ struct iOSMessageComposerBar: View {
             }
         }
         .padding(.horizontal, 16)
+        .appReviewBusy(workbenchDestinationIsActive && (isSendDisabled || hasSendableContent))
         .padding(.vertical, 12)
         // Compact keeps the docked-bar material chrome; regular (iPad) has no
         // full-width material — the composer CARD is the container there. Keyed

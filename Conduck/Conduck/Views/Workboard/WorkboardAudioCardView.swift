@@ -750,6 +750,7 @@ struct WorkboardAudioTransport: View {
 
     private var glyph: some View {
         Image(systemName: Self.symbolName(phase: player.phase, availability: availability))
+            .appReviewBusy(player.phase == .loading || player.phase == .playing || player.phase == .paused)
             .font(.system(size: max(13, dimension * 0.44), weight: .semibold))
             .foregroundStyle(glyphTint)
             .frame(width: dimension, height: dimension)

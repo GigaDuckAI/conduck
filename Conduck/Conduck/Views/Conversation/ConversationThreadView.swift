@@ -196,6 +196,14 @@ struct ConversationThreadView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        #if os(iOS) || os(macOS)
+        .appReviewBusy(workbenchDestinationIsActive && (
+            speaker.state != .idle || viewModel.isAwaitingReply || viewModel.isLoading
+                || viewModel.showsGatewayWaitIndicator || showingCloneTargets
+                || showingFileSetup || reviewingRefusals != nil
+                || filePreview.previewURL != nil || viewModel.showingGatewaySheet
+        ))
+        #endif
         .overlay(alignment: .top) {
             VStack(spacing: 8) {
                 if let notice = workCaptureNotice {

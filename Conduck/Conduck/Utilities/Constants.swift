@@ -16,6 +16,20 @@ import Security
 enum Constants {
     // MARK: - Build Identity
 
+    /// Optional listing owned by this distribution. Community builds leave it
+    /// empty so forks never solicit reviews for the official app by accident.
+    nonisolated static let appStoreID: String? = {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: "ConduckAppStoreID") as? String,
+              !value.isEmpty,
+              value.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
+        return value
+    }()
+
+    nonisolated static var appStoreReviewURL: URL? {
+        guard let appStoreID else { return nil }
+        return URL(string: "https://apps.apple.com/app/id\(appStoreID)?action=write-review")
+    }
+
     /// Reverse-DNS identity namespace of THIS build, read from the
     /// `ConduckIdentityNamespace` Info.plist key (fed by the xcconfig identity
     /// layer's `CONDUCK_IDENTITY_NAMESPACE`: official `ai.gigaduck.agentrelay`,

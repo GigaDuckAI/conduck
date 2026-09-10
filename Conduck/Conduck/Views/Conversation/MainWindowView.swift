@@ -864,6 +864,10 @@ struct MainWindowView: View {
 
     var body: some View {
         windowLifecycleContent
+        .appReviewBusy(showingSettings || guidedHost.presentation != nil
+            || showDeleteAllConfirmation || !sidebarSearch.isEmpty
+            || coordinator.dictationService.state == .recording
+            || coordinator.dictationService.state == .processing)
         .onReceive(NotificationCenter.default.publisher(for: .openConversationDeepLink)) { note in
             activateChatsForToolbarAction()
             consumeConversationDeepLink(note)

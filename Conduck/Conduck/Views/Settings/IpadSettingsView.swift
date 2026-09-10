@@ -430,6 +430,8 @@ private struct AboutPane: View {
                 }
                 .buttonStyle(.plain)
 
+                AppReviewLink()
+
                 Link(destination: URL(string: Constants.websiteURL)!) {
                     supportRow("Visit conduck.com", systemImage: "globe") // xcstrings
                 }
