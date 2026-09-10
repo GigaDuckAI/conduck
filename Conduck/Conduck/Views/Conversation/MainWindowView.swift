@@ -20,11 +20,12 @@
 //
 // WORK / CHATS: one persistent split view owns the window, and the two
 // sections swap pixels inside its columns rather than swapping the split
-// itself. Chats is the shell described above. Work is ONE desk with no list
-// beside it, so the sidebar column collapses (`splitColumnVisibility`) and the
-// desk fills the window. The toolbar arrangement is identical in both
-// sections: compose + the system toggle in the sidebar region, a zero-area
-// principal item whose flexible spaces are the only thing pinning the
+// itself. Chats is the shell described above. In Work the native Chat sidebar
+// collapses (`splitColumnVisibility`) and the desk's project rail owns its own
+// visibility. The sidebar-region toolbar then controls that project rail and
+// hides Chat's compose action; switching back restores the native Chat toggle
+// and its remembered visibility. Both sections retain a zero-area principal
+// item whose flexible spaces are the only thing pinning the
 // Work/Chats section control to the trailing edge (see
 // `gatewayToolbarContent`), and that control declared LAST on the detail side
 // so nothing Chat draws can move it.
@@ -150,8 +151,8 @@ struct MainWindowView: View {
     /// the collapsed bar needs an explicit gate, not the platform's unmount.
     /// `.automatic` = the system's own default, sidebar shown.
     ///
-    /// Chat's alone, because Work is one desk and has no sidebar to show:
-    /// `splitColumnVisibility` forces the column collapsed for the whole time
+    /// Chat's alone: Work's project rail lives inside its own workspace.
+    /// `splitColumnVisibility` forces the native column collapsed the whole time
     /// Work is active, and this holds what Chat is restored to on the way back,
     /// so a column the user collapsed BY HAND survives a round trip through Work.
     @State private var chatColumnVisibility: NavigationSplitViewVisibility = .automatic
@@ -402,50 +403,61 @@ struct MainWindowView: View {
                 // all, each correct only where it stands; moving any of them
                 // breaks the surface it serves. The measurements are in that
                 // file's header.
+                .toolbar(removing: workDestinationIsActive ? .sidebarToggle : nil)
                 .toolbar {
-                    // Delete-All ahead of compose: within the sidebar region a
-                    // column-level item renders in declaration order, so this
-                    // is the one attachment that puts the destructive control
-                    // LEFT of the compose→toggle pair (a content-declared item
-                    // lands between them, and `.navigation` leaves the region
-                    // entirely for the detail side — both screenshot-measured,
-                    // macOS 26.5, 2026-08-24). The flexible spacer pushes
-                    // compose+toggle back against the divider and opens the gap
-                    // that keeps trash from reading as one cluster with them —
-                    // the iPad sidebar bar's leading-trash arrangement. The
-                    // trigger and the empty-gate state both live in
-                    // `ConversationListView` (it owns the list view model), fed
-                    // through `externalDeleteAllConfirmation` /
-                    // `onConversationsEmptyChanged` at the `sidebar` call site.
-                    //
-                    // The visibility gate is EXPLICIT because a column-level
-                    // item outlives the collapsed column on macOS (compose
-                    // relies on exactly that): founder-decided, the collapsed
-                    // bar shows no Delete-All at all — a destructive bulk
-                    // action stays with the list it destroys, like the iPad
-                    // sidebar bar, while compose+toggle keep their two
-                    // collapsed capsules. Work collapses the column, so the
-                    // same rule hides the trash there: the list it would
-                    // destroy is not on screen to stand beside it.
-                    if sidebarHasConversations && effectiveColumnVisibility != .detailOnly {
+                    if workDestinationIsActive, let personalWorkbenchModel {
                         ToolbarItem(placement: .primaryAction) {
-                            Button(role: .destructive) {
-                                activateChatsForToolbarAction()
-                                showDeleteAllConfirmation = true
-                            } label: {
-                                Label(String(localized: "Delete All"), systemImage: "trash")
-                            }
-                            .help(String(localized: LocalizedStringResource(
-                                "conversations.deleteAll.help",
-                                defaultValue: "Delete all conversations"
-                            )))
-                            .accessibilityIdentifier("toolbar.deleteAll")  // stable QA target (non-localized)
+                            WorkDeskSidebarToolbarButton(
+                                workspace: personalWorkbenchModel.workboardViewModel.deskWorkspace,
+                                isActive: workDestinationIsActive
+                            )
                         }
-                        ToolbarSpacer(.flexible, placement: .primaryAction)
                     }
-                    LeadingToolbarChrome(column: .sidebar) {
-                        activateChatsForToolbarAction()
-                        startNewConversation()
+                    if chatDestinationIsActive {
+                        // Delete-All ahead of compose: within the sidebar region a
+                        // column-level item renders in declaration order, so this
+                        // is the one attachment that puts the destructive control
+                        // LEFT of the compose→toggle pair (a content-declared item
+                        // lands between them, and `.navigation` leaves the region
+                        // entirely for the detail side — both screenshot-measured,
+                        // macOS 26.5, 2026-08-24). The flexible spacer pushes
+                        // compose+toggle back against the divider and opens the gap
+                        // that keeps trash from reading as one cluster with them —
+                        // the iPad sidebar bar's leading-trash arrangement. The
+                        // trigger and the empty-gate state both live in
+                        // `ConversationListView` (it owns the list view model), fed
+                        // through `externalDeleteAllConfirmation` /
+                        // `onConversationsEmptyChanged` at the `sidebar` call site.
+                        //
+                        // The visibility gate is EXPLICIT because a column-level
+                        // item outlives the collapsed column on macOS (compose
+                        // relies on exactly that): founder-decided, the collapsed
+                        // bar shows no Delete-All at all — a destructive bulk
+                        // action stays with the list it destroys, like the iPad
+                        // sidebar bar, while compose+toggle keep their two
+                        // collapsed capsules. Work collapses the column, so the
+                        // same rule hides the trash there: the list it would
+                        // destroy is not on screen to stand beside it.
+                        if sidebarHasConversations && effectiveColumnVisibility != .detailOnly {
+                            ToolbarItem(placement: .primaryAction) {
+                                Button(role: .destructive) {
+                                    guard chatDestinationIsActive else { return }
+                                    showDeleteAllConfirmation = true
+                                } label: {
+                                    Label(String(localized: "Delete All"), systemImage: "trash")
+                                }
+                                .help(String(localized: LocalizedStringResource(
+                                    "conversations.deleteAll.help",
+                                    defaultValue: "Delete all conversations"
+                                )))
+                                .accessibilityIdentifier("toolbar.deleteAll")  // stable QA target (non-localized)
+                            }
+                            ToolbarSpacer(.flexible, placement: .primaryAction)
+                        }
+                        LeadingToolbarChrome(column: .sidebar) {
+                            guard chatDestinationIsActive else { return }
+                            startNewConversation()
+                        }
                     }
                 }
         } detail: {
@@ -518,9 +530,9 @@ struct MainWindowView: View {
     /// it, so its column collapses and the desk gets the whole window; switching
     /// to Chats hands the column back in the state Chat was left in.
     ///
-    /// Writes are accepted only from Chat. The getter is constant while Work is
-    /// active, which makes the split view's own toggle inert there — and, the
-    /// part that matters, stops a write-back AppKit performs on its OWN
+    /// Writes are accepted only from Chat. Work replaces the native toolbar
+    /// toggle with its own project-navigation action; keeping this getter
+    /// constant also stops a write-back AppKit performs on its OWN
     /// initiative (it revises this binding when the window is resized past the
     /// two-column floor, and when it restores a saved frame) from rewriting
     /// Chat's remembered state out of a section that has no sidebar to describe.
@@ -614,6 +626,8 @@ struct MainWindowView: View {
             if let personalWorkbenchModel {
                 if mountsWorkLayer {
                     workboardExperience(for: personalWorkbenchModel).detailColumn
+                        .environment(\.workDeskConversationResolver, WorkDeskConversationResolver(resolve: { coordinator.viewModel(for: $0) }))
+                        .environment(\.workDeskSidebarIsHosted, true)
                         .environment(\.workbenchDestinationIsActive, workDestinationIsActive)
                         .workbenchDestinationLayer(
                             isActive: workDestinationIsActive,
@@ -654,9 +668,8 @@ struct MainWindowView: View {
         }
     }
 
-    /// The original sidebar compose/trash controls remain global window chrome.
-    /// From Work they first reveal Chat, then perform the same action as before;
-    /// their identity, placement and semantics therefore never change.
+    /// Explicit conversation requests (deep links and the app's New command)
+    /// reveal Chats. Work's toolbar has no conversation action of its own.
     private func activateChatsForToolbarAction() {
         personalWorkbenchModel?.router.destination = .chats
     }

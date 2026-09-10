@@ -6,8 +6,8 @@
 //
 // Four facts about that window are load-bearing, invisible in a diff, and
 // verifiable only by eye on a signed Mac — this suite is the cheap half of that
-// check. (1) Work is ONE desk with no list beside it, so the sidebar column is
-// COLLAPSED for as long as Work is active and the desk gets the whole window.
+// check. (1) Work owns a project rail inside its workspace, so the native Chat
+// sidebar stays COLLAPSED while Work is active.
 // (2) Chat's own collapse state has to survive a round trip through Work, which
 // means the forced collapse must never be written back into it — including by
 // AppKit, which revises the visibility binding on its own when the window is
@@ -32,6 +32,78 @@ final class MacWorkbenchShellDriftGuardTests: XCTestCase {
 
     private func shellSource() throws -> String {
         try RefusalLaneSource.source(at: Self.path)
+    }
+
+    func testWorkReplacesOnlyTheDefaultToggleWithoutReplacingTheSplitView() throws {
+        let source = try shellSource()
+        let split = try RefusalLaneSource.trailingClosure(
+            after: "private var persistentSplitView: some View", in: source, path: Self.path
+        )
+        XCTAssertEqual(split.components(separatedBy: "NavigationSplitView(columnVisibility:").count - 1, 1)
+        XCTAssertTrue(split.contains(".toolbar(removing: workDestinationIsActive ? .sidebarToggle : nil)"),
+                      "Only Work removes the native Chat toggle; nil restores the platform control in Chats")
+        let sidebar = try RefusalLaneSource.trailingClosure(
+            after: "NavigationSplitView(columnVisibility: splitColumnVisibility)", in: split, path: Self.path
+        )
+        XCTAssertTrue(sidebar.contains(".toolbar(removing: workDestinationIsActive ? .sidebarToggle : nil)"),
+                      "Default sidebar removal must be attached to the sidebar column that owns it")
+    }
+
+    func testChatToolbarActionsAreHiddenAndRefuseStaleWorkTaps() throws {
+        let source = try shellSource()
+        let split = try RefusalLaneSource.trailingClosure(
+            after: "private var persistentSplitView: some View", in: source, path: Self.path
+        )
+        let chat = try RefusalLaneSource.trailingClosure(
+            after: "if chatDestinationIsActive", in: split, path: Self.path
+        )
+        XCTAssertTrue(chat.contains("LeadingToolbarChrome(column: .sidebar)"))
+        XCTAssertTrue(chat.contains("toolbar.deleteAll"))
+        let compose = try RefusalLaneSource.trailingClosure(
+            after: "LeadingToolbarChrome(column: .sidebar)", in: chat, path: Self.path
+        )
+        let guardAt = try XCTUnwrap(compose.range(of: "guard chatDestinationIsActive else { return }")?.lowerBound)
+        let actionAt = try XCTUnwrap(compose.range(of: "startNewConversation()")?.lowerBound)
+        XCTAssertLessThan(guardAt, actionAt)
+        XCTAssertFalse(compose.contains("activateChatsForToolbarAction"),
+                       "A stale Work toolbar tap must not bridge itself into Chats")
+        let work = try RefusalLaneSource.trailingClosure(
+            after: "if workDestinationIsActive, let personalWorkbenchModel", in: split, path: Self.path
+        )
+        XCTAssertTrue(work.contains("WorkDeskSidebarToolbarButton("))
+        XCTAssertFalse(work.contains("LeadingToolbarChrome"))
+        XCTAssertFalse(work.contains("startNewConversation"))
+    }
+
+    func testWorkToolbarUsesTheSameCachedProjectNavigationAsItsDesk() throws {
+        let source = try shellSource()
+        XCTAssertTrue(source.contains("workspace: personalWorkbenchModel.workboardViewModel.deskWorkspace"))
+        XCTAssertTrue(source.contains(".environment(\\.workDeskSidebarIsHosted, true)"))
+        let path = "Conduck/Views/Workboard/WorkboardView.swift"
+        let workSource = try RefusalLaneSource.source(at: path)
+        let buttonStart = try XCTUnwrap(workSource.range(of: "struct WorkDeskSidebarToolbarButton"))
+        let button = try RefusalLaneSource.trailingClosure(
+            after: "var body: some View", in: String(workSource[buttonStart.lowerBound...]), path: path
+        )
+        XCTAssertTrue(button.contains("guard isActive else { return }"))
+        XCTAssertTrue(button.contains("workspace.toggleProjectNavigation()"))
+        XCTAssertTrue(button.contains(".disabled(!isActive)"))
+        XCTAssertFalse(button.contains("chatColumnVisibility"))
+        XCTAssertFalse(button.contains("startNewConversation"))
+        XCTAssertFalse(button.contains(".pointerIconButton"),
+                       "The system toolbar must keep its native button style")
+    }
+
+    func testIPadComposeAlreadyUsesItsActiveDestinationGateAndRejectsHiddenActions() throws {
+        let path = "Conduck/Views/Conversation/ConversationLibraryView.swift"
+        let source = try RefusalLaneSource.source(at: path)
+        XCTAssertTrue(source.contains("if workbenchDestinationIsActive, !sidebarBarOnScreen"))
+        let sidebar = try RefusalLaneSource.trailingClosure(
+            after: "if workbenchDestinationIsActive", in: source, path: path
+        )
+        XCTAssertTrue(sidebar.contains("LeadingToolbarChrome(column: .sidebar)"))
+        let action = try RefusalLaneSource.body(ofFunction: "startNewConversation", in: source, path: path)
+        XCTAssertTrue(action.contains("guard workbenchDestinationIsActive else { return }"))
     }
 
     /// The split view is driven by the DERIVED visibility, and that derivation

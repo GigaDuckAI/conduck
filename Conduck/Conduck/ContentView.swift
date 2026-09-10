@@ -51,6 +51,8 @@ import UIKit
 // MARK: - ContentView (conversation thread shell)
 
 struct ContentView: View {
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
+
     /// FACTS ONLY. The one thing this surface logs is whether a store write it
     /// deliberately does not fail on succeeded — never a transcript, never an
     /// id, never a file name.
@@ -729,45 +731,49 @@ struct ContentView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    gatewayTitleControl
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .simultaneousGesture(TapGesture().onEnded {
+                if workbenchDestinationIsActive {
+                    ToolbarItem(placement: .principal) {
+                        gatewayTitleControl
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .simultaneousGesture(TapGesture().onEnded {
+                                phoneWorkbenchRouter?.dismissPhoneSection(for: .chats)
+                            })
+                    }
+                    // Conversations. The glyph is `sidebar.leading` for family
+                    // resemblance with the system sidebar toggle the iPad split view
+                    // and the macOS window both pin leading-most in their bars — one
+                    // app, one leading affordance across all three shells.
+                    //
+                    // It is a RESEMBLANCE, not the same control: this button toggles
+                    // no sidebar, it presents the conversation list as a sheet
+                    // (`showingList`), because the phone has no second column to
+                    // reveal. That is why the label stays "Conversations" — the
+                    // spoken name describes what the button opens, not the glyph.
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            guard workbenchDestinationIsActive else { return }
                             phoneWorkbenchRouter?.dismissPhoneSection(for: .chats)
-                        })
-                }
-                // Conversations. The glyph is `sidebar.leading` for family
-                // resemblance with the system sidebar toggle the iPad split view
-                // and the macOS window both pin leading-most in their bars — one
-                // app, one leading affordance across all three shells.
-                //
-                // It is a RESEMBLANCE, not the same control: this button toggles
-                // no sidebar, it presents the conversation list as a sheet
-                // (`showingList`), because the phone has no second column to
-                // reveal. That is why the label stays "Conversations" — the
-                // spoken name describes what the button opens, not the glyph.
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        phoneWorkbenchRouter?.dismissPhoneSection(for: .chats)
-                        showingList = true
-                    } label: {
-                        Image(systemName: "sidebar.leading")
+                            showingList = true
+                        } label: {
+                            Image(systemName: "sidebar.leading")
+                        }
+                        .accessibilityLabel("Conversations")  // xcstrings
+                        .accessibilityIdentifier("toolbar.conversations")  // stable QA target (non-localized)
                     }
-                    .accessibilityLabel("Conversations")  // xcstrings
-                    .accessibilityIdentifier("toolbar.conversations")  // stable QA target (non-localized)
-                }
-                // iPhone groups New Chat beside Conversations. Compact iPad
-                // keeps its existing trailing action and native tab bar.
-                ToolbarItem(placement: phoneWorkbenchRouter == nil ? .topBarTrailing : .topBarLeading) {
-                    Button {
-                        phoneWorkbenchRouter?.dismissPhoneSection(for: .chats)
-                        startNewConversation()
-                    } label: {
-                        Image(systemName: "square.and.pencil")
+                    // iPhone groups New Chat beside Conversations. Compact iPad
+                    // keeps its existing trailing action and native tab bar.
+                    ToolbarItem(placement: phoneWorkbenchRouter == nil ? .topBarTrailing : .topBarLeading) {
+                        Button {
+                            guard workbenchDestinationIsActive else { return }
+                            phoneWorkbenchRouter?.dismissPhoneSection(for: .chats)
+                            startNewConversation()
+                        } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .accessibilityLabel("New conversation")  // xcstrings: chat-ui
+                        .accessibilityIdentifier("toolbar.newConversation")  // stable QA target (non-localized)
                     }
-                    .accessibilityLabel("New conversation")  // xcstrings: chat-ui
-                    .accessibilityIdentifier("toolbar.newConversation")  // stable QA target (non-localized)
                 }
             }
             .sheet(item: $settingsRoute, onDismiss: {

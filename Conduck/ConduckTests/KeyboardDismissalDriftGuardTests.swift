@@ -176,26 +176,16 @@ final class KeyboardDismissalDriftGuardTests: XCTestCase {
 
     /// The desk's ScrollView carries the modifier once, carries no bare mode,
     /// and applies it BEFORE the inset that hosts the composer.
-    func testWorkDeskScrollViewUsesTheModifierBeforeTheComposerInset() throws {
-        let source = try RefusalLaneSource.source(at: Self.deskPath)
-
-        XCTAssertEqual(
-            occurrences(of: Self.modifierCall, in: source), 1,
-            "Work's desk must apply `dismissesKeyboardOnScrollOrTap()` exactly once, on its ScrollView."
-        )
-        XCTAssertEqual(
-            occurrences(of: Self.bareMode, in: source), 0,
-            "The bare mode is what the modifier replaces; a second copy is a drift back to drag-only."
-        )
-
-        let modifier = try XCTUnwrap(source.range(of: Self.modifierCall))
-        let inset = try XCTUnwrap(
-            source.range(of: ".safeAreaInset(edge: .bottom"),
-            "No bottom `.safeAreaInset` in \(Self.deskPath) — the composer moved; update this guard."
-        )
-        XCTAssertLessThan(
-            modifier.lowerBound, inset.lowerBound,
-            "Applied after the inset, the modifier would wrap the composer too: the field would sit inside the tap-bearing view and need two taps to focus."
-        )
+    func testWorkDeskDismissalStaysInsideSourcesAndOutsideComposer() throws {
+        let host = try RefusalLaneSource.source(at: Self.deskPath)
+        let sources = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskSourceBoard.swift")
+        let canvas = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskCanvas.swift")
+        XCTAssertTrue(host.contains(".safeAreaInset(edge: .bottom"))
+        XCTAssertTrue(host.contains("mode: .composer"))
+        XCTAssertFalse(host.contains(Self.modifierCall), "Dismissal belongs to source content, not the composer host.")
+        XCTAssertTrue(sources.contains(Self.modifierCall), "The list must dismiss on scrolling and empty-space taps.")
+        XCTAssertTrue(canvas.contains("KeyboardDismissal.dismissKeyboard()"), "Spatial pan/tap must dismiss the capture keyboard.")
+        XCTAssertFalse(sources.contains("mode: .composer"))
+        XCTAssertFalse(canvas.contains("mode: .composer"))
     }
 }

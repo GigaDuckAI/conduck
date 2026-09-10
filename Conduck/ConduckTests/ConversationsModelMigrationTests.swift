@@ -1663,7 +1663,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
     /// report an account that measured nothing. A stale pointer would also leave
     /// the cascade in force, quietly deleting usage history the app now promises
     /// to keep.
-    func testTheCurrentModelVersionIsV17() throws {
+    func testTheCurrentModelVersionIsV18() throws {
         let bundles = [Bundle.main, Bundle(for: Self.self)]
         let momd = try XCTUnwrap(
             bundles.compactMap { $0.url(forResource: "Conversations", withExtension: "momd") }.first,
@@ -1671,7 +1671,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
         let plist = try XCTUnwrap(
             NSDictionary(contentsOf: momd.appendingPathComponent("VersionInfo.plist")),
             "a compiled momd always carries VersionInfo.plist")
-        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 17")
+        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 18")
     }
 
     /// THE SOURCE MODEL MUST STAY IN THE BUNDLE. Lightweight migration infers a
@@ -1680,7 +1680,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
     /// left with a file nothing can open — which on this app is the user's whole
     /// conversation history.
     func testEveryShippedModelVersionIsStillInTheBundle() throws {
-        for version in 2...17 {
+        for version in 2...18 {
             _ = try requiredModel(named: "Conversations \(version).mom")
         }
         _ = try requiredModel(named: "Conversations.mom")

@@ -11,23 +11,29 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum WorkboardLayoutMode: String, CaseIterable {
+    case desk
     case tiles
     case list
 
     var title: LocalizedStringResource {
         switch self {
+        case .desk: LocalizedStringResource("workdesk.layout.desk", defaultValue: "Desk")
         case .tiles: LocalizedStringResource("workboard.layout.tiles", defaultValue: "Tiles")
         case .list: LocalizedStringResource("workboard.layout.list", defaultValue: "List")
         }
     }
 
     var symbol: String {
-        self == .tiles ? "square.grid.2x2" : "list.bullet"
+        switch self {
+        case .desk: "rectangle.3.group"
+        case .tiles: "square.grid.2x2"
+        case .list: "list.bullet"
+        }
     }
 
     static func load() -> Self {
         let value = SettingsDependencies.processDefault.defaults.string(forKey: Constants.workboardLayoutKey)
-        return value.flatMap(Self.init(rawValue:)) ?? .tiles
+        return value.flatMap(Self.init(rawValue:)) ?? .desk
     }
 
     func save() {

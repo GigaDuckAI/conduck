@@ -4,7 +4,7 @@
 // PersonalWorkbenchView.swift
 //
 // The top-level Work / Chats shell. Work is a first-class personal surface with
-// no path to a gateway. This host owns only presentation routing and local
+// for collecting and preparing ideas. This host owns presentation routing and local
 // preview conveniences; capture persistence remains in its dedicated seam.
 // A section switch animates ONLY root opacity: a cheap composited dissolve,
 // while title, toolbar, lifecycle and accessibility state change immediately

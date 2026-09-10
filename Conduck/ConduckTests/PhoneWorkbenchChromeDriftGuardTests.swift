@@ -49,6 +49,17 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
         )
     }
 
+    func testCompactChatToolbarContributesNoActionsWhileWorkIsActive() throws {
+        let toolbar = try phoneToolbar()
+        let active = try RefusalLaneSource.trailingClosure(
+            after: "if workbenchDestinationIsActive", in: toolbar, path: Self.path
+        )
+        XCTAssertTrue(active.contains("toolbar.conversations"))
+        XCTAssertTrue(active.contains("toolbar.newConversation"))
+        XCTAssertFalse(topLevel(of: toolbar).contains("ToolbarItem"),
+                       "Every compact Chat item must sit inside the active-destination branch")
+    }
+
     /// One button in the leading slot opens the list, looks like the sidebar
     /// toggle, and keeps both of its accessibility names.
     func testConversationsButtonRetainsItsSheetActionAndAccessibilityIdentity() throws {
@@ -80,7 +91,7 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
         XCTAssertEqual(
             action.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t}"))
                 .split(whereSeparator: \.isWhitespace).joined(separator: " "),
-            "phoneWorkbenchRouter?.dismissPhoneSection(for: .chats) showingList = true",
+            "guard workbenchDestinationIsActive else { return } phoneWorkbenchRouter?.dismissPhoneSection(for: .chats) showingList = true",
             "The Conversations button no longer presents the conversation list. The phone has no "
             + "second column to reveal, so the sheet IS the destination — a button that toggles "
             + "anything else here compiles and leaves the user with no way to reach their threads."
@@ -142,7 +153,7 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
         XCTAssertEqual(
             action.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t}"))
                 .split(whereSeparator: \.isWhitespace).joined(separator: " "),
-            "phoneWorkbenchRouter?.dismissPhoneSection(for: .chats) startNewConversation()",
+            "guard workbenchDestinationIsActive else { return } phoneWorkbenchRouter?.dismissPhoneSection(for: .chats) startNewConversation()",
             "The New Chat button no longer calls `startNewConversation()`. That call is the phone's "
             + "whole compose path — it clears the selection so the next turn mints a fresh thread."
         )

@@ -34,8 +34,8 @@ final class WorkboardLayoutModePersistenceTests: XCTestCase {
 
     // MARK: - Adoption
 
-    func testLayoutModeDefaultsToTilesWithNothingStored() {
-        XCTAssertEqual(makeViewModel().layoutMode, .tiles)
+    func testLayoutModeDefaultsToSpatialDeskWithNothingStored() {
+        XCTAssertEqual(makeViewModel().layoutMode, .desk)
     }
 
     func testLayoutModeAdoptsThePersistedModeOnConstruction() {

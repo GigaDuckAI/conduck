@@ -11,9 +11,9 @@
 // Seven rules. The first six each held false copy in front of a user before
 // they existed; the seventh is preventive, and says why in its own paragraph:
 //
-// (1) VOCABULARY. Work opens, keeps and removes; it never sends, dispatches,
-// briefs, or holds a draft. There is no code path from the desk to a gateway,
-// so any Work string implying one describes software that does not exist.
+// (1) CAPTURE VOCABULARY. The workboard-prefixed capture controls collect
+// without dispatch. The separate workdesk-prefixed preparation flow may
+// describe a brief and explicit send; it cannot change capture semantics.
 // (2) THE SYNC PROMISE. `WorkMaterialStoragePolicy` keeps a payload over
 // `Constants.workboardSyncCeilingBytes` in the device-local vault behind a
 // reattach, so the tutorial's sync line must name that lane instead of
@@ -74,7 +74,7 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
     /// `workboard.*` because the retry card is a Work surface: the keys carry
     /// the other prefix only because the queue behind them also holds Chat
     /// captures, and a row nobody references would be just as invisible there.
-    private static let catalogPrefixes = ["workboard.", "pendingRetry."]
+    private static let catalogPrefixes = ["workboard.", "workdesk.", "pendingRetry."]
 
     /// The one Work-prefixed string that may talk about sending: the menu bar's
     /// Ask button is the CHAT lane, and it really does reach the gateway. It
@@ -211,7 +211,7 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
 
     // MARK: - (1) Vocabulary
 
-    func testNoWorkStringDescribesSendingDispatchingOrADraft() throws {
+    func testCaptureStringsDoNotDescribeProjectDispatch() throws {
         let strings = try catalogStrings()
 
         for (key, entry) in strings where key.hasPrefix(Self.keyPrefix) {
@@ -229,8 +229,8 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
             XCTAssertTrue(
                 offenders.isEmpty,
                 "\(key) says \(offenders.joined(separator: ", ")): \(value)\n"
-                    + "Work opens, keeps and removes. It has no gateway API, so a Work "
-                    + "string may not describe sending, dispatching, or a draft."
+                    + "Capture opens, keeps and removes. Project handoff belongs to the "
+                    + "separate preparation flow, never to a capture control."
             )
         }
     }

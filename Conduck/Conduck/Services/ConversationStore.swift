@@ -1089,6 +1089,12 @@ actor ConversationStore {
     /// whole wave of leaves at once — reach exactly this store's vault.
     let workAssetVault: WorkAssetVault
 
+    // Project/placement transactions share a FIFO across windows. Awaiting a
+    // background context re-enters this actor; without a claim, two first
+    // gestures could both insert the same logical placement before either saves.
+    var workDeskMutationInProgress = false
+    var workDeskMutationWaiters: [CheckedContinuation<Void, Never>] = []
+
     /// Message ids currently being copied into Work. Core Data's CloudKit-
     /// compatible model cannot use a unique constraint, and actor methods can
     /// re-enter while awaiting background contexts. This claim closes that

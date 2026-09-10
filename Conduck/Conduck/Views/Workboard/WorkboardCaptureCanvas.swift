@@ -53,6 +53,7 @@ struct WorkboardCaptureCanvas: View {
     /// material canvas lands on the same identity the first card will.
     let item: WorkboardItemSnapshot
     let mode: WorkboardCaptureCanvasMode
+    var deskWorkspace: WorkDeskWorkspaceState?
 
     /// Capture always lands on the desk, so the destination is a constant the
     /// canvas states rather than an argument a host chooses.
@@ -64,11 +65,13 @@ struct WorkboardCaptureCanvas: View {
     init(
         viewModel: WorkboardViewModel,
         item: WorkboardItemSnapshot,
-        mode: WorkboardCaptureCanvasMode
+        mode: WorkboardCaptureCanvasMode,
+        deskWorkspace: WorkDeskWorkspaceState? = nil
     ) {
         self.viewModel = viewModel
         self.item = item
         self.mode = mode
+        self.deskWorkspace = deskWorkspace
     }
 
     @State private var photoSelection: [PhotosPickerItem] = []
@@ -329,7 +332,13 @@ struct WorkboardCaptureCanvas: View {
         VStack(alignment: .leading, spacing: 14) {
             deskSyncBanner
             importProgress
-            if !item.materials.isEmpty {
+            if let deskWorkspace {
+                WorkDeskSourceBoard(
+                    viewModel: viewModel, item: item, workspace: deskWorkspace,
+                    onOpen: openMaterial, onShare: shareMaterial, onReattach: beginReattachment
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if !item.materials.isEmpty {
                 WorkboardMaterialBoard(
                     viewModel: viewModel,
                     item: item,
@@ -2464,7 +2473,7 @@ enum WorkboardCompanionBand {
 /// One material as a board card at one of three footprints. The card fills the
 /// frame the mosaic proposes — it never states its own height — so a size change
 /// is a single persisted attribute rather than a second layout system.
-private struct WorkboardSourceCard: View {
+struct WorkboardSourceCard: View {
     let material: WorkboardMaterialSnapshot
     var size: WorkMaterialCardSize = .standard
     /// The grid width the mosaic granted. `size` stays the stored choice — it

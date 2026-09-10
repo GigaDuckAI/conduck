@@ -3,8 +3,8 @@
 // Conduck
 // WorkboardDetailView.swift
 //
-// The desk. The card board and the pinned composer, and nothing that competes
-// with them: this surface collects material and never sends any of it.
+// The adaptive personal desk and pinned capture composer. Organization is
+// metadata over captured cards; the separate brief sheet owns explicit handoff.
 //
 // Work is ONE desk at a compile-time identity, so this view resolves no item
 // and takes no id. It renders a `WorkboardDeskPresentation.Desk` its host has
@@ -31,34 +31,7 @@ struct WorkboardDetailView: View {
     )
 
     var body: some View {
-        ScrollView {
-            Group {
-                switch desk.board {
-                case .invitation:
-                    WorkboardEmptyState(
-                        title: LocalizedStringResource(
-                            "workboard.empty.title",
-                            defaultValue: "Start with a thought, file or screenshot"
-                        ),
-                        message: LocalizedStringResource(
-                            "workboard.desk.empty.message",
-                            defaultValue: "Whatever you collect lands here as a card you can move and open."
-                        )
-                    )
-                case .cards:
-                    WorkboardCaptureCanvas(
-                        viewModel: viewModel,
-                        item: desk.item,
-                        mode: .sources
-                    )
-                }
-            }
-            .padding(.horizontal, WorkboardMetrics.standardSpacing)
-            .padding(.vertical, WorkboardMetrics.generousSpacing)
-            .frame(maxWidth: WorkboardMetrics.contentMaxWidth)
-            .frame(maxWidth: .infinity)
-        }
-        .dismissesKeyboardOnScrollOrTap()
+        WorkDeskWorkspaceView(viewModel: viewModel, item: desk.item, workspace: viewModel.deskWorkspace)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             WorkboardCaptureCanvas(
                 viewModel: viewModel,
