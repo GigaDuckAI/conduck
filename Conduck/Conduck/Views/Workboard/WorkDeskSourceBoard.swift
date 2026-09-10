@@ -67,21 +67,25 @@ struct WorkDeskSourceBoard: View {
     }
 
     private var spatialBoard: some View {
-        WorkDeskCanvas(
-            materials: materials,
+        let visible = materials
+        let indices = Dictionary(visible.enumerated().map { ($0.element.id, $0.offset + 1) }, uniquingKeysWith: { first, _ in first })
+        let projectID = workspace.currentProject?.id
+        return WorkDeskCanvas(
+            materials: visible,
             placements: workspace.organization.placements,
             projects: projects,
+            session: workspace.canvasSession(for: workspace.scope),
             selectedIDs: workspace.selectedIDs,
             isSelecting: workspace.isSelecting,
-            onMove: { id, point in await workspace.organization.move(materialID: id, to: point) },
+            onMoveMaterials: { positions in
+                await workspace.organization.moveMaterials(positions: positions, expectedProjectID: projectID)
+            },
             onMoveProject: { id, point in await workspace.organization.moveProject(id: id, to: point) },
-            onGroup: { ids in workspace.beginProject(materialIDs: ids) },
+            onGroup: { ids, point in workspace.beginProject(materialIDs: ids, position: projectID == nil ? point : nil) },
             onAssign: { ids, projectID in
-                Task {
-                    if await workspace.organization.assign(materialIDs: ids, to: projectID) {
-                        workspace.selectedIDs.subtract(ids)
-                    }
-                }
+                let saved = await workspace.organization.assign(materialIDs: ids, to: projectID)
+                if saved { workspace.selectedIDs.subtract(ids) }
+                return saved
             },
             onSelect: workspace.toggleSelection,
             onOpenProject: { workspace.selectScope(.project($0)) },
@@ -90,7 +94,7 @@ struct WorkDeskSourceBoard: View {
                 await workspace.organization.seedPositions(materials: materials, projects: projects)
             }
         ) { material, size in
-            sourceCard(material, spatial: true)
+            sourceCard(material, spatial: true, position: indices[material.id] ?? 1, count: visible.count)
                 .frame(width: size.width, height: size.height)
         }
         .id(workspace.scope)
@@ -180,11 +184,11 @@ struct WorkDeskSourceBoard: View {
         Task { await workspace.organization.setPinned(!pinned, materialID: id) }
     }
 
-    private func sourceCard(_ material: WorkboardMaterialSnapshot, spatial: Bool = false) -> some View {
+    private func sourceCard(_ material: WorkboardMaterialSnapshot, spatial: Bool = false, position: Int? = nil, count: Int? = nil) -> some View {
         WorkboardSourceCard(
             material: material,
-            boardPosition: (materials.firstIndex(where: { $0.id == material.id }) ?? 0) + 1,
-            boardCount: materials.count,
+            boardPosition: position ?? ((materials.firstIndex(where: { $0.id == material.id }) ?? 0) + 1),
+            boardCount: count ?? materials.count,
             onOpen: { if workspace.isSelecting { workspace.toggleSelection(material.id) } else { onOpen(material) } },
             onShare: { onShare(material) },
             onReattach: { onReattach(material) },

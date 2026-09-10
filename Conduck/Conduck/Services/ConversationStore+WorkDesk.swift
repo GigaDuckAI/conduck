@@ -8,6 +8,8 @@
 // links tolerate imports arriving in either order; a project tombstone wins
 // over every live duplicate so a late placement cannot resurrect a deletion.
 // Each intent updates one item's fields, not a JSON copy of the entire desk.
+// Multi-card moves validate all identities and their original scope before any
+// row is inserted or normalized, then save the positions as one transaction.
 
 import Foundation
 import CoreData
@@ -116,16 +118,42 @@ extension ConversationStore {
             try requireDeskMaterials([id], in: context)
             let rows = try deskPlacementRows(id, in: context)
             let projectID = rows.first?.value(forKey: "projectID") as? UUID
-            let projectRows = try projectID.map { try deskRows("WorkDeskProject", key: "id", id: $0, in: context) } ?? []
-            let unresolved = projectID != nil && (projectRows.isEmpty
-                || projectRows.contains(where: { $0.value(forKey: "deletedAt") != nil })
-                || !projectRows.contains(where: { $0.value(forKey: "title") as? String != nil }))
+            let resolvedProjectID = try resolvedDeskProjectID(projectID, in: context)
+            let unresolved = projectID != nil && resolvedProjectID == nil
             editDeskRows(rows) { row in
                 // A missing/deleted project is displayed as unfiled. An
                 // explicit drag there adopts that visible state; retaining
                 // its old membership would suppress the new coordinates.
                 if unresolved { row.setValue(nil, forKey: "projectID") }
                 setDeskPoint(position, on: row)
+            }
+        case let .moveMaterials(positions, expectedProjectID):
+            guard !positions.isEmpty else { return }
+            if let expectedProjectID,
+               try resolvedDeskProjectID(expectedProjectID, in: context) == nil {
+                throw WorkDeskStoreError.projectNotFound
+            }
+            let moves = positions.sorted { $0.key.uuidString < $1.key.uuidString }
+            try requireDeskMaterials(moves.map(\.key), in: context)
+            var clearUnresolvedMembership: Set<UUID> = []
+            // Read without deskPlacementRows/liveDeskProjectRows: those helpers
+            // normalize duplicates and may insert. No row may change until all
+            // selected identities and memberships have passed this validation.
+            for (id, _) in moves {
+                let rows = try deskRows("WorkDeskPlacement", key: "materialID", id: id, in: context)
+                let storedProjectID = rows.first?.value(forKey: "projectID") as? UUID
+                let resolvedProjectID = try resolvedDeskProjectID(storedProjectID, in: context)
+                guard resolvedProjectID == expectedProjectID else { throw WorkDeskStoreError.materialMoved }
+                if storedProjectID != nil && resolvedProjectID == nil {
+                    clearUnresolvedMembership.insert(id)
+                }
+            }
+            for (id, position) in moves {
+                let rows = try deskPlacementRows(id, in: context)
+                editDeskRows(rows) { row in
+                    if clearUnresolvedMembership.contains(id) { row.setValue(nil, forKey: "projectID") }
+                    setDeskPoint(position, on: row)
+                }
             }
         case let .pinMaterial(id, isPinned):
             try requireDeskMaterials([id], in: context)
@@ -227,6 +255,18 @@ extension ConversationStore {
         }
         normalizeDeskDuplicates(rows)
         return rows
+    }
+
+    /// The membership the person sees. Missing or partially arrived projects
+    /// and any tombstone resolve to the unfiled desk, without changing rows.
+    private nonisolated static func resolvedDeskProjectID(
+        _ id: UUID?, in context: NSManagedObjectContext
+    ) throws -> UUID? {
+        guard let id else { return nil }
+        let rows = try deskRows("WorkDeskProject", key: "id", id: id, in: context)
+        guard !rows.isEmpty, !rows.contains(where: { $0.value(forKey: "deletedAt") != nil }),
+              rows.contains(where: { $0.value(forKey: "title") as? String != nil }) else { return nil }
+        return id
     }
 
     private nonisolated static func deskPlacementRows(

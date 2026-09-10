@@ -116,6 +116,20 @@ class WorkDeskStringSyncTests(unittest.TestCase):
         self.assertEqual(after["strings"]["unrelated"], before["strings"]["unrelated"])
         self.assertEqual(after["strings"]["workdesk.new"]["localizations"]["en"]["stringUnit"]["value"], "New project")
 
+    def test_correct_english_in_new_state_is_made_available_to_the_bundle(self):
+        key = "workboard.tutorial.point.arrange"
+        self.authored({key: "Move cards by their handles."})
+        self.write_catalog({key: "Move cards by their handles."})
+        catalog = json.loads(self.catalog.read_text())
+        catalog["strings"][key]["localizations"]["en"]["stringUnit"]["state"] = "new"
+        self.catalog.write_text(json.dumps(catalog, indent=4))
+        original = self.catalog.read_text()
+        self.assertEqual(sync.synchronize(self.catalog, self.source, [self.objects]), [key])
+        self.assertEqual(self.catalog.read_text(), original)
+        sync.synchronize(self.catalog, self.source, [self.objects], write=True)
+        self.assertEqual(self.catalog.read_text(), original.replace('"state": "new"', '"state": "translated"'))
+        self.assertEqual(sync.synchronize(self.catalog, self.source, [self.objects]), [])
+
     def test_structured_translations_are_not_flattened(self):
         self.authored({"workdesk.count": "%lld materials"})
         self.catalog.write_text(json.dumps({"sourceLanguage": "en", "strings": {

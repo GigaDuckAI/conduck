@@ -93,6 +93,12 @@ final class WorkDeskOrganization {
     }
 
     @discardableResult
+    func moveMaterials(positions: [UUID: WorkDeskPoint], expectedProjectID: UUID?) async -> Bool {
+        guard !positions.isEmpty else { return true }
+        return await enqueue(.moveMaterials(positions: positions, expectedProjectID: expectedProjectID))
+    }
+
+    @discardableResult
     func moveProject(id: UUID, to position: WorkDeskPoint?) async -> Bool {
         await enqueue(.moveProject(id: id, position: position))
     }

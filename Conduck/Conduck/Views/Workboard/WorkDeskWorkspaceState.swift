@@ -29,6 +29,14 @@ final class WorkDeskWorkspaceState {
     var briefRevisions: [UUID: Date] = [:]
     var preparingProjectID: UUID?
     var deletingProjectID: UUID?
+    @ObservationIgnored private var canvasSessions: [WorkDeskScope: WorkDeskCanvasSession] = [:]
+
+    func canvasSession(for scope: WorkDeskScope) -> WorkDeskCanvasSession {
+        if let existing = canvasSessions[scope] { return existing }
+        let session = WorkDeskCanvasSession()
+        canvasSessions[scope] = session
+        return session
+    }
 
     init(organization: WorkDeskOrganization? = nil) {
         self.organization = organization ?? WorkDeskOrganization()
@@ -104,8 +112,8 @@ final class WorkDeskWorkspaceState {
         selectedIDs.formIntersection(Set(visibleMaterials(in: materials).map(\.id)))
     }
 
-    func beginProject(materialIDs: [UUID] = []) {
-        presentEditor(WorkDeskProjectEditorRequest(project: nil, materialIDs: materialIDs))
+    func beginProject(materialIDs: [UUID] = [], position: WorkDeskPoint? = nil) {
+        presentEditor(WorkDeskProjectEditorRequest(project: nil, materialIDs: materialIDs, position: position))
     }
 
     func editProject(_ project: WorkDeskProjectRecord) {
@@ -161,4 +169,5 @@ struct WorkDeskProjectEditorRequest: Identifiable {
     let id = UUID()
     let project: WorkDeskProjectRecord?
     let materialIDs: [UUID]
+    var position: WorkDeskPoint? = nil
 }
