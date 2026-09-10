@@ -56,1348 +56,6 @@
         }
       }
     },
-    "common.save" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Save"
-          }
-        }
-      }
-    },
-    "workdesk.aggregate.hint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A readable overview across projects. Open a project to arrange its cards."
-          }
-        }
-      }
-    },
-    "workdesk.all" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "All materials"
-          }
-        }
-      }
-    },
-    "workdesk.brief.accepted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your handoff is in Chat"
-          }
-        }
-      }
-    },
-    "workdesk.brief.acceptedMessage" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open the conversation to follow its progress or continue working with your AI. Your project and materials are still here."
-          }
-        }
-      }
-    },
-    "workdesk.brief.attachedFiles" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Attached files"
-          }
-        }
-      }
-    },
-    "workdesk.brief.chooseAI" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose your AI"
-          }
-        }
-      }
-    },
-    "workdesk.brief.discard" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Discard changes"
-          }
-        }
-      }
-    },
-    "workdesk.brief.discardMessage" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The changes in this window will be lost. Your saved project and materials will stay in Work."
-          }
-        }
-      }
-    },
-    "workdesk.brief.discardTitle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Discard unsaved changes?"
-          }
-        }
-      }
-    },
-    "workdesk.brief.edit" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Edit brief"
-          }
-        }
-      }
-    },
-    "workdesk.brief.excluded" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unchecked materials stay in your project and will not be sent."
-          }
-        }
-      }
-    },
-    "workdesk.brief.eyebrow" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "FROM IDEAS TO A FIRST PROMPT"
-          }
-        }
-      }
-    },
-    "workdesk.brief.fileCapability" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your gateway · text, images and attached files"
-          }
-        }
-      }
-    },
-    "workdesk.brief.hostedCapability" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hosted model · text and images · no file workspace"
-          }
-        }
-      }
-    },
-    "workdesk.brief.included" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Included"
-          }
-        }
-      }
-    },
-    "workdesk.brief.instructions" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "What would you like to achieve?"
-          }
-        }
-      }
-    },
-    "workdesk.brief.intro" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Give your AI a clear starting point. Your project stays here as the conversation moves forward."
-          }
-        }
-      }
-    },
-    "workdesk.brief.keepEditing" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Keep editing"
-          }
-        }
-      }
-    },
-    "workdesk.brief.leftOut" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Left out"
-          }
-        }
-      }
-    },
-    "workdesk.brief.materials" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bring into the conversation"
-          }
-        }
-      }
-    },
-    "workdesk.brief.noConnections" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No AI connection is available on this device. Save this brief, then connect one in Settings → Personal AI."
-          }
-        }
-      }
-    },
-    "workdesk.brief.noMaterials" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A clear brief is enough to begin. You can add materials to this project later."
-          }
-        }
-      }
-    },
-    "workdesk.brief.openChat" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open chat"
-          }
-        }
-      }
-    },
-    "workdesk.brief.placeholder" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Describe the task, the result you want, and anything your AI should keep in mind…"
-          }
-        }
-      }
-    },
-    "workdesk.brief.prepareAnother" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Prepare another handoff"
-          }
-        }
-      }
-    },
-    "workdesk.brief.ready" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ready for your AI"
-          }
-        }
-      }
-    },
-    "workdesk.brief.reviewButton" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Review handoff"
-          }
-        }
-      }
-    },
-    "workdesk.brief.reviewIntro" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Read the prompt below. Sending starts a new chat with this connection and includes only the materials you selected."
-          }
-        }
-      }
-    },
-    "workdesk.brief.saveClose" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Save & close"
-          }
-        }
-      }
-    },
-    "workdesk.brief.saveFailed" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your brief could not be saved. Keep this window open and try again."
-          }
-        }
-      }
-    },
-    "workdesk.brief.savedUnavailable" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This project's saved connection is unavailable here. Choose another connection to continue."
-          }
-        }
-      }
-    },
-    "workdesk.brief.sendTo" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Send to %@"
-          }
-        }
-      }
-    },
-    "workdesk.brief.textCapability" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your gateway · text and images · file transfer not connected"
-          }
-        }
-      }
-    },
-    "workdesk.brief.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Project brief"
-          }
-        }
-      }
-    },
-    "workdesk.brief.visionNote" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Image understanding depends on the model configured for this connection."
-          }
-        }
-      }
-    },
-    "workdesk.canvas.fit" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fit desk"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.focusMaterial" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Zoom in to this material"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.move" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move material"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.moveDown" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move down"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.moveHint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Drag this handle to arrange your desk"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.moveLeft" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move left"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.moveRight" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move right"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.moveUp" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move up"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.openProject" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open project"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.pin" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pin material"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.selectCard" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Select material"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.unpin" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unpin material"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.zoomIn" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Zoom in"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.zoomOut" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Zoom out"
-          }
-        }
-      }
-    },
-    "workdesk.capture.destination" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New captures land on your desk. Move them into a project whenever you’re ready."
-          }
-        }
-      }
-    },
-    "workdesk.desk" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your desk"
-          }
-        }
-      }
-    },
-    "workdesk.empty.message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Capture a thought below, or bring ideas together in a project. Everything starts on your desk."
-          }
-        }
-      }
-    },
-    "workdesk.empty.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Room to think"
-          }
-        }
-      }
-    },
-    "workdesk.error.conflict" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The desk changed. Try that action again."
-          }
-        }
-      }
-    },
-    "workdesk.error.materialMissing" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "An item has changed or been removed. Refresh the desk and try again."
-          }
-        }
-      }
-    },
-    "workdesk.error.projectChanged" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This project changed while you were editing. Reopen it to use the latest version."
-          }
-        }
-      }
-    },
-    "workdesk.error.projectMissing" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "That project is no longer available. Your ideas are still on the desk."
-          }
-        }
-      }
-    },
-    "workdesk.error.save" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The desk couldn’t save that change. Try again."
-          }
-        }
-      }
-    },
-    "workdesk.error.textLength" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shorten the project name or brief, then try again."
-          }
-        }
-      }
-    },
-    "workdesk.error.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Give the project a name."
-          }
-        }
-      }
-    },
-    "workdesk.group" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Create project"
-          }
-        }
-      }
-    },
-    "workdesk.handoff.bytesUnavailable" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A selected file is not available on this device. Let it finish syncing, reattach it, or leave it out of this handoff."
-          }
-        }
-      }
-    },
-    "workdesk.handoff.connectionChanged" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The selected connection changed. Review the handoff again before sending."
-          }
-        }
-      }
-    },
-    "workdesk.handoff.emptyBrief" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add an instruction so your AI knows what to do with these materials."
-          }
-        }
-      }
-    },
-    "workdesk.handoff.failed" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The handoff could not finish. Your project is unchanged. Review it again to try once more."
-          }
-        }
-      }
-    },
-    "workdesk.handoff.materialChanged" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A selected material changed. Close this brief and open it again to review the latest version."
-          }
-        }
-      }
-    },
-    "workdesk.handoff.needsFileTransfer" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This file needs a connection with file transfer. Choose another AI, or leave the file out of this handoff."
-          }
-        }
-      }
-    },
-    "workdesk.handoff.noGateway" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose an available AI connection to continue."
-          }
-        }
-      }
-    },
-    "workdesk.handoff.submissionRefused" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The chat could not accept this handoff. Your brief and materials are still in Work."
-          }
-        }
-      }
-    },
-    "workdesk.layout.desk" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Desk"
-          }
-        }
-      }
-    },
-    "workdesk.material.count" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld materials"
-          }
-        }
-      }
-    },
-    "workdesk.material.count.one" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1 material"
-          }
-        }
-      }
-    },
-    "workdesk.material.delete.message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This material will be removed from Work and its project."
-          }
-        }
-      }
-    },
-    "workdesk.material.delete.pair" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This picture and the voice note inside it will be removed from Work and its project."
-          }
-        }
-      }
-    },
-    "workdesk.material.select" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Select material"
-          }
-        }
-      }
-    },
-    "workdesk.move" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move to"
-          }
-        }
-      }
-    },
-    "workdesk.options" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Desk options"
-          }
-        }
-      }
-    },
-    "workdesk.pin.selection" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pin selected"
-          }
-        }
-      }
-    },
-    "workdesk.pin.toggle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Toggle pin"
-          }
-        }
-      }
-    },
-    "workdesk.pinned" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pinned"
-          }
-        }
-      }
-    },
-    "workdesk.prepare" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Prepare"
-          }
-        }
-      }
-    },
-    "workdesk.project.create.explanation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A home for related ideas, files and the brief you’ll shape from them."
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Its ideas and files will return to your desk. Nothing is deleted."
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ungroup this project?"
-          }
-        }
-      }
-    },
-    "workdesk.project.name" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Project name"
-          }
-        }
-      }
-    },
-    "workdesk.project.new" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New project"
-          }
-        }
-      }
-    },
-    "workdesk.project.pin.toggle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Toggle project pin"
-          }
-        }
-      }
-    },
-    "workdesk.project.rename" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Rename project"
-          }
-        }
-      }
-    },
-    "workdesk.project.unavailable" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This project is no longer available. Your materials are still on the desk."
-          }
-        }
-      }
-    },
-    "workdesk.project.ungroup" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ungroup Project"
-          }
-        }
-      }
-    },
-    "workdesk.projects" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Projects"
-          }
-        }
-      }
-    },
-    "workdesk.projects.browse" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Browse projects"
-          }
-        }
-      }
-    },
-    "workdesk.projects.empty" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bring related ideas together. Select a few cards to create your first project."
-          }
-        }
-      }
-    },
-    "workdesk.return" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Return to desk"
-          }
-        }
-      }
-    },
-    "workdesk.search" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Find an idea or file"
-          }
-        }
-      }
-    },
-    "workdesk.search.empty" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No matching materials here. Try another word or look in All materials."
-          }
-        }
-      }
-    },
-    "workdesk.select" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Select"
-          }
-        }
-      }
-    },
-    "workdesk.select.all" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Select all"
-          }
-        }
-      }
-    },
-    "workdesk.selected.count" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld selected"
-          }
-        }
-      }
-    },
-    "workdesk.sidebar.hide" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hide project sidebar"
-          }
-        }
-      }
-    },
-    "workdesk.sidebar.show" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Show project sidebar"
-          }
-        }
-      }
-    },
-    "workdesk.tutorial.prepare" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shape a project brief, choose your AI, then review before sending."
-          }
-        }
-      }
-    },
-    "workdesk.update.failed" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Couldn’t update the desk"
-          }
-        }
-      }
-    },
-    "workbench.section.expandHint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose Chats or Work"
-          }
-        }
-      }
-    },
-    "workbench.section.collapseHint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Close section chooser"
-          }
-        }
-      }
-    },
-    "diagnostics.sync.details" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sync details"
-          }
-        }
-      }
-    },
-    "diagnostics.permissions.details" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Permission details"
-          }
-        }
-      }
-    },
-    "diagnostics.files.testDetails" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Test details"
-          }
-        }
-      }
-    },
-    "diagnostics.files.settings" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "File server settings"
-          }
-        }
-      }
-    },
-    "diagnostics.voice.playback.notTested" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Playback hasn't been tested for this setup. This test speaks aloud."
-          }
-        }
-      }
-    },
-    "diagnostics.action.allowSpeech" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Allow speech recognition"
-          }
-        }
-      }
-    },
-    "diagnostics.action.openSpeechSettings" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open speech settings"
-          }
-        }
-      }
-    },
-    "diagnostics.voice.permissions" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Recording permissions"
-          }
-        }
-      }
-    },
-    "diagnostics.summary.untested" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This setup hasn't been fully checked"
-          }
-        }
-      }
-    },
-    "diagnostics.action.checkGateway" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Check connection"
-          }
-        }
-      }
-    },
-    "diagnostics.check.notTested" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Not tested"
-          }
-        }
-      }
-    },
-    "diagnostics.sync.events.history.mixed" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld recorded sync events, including %lld failures. The last recorded attempt succeeded; earlier failures may concern a different sync operation."
-          }
-        }
-      }
-    },
-    "diagnostics.sync.events.history.latestFailed" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld recorded sync events; the last recorded attempt failed. This history does not establish current sync health."
-          }
-        }
-      }
-    },
-    "diagnostics.notifications.alertsOff.info" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Alerts are off. Shortcut and background replies arrive silently; enable alerts if you want them."
-          }
-        }
-      }
-    },
-    "diagnostics.notifications.disabled.info" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Notifications are off. Shortcut and background replies arrive silently; enable notifications if you want alerts."
-          }
-        }
-      }
-    },
-    "popover.retry.savedRecording.action" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Retry saved recording"
-          }
-        }
-      }
-    },
     "" : {
 
     },
@@ -2744,6 +1402,17 @@
         }
       }
     },
+    "common.save" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Save"
+          }
+        }
+      }
+    },
     "Community" : {
 
     },
@@ -3625,6 +2294,28 @@
         }
       }
     },
+    "diagnostics.action.allowSpeech" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow speech recognition"
+          }
+        }
+      }
+    },
+    "diagnostics.action.checkGateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check connection"
+          }
+        }
+      }
+    },
     "diagnostics.action.checking" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -3713,8 +2404,18 @@
         }
       }
     },
+    "diagnostics.action.openSpeechSettings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open speech settings"
+          }
+        }
+      }
+    },
     "diagnostics.action.previewVoice" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3725,7 +2426,6 @@
       }
     },
     "diagnostics.action.recheckGateway" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3747,7 +2447,6 @@
       }
     },
     "diagnostics.action.testEverything" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3791,7 +2490,6 @@
       }
     },
     "diagnostics.action.testTranscription" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -3929,6 +2627,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "The last request didn't go through."
+          }
+        }
+      }
+    },
+    "diagnostics.check.notTested" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not tested"
           }
         }
       }
@@ -4264,7 +2973,6 @@
       }
     },
     "diagnostics.files.detail.testRequired" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -4318,6 +3026,28 @@
         }
       }
     },
+    "diagnostics.files.settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File server settings"
+          }
+        }
+      }
+    },
+    "diagnostics.files.testDetails" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Test details"
+          }
+        }
+      }
+    },
     "diagnostics.fix.generic" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -4352,7 +3082,6 @@
       }
     },
     "diagnostics.footer.testEverything" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -4450,24 +3179,24 @@
         }
       }
     },
-    "diagnostics.notifications.alertsOff" : {
-      "extractionState" : "extracted_with_value",
+    "diagnostics.notifications.alertsOff.info" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Notifications are allowed but alerts are off — Shortcut and background replies won't show. Turn on alerts in system Settings."
+            "state" : "translated",
+            "value" : "Alerts are off. Shortcut and background replies arrive silently; enable alerts if you want them."
           }
         }
       }
     },
-    "diagnostics.notifications.denied" : {
-      "extractionState" : "extracted_with_value",
+    "diagnostics.notifications.disabled.info" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Turn on notifications in system Settings — otherwise Shortcut and background replies arrive silently."
+            "state" : "translated",
+            "value" : "Notifications are off. Shortcut and background replies arrive silently; enable notifications if you want alerts."
           }
         }
       }
@@ -4512,6 +3241,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Permission status unavailable."
+          }
+        }
+      }
+    },
+    "diagnostics.permissions.details" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permission details"
           }
         }
       }
@@ -4561,7 +3301,6 @@
       }
     },
     "diagnostics.summary.attention.many" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -4572,7 +3311,6 @@
       }
     },
     "diagnostics.summary.attention.one" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -4605,7 +3343,6 @@
       }
     },
     "diagnostics.summary.passed" : {
-      "extractionState" : "extracted_with_value",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -4626,6 +3363,28 @@
         }
       }
     },
+    "diagnostics.summary.untested" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This setup hasn't been fully checked"
+          }
+        }
+      }
+    },
+    "diagnostics.sync.details" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync details"
+          }
+        }
+      }
+    },
     "diagnostics.sync.events" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -4637,13 +3396,24 @@
         }
       }
     },
-    "diagnostics.sync.events.latestFailed" : {
-      "extractionState" : "extracted_with_value",
+    "diagnostics.sync.events.history.latestFailed" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "%lld recent sync events; the most recent attempt failed."
+            "state" : "translated",
+            "value" : "%lld recorded sync events; the last recorded attempt failed. This history does not establish current sync health."
+          }
+        }
+      }
+    },
+    "diagnostics.sync.events.history.mixed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld recorded sync events, including %lld failures. The last recorded attempt succeeded; earlier failures may concern a different sync operation."
           }
         }
       }
@@ -4655,28 +3425,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%lld recent sync events."
-          }
-        }
-      }
-    },
-    "diagnostics.sync.events.recovered" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld recent sync events; %2$lld earlier errors recovered."
-          }
-        }
-      }
-    },
-    "diagnostics.sync.events.stuck" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Recent sync attempts are failing — check iCloud and your connection."
           }
         }
       }
@@ -4842,6 +3590,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Microphone access is controlled by Screen Time or device management."
+          }
+        }
+      }
+    },
+    "diagnostics.voice.permissions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recording permissions"
+          }
+        }
+      }
+    },
+    "diagnostics.voice.playback.notTested" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Playback hasn't been tested for this setup. This test speaks aloud."
           }
         }
       }
@@ -9256,13 +8026,13 @@
         }
       }
     },
-    "popover.retry.savedRecording.help" : {
-      "extractionState" : "extracted_with_value",
+    "popover.retry.savedRecording.action" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Try the saved recording again"
+            "state" : "translated",
+            "value" : "Retry saved recording"
           }
         }
       }
@@ -12191,17 +10961,6 @@
         }
       }
     },
-    "settings.mac.general.shortcuts.header" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Keyboard Shortcuts"
-          }
-        }
-      }
-    },
     "settings.mac.general.shortcut.quickCapture.label" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12220,6 +10979,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Screenshot & Ask"
+          }
+        }
+      }
+    },
+    "settings.mac.general.shortcuts.header" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Keyboard Shortcuts"
           }
         }
       }
@@ -18923,28 +17693,6 @@
         }
       }
     },
-    "settings.usage.stat.tokens.a11y.components" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ tokens, input plus output added up"
-          }
-        }
-      }
-    },
-    "settings.usage.stat.tokens.a11y.reported" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%@ tokens, reported by your gateway"
-          }
-        }
-      }
-    },
     "settings.usage.stat.tokens.a11y.usable" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23732,6 +22480,28 @@
         }
       }
     },
+    "workbench.section.collapseHint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close section chooser"
+          }
+        }
+      }
+    },
+    "workbench.section.expandHint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Chats or Work"
+          }
+        }
+      }
+    },
     "workbench.work" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23772,6 +22542,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Move Later"
+          }
+        }
+      }
+    },
+    "workboard.arrange.hint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drag to reorder"
           }
         }
       }
@@ -24403,6 +23184,39 @@
         }
       }
     },
+    "workboard.layout.label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Board view"
+          }
+        }
+      }
+    },
+    "workboard.layout.list" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "List"
+          }
+        }
+      }
+    },
+    "workboard.layout.tiles" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tiles"
+          }
+        }
+      }
+    },
     "workboard.load.failed.message" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24443,50 +23257,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Opening your private work…"
-          }
-        }
-      }
-    },
-    "workboard.arrange.hint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Drag to reorder"
-          }
-        }
-      }
-    },
-    "workboard.layout.label" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Board view"
-          }
-        }
-      }
-    },
-    "workboard.layout.list" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "List"
-          }
-        }
-      }
-    },
-    "workboard.layout.tiles" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tiles"
           }
         }
       }
@@ -25063,17 +23833,6 @@
         }
       }
     },
-    "workboard.menuBar.savedQueued" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "On its way to Work. Nothing was sent."
-          }
-        }
-      }
-    },
     "workboard.menuBar.saved.open.help" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -25081,6 +23840,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Open Work and see the new card"
+          }
+        }
+      }
+    },
+    "workboard.menuBar.savedQueued" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "On its way to Work. Nothing was sent."
           }
         }
       }
@@ -25631,6 +24401,1139 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Added to Work. Nothing was sent."
+          }
+        }
+      }
+    },
+    "workdesk.aggregate.hint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A readable overview across projects. Open a project to arrange its cards."
+          }
+        }
+      }
+    },
+    "workdesk.all" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All materials"
+          }
+        }
+      }
+    },
+    "workdesk.brief.accepted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your handoff is in Chat"
+          }
+        }
+      }
+    },
+    "workdesk.brief.acceptedMessage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open the conversation to follow its progress or continue working with your AI. Your project and materials are still here."
+          }
+        }
+      }
+    },
+    "workdesk.brief.attachedFiles" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Attached files"
+          }
+        }
+      }
+    },
+    "workdesk.brief.chooseAI" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose your AI"
+          }
+        }
+      }
+    },
+    "workdesk.brief.discard" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Discard changes"
+          }
+        }
+      }
+    },
+    "workdesk.brief.discardMessage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The changes in this window will be lost. Your saved project and materials will stay in Work."
+          }
+        }
+      }
+    },
+    "workdesk.brief.discardTitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Discard unsaved changes?"
+          }
+        }
+      }
+    },
+    "workdesk.brief.edit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit brief"
+          }
+        }
+      }
+    },
+    "workdesk.brief.excluded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unchecked materials stay in your project and will not be sent."
+          }
+        }
+      }
+    },
+    "workdesk.brief.eyebrow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FROM IDEAS TO A FIRST PROMPT"
+          }
+        }
+      }
+    },
+    "workdesk.brief.fileCapability" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your gateway · text, images and attached files"
+          }
+        }
+      }
+    },
+    "workdesk.brief.hostedCapability" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hosted model · text and images · no file workspace"
+          }
+        }
+      }
+    },
+    "workdesk.brief.included" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Included"
+          }
+        }
+      }
+    },
+    "workdesk.brief.instructions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What would you like to achieve?"
+          }
+        }
+      }
+    },
+    "workdesk.brief.intro" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Give your AI a clear starting point. Your project stays here as the conversation moves forward."
+          }
+        }
+      }
+    },
+    "workdesk.brief.keepEditing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep editing"
+          }
+        }
+      }
+    },
+    "workdesk.brief.leftOut" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Left out"
+          }
+        }
+      }
+    },
+    "workdesk.brief.materials" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bring into the conversation"
+          }
+        }
+      }
+    },
+    "workdesk.brief.noConnections" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No AI connection is available on this device. Save this brief, then connect one in Settings → Personal AI."
+          }
+        }
+      }
+    },
+    "workdesk.brief.noMaterials" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A clear brief is enough to begin. You can add materials to this project later."
+          }
+        }
+      }
+    },
+    "workdesk.brief.openChat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open chat"
+          }
+        }
+      }
+    },
+    "workdesk.brief.placeholder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Describe the task, the result you want, and anything your AI should keep in mind…"
+          }
+        }
+      }
+    },
+    "workdesk.brief.prepareAnother" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prepare another handoff"
+          }
+        }
+      }
+    },
+    "workdesk.brief.ready" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ready for your AI"
+          }
+        }
+      }
+    },
+    "workdesk.brief.reviewButton" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Review handoff"
+          }
+        }
+      }
+    },
+    "workdesk.brief.reviewIntro" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read the prompt below. Sending starts a new chat with this connection and includes only the materials you selected."
+          }
+        }
+      }
+    },
+    "workdesk.brief.saveClose" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save & close"
+          }
+        }
+      }
+    },
+    "workdesk.brief.savedUnavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This project's saved connection is unavailable here. Choose another connection to continue."
+          }
+        }
+      }
+    },
+    "workdesk.brief.saveFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your brief could not be saved. Keep this window open and try again."
+          }
+        }
+      }
+    },
+    "workdesk.brief.sendTo" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send to %@"
+          }
+        }
+      }
+    },
+    "workdesk.brief.textCapability" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your gateway · text and images · file transfer not connected"
+          }
+        }
+      }
+    },
+    "workdesk.brief.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Project brief"
+          }
+        }
+      }
+    },
+    "workdesk.brief.visionNote" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Image understanding depends on the model configured for this connection."
+          }
+        }
+      }
+    },
+    "workdesk.canvas.fit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fit desk"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.focusMaterial" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom in to this material"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.move" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move material"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.moveDown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move down"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.moveHint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drag this handle to arrange your desk"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.moveLeft" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move left"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.moveRight" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move right"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.moveUp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move up"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.openProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open project"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.pin" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pin material"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.selectCard" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select material"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.unpin" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unpin material"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.zoomIn" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom in"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.zoomOut" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom out"
+          }
+        }
+      }
+    },
+    "workdesk.capture.destination" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New captures land on your desk. Move them into a project whenever you’re ready."
+          }
+        }
+      }
+    },
+    "workdesk.desk" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your desk"
+          }
+        }
+      }
+    },
+    "workdesk.empty.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Capture a thought below, or bring ideas together in a project. Everything starts on your desk."
+          }
+        }
+      }
+    },
+    "workdesk.empty.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Room to think"
+          }
+        }
+      }
+    },
+    "workdesk.error.conflict" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The desk changed. Try that action again."
+          }
+        }
+      }
+    },
+    "workdesk.error.materialMissing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "An item has changed or been removed. Refresh the desk and try again."
+          }
+        }
+      }
+    },
+    "workdesk.error.projectChanged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This project changed while you were editing. Reopen it to use the latest version."
+          }
+        }
+      }
+    },
+    "workdesk.error.projectMissing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That project is no longer available. Your ideas are still on the desk."
+          }
+        }
+      }
+    },
+    "workdesk.error.save" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The desk couldn’t save that change. Try again."
+          }
+        }
+      }
+    },
+    "workdesk.error.textLength" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shorten the project name or brief, then try again."
+          }
+        }
+      }
+    },
+    "workdesk.error.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Give the project a name."
+          }
+        }
+      }
+    },
+    "workdesk.group" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create project"
+          }
+        }
+      }
+    },
+    "workdesk.handoff.bytesUnavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A selected file is not available on this device. Let it finish syncing, reattach it, or leave it out of this handoff."
+          }
+        }
+      }
+    },
+    "workdesk.handoff.connectionChanged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The selected connection changed. Review the handoff again before sending."
+          }
+        }
+      }
+    },
+    "workdesk.handoff.emptyBrief" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add an instruction so your AI knows what to do with these materials."
+          }
+        }
+      }
+    },
+    "workdesk.handoff.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The handoff could not finish. Your project is unchanged. Review it again to try once more."
+          }
+        }
+      }
+    },
+    "workdesk.handoff.materialChanged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A selected material changed. Close this brief and open it again to review the latest version."
+          }
+        }
+      }
+    },
+    "workdesk.handoff.needsFileTransfer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This file needs a connection with file transfer. Choose another AI, or leave the file out of this handoff."
+          }
+        }
+      }
+    },
+    "workdesk.handoff.noGateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose an available AI connection to continue."
+          }
+        }
+      }
+    },
+    "workdesk.handoff.submissionRefused" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The chat could not accept this handoff. Your brief and materials are still in Work."
+          }
+        }
+      }
+    },
+    "workdesk.layout.desk" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desk"
+          }
+        }
+      }
+    },
+    "workdesk.material.count" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld materials"
+          }
+        }
+      }
+    },
+    "workdesk.material.count.one" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 material"
+          }
+        }
+      }
+    },
+    "workdesk.material.delete.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This material will be removed from Work and its project."
+          }
+        }
+      }
+    },
+    "workdesk.material.delete.pair" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This picture and the voice note inside it will be removed from Work and its project."
+          }
+        }
+      }
+    },
+    "workdesk.material.select" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select material"
+          }
+        }
+      }
+    },
+    "workdesk.move" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move to"
+          }
+        }
+      }
+    },
+    "workdesk.options" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desk options"
+          }
+        }
+      }
+    },
+    "workdesk.pin.selection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pin selected"
+          }
+        }
+      }
+    },
+    "workdesk.pin.toggle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toggle pin"
+          }
+        }
+      }
+    },
+    "workdesk.pinned" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pinned"
+          }
+        }
+      }
+    },
+    "workdesk.prepare" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prepare"
+          }
+        }
+      }
+    },
+    "workdesk.project.create.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A home for related ideas, files and the brief you’ll shape from them."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its ideas and files will return to your desk. Nothing is deleted."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ungroup this project?"
+          }
+        }
+      }
+    },
+    "workdesk.project.name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Project name"
+          }
+        }
+      }
+    },
+    "workdesk.project.new" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New project"
+          }
+        }
+      }
+    },
+    "workdesk.project.pin.toggle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toggle project pin"
+          }
+        }
+      }
+    },
+    "workdesk.project.rename" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rename project"
+          }
+        }
+      }
+    },
+    "workdesk.project.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This project is no longer available. Your materials are still on the desk."
+          }
+        }
+      }
+    },
+    "workdesk.project.ungroup" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ungroup Project"
+          }
+        }
+      }
+    },
+    "workdesk.projects" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Projects"
+          }
+        }
+      }
+    },
+    "workdesk.projects.browse" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Browse projects"
+          }
+        }
+      }
+    },
+    "workdesk.projects.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bring related ideas together. Select a few cards to create your first project."
+          }
+        }
+      }
+    },
+    "workdesk.return" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Return to desk"
+          }
+        }
+      }
+    },
+    "workdesk.search" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Find an idea or file"
+          }
+        }
+      }
+    },
+    "workdesk.search.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No matching materials here. Try another word or look in All materials."
+          }
+        }
+      }
+    },
+    "workdesk.select" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select"
+          }
+        }
+      }
+    },
+    "workdesk.select.all" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select all"
+          }
+        }
+      }
+    },
+    "workdesk.selected.count" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld selected"
+          }
+        }
+      }
+    },
+    "workdesk.sidebar.hide" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide project sidebar"
+          }
+        }
+      }
+    },
+    "workdesk.sidebar.show" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show project sidebar"
+          }
+        }
+      }
+    },
+    "workdesk.tutorial.prepare" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shape a project brief, choose your AI, then review before sending."
+          }
+        }
+      }
+    },
+    "workdesk.update.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t update the desk"
           }
         }
       }
