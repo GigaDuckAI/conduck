@@ -1,156 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// A viewport onto the private desk. Positions are top-left coordinates in desk
-// space; gestures alone hold transient movement, and only release calls the
-// persistence owner. External file drops remain the containing Work pane's job.
-// Existing material views are injected so preview, sharing and repair retain
-// their original availability gates. Project piles are organization, never a
-// copy of the underlying materials.
+// A viewport onto the private desk. Direct input updates only local presentation;
+// releasing a grip persists one atomic movement. Pan and zoom compose incremental
+// screen deltas, while cards keep a stable world position and foreground order.
+// Drop feedback is a separate foreground layer, never a child hidden by the card
+// being held. Existing previews retain ownership of playback, sharing and repair.
 
 import SwiftUI
-
-struct WorkDeskCanvasProject: Identifiable {
-    let record: WorkDeskProjectRecord
-    let materialCount: Int
-    var id: UUID { record.id }
-}
-
-nonisolated struct WorkDeskCanvasTransform: Equatable {
-    var scale: CGFloat = 1
-    var offset: CGSize = .zero
-}
-
-/// Shared drawing and hit-testing arithmetic. Coordinates remain finite and
-/// bounded even when imported metadata or a cancelled gesture is malformed.
-nonisolated enum WorkDeskCanvasGeometry {
-    static let minimumScale: CGFloat = 0.01
-    static let maximumScale: CGFloat = 1.6
-    static let coordinateLimit = WorkDeskPoint.coordinateLimit
-    static let overviewThreshold: CGFloat = 0.35
-    static let cardBodySize = CGSize(width: 232, height: 238)
-    static let projectBodySize = CGSize(width: 232, height: 168)
-    static let handleHeight: CGFloat = 44
-
-    static func visibleHandleHeight(scale: CGFloat) -> CGFloat {
-        scale < overviewThreshold ? 0 : handleHeight
-    }
-
-    static func boundedScale(_ scale: CGFloat) -> CGFloat {
-        guard scale.isFinite else { return 1 }
-        return min(max(scale, minimumScale), maximumScale)
-    }
-
-    static func bounded(_ point: WorkDeskPoint) -> WorkDeskPoint {
-        WorkDeskPoint(
-            x: point.x.isFinite ? min(max(point.x, 0), coordinateLimit) : 0,
-            y: point.y.isFinite ? min(max(point.y, 0), coordinateLimit) : 0
-        )
-    }
-
-    static func moved(_ point: WorkDeskPoint, by translation: CGSize, scale: CGFloat) -> WorkDeskPoint {
-        let zoom = boundedScale(scale)
-        return bounded(WorkDeskPoint(
-            x: point.x + Double(translation.width / zoom),
-            y: point.y + Double(translation.height / zoom)
-        ))
-    }
-
-    static func defaultPoint(index: Int, columns: Int) -> WorkDeskPoint {
-        let columnCount = max(1, columns)
-        let slot = max(0, index)
-        return WorkDeskPoint(
-            x: 28 + Double(slot % columnCount) * 264,
-            y: 26 + Double(slot / columnCount) * 340
-        )
-    }
-
-    /// Finds an unoccupied slot using actual persisted frames, not the count of
-    /// remaining cards. Deleting an early card must not put the next capture on
-    /// top of a later card that retained its original position.
-    static func availablePoint(occupied: [CGRect], columns: Int, bodySize: CGSize, scale: CGFloat) -> WorkDeskPoint? {
-        let preferredColumns = max(1, columns)
-        let rows = max(1, Int((coordinateLimit - 340) / 340))
-        let totalColumns = max(1, Int((coordinateLimit - 264) / 264))
-        for band in 0..<(totalColumns / preferredColumns + 1) {
-            for row in 0..<rows {
-                for column in 0..<preferredColumns {
-                    let xColumn = band * preferredColumns + column
-                    guard xColumn < totalColumns else { continue }
-                    let point = WorkDeskPoint(x: 28 + Double(xColumn) * 264, y: 26 + Double(row) * 340)
-                    let proposed = frame(at: point, bodySize: bodySize, scale: scale).insetBy(dx: -10, dy: -10)
-                    if !occupied.contains(where: { $0.intersects(proposed) }) { return point }
-                }
-            }
-        }
-        return nil
-    }
-
-    static func frame(at point: WorkDeskPoint, bodySize: CGSize, scale: CGFloat) -> CGRect {
-        let point = bounded(point)
-        return CGRect(
-            x: point.x, y: point.y,
-            width: bodySize.width,
-            height: bodySize.height + visibleHandleHeight(scale: scale) / boundedScale(scale)
-        )
-    }
-
-    static func screenPoint(_ point: WorkDeskPoint, transform: WorkDeskCanvasTransform) -> CGPoint {
-        CGPoint(
-            x: CGFloat(point.x) * transform.scale + transform.offset.width,
-            y: CGFloat(point.y) * transform.scale + transform.offset.height
-        )
-    }
-
-    /// Zoom around the chosen screen point, keeping its desk point stationary.
-    static func zoomed(_ transform: WorkDeskCanvasTransform, to requested: CGFloat, anchor: CGPoint) -> WorkDeskCanvasTransform {
-        let oldScale = boundedScale(transform.scale)
-        let scale = boundedScale(requested)
-        let ratio = scale / oldScale
-        return WorkDeskCanvasTransform(scale: scale, offset: CGSize(
-            width: anchor.x - (anchor.x - transform.offset.width) * ratio,
-            height: anchor.y - (anchor.y - transform.offset.height) * ratio
-        ))
-    }
-
-    static func fit(frames: [CGRect], viewport: CGSize) -> WorkDeskCanvasTransform {
-        guard viewport.width > 0, viewport.height > 0,
-              let first = frames.first else { return WorkDeskCanvasTransform() }
-        let bounds = frames.dropFirst().reduce(first) { $0.union($1) }
-        guard !bounds.isNull, bounds.width.isFinite, bounds.height.isFinite else {
-            return WorkDeskCanvasTransform()
-        }
-        let usable = CGSize(width: max(1, viewport.width - 48), height: max(1, viewport.height - 100))
-        let scale = boundedScale(min(1, min(usable.width / max(1, bounds.width), usable.height / max(1, bounds.height))))
-        return WorkDeskCanvasTransform(scale: scale, offset: CGSize(
-            width: (viewport.width - bounds.width * scale) / 2 - bounds.minX * scale,
-            height: 24 - bounds.minY * scale
-        ))
-    }
-
-    /// Requiring the centre to enter the inner portion distinguishes purposeful
-    /// stacking from merely crossing an edge while arranging nearby notes.
-    static func overlapTarget(movingFrame: CGRect, candidates: [(UUID, CGRect)]) -> UUID? {
-        let centre = CGPoint(x: movingFrame.midX, y: movingFrame.midY)
-        return candidates.filter { _, frame in
-            frame.insetBy(dx: frame.width * 0.18, dy: frame.height * 0.18).contains(centre)
-        }.min { lhs, rhs in
-            let left = hypot(lhs.1.midX - centre.x, lhs.1.midY - centre.y)
-            let right = hypot(rhs.1.midX - centre.x, rhs.1.midY - centre.y)
-            return left == right ? lhs.0.uuidString < rhs.0.uuidString : left < right
-        }?.0
-    }
-}
 
 struct WorkDeskCanvas<CardContent: View>: View {
     let materials: [WorkboardMaterialSnapshot]
     let placements: [UUID: WorkDeskPlacementRecord]
     var projects: [WorkDeskCanvasProject] = []
+    @Bindable var session: WorkDeskCanvasSession
     let selectedIDs: Set<UUID>
     let isSelecting: Bool
-    let onMove: (UUID, WorkDeskPoint) async -> Bool
+    let onMoveMaterials: ([UUID: WorkDeskPoint]) async -> Bool
     let onMoveProject: (UUID, WorkDeskPoint) async -> Bool
-    let onGroup: ([UUID]) -> Void
-    let onAssign: ([UUID], UUID) -> Void
+    let onGroup: ([UUID], WorkDeskPoint) -> Void
+    let onAssign: ([UUID], UUID) async -> Bool
     let onSelect: (UUID) -> Void
     let onOpenProject: (UUID) -> Void
     let onTogglePin: (UUID) -> Void
@@ -159,69 +27,89 @@ struct WorkDeskCanvas<CardContent: View>: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.workbenchDestinationIsActive) private var isActive
-    @State private var transform = WorkDeskCanvasTransform()
     @State private var viewport: CGSize = .zero
-    @State private var initialized = false
-    @State private var columns = 3
+    @State private var controlsFrame: CGRect = .zero
     @State private var coordinateSpace = UUID()
-    @State private var panStart: CGSize?
-    @State private var magnificationStart: WorkDeskCanvasTransform?
-    @State private var drag: MovingItem?
-    @State private var defaultPositions: [UUID: WorkDeskPoint] = [:]
-    @State private var releasedPositions: [UUID: WorkDeskPoint] = [:]
-    @State private var moveTokens: [UUID: UUID] = [:]
+    @State private var nativeNavigation = false
+    @State private var cancellationGeneration = 0
+    @State private var lastPanTranslation: CGSize = .zero
+    @State private var suppressPanUntilRelease = false
+    @State private var drag: WorkDeskCanvasDrag?
+    @State private var dragPointer: CGPoint?
+    @State private var livePositions: [WorkDeskCanvasItemID: WorkDeskPoint] = [:]
+    @State private var savedPositions: [WorkDeskCanvasItemID: WorkDeskPoint] = [:]
+    @State private var defaultPositions: [WorkDeskCanvasItemID: WorkDeskPoint] = [:]
+    @State private var visibleIDs: Set<WorkDeskCanvasItemID> = []
+    @State private var materialIndices: [UUID: Int] = [:]
+    @State private var pending = WorkDeskPendingPositions()
+    @State private var dropCandidates: [WorkDeskDropCandidate] = []
+    @State private var hover = WorkDeskDropHover()
+    @State private var edgePanTask: Task<Void, Never>?
     @GestureState private var isPanning = false
-    @GestureState private var isMagnifying = false
 
-    private struct MovingItem {
-        let id: UUID
-        let isProject: Bool
-        let origin: WorkDeskPoint
-        var point: WorkDeskPoint
-    }
-
-    private enum DropTarget: Equatable {
-        case material(UUID)
-        case project(UUID)
-    }
+    private var transform: WorkDeskCanvasTransform { session.transform }
+    private var motion: Animation? { reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.86) }
+    private var viewportCenter: CGPoint { CGPoint(x: viewport.width / 2, y: viewport.height / 2) }
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack(alignment: .topLeading) {
-                background
-                ForEach(projects) { project in projectPile(project) }
-                ForEach(materials) { material in materialCard(material) }
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .coordinateSpace(name: coordinateSpace)
-            .clipped()
-            .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.84), value: materials.map(\.id))
-            .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.84), value: projects.map(\.id))
-            .overlay(alignment: .bottomTrailing) { viewportControls.padding(14) }
-            .simultaneousGesture(magnifyGesture)
-            .onChange(of: proxy.size, initial: true) { _, size in
-                viewport = size
-                guard !initialized, size.width > 0, size.height > 0 else { return }
-                initialized = true
-                transform.scale = size.width < 600 ? 0.72 : 1
-                columns = max(2, min(4, Int((size.width - 32) / (264 * transform.scale))))
-                seedDefaultPositions()
-                revealDeskIfOffscreen()
-            }
-            .onChange(of: materials.map(\.id), initial: true) { _, ids in
-                seedDefaultPositions()
-                if let drag, !drag.isProject, !ids.contains(drag.id) { self.drag = nil }
-            }
-            .onChange(of: projects.map(\.id), initial: true) { _, ids in
-                seedDefaultPositions()
-                if let drag, drag.isProject, !ids.contains(drag.id) { self.drag = nil }
-            }
-            .onChange(of: isPanning) { _, active in if !active { panStart = nil } }
-            .onChange(of: isMagnifying) { _, active in if !active { magnificationStart = nil } }
-            .onChange(of: isActive) { _, active in if !active { cancelInteractions() } }
-            .onDisappear { cancelInteractions() }
+            canvasLayers
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .workDeskViewportInput(
+                    isEnabled: isActive,
+                    excludedRects: [controlsFrame],
+                    onPan: panViewport,
+                    onZoom: zoomViewport,
+                    onMagnifyBy: magnifyViewport,
+                    onInteractionChanged: nativeInteractionChanged
+                )
+                .overlay { dropFeedback }
+                .overlay(alignment: .bottomTrailing) {
+                    viewportControls
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(coordinateSpace)) }
+                        action: { controlsFrame = $0 }
+                        .padding(14)
+                }
+                .clipped()
+                .coordinateSpace(name: coordinateSpace)
+                .onChange(of: proxy.size, initial: true) { _, size in
+                    viewport = size
+                    guard size.width > 0, size.height > 0 else { return }
+                    if !session.isInitialized {
+                        session.isInitialized = true
+                        session.transform.scale = size.width < 600 ? 0.72 : 1
+                        session.columns = max(2, min(4, Int((size.width - 32) / (264 * transform.scale))))
+                        refreshLayout()
+                        revealDeskIfOffscreen()
+                    } else { refreshLayout() }
+                }
+                .onChange(of: materials.map(\.id), initial: true) { _, _ in refreshLayout() }
+                .onChange(of: projects.map(\.record), initial: true) { _, _ in refreshLayout() }
+                .onChange(of: placements) { _, _ in refreshLayout() }
+                .onChange(of: isPanning) { _, active in
+                    if !active { lastPanTranslation = .zero; suppressPanUntilRelease = false }
+                }
+                .onChange(of: isActive) { _, active in if !active { cancelInteractions() } }
+                .onDisappear { cancelInteractions() }
+                .task(id: hover.generation) { await armDropAfterDwell() }
         }
         .accessibilityIdentifier("workdesk-spatial-canvas")
+    }
+
+    private var canvasLayers: some View {
+        ZStack(alignment: .topLeading) {
+            background
+            ForEach(projects) { project in
+                let id = WorkDeskCanvasItemID.project(project.id)
+                if shouldRender(id) { projectPile(project) }
+            }
+            ForEach(materials) { material in
+                let id = WorkDeskCanvasItemID.material(material.id)
+                if shouldRender(id) { materialCard(material) }
+            }
+        }
+        .animation(motion, value: materials.map(\.id))
+        .animation(motion, value: projects.map(\.id))
     }
 
     private var background: some View {
@@ -243,158 +131,143 @@ struct WorkDeskCanvas<CardContent: View>: View {
                 .accessibilityHidden(true)
             }
             .contentShape(Rectangle())
-            .onTapGesture {
-                    #if os(iOS)
-                    KeyboardDismissal.dismissKeyboard()
-                    #endif
-                 }
-            .gesture(DragGesture(minimumDistance: 4)
-                .updating($isPanning) { _, active, _ in active = true }
-                .onChanged { value in
-                guard isActive, drag == nil else { return }
-                if panStart == nil {
-
-                    #if os(iOS)
-                    KeyboardDismissal.dismissKeyboard()
-                    #endif
-
-                    panStart = transform.offset
-                }
-                guard let panStart else { return }
-                transform.offset = CGSize(width: panStart.width + value.translation.width, height: panStart.height + value.translation.height)
-            }.onEnded { _ in panStart = nil })
-    }
-
-    private var magnifyGesture: some Gesture {
-        MagnifyGesture()
-            .updating($isMagnifying) { _, active, _ in active = true }
-            .onChanged { value in
-                guard isActive, drag == nil else { return }
-                if magnificationStart == nil { magnificationStart = transform }
-                guard let start = magnificationStart else { return }
-                transform = WorkDeskCanvasGeometry.zoomed(start, to: start.scale * value.magnification, anchor: viewportCenter)
-            }
-            .onEnded { _ in magnificationStart = nil }
+            .onTapGesture { dismissCaptureKeyboard() }
+            .gesture(
+                DragGesture(minimumDistance: 4)
+                    .updating($isPanning) { _, active, _ in active = true }
+                    .onChanged { value in
+                        guard isActive, drag == nil, !nativeNavigation, !suppressPanUntilRelease else { return }
+                        if lastPanTranslation == .zero { dismissCaptureKeyboard() }
+                        let delta = CGSize(width: value.translation.width - lastPanTranslation.width,
+                                           height: value.translation.height - lastPanTranslation.height)
+                        lastPanTranslation = value.translation
+                        panViewport(delta)
+                    }
+                    .onEnded { _ in lastPanTranslation = .zero; suppressPanUntilRelease = false }
+            )
+            #if os(macOS)
+            .pointerStyle(isPanning ? .grabActive : .grabIdle)
+            #endif
     }
 
     private func materialCard(_ material: WorkboardMaterialSnapshot) -> some View {
-        let point = currentPoint(id: material.id, isProject: false)
+        let id = WorkDeskCanvasItemID.material(material.id)
+        let frame = screenFrame(for: id)
         let bodySize = WorkDeskCanvasGeometry.cardBodySize
-        let screen = WorkDeskCanvasGeometry.screenPoint(point, transform: transform)
-        let width = bodySize.width * transform.scale
-        let height = bodySize.height * transform.scale + WorkDeskCanvasGeometry.visibleHandleHeight(scale: transform.scale)
-        let lifted = drag?.id == material.id
+        let lifted = livePositions[id] != nil
         return Group {
             if transform.scale < WorkDeskCanvasGeometry.overviewThreshold {
-                Button { focus(point: point, bodySize: bodySize) } label: {
-                    cardContent(material, bodySize)
-                        .frame(width: bodySize.width, height: bodySize.height)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                        .scaleEffect(transform.scale)
-                        .frame(width: width, height: bodySize.height * transform.scale)
-                        .clipped()
-                        .overlay { RoundedRectangle(cornerRadius: 3).strokeBorder(selectedIDs.contains(material.id) ? AppColors.brandAmber : AppColors.border, lineWidth: 1) }
+                Button { activate(id); focus(id) } label: {
+                    VStack(spacing: 0) {
+                        overviewHeader
+                        materialPreview(material, bodySize: bodySize,
+                                        scale: WorkDeskCanvasGeometry.previewScale(transform.scale, bodySize: bodySize))
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                    .frame(width: frame.width, height: frame.height)
+                    .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 7))
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(AppColors.border, lineWidth: 1) }
                 }
-                .choiceCardButton(cornerRadius: 3)
+                .choiceCardButton(cornerRadius: 7)
                 .accessibilityLabel(Text(verbatim: material.name))
                 .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.focusMaterial", defaultValue: "Zoom in to this material")))
             } else {
                 WorkDeskCard(
-            title: material.name,
-            width: width,
-            isSelected: selectedIDs.contains(material.id),
-            isPinned: placements[material.id]?.isPinned == true,
-            isSelecting: isSelecting,
-            isLifted: lifted,
-            isGroupTarget: dropTarget == .material(material.id),
-            coordinateSpace: coordinateSpace,
-            onSelect: { onSelect(material.id) },
-            onTogglePin: { onTogglePin(material.id) },
-            onDragChanged: { updateDrag(id: material.id, isProject: false, translation: $0) },
-            onDragEnded: { finishDrag(id: material.id, isProject: false, translation: $0) },
-            onDragCancelled: { cancelDrag(id: material.id) },
-            onNudge: { nudge(id: material.id, isProject: false, translation: $0) }
-        ) {
-            cardContent(material, bodySize)
-                .frame(width: bodySize.width, height: bodySize.height)
-                .scaleEffect(transform.scale)
-                .frame(width: width, height: bodySize.height * transform.scale)
-                .clipped()
-                .accessibilityHidden(isSelecting)
-                .overlay {
-                    if isSelecting {
-                        Button { onSelect(material.id) } label: {
-                            Color.clear.contentShape(Rectangle())
+                    title: material.name, width: frame.width,
+                    isSelected: selectedIDs.contains(material.id),
+                    isPinned: placements[material.id]?.isPinned == true,
+                    isSelecting: isSelecting, isLifted: lifted,
+                    isGroupTarget: hover.target == id,
+                    coordinateSpace: coordinateSpace,
+                    onSelect: { activate(id); onSelect(material.id) },
+                    onTogglePin: { activate(id); onTogglePin(material.id) },
+                    onDragChanged: { updateDrag(id: id, translation: $0) },
+                    onDragEnded: { finishDrag(id: id, translation: $0) },
+                    onDragCancelled: { cancelDrag(id: id) },
+                    onNudge: { nudge(id: id, translation: $0) },
+                    isNavigating: nativeNavigation,
+                    cancellationGeneration: cancellationGeneration,
+                    onDragLocation: recordDragPointer,
+                    onActivate: { activate(id) }
+                ) {
+                    materialPreview(material, bodySize: bodySize, scale: transform.scale)
+                        .accessibilityHidden(isSelecting)
+                        .overlay {
+                            if isSelecting {
+                                Button { activate(id); onSelect(material.id) } label: {
+                                    Color.clear.contentShape(Rectangle())
+                                }
+                                .choiceCardButton(cornerRadius: 16)
+                                .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material")))
+                                .accessibilityValue(Text(verbatim: material.name))
+                            }
                         }
-                        .choiceCardButton(cornerRadius: 16)
-                        .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material")))
-                        .accessibilityValue(Text(verbatim: material.name))
-                    }
-                }
                 }
             }
         }
-        .rotationEffect(.degrees(reduceMotion || lifted || isSelecting ? 0 : tilt(for: material.id)))
-        .position(x: screen.x + width / 2, y: screen.y + height / 2)
-        .zIndex(lifted ? 1_000 : selectedIDs.contains(material.id) ? 10 : 1)
-        .transition(reduceMotion ? .opacity : .scale(scale: 0.92).combined(with: .opacity))
+        .position(x: frame.midX, y: frame.midY)
+        .zIndex(session.layer(for: id) + (lifted ? WorkDeskCanvasGeometry.liftedLayer : 0))
+        .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
         .accessibilityIdentifier("workdesk-card-\(material.id.uuidString)")
     }
 
+    private func materialPreview(_ material: WorkboardMaterialSnapshot, bodySize: CGSize, scale: CGFloat) -> some View {
+        WorkDeskStablePreview(material: material, size: bodySize, isSelecting: isSelecting,
+                              ordinal: materialIndices[material.id] ?? 1, totalCount: materials.count, content: cardContent)
+            .equatable()
+            .frame(width: bodySize.width, height: bodySize.height)
+            .scaleEffect(scale)
+            .frame(width: bodySize.width * scale, height: bodySize.height * scale)
+            .clipped()
+    }
+
+    private var overviewHeader: some View {
+        Image(systemName: "circle.grid.3x2.fill")
+            .font(.system(size: 10))
+            .foregroundStyle(AppColors.textTertiary)
+            .frame(height: WorkDeskCanvasGeometry.visibleHandleHeight(scale: transform.scale))
+            .opacity(WorkDeskCanvasGeometry.visibleHandleHeight(scale: transform.scale) / 44)
+            .clipped()
+            .accessibilityHidden(true)
+    }
+
     private func projectPile(_ project: WorkDeskCanvasProject) -> some View {
-        let point = currentPoint(id: project.id, isProject: true)
-        let bodySize = WorkDeskCanvasGeometry.projectBodySize
-        let screen = WorkDeskCanvasGeometry.screenPoint(point, transform: transform)
-        let width = bodySize.width * transform.scale
-        let bodyHeight = bodySize.height * transform.scale
-        let highlighted = dropTarget == .project(project.id)
+        let id = WorkDeskCanvasItemID.project(project.id)
+        let frame = screenFrame(for: id)
+        let highlighted = hover.target == id
+        let lifted = livePositions[id] != nil
+        let isOverview = transform.scale < WorkDeskCanvasGeometry.overviewThreshold
         return VStack(spacing: 0) {
-            if transform.scale >= WorkDeskCanvasGeometry.overviewThreshold {
+            if isOverview { overviewHeader }
+            else {
                 WorkDeskDragGrip(
-                title: project.record.title,
-                coordinateSpace: coordinateSpace,
-                onChanged: { updateDrag(id: project.id, isProject: true, translation: $0) },
-                onEnded: { finishDrag(id: project.id, isProject: true, translation: $0) },
-                onCancelled: { cancelDrag(id: project.id) },
-                onNudge: { nudge(id: project.id, isProject: true, translation: $0) }
+                    title: project.record.title, coordinateSpace: coordinateSpace,
+                    onChanged: { updateDrag(id: id, translation: $0) },
+                    onEnded: { finishDrag(id: id, translation: $0) },
+                    onCancelled: { cancelDrag(id: id) },
+                    onNudge: { nudge(id: id, translation: $0) },
+                    cancellationGeneration: cancellationGeneration,
+                    onLocation: recordDragPointer,
+                    onActivate: { activate(id) }
                 )
+                .environment(\.workbenchDestinationIsActive, isActive && !nativeNavigation)
             }
-            Button { onOpenProject(project.id) } label: {
-                if transform.scale < WorkDeskCanvasGeometry.overviewThreshold {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(AppColors.brandAmber.opacity(0.28))
-                        .overlay { Image(systemName: "folder.fill").font(.system(size: max(5, width * 0.3))).foregroundStyle(AppColors.brandAmber) }
-                        .frame(width: width, height: bodyHeight)
-                } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Image(systemName: "square.stack.3d.up.fill")
-                            .font(.system(size: 23 * max(0.7, transform.scale)))
-                        Spacer(minLength: 0)
-                        if project.record.isPinned { Image(systemName: "pin.fill").font(.caption) }
-                    }
-                    .foregroundStyle(AppColors.brandAmber)
-                    Spacer(minLength: 0)
-                    Text(verbatim: project.record.title)
-                        .font(.system(size: 19 * max(0.7, transform.scale), weight: .semibold))
-                        .foregroundStyle(AppColors.textPrimary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Text(verbatim: String(project.materialCount))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(AppColors.textTertiary)
-                }
-                .padding(max(12, 20 * transform.scale))
-                .frame(width: width, height: bodyHeight)
-                .contentShape(Rectangle())
-                }
+            Button {
+                activate(id)
+                if isOverview { focus(id) } else { onOpenProject(project.id) }
+            } label: {
+                projectFace(project, size: CGSize(width: frame.width,
+                    height: frame.height - WorkDeskCanvasGeometry.visibleHandleHeight(scale: transform.scale)), overview: isOverview)
             }
             .choiceCardButton(cornerRadius: 18)
             .accessibilityLabel(Text(verbatim: project.record.title))
-            .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project")))
+            .accessibilityHint(Text(isOverview
+                ? LocalizedStringResource("workdesk.canvas.focusMaterial", defaultValue: "Zoom in to this material")
+                : LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project")))
         }
-        .frame(width: width)
+        .frame(width: frame.width, height: frame.height)
         .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 20))
         .overlay {
             RoundedRectangle(cornerRadius: 20)
@@ -404,246 +277,430 @@ struct WorkDeskCanvas<CardContent: View>: View {
         .background {
             RoundedRectangle(cornerRadius: 20)
                 .fill(AppColors.backgroundSecondary)
-                .rotationEffect(.degrees(reduceMotion ? 0 : 3))
-                .offset(x: 3, y: 6)
+                .rotationEffect(.degrees(reduceMotion ? 0 : 3)).offset(x: 3, y: 6)
             RoundedRectangle(cornerRadius: 20)
                 .fill(AppColors.brandAmber.opacity(0.13))
-                .rotationEffect(.degrees(reduceMotion ? 0 : -3))
-                .offset(x: -3, y: 10)
+                .rotationEffect(.degrees(reduceMotion ? 0 : -3)).offset(x: -3, y: 10)
         }
-        .overlay(alignment: .bottom) {
-            if highlighted {
-                Text(LocalizedStringResource("workdesk.canvas.addToProject", defaultValue: "Add to project"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppColors.background)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(AppColors.brandAmber, in: Capsule())
-                    .padding(.bottom, 10)
-                    .allowsHitTesting(false)
+        .shadow(color: .black.opacity(lifted ? 0.4 : 0.25), radius: lifted ? 22 : 14, y: lifted ? 12 : 8)
+        .animation(motion, value: lifted)
+        .animation(motion, value: highlighted)
+        .position(x: frame.midX, y: frame.midY)
+        .zIndex(session.layer(for: id) + (lifted ? WorkDeskCanvasGeometry.liftedLayer : 0))
+        .transition(reduceMotion ? .opacity : .scale(scale: 0.86).combined(with: .opacity))
+        .accessibilityIdentifier("workdesk-project-\(project.id.uuidString)")
+    }
+
+    private func projectFace(_ project: WorkDeskCanvasProject, size: CGSize, overview: Bool) -> some View {
+        Group {
+            if overview {
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(AppColors.brandAmber.opacity(0.16))
+                    .overlay { Image(systemName: "folder.fill").font(.system(size: max(18, size.width * 0.25))).foregroundStyle(AppColors.brandAmber) }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Image(systemName: "square.stack.3d.up.fill").font(.system(size: 23 * max(0.7, transform.scale)))
+                        Spacer(minLength: 0)
+                        if project.record.isPinned { Image(systemName: "pin.fill").font(.caption) }
+                    }
+                    .foregroundStyle(AppColors.brandAmber)
+                    Spacer(minLength: 0)
+                    Text(verbatim: project.record.title)
+                        .font(.system(size: 19 * max(0.7, transform.scale), weight: .semibold))
+                        .foregroundStyle(AppColors.textPrimary).lineLimit(2).multilineTextAlignment(.leading)
+                    Text(WorkDeskCopy.materialCount(project.materialCount))
+                        .font(.caption.monospacedDigit()).foregroundStyle(AppColors.textTertiary)
+                }
+                .padding(max(12, 20 * transform.scale))
             }
         }
-        .shadow(color: .black.opacity(0.25), radius: 14, y: 8)
-        .position(x: screen.x + width / 2, y: screen.y + (bodyHeight + WorkDeskCanvasGeometry.visibleHandleHeight(scale: transform.scale)) / 2)
-        .zIndex(drag?.id == project.id ? 1_000 : 0)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: highlighted)
-        .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
-        .accessibilityIdentifier("workdesk-project-\(project.id.uuidString)")
+        .frame(width: size.width, height: size.height)
+        .contentShape(Rectangle())
+    }
+
+    /// One overlay above every card and project. The title remains readable
+    /// even when the dragged card completely covers its intended destination.
+    @ViewBuilder private var dropFeedback: some View {
+        if let target = hover.target, let drag {
+            let bounds = WorkDeskCanvasGeometry.feedbackFrame(near: screenFrame(for: drag.lead), viewport: viewport)
+            VStack(alignment: .leading, spacing: 5) {
+                Label(dropInstruction, systemImage: hover.isReady ? "checkmark.circle.fill" : "square.stack.3d.up")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(verbatim: title(for: target))
+                    .font(.caption).lineLimit(1).foregroundStyle(AppColors.textSecondary)
+            }
+            .frame(width: bounds.width - 28, height: bounds.height - 20, alignment: .leading)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .foregroundStyle(hover.isReady ? AppColors.brandAmber : AppColors.textPrimary)
+            .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 16))
+            .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(AppColors.brandAmber.opacity(hover.isReady ? 0.9 : 0.4), lineWidth: 1.5) }
+            .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
+            .position(x: bounds.midX, y: bounds.midY)
+            .zIndex(WorkDeskCanvasGeometry.feedbackLayer)
+            .allowsHitTesting(false)
+            .transition(.opacity)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hover.isReady)
+            .accessibilityIdentifier("workdesk-drop-feedback")
+        }
+    }
+
+    private var dropInstruction: LocalizedStringResource {
+        guard hover.isReady else {
+            return LocalizedStringResource("workdesk.canvas.holdToGroup", defaultValue: "Hold here to group")
+        }
+        if hover.target?.isProject == true {
+            return LocalizedStringResource("workdesk.canvas.releaseToAdd", defaultValue: "Release to add to project")
+        }
+        return LocalizedStringResource("workdesk.canvas.releaseToGroup", defaultValue: "Release to create project")
     }
 
     private var viewportControls: some View {
         HStack(spacing: 2) {
-            Button { changeZoom(to: transform.scale / 1.2) } label: {
-                Image(systemName: "minus").frame(width: 44, height: 44)
+            Button { changeZoom(to: transform.scale / 1.2) } label: { Image(systemName: "minus").frame(width: 44, height: 44) }
+                .pointerIconButton(size: 44)
+                .disabled(transform.scale <= WorkDeskCanvasGeometry.minimumScale)
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.zoomOut", defaultValue: "Zoom out")))
+            Button { changeZoom(to: 1) } label: {
+                Text(verbatim: zoomLabel)
+                    .font(.caption.monospacedDigit()).frame(minWidth: 44, minHeight: 44)
             }
-            .pointerIconButton(size: 44)
-            .disabled(transform.scale <= WorkDeskCanvasGeometry.minimumScale)
-            .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.zoomOut", defaultValue: "Zoom out")))
-            Text(verbatim: "\(Int((transform.scale * 100).rounded()))%")
-                .font(.caption.monospacedDigit())
-                .frame(minWidth: 42)
-                .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.zoom", defaultValue: "Desk zoom")))
-                .accessibilityValue(Text(verbatim: "\(Int((transform.scale * 100).rounded()))%"))
-            Button { changeZoom(to: transform.scale * 1.2) } label: {
-                Image(systemName: "plus").frame(width: 44, height: 44)
-            }
-            .pointerIconButton(size: 44)
-            .disabled(transform.scale >= WorkDeskCanvasGeometry.maximumScale)
-            .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.zoomIn", defaultValue: "Zoom in")))
+            .pointerIconButton(size: 44, horizontalPadding: 4)
+            .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.resetZoom", defaultValue: "Reset zoom")))
+            .accessibilityValue(Text(verbatim: zoomLabel))
+            .help(Text(LocalizedStringResource("workdesk.canvas.resetZoom", defaultValue: "Reset zoom")))
+            Button { changeZoom(to: transform.scale * 1.2) } label: { Image(systemName: "plus").frame(width: 44, height: 44) }
+                .pointerIconButton(size: 44)
+                .disabled(transform.scale >= WorkDeskCanvasGeometry.maximumScale)
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.zoomIn", defaultValue: "Zoom in")))
             Rectangle().fill(AppColors.border).frame(width: 1, height: 18)
-            Button(action: fitDesk) {
-                Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 44, height: 44)
-            }
-            .pointerIconButton(size: 44)
-            .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.fit", defaultValue: "Fit desk")))
+            Button(action: fitDesk) { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 44, height: 44) }
+                .pointerIconButton(size: 44)
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.fit", defaultValue: "Fit desk")))
         }
         .foregroundStyle(AppColors.textSecondary)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay { Capsule().strokeBorder(AppColors.borderSubtle, lineWidth: 1).allowsHitTesting(false) }
         .shadow(color: .black.opacity(0.2), radius: 12, y: 5)
-        .disabled(!isActive || drag != nil)
+        .disabled(!isActive || drag != nil || nativeNavigation)
     }
 
-    private var viewportCenter: CGPoint { CGPoint(x: viewport.width / 2, y: viewport.height / 2) }
+    private var zoomLabel: String {
+        transform.scale < 0.01 ? String(format: "%.1f%%", transform.scale * 100) : "\(Int((transform.scale * 100).rounded()))%"
+    }
 
-    private func currentPoint(id: UUID, isProject: Bool) -> WorkDeskPoint {
-        if let drag, drag.id == id, drag.isProject == isProject { return drag.point }
-        if let point = releasedPositions[id] { return point }
-        if isProject {
-            if let point = projects.first(where: { $0.id == id })?.record.position { return WorkDeskCanvasGeometry.bounded(point) }
-            return defaultPositions[id] ?? WorkDeskCanvasGeometry.defaultPoint(index: materials.count + (projects.firstIndex(where: { $0.id == id }) ?? 0), columns: columns)
+    private func currentPoint(_ id: WorkDeskCanvasItemID) -> WorkDeskPoint {
+        livePositions[id] ?? pending.positions[id] ?? savedPositions[id] ?? defaultPositions[id] ?? .init(x: 28, y: 26)
+    }
+
+    private func bodySize(for id: WorkDeskCanvasItemID) -> CGSize {
+        id.isProject ? WorkDeskCanvasGeometry.projectBodySize : WorkDeskCanvasGeometry.cardBodySize
+    }
+
+    private func screenFrame(for id: WorkDeskCanvasItemID) -> CGRect {
+        WorkDeskCanvasGeometry.screenFrame(at: currentPoint(id), bodySize: bodySize(for: id), transform: transform)
+    }
+
+    private func shouldRender(_ id: WorkDeskCanvasItemID) -> Bool {
+        WorkDeskCanvasGeometry.shouldRender(screenFrame(for: id), viewport: viewport,
+            isInteracting: livePositions[id] != nil || hover.target == id)
+    }
+
+    private func title(for id: WorkDeskCanvasItemID) -> String {
+        switch id {
+        case .material(let value): materials.first { $0.id == value }?.name ?? ""
+        case .project(let value): projects.first { $0.id == value }?.record.title ?? ""
         }
-        if let point = placements[id]?.position { return WorkDeskCanvasGeometry.bounded(point) }
-        return defaultPositions[id] ?? WorkDeskCanvasGeometry.defaultPoint(index: materials.firstIndex(where: { $0.id == id }) ?? 0, columns: columns)
     }
 
-    /// Reserve a slot once for every identity in this mounted desk. Removing or
-    /// grouping another note cannot move unarranged notes out from under a hand;
-    /// later captures get fresh slots instead of compacting the existing pile.
-    private func seedDefaultPositions() {
-        guard initialized else { return }
+    private func refreshLayout() {
+        let ids = projects.map { WorkDeskCanvasItemID.project($0.id) } + materials.map { WorkDeskCanvasItemID.material($0.id) }
+        visibleIDs = Set(ids)
+        materialIndices = Dictionary(materials.enumerated().map { ($0.element.id, $0.offset + 1) }, uniquingKeysWith: { first, _ in first })
+        if let drag, !Set(drag.origins.keys).isSubset(of: visibleIDs) { cancelInteractions() }
+        session.reconcile(ids)
+        var saved: [WorkDeskCanvasItemID: WorkDeskPoint] = [:]
+        for material in materials { saved[.material(material.id)] = placements[material.id]?.position }
+        for project in projects { saved[.project(project.id)] = project.record.position }
+        savedPositions = saved
+        defaultPositions = defaultPositions.filter { visibleIDs.contains($0.key) }
+        seedDefaultPositions(ids)
+        if drag != nil { cacheDropCandidates(); updateDropTarget() }
+    }
+
+    private func seedDefaultPositions(_ ids: [WorkDeskCanvasItemID]) {
+        guard session.isInitialized else { return }
         var materialPoints: [WorkDeskPositionSeed] = []
         var projectPoints: [UUID: WorkDeskPoint] = [:]
-        let entries = materials.map { ($0.id, false, WorkDeskCanvasGeometry.cardBodySize) }
-            + projects.map { ($0.id, true, WorkDeskCanvasGeometry.projectBodySize) }
         var occupied: [CGRect] = []
-        // Reserve all persisted positions before assigning any missing position.
-        for (id, isProject, size) in entries {
-            let saved = releasedPositions[id] ?? (isProject
-                ? projects.first(where: { $0.id == id })?.record.position
-                : placements[id]?.position) ?? defaultPositions[id]
-            if let saved {
+        for id in ids {
+            if let saved = pending.positions[id] ?? savedPositions[id] ?? defaultPositions[id] {
                 defaultPositions[id] = saved
-                occupied.append(WorkDeskCanvasGeometry.frame(at: saved, bodySize: size, scale: transform.scale))
+                occupied.append(WorkDeskCanvasGeometry.frame(at: saved, bodySize: bodySize(for: id), scale: 1))
             }
         }
-        for (id, isProject, size) in entries where defaultPositions[id] == nil {
-            guard let point = WorkDeskCanvasGeometry.availablePoint(
-                occupied: occupied, columns: columns, bodySize: size, scale: transform.scale
-            ) else { continue }
+        for id in ids where defaultPositions[id] == nil {
+            guard let point = WorkDeskCanvasGeometry.availablePoint(occupied: occupied,
+                columns: session.columns, bodySize: bodySize(for: id), scale: 1) else { continue }
             defaultPositions[id] = point
-            occupied.append(WorkDeskCanvasGeometry.frame(at: point, bodySize: size, scale: transform.scale))
-            if isProject { projectPoints[id] = point }
-            else {
-                materialPoints.append(WorkDeskPositionSeed(materialID: id, projectID: placements[id]?.projectID, position: point))
+            occupied.append(WorkDeskCanvasGeometry.frame(at: point, bodySize: bodySize(for: id), scale: 1))
+            switch id {
+            case .material(let value): materialPoints.append(.init(materialID: value, projectID: placements[value]?.projectID, position: point))
+            case .project(let value): projectPoints[value] = point
             }
         }
         guard !materialPoints.isEmpty || !projectPoints.isEmpty else { return }
         Task { @MainActor in _ = await onSeedPositions(materialPoints, projectPoints) }
     }
 
-    private var draggedIDs: [UUID] {
-        guard let drag, !drag.isProject else { return [] }
-        let visible = materials.map(\.id)
-        return selectedIDs.contains(drag.id) ? visible.filter { selectedIDs.contains($0) } : [drag.id]
+    private func activate(_ id: WorkDeskCanvasItemID) {
+        guard isActive, !nativeNavigation else { return }
+        session.bringToFront([id])
     }
 
-    private var dropTarget: DropTarget? {
-        guard let drag, !drag.isProject else { return nil }
-        let movingFrame = WorkDeskCanvasGeometry.frame(at: drag.point, bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: transform.scale)
-        let projectCandidates = projects.map { project in
-            (project.id, WorkDeskCanvasGeometry.frame(at: currentPoint(id: project.id, isProject: true), bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: transform.scale))
-        }
-        if let id = WorkDeskCanvasGeometry.overlapTarget(movingFrame: movingFrame, candidates: projectCandidates) { return .project(id) }
-        let excluded = Set(draggedIDs)
-        let cardCandidates = materials.filter { !excluded.contains($0.id) }.map { material in
-            (material.id, WorkDeskCanvasGeometry.frame(at: currentPoint(id: material.id, isProject: false), bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: transform.scale))
-        }
-        return WorkDeskCanvasGeometry.overlapTarget(movingFrame: movingFrame, candidates: cardCandidates).map(DropTarget.material)
-    }
-
-    private func updateDrag(id: UUID, isProject: Bool, translation: CGSize) {
-        guard isActive, moveTokens[id] == nil else { return }
+    private func updateDrag(id: WorkDeskCanvasItemID, translation: CGSize) {
+        guard isActive, !nativeNavigation else { return }
         if drag == nil {
-
-                    #if os(iOS)
-                    KeyboardDismissal.dismissKeyboard()
-                    #endif
-
-            let origin = currentPoint(id: id, isProject: isProject)
-            drag = MovingItem(id: id, isProject: isProject, origin: origin, point: origin)
+            dismissCaptureKeyboard()
+            lastPanTranslation = .zero
+            suppressPanUntilRelease = true
+            var ids = [id]
+            if !id.isProject, selectedIDs.contains(id.id) {
+                ids = materials.map { WorkDeskCanvasItemID.material($0.id) }.filter { selectedIDs.contains($0.id) && $0 != id }
+                    .sorted { session.layer(for: $0) < session.layer(for: $1) } + [id]
+            }
+            session.raiseGroup(ids, lead: id)
+            let origins = Dictionary(uniqueKeysWithValues: ids.map { ($0, currentPoint($0)) })
+            drag = WorkDeskCanvasDrag(lead: id, origins: origins, startTransform: transform)
+            cacheDropCandidates()
+            startEdgePanning()
         }
-        guard let current = drag, current.id == id, current.isProject == isProject else { return }
-        drag?.point = WorkDeskCanvasGeometry.moved(current.origin, by: translation, scale: transform.scale)
+        guard drag?.lead == id else { return }
+        drag?.translation = translation
+        if let drag { livePositions = drag.positions(transform: transform) }
+        updateDropTarget()
     }
 
-    private func finishDrag(id: UUID, isProject: Bool, translation: CGSize) {
-        guard isActive, drag?.id == id else { cancelDrag(id: id); return }
-        updateDrag(id: id, isProject: isProject, translation: translation)
+    private func cacheDropCandidates() {
+        let excluded = Set(drag?.origins.keys.map { $0 } ?? [])
+        dropCandidates = visibleIDs.filter { !excluded.contains($0) }.map { id in
+            WorkDeskDropCandidate(id: id,
+                frame: WorkDeskCanvasGeometry.frame(at: currentPoint(id), bodySize: bodySize(for: id), scale: transform.scale),
+                layer: session.layer(for: id))
+        }
+    }
+
+    private func updateDropTarget() {
+        guard let drag, !drag.lead.isProject, let point = livePositions[drag.lead] else { hover.reset(); return }
+        let frame = WorkDeskCanvasGeometry.frame(at: point, bodySize: bodySize(for: drag.lead), scale: transform.scale)
+        hover.update(WorkDeskCanvasGeometry.foregroundTarget(movingFrame: frame, candidates: dropCandidates))
+    }
+
+    private func armDropAfterDwell() async {
+        guard hover.target != nil, drag != nil else { return }
+        let generation = hover.generation
+        do { try await Task.sleep(for: WorkDeskDropHover.dwellDuration) } catch { return }
+        guard !Task.isCancelled, isActive, drag != nil else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) { hover.arm(generation: generation) }
+    }
+
+    private func finishDrag(id: WorkDeskCanvasItemID, translation: CGSize) {
+        guard isActive, !nativeNavigation, drag?.lead == id else { cancelDrag(id: id); return }
+        updateDrag(id: id, translation: translation)
         guard let finished = drag else { return }
-        let target = dropTarget
-        let ids = draggedIDs
+        let points = livePositions
+        let target = hover.isReady ? hover.target : nil
+        let materialIDs = finished.origins.keys.filter { !$0.isProject }.map(\.id).sorted { $0.uuidString < $1.uuidString }
+        session.raiseGroup(Array(finished.origins.keys), lead: id)
+        edgePanTask?.cancel(); edgePanTask = nil
         drag = nil
-        if finished.isProject {
-            commitMove(id: id, point: finished.point, isProject: true)
-        } else {
+        dragPointer = nil
+        hover.reset()
+        if let target, !id.isProject {
             switch target {
-            case .project(let targetID): onAssign(ids, targetID)
-            case .material(let targetID): onGroup(ids + [targetID])
-            case nil: commitMove(id: id, point: finished.point, isProject: false)
+            case .material(let value):
+                withAnimation(motion) { livePositions = [:] }
+                onGroup(materialIDs + [value], currentPoint(target))
+            case .project(let projectID):
+                let destination = currentPoint(target)
+                let settling = points.mapValues { _ in destination }
+                withAnimation(motion) { commitAssignment(materialIDs, to: projectID, points: settling); livePositions = [:] }
             }
+        } else {
+            commitMove(points)
+            livePositions = [:]
         }
     }
 
-    private func cancelDrag(id: UUID) { if drag?.id == id { drag = nil } }
-
-    private func nudge(id: UUID, isProject: Bool, translation: CGSize) {
-        guard isActive, moveTokens[id] == nil else { return }
-        let point = WorkDeskCanvasGeometry.moved(currentPoint(id: id, isProject: isProject), by: translation, scale: 1)
-        commitMove(id: id, point: point, isProject: isProject)
+    private func cancelDrag(id: WorkDeskCanvasItemID) {
+        guard drag?.lead == id else { return }
+        edgePanTask?.cancel(); edgePanTask = nil
+        drag = nil
+        dragPointer = nil
+        hover.reset()
+        withAnimation(motion) { livePositions = [:] }
     }
 
-    /// Hold the released position until the store answers. A failed write
-    /// returns visibly to persisted truth; a successful one never snaps back
-    /// for the duration of the save. The callback owns its error presentation.
-    private func commitMove(id: UUID, point: WorkDeskPoint, isProject: Bool) {
-        let token = UUID()
-        releasedPositions[id] = point
-        moveTokens[id] = token
+    private func nudge(id: WorkDeskCanvasItemID, translation: CGSize) {
+        guard isActive, !nativeNavigation, drag == nil else { return }
+        var ids = [id]
+        if !id.isProject, selectedIDs.contains(id.id) {
+            ids = materials.map { WorkDeskCanvasItemID.material($0.id) }.filter { selectedIDs.contains($0.id) }
+        }
+        let origins = Dictionary(uniqueKeysWithValues: ids.map { ($0, currentPoint($0)) })
+        let points = WorkDeskCanvasGeometry.translated(origins, by: translation)
+        session.raiseGroup(ids, lead: id)
+        withAnimation(motion) { commitMove(points) }
+    }
+
+    private func commitMove(_ points: [WorkDeskCanvasItemID: WorkDeskPoint]) {
+        let token = pending.begin(points)
         Task { @MainActor in
-            if isProject { _ = await onMoveProject(id, point) }
-            else { _ = await onMove(id, point) }
-            guard moveTokens[id] == token else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-                releasedPositions[id] = nil
-                moveTokens[id] = nil
+            let success: Bool
+            if let entry = points.first, entry.key.isProject { success = await onMoveProject(entry.key.id, entry.value) }
+            else { success = await onMoveMaterials(Dictionary(uniqueKeysWithValues: points.map { ($0.key.id, $0.value) })) }
+            withAnimation(motion) {
+                let owned = pending.finish(token: token)
+                if success {
+                    // The parent publishes before returning, but its next body
+                    // pass may still be queued. Bridge that one frame using the
+                    // confirmed positions, then accept subsequent synced truth.
+                    for (id, point) in owned where visibleIDs.contains(id) { savedPositions[id] = point; defaultPositions[id] = point }
+                }
+                if drag != nil { cacheDropCandidates(); updateDropTarget() }
             }
         }
     }
 
-    private func focus(point: WorkDeskPoint, bodySize: CGSize) {
+    private func commitAssignment(_ ids: [UUID], to projectID: UUID, points: [WorkDeskCanvasItemID: WorkDeskPoint]) {
+        let token = pending.begin(points)
+        Task { @MainActor in
+            _ = await onAssign(ids, projectID)
+            withAnimation(motion) {
+                _ = pending.finish(token: token)
+                if drag != nil { cacheDropCandidates(); updateDropTarget() }
+            }
+        }
+    }
+
+    private func nativeInteractionChanged(_ active: Bool) {
+        nativeNavigation = active
+        if active {
+            dismissCaptureKeyboard()
+            if let drag { cancellationGeneration &+= 1; cancelDrag(id: drag.lead) }
+            suppressPanUntilRelease = isPanning
+            lastPanTranslation = .zero
+        }
+    }
+
+    private func panViewport(_ delta: CGSize) {
+        guard isActive, drag == nil else { return }
+        withTransaction(Transaction(animation: nil)) { session.transform = WorkDeskCanvasGeometry.panned(transform, by: delta) }
+    }
+
+    private func zoomViewport(_ factor: CGFloat, _ anchor: CGPoint) {
+        guard isActive, drag == nil, factor.isFinite, factor > 0 else { return }
+        withTransaction(Transaction(animation: nil)) {
+            session.transform = WorkDeskCanvasGeometry.zoomed(transform, to: transform.scale * factor, anchor: anchor)
+        }
+    }
+
+    private func magnifyViewport(_ delta: CGFloat, _ anchor: CGPoint) {
+        guard isActive, drag == nil, delta.isFinite else { return }
+        withTransaction(Transaction(animation: nil)) {
+            session.transform = WorkDeskCanvasGeometry.zoomed(transform, to: transform.scale + delta, anchor: anchor)
+        }
+    }
+
+    private func startEdgePanning() {
+        edgePanTask?.cancel()
+        edgePanTask = Task { @MainActor in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(16)) } catch { break }
+                guard isActive, let drag, !nativeNavigation else { break }
+                guard let dragPointer else { continue }
+                let velocity = WorkDeskCanvasGeometry.edgePanVelocity(at: dragPointer, viewport: viewport)
+                guard velocity != .zero else { continue }
+                var next = WorkDeskCanvasGeometry.panned(transform, by: CGSize(width: velocity.width * 0.016, height: velocity.height * 0.016))
+                let shifted = drag.positions(transform: next)
+                if shifted[drag.lead]?.x == livePositions[drag.lead]?.x { next.offset.width = transform.offset.width }
+                if shifted[drag.lead]?.y == livePositions[drag.lead]?.y { next.offset.height = transform.offset.height }
+                withTransaction(Transaction(animation: nil)) {
+                    session.transform = next
+                    livePositions = drag.positions(transform: next)
+                    updateDropTarget()
+                }
+            }
+        }
+    }
+
+    private func focus(_ id: WorkDeskCanvasItemID) {
+        let point = currentPoint(id), size = bodySize(for: id)
         let scale: CGFloat = viewport.width < 600 ? 0.85 : 1
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) {
-            transform = WorkDeskCanvasTransform(scale: scale, offset: CGSize(
-                width: viewport.width / 2 - (CGFloat(point.x) + bodySize.width / 2) * scale,
-                height: viewport.height / 2 - (CGFloat(point.y) + bodySize.height / 2) * scale - 22
-            ))
+        withAnimation(motion) {
+            session.transform = WorkDeskCanvasTransform(scale: scale, offset: CGSize(
+                width: viewport.width / 2 - (CGFloat(point.x) + size.width / 2) * scale,
+                height: viewport.height / 2 - (CGFloat(point.y) + size.height / 2) * scale - 22))
         }
     }
 
     private func changeZoom(to scale: CGFloat) {
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-            transform = WorkDeskCanvasGeometry.zoomed(transform, to: scale, anchor: viewportCenter)
-        }
+        withAnimation(motion) { session.transform = WorkDeskCanvasGeometry.zoomed(transform, to: scale, anchor: viewportCenter) }
     }
 
     private func revealDeskIfOffscreen() {
-        let visible = CGRect(origin: .zero, size: viewport)
-        let frames = materials.map { ($0.id, false, WorkDeskCanvasGeometry.cardBodySize) }
-            + projects.map { ($0.id, true, WorkDeskCanvasGeometry.projectBodySize) }
-        let hasVisibleCard = frames.contains { id, isProject, size in
-            let point = WorkDeskCanvasGeometry.screenPoint(currentPoint(id: id, isProject: isProject), transform: transform)
-            return visible.intersects(CGRect(origin: point, size: CGSize(width: size.width * transform.scale, height: size.height * transform.scale + 44)))
-        }
-        if !frames.isEmpty && !hasVisibleCard { fitDesk() }
+        if !visibleIDs.isEmpty && !visibleIDs.contains(where: { CGRect(origin: .zero, size: viewport).intersects(screenFrame(for: $0)) }) { fitDesk() }
     }
 
     private func fitDesk() {
-        // Re-evaluate after zoom: handles stay 44 screen points while ordinary
-        // cards zoom, and disappear in the tiny overview. Using old-scale
-        // bounds would leave the last row below the viewport on a phone.
         var fitted = transform
-        for _ in 0..<3 {
-            let frames = materials.map { material in
-                WorkDeskCanvasGeometry.frame(at: currentPoint(id: material.id, isProject: false), bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: fitted.scale)
-            } + projects.map { project in
-                WorkDeskCanvasGeometry.frame(at: currentPoint(id: project.id, isProject: true), bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: fitted.scale)
-            }
+        for _ in 0..<5 {
+            let frames = visibleIDs.map { WorkDeskCanvasGeometry.frame(at: currentPoint($0), bodySize: bodySize(for: $0), scale: fitted.scale) }
             fitted = WorkDeskCanvasGeometry.fit(frames: frames, viewport: viewport)
         }
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) {
-            transform = fitted
-        }
+        withAnimation(motion) { session.transform = fitted }
     }
 
     private func cancelInteractions() {
+        if drag != nil { cancellationGeneration &+= 1 }
+        edgePanTask?.cancel(); edgePanTask = nil
         drag = nil
-        panStart = nil
-        magnificationStart = nil
+        dragPointer = nil
+        livePositions = [:]
+        hover.reset()
+        nativeNavigation = false
+        lastPanTranslation = .zero
+        suppressPanUntilRelease = false
     }
 
-    private func tilt(for id: UUID) -> Double {
-        let sum = id.uuidString.utf8.reduce(0) { $0 + Int($1) }
-        return Double(sum % 5 - 2) * 0.35
+    private func recordDragPointer(_ point: CGPoint) {
+        guard isActive, !nativeNavigation, point.x.isFinite, point.y.isFinite else { return }
+        dragPointer = point
     }
+
+    private func dismissCaptureKeyboard() {
+        #if os(iOS)
+        KeyboardDismissal.dismissKeyboard()
+        #endif
+    }
+}
+
+/// Camera movement changes the surrounding frame, not the preview's inputs.
+/// Keep expensive thumbnails and nested playback controls out of pan-rate body
+/// rebuilding while still invalidating for revised captures and selection mode.
+struct WorkDeskStablePreview<Content: View>: View, Equatable {
+    let material: WorkboardMaterialSnapshot
+    let size: CGSize
+    let isSelecting: Bool
+    let ordinal: Int
+    let totalCount: Int
+    let content: (WorkboardMaterialSnapshot, CGSize) -> Content
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.material == rhs.material && lhs.size == rhs.size && lhs.isSelecting == rhs.isSelecting
+            && lhs.ordinal == rhs.ordinal && lhs.totalCount == rhs.totalCount
+    }
+
+    var body: some View { content(material, size) }
 }

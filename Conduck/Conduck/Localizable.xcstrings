@@ -1,6 +1,61 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "workdesk.canvas.holdToGroup" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hold here to group"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.releaseToAdd" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Release to add to project"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.releaseToGroup" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Release to create project"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.resetZoom" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset zoom"
+          }
+        }
+      }
+    },
+    "workdesk.error.materialMoved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "An item moved to another project. Refresh the desk and try again."
+          }
+        }
+      }
+    },
     "common.save" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -397,17 +452,6 @@
         }
       }
     },
-    "workdesk.canvas.addToProject" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add to project"
-          }
-        }
-      }
-    },
     "workdesk.canvas.fit" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -426,17 +470,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Zoom in to this material"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.groupDrop" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Create a project"
           }
         }
       }
@@ -547,17 +580,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Unpin material"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.zoom" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Desk zoom"
           }
         }
       }
@@ -25156,7 +25178,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Move cards by their handles. Overlap ideas to start a project, or use Select."
           }
         }

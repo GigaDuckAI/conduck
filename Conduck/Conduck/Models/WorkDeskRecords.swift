@@ -96,6 +96,9 @@ nonisolated enum WorkDeskMutation: Sendable {
     case deleteProject(id: UUID)
     case assign(materialIDs: [UUID], projectID: UUID?)
     case moveMaterial(id: UUID, position: WorkDeskPoint?)
+    /// A selected group moves only while every member still belongs to the
+    /// scope where its drag began. One stale member refuses the whole move.
+    case moveMaterials(positions: [UUID: WorkDeskPoint], expectedProjectID: UUID?)
     case pinMaterial(id: UUID, isPinned: Bool)
     case moveProject(id: UUID, position: WorkDeskPoint?)
     case pinProject(id: UUID, isPinned: Bool)
@@ -105,6 +108,7 @@ nonisolated enum WorkDeskMutation: Sendable {
 nonisolated enum WorkDeskStoreError: Error, Equatable, LocalizedError {
     case projectNotFound
     case materialNotFound
+    case materialMoved
     case invalidTitle
     case contentTooLong
     case identifierCollision
@@ -116,6 +120,8 @@ nonisolated enum WorkDeskStoreError: Error, Equatable, LocalizedError {
             String(localized: "workdesk.error.projectMissing", defaultValue: "That project is no longer available. Your ideas are still on the desk.")
         case .materialNotFound:
             String(localized: "workdesk.error.materialMissing", defaultValue: "An item has changed or been removed. Refresh the desk and try again.")
+        case .materialMoved:
+            String(localized: "workdesk.error.materialMoved", defaultValue: "An item moved to another project. Refresh the desk and try again.")
         case .invalidTitle:
             String(localized: "workdesk.error.title", defaultValue: "Give the project a name.")
         case .contentTooLong:

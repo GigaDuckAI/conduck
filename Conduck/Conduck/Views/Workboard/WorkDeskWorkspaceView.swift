@@ -435,7 +435,7 @@ private struct WorkDeskProjectEditor: View {
                     brief: project.brief, preferredGatewayRef: project.preferredGatewayRef, expectedUpdatedAt: project.updatedAt)
                 savedID = saved ? project.id : nil
             } else {
-                savedID = await organization.createProject(title: title, materialIDs: request.materialIDs)
+                savedID = await organization.createProject(title: title, materialIDs: request.materialIDs, position: request.position)
             }
             isSaving = false
             if let savedID { onCreated(savedID); dismiss() }

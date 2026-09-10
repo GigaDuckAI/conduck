@@ -7,7 +7,8 @@ Xcode's GeneratedStringSymbols metadata describes generated accessors, not the
 authored fallback text. It can contain only a key or bare format placeholder.
 Only compiler records naming current files inside this app's source directory
 are eligible. Missing, stale or conflicting defaults refuse the entire write.
-Existing formatting, translations and metadata remain intact.
+Other translations, unrelated metadata and existing formatting remain intact.
+Verified English defaults are marked translated so they enter the app bundle.
 
 Usage: python3 scripts/sync-workdesk-strings.py --objects <app Objects-normal/arm64>
 Add --write to synchronize after checking the proposed source defaults.
@@ -127,14 +128,23 @@ def patched_catalog(text, defaults):
         unit = entry.get("localizations", {}).get("en", {}).get("stringUnit")
         if not isinstance(unit, dict) or "value" not in unit:
             raise CatalogError(f"{key} needs a manual English translation update; structured entries are preserved.")
-        if unit["value"] == value:
+        replacements = {}
+        if unit["value"] != value:
+            replacements["value"] = value
+        # A correct development value in the "new" state may be omitted from
+        # the compiled English bundle. Authored English defaults are verified
+        # source copy, so synchronize readiness as well as the visible words.
+        if unit.get("state") != "translated":
+            replacements["state"] = "translated"
+        if not replacements:
             continue
-        span = strings_span
-        for component in (key, "localizations", "en", "stringUnit", "value"):
-            span = member_span(text, component, span[0])
-            if span is None:
-                raise CatalogError(f"Missing translation value for {key}.")
-        edits.append((span[0], span[1], json.dumps(value, ensure_ascii=False)))
+        for field, replacement in replacements.items():
+            span = strings_span
+            for component in (key, "localizations", "en", "stringUnit", field):
+                span = member_span(text, component, span[0])
+                if span is None:
+                    raise CatalogError(f"Missing translation {field} for {key}.")
+            edits.append((span[0], span[1], json.dumps(replacement, ensure_ascii=False)))
         changed.append(key)
     for start, end, replacement in sorted(edits, reverse=True):
         text = text[:start] + replacement + text[end:]
@@ -186,7 +196,7 @@ def main():
         parser.exit(2, f"Work desk localization check failed: {error}\n")
     if changed and not args.write:
         parser.exit(1, "English copy differs from authored defaults: " + ", ".join(changed) + "\n")
-    print(f"Work desk English copy {'updated' if args.write else 'verified'}; {len(changed)} changed values.")
+    print(f"Work desk English copy {'updated' if args.write else 'verified'}; {len(changed)} changed entries.")
 
 
 if __name__ == "__main__":
