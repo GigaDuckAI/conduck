@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Drawing, navigation and hit testing share screen-to-desk arithmetic. Tiny
-// overview cards retain an accessible focus target; live movement is clamped
+// overview cards have nearby focus hit testing independent of their size; movement is clamped
 // as one group so reaching an edge never changes spacing between selected cards.
 
 import SwiftUI
@@ -26,27 +26,16 @@ nonisolated enum WorkDeskCanvasGeometry {
     static let overviewThreshold: CGFloat = 0.60
     static let cardBodySize = CGSize(width: 232, height: 238)
     static let projectBodySize = CGSize(width: 232, height: 168)
-    static let handleHeight: CGFloat = 44
     static let minimumFocusSize: CGFloat = 44
     static let feedbackLayer: Double = 2_000_000
     static let liftedLayer: Double = 1_000_000
 
-    static func previewScale(_ scale: CGFloat, bodySize: CGSize) -> CGFloat {
-        let zoom = boundedScale(scale)
-        guard zoom < overviewThreshold else { return zoom }
-        return max(zoom, minimumFocusSize / min(bodySize.width, bodySize.height))
-    }
-
+    // Every tile is one fixed rectangle in the world. Its full face scales
+    // proportionally; a minimum touch target must never inflate drawn content,
+    // collision frames or Fit bounds as the camera zooms out.
     static func screenSize(bodySize: CGSize, scale: CGFloat) -> CGSize {
-        let zoom = previewScale(scale, bodySize: bodySize)
-        return CGSize(width: bodySize.width * zoom,
-                      height: bodySize.height * zoom + visibleHandleHeight(scale: scale))
-    }
-
-    static func visibleHandleHeight(scale: CGFloat) -> CGFloat {
-        // The read-only overview header folds away continuously; crossing the
-        // interactive threshold must not jump every card by one handle height.
-        handleHeight * min(1, max(0, (boundedScale(scale) - 0.35) / (overviewThreshold - 0.35)))
+        let zoom = boundedScale(scale)
+        return CGSize(width: bodySize.width * zoom, height: bodySize.height * zoom)
     }
 
     static func boundedScale(_ scale: CGFloat) -> CGFloat {
@@ -99,14 +88,31 @@ nonisolated enum WorkDeskCanvasGeometry {
         return nil
     }
 
-    static func frame(at point: WorkDeskPoint, bodySize: CGSize, scale: CGFloat) -> CGRect {
+    static func frame(at point: WorkDeskPoint, bodySize: CGSize, scale _: CGFloat) -> CGRect {
         let point = bounded(point)
-        let size = screenSize(bodySize: bodySize, scale: scale)
-        return CGRect(
-            x: point.x, y: point.y,
-            width: size.width / boundedScale(scale),
-            height: size.height / boundedScale(scale)
-        )
+        return CGRect(x: point.x, y: point.y, width: bodySize.width, height: bodySize.height)
+    }
+
+    /// Empty-space taps can focus a tiny overview card nearby without making
+    /// that card cover its neighbours. Actual visible surfaces always win;
+    /// otherwise choose the nearest centre in a screen-sized reach.
+    static func overviewTarget(at point: CGPoint, candidates: [WorkDeskDropCandidate]) -> WorkDeskCanvasItemID? {
+        guard point.x.isFinite, point.y.isFinite else { return nil }
+        let direct = candidates.filter { $0.frame.contains(point) }
+        if let front = direct.max(by: {
+            $0.layer == $1.layer ? $0.id.sortKey < $1.id.sortKey : $0.layer < $1.layer
+        }) { return front.id }
+        return candidates.filter { candidate in
+            let reach = CGRect(x: candidate.frame.midX - max(minimumFocusSize, candidate.frame.width) / 2,
+                               y: candidate.frame.midY - max(minimumFocusSize, candidate.frame.height) / 2,
+                               width: max(minimumFocusSize, candidate.frame.width),
+                               height: max(minimumFocusSize, candidate.frame.height))
+            return reach.contains(point)
+        }.min {
+            let lhs = hypot($0.frame.midX - point.x, $0.frame.midY - point.y)
+            let rhs = hypot($1.frame.midX - point.x, $1.frame.midY - point.y)
+            return lhs == rhs ? $0.id.sortKey < $1.id.sortKey : lhs < rhs
+        }?.id
     }
 
     static func screenFrame(at point: WorkDeskPoint, bodySize: CGSize, transform: WorkDeskCanvasTransform) -> CGRect {

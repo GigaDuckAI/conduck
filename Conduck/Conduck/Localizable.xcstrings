@@ -1,6 +1,28 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "workdesk.project.unpin" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unpin project"
+          }
+        }
+      }
+    },
+    "workdesk.project.pin" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pin project"
+          }
+        }
+      }
+    },
     "workdesk.search.show" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24899,17 +24921,6 @@
         }
       }
     },
-    "workdesk.canvas.move" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move material"
-          }
-        }
-      }
-    },
     "workdesk.canvas.moveDown" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25324,17 +25335,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Pin selected"
-          }
-        }
-      }
-    },
-    "workdesk.pin.toggle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Toggle pin"
           }
         }
       }

@@ -250,34 +250,34 @@ final class WorkDeskCanvasInteractionTests: XCTestCase {
         XCTAssertEqual(workspace.projectEditor?.position, point)
     }
 
-    func testOverviewTargetsNeverShrinkBelowTouchSize() {
-        for scale: CGFloat in [0.01, 0.1, 0.3, 0.59] {
-            for size in [WorkDeskCanvasGeometry.cardBodySize, WorkDeskCanvasGeometry.projectBodySize] {
+    func testWholeCardSizeScalesContinuouslyThroughOverview() {
+        for size in [WorkDeskCanvasGeometry.cardBodySize, WorkDeskCanvasGeometry.projectBodySize] {
+            for scale: CGFloat in [0.01, 0.1, 0.3, 0.5999, 0.6001, 1, 1.6] {
                 let rendered = WorkDeskCanvasGeometry.screenSize(bodySize: size, scale: scale)
-                XCTAssertGreaterThanOrEqual(rendered.width, 44)
-                XCTAssertGreaterThanOrEqual(rendered.height, 44)
+                XCTAssertEqual(rendered.width, size.width * scale, accuracy: 0.000_001)
+                XCTAssertEqual(rendered.height, size.height * scale, accuracy: 0.000_001)
             }
         }
-        let below = WorkDeskCanvasGeometry.screenSize(bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: 0.5999)
-        let above = WorkDeskCanvasGeometry.screenSize(bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: 0.6001)
-        XCTAssertLessThan(abs(above.height - below.height), 1, "The overview boundary must not jump one full handle height.")
     }
 
-    func testFitAccountsForMinimumOverviewTargetsAtDistantPositions() {
-        let points = [WorkDeskPoint(x: 0, y: 0), WorkDeskPoint(x: 20_000, y: 20_000)]
+    func testFitUsesFixedWorldBoundsAtDistantPositionsAndEveryStartingZoom() {
+        let points = [WorkDeskPoint(x: -20_000, y: -20_000), WorkDeskPoint(x: 20_000, y: 20_000)]
         for viewport in [CGSize(width: 320, height: 480), CGSize(width: 320, height: 200), CGSize(width: 400, height: 220)] {
-            var transform = WorkDeskCanvasTransform()
-            for _ in 0..<5 {
-                transform = WorkDeskCanvasGeometry.fit(frames: points.map {
-                    WorkDeskCanvasGeometry.frame(at: $0, bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: transform.scale)
+            let expected = WorkDeskCanvasGeometry.fit(frames: points.map {
+                WorkDeskCanvasGeometry.frame(at: $0, bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: 1)
+            }, viewport: viewport)
+            for startScale: CGFloat in [0.001, 0.1, 0.6, 1.6] {
+                let transform = WorkDeskCanvasGeometry.fit(frames: points.map {
+                    WorkDeskCanvasGeometry.frame(at: $0, bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: startScale)
                 }, viewport: viewport)
-            }
-            for point in points {
-                let frame = WorkDeskCanvasGeometry.screenFrame(at: point, bodySize: WorkDeskCanvasGeometry.cardBodySize, transform: transform)
-                XCTAssertGreaterThanOrEqual(frame.minX, 0)
-                XCTAssertGreaterThanOrEqual(frame.minY, 0)
-                XCTAssertLessThanOrEqual(frame.maxX, viewport.width)
-                XCTAssertLessThanOrEqual(frame.maxY, viewport.height)
+                XCTAssertEqual(transform, expected, "Fit must not depend on the previous zoom.")
+                for point in points {
+                    let frame = WorkDeskCanvasGeometry.screenFrame(at: point, bodySize: WorkDeskCanvasGeometry.cardBodySize, transform: transform)
+                    XCTAssertGreaterThanOrEqual(frame.minX, 0)
+                    XCTAssertGreaterThanOrEqual(frame.minY, 0)
+                    XCTAssertLessThanOrEqual(frame.maxX, viewport.width)
+                    XCTAssertLessThanOrEqual(frame.maxY, viewport.height)
+                }
             }
         }
     }

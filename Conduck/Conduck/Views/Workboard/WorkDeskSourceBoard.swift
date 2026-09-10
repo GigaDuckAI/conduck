@@ -4,6 +4,8 @@
 // controls: opening, availability, repair, sharing and folded voice materials.
 // Organization only passes identifiers to its own metadata store. Destructive
 // removal retains the capture store's exact parent/companion confirmation.
+// Every layout draws the material's own surface and menu. Selection overlays
+// that surface; it never adds a second card or a permanent organization bar.
 
 import SwiftUI
 
@@ -97,13 +99,16 @@ struct WorkDeskSourceBoard: View {
             },
             onSelect: workspace.toggleSelection,
             onOpenProject: { workspace.selectScope(.project($0)) },
-            onTogglePin: togglePin,
             onSeedPositions: { materials, projects in
                 await workspace.organization.seedPositions(materials: materials, projects: projects)
             },
             onCreateProject: workspace.scope == .desk ? { point in
                 workspace.beginProject(position: point)
-            } : nil
+            } : nil,
+            onToggleProjectPin: { id in
+                guard let project = workspace.organization.project(id: id) else { return }
+                Task { await workspace.organization.setProjectPinned(!project.isPinned, id: id) }
+            }
         ) { material, size in
             sourceCard(material, spatial: true, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
                 .frame(width: size.width, height: size.height)
@@ -133,22 +138,19 @@ struct WorkDeskSourceBoard: View {
                 if renderedLayout == .tiles {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 250), spacing: 16)], spacing: 16) {
                         ForEach(visible) { material in
-                            VStack(spacing: 0) {
-                                organizationControls(material)
-                                sourceCard(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs).frame(height: 190)
-                            }
-                            .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 14))
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(workspace.selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2))
+                            sourceCard(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
+                                .frame(height: 190)
+                                .overlay(RoundedRectangle(cornerRadius: 13).stroke(workspace.selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2)
+                                    .allowsHitTesting(false))
+                                .overlay(alignment: .topLeading) { selectionIndicator(material) }
                         }
                     }
                 } else {
                     ForEach(visible) { material in
-                        VStack(spacing: 0) {
-                            organizationControls(material)
-                            sourceRow(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
-                        }
-                        .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 14))
-                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(workspace.selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2))
+                        sourceRow(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
+                            .overlay(RoundedRectangle(cornerRadius: 13).stroke(workspace.selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2)
+                                .allowsHitTesting(false))
+                            .overlay(alignment: .topLeading) { selectionIndicator(material) }
                     }
                 }
             }
@@ -158,51 +160,18 @@ struct WorkDeskSourceBoard: View {
         .dismissesKeyboardOnScrollOrTap()
     }
 
-    private func organizationControls(_ material: WorkboardMaterialSnapshot) -> some View {
-        HStack(spacing: 4) {
-            if workspace.isSelecting {
-                Button { workspace.toggleSelection(material.id) } label: {
-                    Image(systemName: workspace.selectedIDs.contains(material.id) ? "checkmark.circle.fill" : "circle")
-                        .frame(width: 44, height: 44)
-                }
-                .pointerIconButton(size: 44)
-                .accessibilityLabel(Text(LocalizedStringResource("workdesk.material.select", defaultValue: "Select material")))
-            }
-            if let projectID = workspace.organization.projectID(for: material.id),
-               let project = workspace.organization.project(id: projectID) {
-                Text(verbatim: project.title).font(.caption).lineLimit(1)
-                    .foregroundStyle(AppColors.textSecondary).padding(.leading, 8)
-            }
-            Spacer()
-            Button { togglePin(material.id) } label: {
-                Image(systemName: workspace.organization.placements[material.id]?.isPinned == true ? "pin.fill" : "pin")
-                    .frame(width: 44, height: 44)
-            }
-            .pointerIconButton(size: 44)
-            .accessibilityLabel(Text(LocalizedStringResource("workdesk.pin.toggle", defaultValue: "Toggle pin")))
-            Menu {
-                Button(LocalizedStringResource("workdesk.group", defaultValue: "Create project")) {
-                    workspace.beginProject(materialIDs: [material.id])
-                }
-                Button(LocalizedStringResource("workdesk.return", defaultValue: "Return to desk")) {
-                    Task { await workspace.organization.assign(materialIDs: [material.id], to: nil) }
-                }
-                ForEach(workspace.organization.projects) { project in
-                    Button { Task { await workspace.organization.assign(materialIDs: [material.id], to: project.id) } }
-                    label: { Text(verbatim: project.title) }
-                }
-            } label: { Image(systemName: "folder").frame(width: 44, height: 44) }
-            .pointerIconButton(size: 44)
-            .accessibilityLabel(Text(LocalizedStringResource("workdesk.move", defaultValue: "Move to")))
+    @ViewBuilder
+    private func selectionIndicator(_ material: WorkboardMaterialSnapshot) -> some View {
+        if workspace.isSelecting {
+            Image(systemName: workspace.selectedIDs.contains(material.id) ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(AppColors.accent)
+                .padding(6)
+                .background(AppColors.cardBackgroundElevated, in: Circle())
+                .padding(6)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
-        .font(.caption)
-        .foregroundStyle(AppColors.accent)
-        .padding(.horizontal, 4)
-    }
-
-    private func togglePin(_ id: UUID) {
-        let pinned = workspace.organization.placements[id]?.isPinned == true
-        Task { await workspace.organization.setPinned(!pinned, materialID: id) }
     }
 
     private func sourceCard(_ material: WorkboardMaterialSnapshot, spatial: Bool = false, position: Int, visibleIDs: [UUID]) -> some View {
@@ -218,7 +187,8 @@ struct WorkDeskSourceBoard: View {
             onRemove: { pendingRemoval = material },
             onOpenCompanion: material.companion.map { companion in { onOpen(companion.material) } },
             onShareCompanion: material.companion.map { companion in { onShare(companion.material) } },
-            onReattachCompanion: material.companion.map { companion in { onReattach(companion.material) } }
+            onReattachCompanion: material.companion.map { companion in { onReattach(companion.material) } },
+            organizationActions: .init(workspace: workspace, materialID: material.id)
         )
         .allowsHitTesting(!workspace.isSelecting)
         .overlay { if workspace.isSelecting { selectionShield(material) } }
@@ -237,7 +207,8 @@ struct WorkDeskSourceBoard: View {
             onRemove: { pendingRemoval = material },
             onOpenCompanion: material.companion.map { companion in { onOpen(companion.material) } },
             onShareCompanion: material.companion.map { companion in { onShare(companion.material) } },
-            onReattachCompanion: material.companion.map { companion in { onReattach(companion.material) } }
+            onReattachCompanion: material.companion.map { companion in { onReattach(companion.material) } },
+            organizationActions: .init(workspace: workspace, materialID: material.id)
         )
         .allowsHitTesting(!workspace.isSelecting)
         .overlay { if workspace.isSelecting { selectionShield(material) } }

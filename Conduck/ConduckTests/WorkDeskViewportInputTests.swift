@@ -53,20 +53,142 @@ final class WorkDeskViewportInputTests: XCTestCase {
         XCTAssertNil(WorkDeskViewportInputMath.pinchScale(1, anchor: anchor))
     }
 
-    func testAppKitPinchDeltasAddToScaleInsteadOfCompounding() {
+    func testAppKitAddsWithinTheGestureThenScalesTheDocumentProportionally() throws {
         let anchor = CGPoint(x: 81, y: 203)
-        var scale: CGFloat = 1
-        for _ in 0..<2 {
-            guard case .magnifyBy(let amount, let actualAnchor) = WorkDeskViewportInputMath.appKitMagnification(0.1, anchor: anchor) else {
-                return XCTFail("AppKit magnification must use the additive callback")
+        for initialScale: CGFloat in [0.02, 0.1, 0.8, 1] {
+            var gesture = WorkDeskViewportMagnification()
+            var camera = WorkDeskCanvasTransform(scale: initialScale)
+            let before = WorkDeskCanvasGeometry.worldPoint(anchor, transform: camera)
+            for _ in 0..<2 {
+                guard case .zoom(let factor, let actualAnchor) = gesture.receive(0.1, anchor: anchor) else {
+                    return XCTFail("AppKit magnification must become a proportional zoom factor")
+                }
+                XCTAssertEqual(actualAnchor, anchor)
+                camera = WorkDeskCanvasGeometry.zoomed(camera, to: camera.scale * factor, anchor: actualAnchor)
             }
-            XCTAssertEqual(actualAnchor, anchor)
-            scale += amount
+            XCTAssertEqual(camera.scale, initialScale * 1.2, accuracy: 0.000_001)
+            let screen = WorkDeskCanvasGeometry.screenPoint(before, transform: camera)
+            XCTAssertEqual(screen.x, anchor.x, accuracy: 0.000_001)
+            XCTAssertEqual(screen.y, anchor.y, accuracy: 0.000_001)
+            XCTAssertEqual(gesture.gestureScale, 1.2, accuracy: 0.000_001)
         }
-        XCTAssertEqual(scale, 1.2, accuracy: 0.000_001)
-        XCTAssertEqual(WorkDeskViewportInputMath.appKitMagnification(-0.2, anchor: anchor), .magnifyBy(amount: -0.2, anchor: anchor))
-        XCTAssertNil(WorkDeskViewportInputMath.appKitMagnification(CGFloat.infinity, anchor: anchor))
-        XCTAssertNil(WorkDeskViewportInputMath.appKitMagnification(0, anchor: anchor))
+    }
+
+    func testAppKitGestureResultDoesNotDependOnNumberOfDeliveredEvents() throws {
+        var many = WorkDeskViewportMagnification(), one = WorkDeskViewportMagnification()
+        var combined: CGFloat = 1
+        for _ in 0..<20 {
+            guard case .zoom(let factor, _) = many.receive(-0.02, anchor: .zero) else { return XCTFail() }
+            combined *= factor
+        }
+        guard case .zoom(let factor, _) = one.receive(-0.4, anchor: .zero) else { return XCTFail() }
+        XCTAssertEqual(combined, factor, accuracy: 0.000_001)
+        XCTAssertEqual(combined, 0.6, accuracy: 0.000_001)
+    }
+
+    func testAppKitGestureResetRebasesAfterEndingCancellationOrBoundaryExit() throws {
+        var gesture = WorkDeskViewportMagnification()
+        _ = gesture.receive(0.8, anchor: .zero)
+        gesture.reset()
+        XCTAssertEqual(gesture.gestureScale, 1)
+        XCTAssertEqual(gesture.receive(0.1, anchor: .zero), .zoom(factor: 1.1, anchor: .zero))
+        gesture.reset()
+        gesture.reset()
+        XCTAssertEqual(gesture.receive(-0.1, anchor: .zero), .zoom(factor: 0.9, anchor: .zero))
+    }
+
+    func testAppKitZoomReversesImmediatelyAtDocumentAndGestureLimits() throws {
+        for start in [WorkDeskCanvasGeometry.minimumScale, WorkDeskCanvasGeometry.maximumScale] {
+            var gesture = WorkDeskViewportMagnification()
+            var camera = WorkDeskCanvasTransform(scale: start)
+            let outward: CGFloat = start == WorkDeskCanvasGeometry.minimumScale ? -0.4 : 0.4
+            for amount in [outward, -outward / 4] {
+                guard case .zoom(let factor, _) = gesture.receive(amount, anchor: .zero) else { return XCTFail() }
+                camera = WorkDeskCanvasGeometry.zoomed(camera, to: camera.scale * factor, anchor: .zero)
+            }
+            if start == WorkDeskCanvasGeometry.minimumScale { XCTAssertGreaterThan(camera.scale, start) }
+            else { XCTAssertLessThan(camera.scale, start) }
+        }
+        var gesture = WorkDeskViewportMagnification()
+        _ = gesture.receive(-1000, anchor: .zero)
+        XCTAssertEqual(gesture.gestureScale, WorkDeskViewportMagnification.minimumGestureScale)
+        guard case .zoom(let reverseLow, _) = gesture.receive(0.01, anchor: .zero) else { return XCTFail() }
+        XCTAssertGreaterThan(reverseLow, 1)
+        _ = gesture.receive(1000, anchor: .zero)
+        XCTAssertEqual(gesture.gestureScale, WorkDeskViewportMagnification.maximumGestureScale)
+        guard case .zoom(let reverseHigh, _) = gesture.receive(-0.01, anchor: .zero) else { return XCTFail() }
+        XCTAssertLessThan(reverseHigh, 1)
+    }
+
+    func testMalformedAppKitMagnificationDoesNotChangeItsBaseline() {
+        var gesture = WorkDeskViewportMagnification()
+        XCTAssertNil(gesture.receive(.infinity, anchor: .zero))
+        XCTAssertNil(gesture.receive(.nan, anchor: .zero))
+        XCTAssertNil(gesture.receive(0.1, anchor: CGPoint(x: CGFloat.nan, y: 0)))
+        XCTAssertNil(gesture.receive(0, anchor: .zero))
+        XCTAssertEqual(gesture.gestureScale, 1)
+    }
+
+    func testTouchPanAndPinchKeepTheCentroidAnchoredInEitherCallbackOrder() throws {
+        let first = CGPoint(x: 200, y: 180), next = CGPoint(x: 220, y: 210)
+        let initial = WorkDeskCanvasTransform(scale: 0.8, offset: CGSize(width: 25, height: -40))
+        let held = WorkDeskCanvasGeometry.worldPoint(first, transform: initial)
+        var results: [WorkDeskCanvasTransform] = []
+        for panFirst in [true, false] {
+            var motion = WorkDeskViewportTouchMotion()
+            var camera = initial
+            _ = motion.pan(.zero, anchor: first, isPinching: false)
+            func pan() {
+                if let delta = motion.pan(CGPoint(x: 20, y: 30), anchor: next, isPinching: true) {
+                    camera = WorkDeskCanvasGeometry.panned(camera, by: delta)
+                }
+            }
+            func pinch() {
+                let update = motion.pinch(1.2, anchor: next)
+                if let delta = update.pan { camera = WorkDeskCanvasGeometry.panned(camera, by: delta) }
+                if case .zoom(let factor, let anchor) = update.zoom {
+                    camera = WorkDeskCanvasGeometry.zoomed(camera, to: camera.scale * factor, anchor: anchor)
+                }
+            }
+            if panFirst { pan(); pinch() } else { pinch(); pan() }
+            let screen = WorkDeskCanvasGeometry.screenPoint(held, transform: camera)
+            XCTAssertEqual(screen.x, next.x, accuracy: 0.000_001)
+            XCTAssertEqual(screen.y, next.y, accuracy: 0.000_001)
+            results.append(camera)
+        }
+        XCTAssertEqual(results[0], results[1])
+    }
+
+    func testTouchPinchMovesTheCentroidEvenWithoutAMatchingPanCallback() {
+        var motion = WorkDeskViewportTouchMotion()
+        _ = motion.pinch(1, anchor: CGPoint(x: 100, y: 100))
+        let moved = motion.pinch(1, anchor: CGPoint(x: 120, y: 90))
+        XCTAssertEqual(moved.pan, CGSize(width: 20, height: -10))
+        XCTAssertNil(moved.zoom, "Moving both fingers with unchanged separation still pans.")
+        XCTAssertNil(motion.pan(CGPoint(x: 20, y: -10), anchor: CGPoint(x: 120, y: 90), isPinching: true),
+            "The pan callback cannot repeat a centroid movement already supplied by pinch.")
+    }
+
+    func testTouchBoundaryReentryAndLifecycleResetNeverReplaySkippedMovement() {
+        var motion = WorkDeskViewportTouchMotion()
+        _ = motion.pinch(1, anchor: CGPoint(x: 20, y: 40))
+        motion.reset()
+        let reentry = motion.pinch(1.1, anchor: CGPoint(x: 500, y: 600))
+        XCTAssertNil(reentry.pan)
+        XCTAssertEqual(reentry.zoom, .zoom(factor: 1.1, anchor: CGPoint(x: 500, y: 600)))
+        XCTAssertEqual(motion.pan(CGPoint(x: 2, y: 3), anchor: CGPoint(x: 502, y: 603), isPinching: true),
+            CGSize(width: 2, height: 3))
+        motion.reset()
+        XCTAssertEqual(motion.pan(CGPoint(x: 8, y: -3), anchor: CGPoint(x: 150, y: 200), isPinching: false),
+            CGSize(width: 8, height: -3), "Ordinary two-finger pan resumes its own incremental translation.")
+    }
+
+    func testMalformedTouchInputCannotContaminateTheNextCentroid() {
+        var motion = WorkDeskViewportTouchMotion()
+        _ = motion.pinch(1, anchor: CGPoint(x: 100, y: 100))
+        XCTAssertNil(motion.pinch(.nan, anchor: CGPoint(x: 400, y: 400)).pan)
+        XCTAssertNil(motion.pan(CGPoint(x: CGFloat.infinity, y: 2), anchor: CGPoint(x: 200, y: 200), isPinching: true))
+        XCTAssertEqual(motion.pinch(1, anchor: CGPoint(x: 105, y: 108)).pan, CGSize(width: 5, height: 8))
     }
 
     func testWheelGestureBeginningOutsideCannotBeAcquiredByEnteringDuringChangeOrMomentum() {
@@ -186,8 +308,10 @@ final class WorkDeskViewportInputTests: XCTestCase {
         XCTAssertTrue(mac.contains("convert(event.locationInWindow, from: nil)"))
         XCTAssertTrue(mac.contains("configuration.accepts(point, bounds: bounds)"))
         XCTAssertTrue(mac.contains("return self.handle(event)"))
-        XCTAssertTrue(mac.contains("WorkDeskViewportInputMath.appKitMagnification(event.magnification, anchor: point)"))
-        XCTAssertTrue(source.contains("case .magnifyBy(let amount, let anchor): onMagnifyBy(amount, anchor)"))
+        XCTAssertTrue(mac.contains("magnification.receive(event.magnification, anchor: point)"))
+        XCTAssertTrue(mac.contains("if phase == .began { magnification.reset() }"))
+        XCTAssertTrue(mac.contains("if !decision.isActive || !decision.appliesDelta { magnification.reset() }"))
+        XCTAssertFalse(source.contains("onMagnifyBy"))
         XCTAssertFalse(mac.contains("self?.handle(event) ?? event"), "Nil from a handled event must not be replaced with the original event")
         XCTAssertFalse(mac.contains("addGlobalMonitor"))
         XCTAssertFalse(mac.contains(".leftMouseDown"))
@@ -222,7 +346,13 @@ final class WorkDeskViewportInputTests: XCTestCase {
         XCTAssertTrue(touch.contains("!(view is UIWindow)"))
         XCTAssertTrue(touch.contains("recognizer.setTranslation(.zero, in: self)"))
         XCTAssertTrue(touch.contains("recognizer.scale = 1"))
-        XCTAssertTrue(touch.contains("WorkDeskViewportInputMath.pinchScale(recognizer.scale, anchor: anchor)"))
+        XCTAssertTrue(touch.contains("touchMotion.pinch(recognizer.scale, anchor: recognizer.location(in: self))"))
+        XCTAssertTrue(touch.contains("touchMotion.pan(recognizer.translation(in: self)"))
+        XCTAssertTrue(touch.contains("guard !finished, acceptsGesture(recognizer)"))
+        let pinched = try RefusalLaneSource.body(ofFunction: "pinched", in: touch, path: Self.path)
+        let panDelivery = try XCTUnwrap(pinched.range(of: "configuration.onPan(translation)"))
+        let zoomDelivery = try XCTUnwrap(pinched.range(of: "configuration.deliver(delta)"))
+        XCTAssertLessThan(panDelivery.lowerBound, zoomDelivery.lowerBound)
         XCTAssertTrue(touch.contains("recognizer.location(in: self)"))
         XCTAssertFalse(touch.contains("UITapGestureRecognizer"))
         let dismantle = try RefusalLaneSource.body(ofFunction: "dismantleUIView", in: source, path: Self.path)
