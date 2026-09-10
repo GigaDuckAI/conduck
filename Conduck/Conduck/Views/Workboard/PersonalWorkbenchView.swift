@@ -1138,6 +1138,15 @@ struct PersonalWorkbenchView<Chats: View>: View {
             // shows relative to one, and `UIActivityViewController` traps on
             // iPad without a popover anchor.
             .sharePresentationAnchor(model.router.share.anchor)
+            .appReviewBusy(
+                model.workboardViewModel.isCapturingIntoDesk
+                    || model.workboardViewModel.notice != nil
+                    || model.router.materialPresentation != nil
+                    || model.router.filePreview.previewURL != nil
+                    || model.router.previewNotice != nil
+                    || model.router.share.isPreparing
+            )
+            .requestAppReviewAfterActiveDays(anchor: model.router.share.anchor)
             .overlay(alignment: .top) { sharePreparingBanner }
             // ONE failure, rendered by whichever surface is on top. A gallery
             // sheet is opaque and draws it inline, so raising the desk's alert

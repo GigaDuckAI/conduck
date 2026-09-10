@@ -109,6 +109,11 @@ struct WorkboardCaptureCanvas: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .appReviewBusy(workbenchDestinationIsActive && (
+            composerFocused || !cleanComposerText.isEmpty || isAddingThought || isImporting
+                || showsPhotoPicker || showsFileImporter || showsVoiceCapture
+                || showsLinkComposer || largeImportConfirmation != nil
+        ))
         .fileImporter(
             isPresented: activeFileImporterIsPresented,
             allowedContentTypes: [.item],

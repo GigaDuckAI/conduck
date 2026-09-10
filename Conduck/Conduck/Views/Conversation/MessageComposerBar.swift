@@ -379,6 +379,11 @@ struct MessageComposerBar: View {
 
     var body: some View {
         composerStack
+        .appReviewBusy(workbenchDestinationIsActive && (
+            captureActive || hasSendableContent || activeGatewayStages > 0
+                || attachmentDispatchInProgress || showingPhotosPicker
+                || showingFileImporter || showingSetupGuide || !pendingLargeFiles.isEmpty
+        ))
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         // Keep the mounted hidden Chat composer out of keyboard/menu routing

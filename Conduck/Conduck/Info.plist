@@ -47,6 +47,8 @@
 	</array>
 	<key>ConduckAppGroupID</key>
 	<string>$(CONDUCK_GROUP_ID)</string>
+	<key>ConduckAppStoreID</key>
+	<string>$(CONDUCK_APP_STORE_ID)</string>
 	<key>ConduckCloudKitBlobsContainerID</key>
 	<string>$(CONDUCK_ICLOUD_BLOBS_CONTAINER_ID)</string>
 	<key>ConduckCloudKitContainerID</key>
