@@ -2531,6 +2531,9 @@ struct WorkboardSourceCard: View {
     var loadCompanionPayload: (UUID) async throws -> Data? = { id in
         try await ConversationStore.shared.loadWorkMaterialPayload(id: id)
     }
+    /// The personal desk adds organization to the existing menu. Other source
+    /// cards retain their ordinary capture/attachment actions.
+    var organizationActions: WorkDeskMaterialOrganizationActions? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
@@ -3194,6 +3197,10 @@ struct WorkboardSourceCard: View {
                 )
             }
         }
+        if let organizationActions {
+            Divider()
+            WorkDeskMaterialMenuActions(actions: organizationActions)
+        }
         if onMoveEarlier != nil || onMoveLater != nil {
             Divider()
             if let onMoveEarlier {
@@ -3236,6 +3243,9 @@ struct WorkboardSourceCard: View {
     /// reaches VoiceOver as a named action here or not at all.
     @ViewBuilder
     private var cardAccessibilityActions: some View {
+        if let organizationActions {
+            WorkDeskMaterialAccessibilityActions(actions: organizationActions)
+        }
         if let shareAction {
             Button(
                 WorkboardCompanionBand.shareTitle(hasCompanion: material.companion != nil),

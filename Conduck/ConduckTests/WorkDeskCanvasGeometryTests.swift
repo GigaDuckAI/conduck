@@ -105,7 +105,6 @@ final class WorkDeskCanvasGeometryTests: XCTestCase {
         let viewport = CGSize(width: 320, height: 480)
         let transform = WorkDeskCanvasGeometry.fit(frames: frames, viewport: viewport)
         XCTAssertLessThan(transform.scale, WorkDeskCanvasGeometry.overviewThreshold)
-        XCTAssertEqual(WorkDeskCanvasGeometry.visibleHandleHeight(scale: transform.scale), 0)
         for frame in frames {
             let topLeft = WorkDeskCanvasGeometry.screenPoint(WorkDeskPoint(x: frame.minX, y: frame.minY), transform: transform)
             XCTAssertGreaterThanOrEqual(topLeft.x, 0)
@@ -114,4 +113,40 @@ final class WorkDeskCanvasGeometryTests: XCTestCase {
             XCTAssertLessThanOrEqual(topLeft.y + frame.height * transform.scale, viewport.height)
         }
     }
+
+    func testZoomKeepsTheSamePartOfEveryCardUnderTheFocalPoint() {
+        for size in [WorkDeskCanvasGeometry.cardBodySize, WorkDeskCanvasGeometry.projectBodySize] {
+            for zoom: CGFloat in [0.02, 0.1, 0.59, 0.6, 1.4] {
+                let point = WorkDeskPoint(x: -250, y: 180)
+                let before = WorkDeskCanvasTransform(scale: zoom, offset: CGSize(width: 240, height: 110))
+                let frame = WorkDeskCanvasGeometry.screenFrame(at: point, bodySize: size, transform: before)
+                let anchor = CGPoint(x: frame.minX + frame.width * 0.37, y: frame.minY + frame.height * 0.62)
+                let after = WorkDeskCanvasGeometry.zoomed(before, to: 0.9, anchor: anchor)
+                let result = WorkDeskCanvasGeometry.screenFrame(at: point, bodySize: size, transform: after)
+                XCTAssertEqual(result.minX + result.width * 0.37, anchor.x, accuracy: 0.000_001)
+                XCTAssertEqual(result.minY + result.height * 0.62, anchor.y, accuracy: 0.000_001)
+            }
+        }
+    }
+
+    func testZoomOutDoesNotMakeSeparateTilesOverlap() {
+        for zoom: CGFloat in [0.001, 0.02, 0.1, 0.59, 1.6] {
+            let transform = WorkDeskCanvasTransform(scale: zoom)
+            let a = WorkDeskCanvasGeometry.screenFrame(at: .init(x: 0, y: 0), bodySize: WorkDeskCanvasGeometry.cardBodySize, transform: transform)
+            let b = WorkDeskCanvasGeometry.screenFrame(at: .init(x: 300, y: 0), bodySize: WorkDeskCanvasGeometry.cardBodySize, transform: transform)
+            XCTAssertFalse(a.intersects(b))
+            XCTAssertEqual(b.minX - a.maxX, 68 * zoom, accuracy: 0.000_001)
+        }
+    }
+
+    func testOverviewTouchReachChoosesNearbyCardsWithoutHidingTheirNeighbours() {
+        let a = WorkDeskCanvasItemID.material(UUID()), b = WorkDeskCanvasItemID.project(UUID())
+        let candidates = [WorkDeskDropCandidate(id: a, frame: CGRect(x: 0, y: 0, width: 4, height: 4), layer: 1),
+                          WorkDeskDropCandidate(id: b, frame: CGRect(x: 10, y: 0, width: 4, height: 4), layer: 2)]
+        XCTAssertEqual(WorkDeskCanvasGeometry.overviewTarget(at: CGPoint(x: 1, y: 1), candidates: candidates), a)
+        XCTAssertEqual(WorkDeskCanvasGeometry.overviewTarget(at: CGPoint(x: 8, y: 8), candidates: candidates), b)
+        XCTAssertEqual(WorkDeskCanvasGeometry.overviewTarget(at: CGPoint(x: 8, y: 8), candidates: candidates.reversed()), b)
+        XCTAssertNil(WorkDeskCanvasGeometry.overviewTarget(at: CGPoint(x: 100, y: 100), candidates: candidates))
+    }
+
 }

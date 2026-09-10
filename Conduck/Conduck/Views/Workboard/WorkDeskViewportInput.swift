@@ -12,6 +12,9 @@
 // recognizers never attach to UIWindow. The geometry filter is the boundary.
 // All callbacks are incremental screen-space values, so pan and pinch compose
 // on the host's current transform instead of restoring competing start values.
+// AppKit's additive magnification belongs to the current gesture, never to the
+// absolute document zoom. Touch pan and pinch share a centroid so callback order
+// cannot translate an already-scaled movement a second time.
 
 #if !os(watchOS)
 import SwiftUI
@@ -24,7 +27,6 @@ import UIKit
 nonisolated enum WorkDeskViewportInputDelta: Equatable {
     case pan(CGSize)
     case zoom(factor: CGFloat, anchor: CGPoint)
-    case magnifyBy(amount: CGFloat, anchor: CGPoint)
 }
 
 /// Platform event normalization, independent of views and live input devices.
@@ -65,19 +67,58 @@ nonisolated enum WorkDeskViewportInputMath {
         return .zoom(factor: factor, anchor: anchor)
     }
 
-    /// NSEvent.h specifies addition to the current scale. UIKit's resettable
-    /// pinch scale and wheel zoom are multiplicative and never enter this lane.
-    static func appKitMagnification(_ amount: CGFloat, anchor: CGPoint) -> WorkDeskViewportInputDelta? {
-        guard amount.isFinite, amount != 0,
-              anchor.x.isFinite, anchor.y.isFinite else { return nil }
-        return .magnifyBy(amount: amount, anchor: anchor)
-    }
-
     static func translation(from previous: CGPoint, to current: CGPoint) -> CGSize? {
         let result = CGSize(width: current.x - previous.x, height: current.y - previous.y)
         guard result.width.isFinite, result.height.isFinite,
               result.width != 0 || result.height != 0 else { return nil }
         return result
+    }
+}
+
+/// NSEvent magnification is additive within a gesture. Convert that accumulated
+/// gesture scale into incremental ratios, preserving proportional movement even
+/// when the document starts far below 100%. Limits keep malformed input finite;
+/// reversing a held gesture immediately reverses the delivered ratio.
+nonisolated struct WorkDeskViewportMagnification {
+    static let minimumGestureScale: CGFloat = 0.01
+    static let maximumGestureScale: CGFloat = 100
+    private(set) var gestureScale: CGFloat = 1
+
+    mutating func receive(_ amount: CGFloat, anchor: CGPoint) -> WorkDeskViewportInputDelta? {
+        guard amount.isFinite, anchor.x.isFinite, anchor.y.isFinite else { return nil }
+        let previous = gestureScale
+        gestureScale = min(Self.maximumGestureScale, max(Self.minimumGestureScale, previous + amount))
+        return WorkDeskViewportInputMath.pinchScale(gestureScale / previous, anchor: anchor)
+    }
+
+    mutating func reset() { gestureScale = 1 }
+}
+
+/// Pan and pinch observe the same touch centroid. Whichever callback arrives
+/// first supplies its movement; the pinch then zooms at that updated anchor.
+/// This avoids both duplicate translation and pan/zoom order-dependent drift.
+nonisolated struct WorkDeskViewportTouchMotion {
+    private var centroid: CGPoint?
+
+    mutating func pan(_ translation: CGPoint, anchor: CGPoint, isPinching: Bool) -> CGSize? {
+        guard anchor.x.isFinite, anchor.y.isFinite,
+              translation.x.isFinite, translation.y.isFinite else { return nil }
+        if isPinching { return moveCentroid(to: anchor) }
+        centroid = anchor
+        return WorkDeskViewportInputMath.translation(from: .zero, to: translation)
+    }
+
+    mutating func pinch(_ factor: CGFloat, anchor: CGPoint) -> (pan: CGSize?, zoom: WorkDeskViewportInputDelta?) {
+        guard factor.isFinite, factor > 0, anchor.x.isFinite, anchor.y.isFinite else { return (nil, nil) }
+        return (moveCentroid(to: anchor), WorkDeskViewportInputMath.pinchScale(factor, anchor: anchor))
+    }
+
+    mutating func reset() { centroid = nil }
+
+    private mutating func moveCentroid(to anchor: CGPoint) -> CGSize? {
+        let previous = centroid
+        centroid = anchor
+        return previous.flatMap { WorkDeskViewportInputMath.translation(from: $0, to: anchor) }
     }
 }
 
@@ -198,7 +239,6 @@ nonisolated struct WorkDeskViewportInputSessions {
     let excludedRects: [CGRect]
     let onPan: @MainActor (CGSize) -> Void
     let onZoom: @MainActor (CGFloat, CGPoint) -> Void
-    let onMagnifyBy: @MainActor (CGFloat, CGPoint) -> Void
     let onInteractionChanged: @MainActor (Bool) -> Void
 
     func accepts(_ point: CGPoint, bounds: CGRect) -> Bool {
@@ -209,7 +249,6 @@ nonisolated struct WorkDeskViewportInputSessions {
         switch delta {
         case .pan(let translation): onPan(translation)
         case .zoom(let factor, let anchor): onZoom(factor, anchor)
-        case .magnifyBy(let amount, let anchor): onMagnifyBy(amount, anchor)
         }
     }
 }
@@ -218,14 +257,13 @@ extension View {
     /// Apply before overlays, or exclude their measured canvas-local frames.
     /// `onInteractionChanged` lets the owner suspend its one-finger/card drag
     /// while native two-finger or middle-button navigation is underway.
-    /// `onZoom` receives factors; `onMagnifyBy` receives AppKit's additive
-    /// change to the current scale. Both carry the actual local focal point.
+    /// `onZoom` receives proportional factors on every platform, with the
+    /// actual local focal point. AppKit's additive events are normalized here.
     @MainActor func workDeskViewportInput(
         isEnabled: Bool,
         excludedRects: [CGRect] = [],
         onPan: @escaping @MainActor (CGSize) -> Void,
         onZoom: @escaping @MainActor (CGFloat, CGPoint) -> Void,
-        onMagnifyBy: @escaping @MainActor (CGFloat, CGPoint) -> Void,
         onInteractionChanged: @escaping @MainActor (Bool) -> Void = { _ in }
     ) -> some View {
         background {
@@ -234,7 +272,6 @@ extension View {
                 excludedRects: excludedRects,
                 onPan: onPan,
                 onZoom: onZoom,
-                onMagnifyBy: onMagnifyBy,
                 onInteractionChanged: onInteractionChanged
             ))
             .accessibilityHidden(true)
@@ -268,6 +305,7 @@ private struct WorkDeskViewportInputMarker: NSViewRepresentable {
     private var middleButton = WorkDeskViewportMiddleButtonOwnership()
     private var wheel = WorkDeskViewportWheelOwnership()
     private var magnify = WorkDeskViewportGestureOwnership()
+    private var magnification = WorkDeskViewportMagnification()
 
     init(configuration: WorkDeskViewportInputConfiguration) {
         self.configuration = configuration
@@ -319,6 +357,7 @@ private struct WorkDeskViewportInputMarker: NSViewRepresentable {
         _ = middleButton.end()
         wheel = WorkDeskViewportWheelOwnership()
         magnify = WorkDeskViewportGestureOwnership()
+        magnification.reset()
         if let changed = sessions.reset() { configuration.onInteractionChanged(changed) }
     }
 
@@ -356,11 +395,15 @@ private struct WorkDeskViewportInputMarker: NSViewRepresentable {
             setSession(.wheel, active: decision.isActive)
             return decision.consumes ? nil : event
         case .magnify:
-            let decision = magnify.receive(phase: Self.phase(event.phase), inside: inside)
+            let phase = Self.phase(event.phase)
+            if phase == .began { magnification.reset() }
+            let decision = magnify.receive(phase: phase, inside: inside)
             if decision.consumes { setSession(.pinch, active: true) }
-            if decision.appliesDelta, let delta = WorkDeskViewportInputMath.appKitMagnification(event.magnification, anchor: point) {
+            if decision.appliesDelta, let delta = magnification.receive(event.magnification, anchor: point) {
                 configuration.deliver(delta)
             }
+            // Outside movement is skipped and rebased, never replayed on entry.
+            if !decision.isActive || !decision.appliesDelta { magnification.reset() }
             setSession(.pinch, active: decision.isActive)
             return decision.consumes ? nil : event
         case .otherMouseDown where event.buttonNumber == 2:
@@ -405,6 +448,7 @@ private struct WorkDeskViewportInputMarker: UIViewRepresentable {
     private let pinch = UIPinchGestureRecognizer()
     private weak var recognizerOwner: UIView?
     private var sessions = WorkDeskViewportInputSessions()
+    private var touchMotion = WorkDeskViewportTouchMotion()
 
     init(configuration: WorkDeskViewportInputConfiguration) {
         self.configuration = configuration
@@ -478,6 +522,7 @@ private struct WorkDeskViewportInputMarker: UIViewRepresentable {
         }
         pan.setTranslation(.zero, in: self)
         pinch.scale = 1
+        touchMotion.reset()
         if let changed = sessions.reset() { configuration.onInteractionChanged(changed) }
     }
 
@@ -508,7 +553,10 @@ private struct WorkDeskViewportInputMarker: UIViewRepresentable {
     }
 
     private func setSession(_ kind: WorkDeskViewportInputSessions.Kind, active: Bool) {
-        if let changed = sessions.set(kind, active: active) { configuration.onInteractionChanged(changed) }
+        if let changed = sessions.set(kind, active: active) {
+            if !changed { touchMotion.reset() }
+            configuration.onInteractionChanged(changed)
+        }
     }
 
     private func acceptsGesture(_ recognizer: UIGestureRecognizer) -> Bool {
@@ -526,9 +574,14 @@ private struct WorkDeskViewportInputMarker: UIViewRepresentable {
             if finished { setSession(.pan, active: false) }
         }
         guard recognizer.state != .cancelled, recognizer.state != .failed,
-              acceptsGesture(recognizer) else { return }
-        let delta = recognizer.translation(in: self)
-        if let translated = WorkDeskViewportInputMath.translation(from: .zero, to: delta) {
+              acceptsGesture(recognizer) else { touchMotion.reset(); return }
+        let isPinching = pinch.state == .began || pinch.state == .changed
+        if isPinching, finished || recognizer.numberOfTouches == 1 {
+            touchMotion.reset()
+            return
+        }
+        if let translated = touchMotion.pan(recognizer.translation(in: self),
+            anchor: recognizer.location(in: self), isPinching: isPinching) {
             configuration.onPan(translated)
         }
     }
@@ -541,10 +594,15 @@ private struct WorkDeskViewportInputMarker: UIViewRepresentable {
             recognizer.scale = 1
             if finished { setSession(.pinch, active: false) }
         }
-        let anchor = recognizer.location(in: self)
-        guard recognizer.state != .cancelled, recognizer.state != .failed, acceptsGesture(recognizer),
-              let delta = WorkDeskViewportInputMath.pinchScale(recognizer.scale, anchor: anchor) else { return }
-        configuration.deliver(delta)
+        // Once a finger lifts, location may become the remaining finger instead
+        // of the previous two-touch center. Its ending must never move the desk.
+        guard !finished, acceptsGesture(recognizer) else {
+            touchMotion.reset()
+            return
+        }
+        let update = touchMotion.pinch(recognizer.scale, anchor: recognizer.location(in: self))
+        if let translation = update.pan { configuration.onPan(translation) }
+        if let delta = update.zoom { configuration.deliver(delta) }
     }
 }
 #endif

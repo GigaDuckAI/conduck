@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Deterministic contracts behind whole-object movement. A narrow card must leave
-// room to drag, and Escape must suppress the rest of the same physical gesture
+// Deterministic contracts behind whole-object movement. Escape suppresses
+// the rest of the same physical gesture
 // rather than allowing a later update to commit the cancelled move. Keyboard
 // shortcuts remain local and must not consume application-level modifiers.
 
@@ -10,19 +10,6 @@ import SwiftUI
 @testable import Conduck
 
 final class WorkDeskCardInteractionTests: XCTestCase {
-    func testNarrowHeadersReserveACompleteGripBeforeAddingButtons() {
-        let widths: [CGFloat] = [44, 81.2, 87.9, 88, 131.9, 132, 139.2, 232]
-        for width in widths {
-            let controls = (WorkDeskCardHeaderPolicy.showsSelection(width: width) ? 1 : 0)
-                + (WorkDeskCardHeaderPolicy.showsPin(width: width) ? 1 : 0)
-            let remaining = width - CGFloat(controls) * WorkDeskCardHeaderPolicy.targetSize
-            XCTAssertGreaterThanOrEqual(remaining, 44, "No full grip remains at width \(width)")
-        }
-        XCTAssertFalse(WorkDeskCardHeaderPolicy.showsSelection(width: 81.2))
-        XCTAssertFalse(WorkDeskCardHeaderPolicy.showsPin(width: 131.9))
-        XCTAssertTrue(WorkDeskCardHeaderPolicy.showsPin(width: 132))
-    }
-
     func testMaterialsProjectsAndOverviewShareTheWholeSurfaceDragOwner() throws {
         let source = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskCanvas.swift")
         for method in ["materialCard", "projectPile"] {
@@ -37,7 +24,7 @@ final class WorkDeskCardInteractionTests: XCTestCase {
         XCTAssertTrue(card.contains("DragGesture(minimumDistance: 6, coordinateSpace: .named(coordinateSpace))"),
             "Taps must reach nested buttons until movement deliberately becomes a drag.")
         XCTAssertEqual(card.components(separatedBy: "DragGesture(").count - 1, 1,
-            "The header must not compete with the containing object's gesture.")
+            "Each object must keep one gesture owner across presentation modes.")
     }
 
     func testEscapeSuppressesUpdatesUntilTheHeldGestureReleases() {

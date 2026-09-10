@@ -21,6 +21,8 @@
 // removing it, so destination changes also cancel playback and pending reads.
 // Availability gates every action through the same policy as the mosaic, so a
 // thumbnail never stands in for missing bytes.
+// Personal-desk organization joins the existing action menu; its live observer
+// also supplies the project caption within the row's own metadata.
 //
 // A picture that folded a VOICE MATERIAL into it draws ONE row here too: the
 // thumbnail, the voice material's words as the row's text, and the picture's own
@@ -50,6 +52,7 @@ struct WorkboardMaterialListRow: View {
     /// Repair the RECORDING, not the picture: the row's own Reattach replaces
     /// the screenshot, which is the wrong file for a recording that is missing.
     var onReattachCompanion: (() -> Void)?
+    var organizationActions: WorkDeskMaterialOrganizationActions? = nil
 
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     @State private var player = WorkboardAudioCardPlayer()
@@ -232,6 +235,9 @@ struct WorkboardMaterialListRow: View {
 
     private var metadata: some View {
         VStack(alignment: .leading, spacing: 3) {
+            if let organizationActions {
+                WorkDeskMaterialLocation(actions: organizationActions)
+            }
             HStack(spacing: 6) {
                 // The face's meta line where it has one — a file's type and
                 // size, a picture's size — and the kind's own noun where it
@@ -313,6 +319,10 @@ struct WorkboardMaterialListRow: View {
                 Label(LocalizedStringResource("workboard.material.reattach.action", defaultValue: "Reattach or Replace"), systemImage: "paperclip")
             }
         }
+        if let organizationActions {
+            Divider()
+            WorkDeskMaterialMenuActions(actions: organizationActions)
+        }
         if onMoveEarlier != nil || onMoveLater != nil {
             Divider()
             if let onMoveEarlier {
@@ -336,6 +346,9 @@ struct WorkboardMaterialListRow: View {
 
     @ViewBuilder
     private var accessibilityActions: some View {
+        if let organizationActions {
+            WorkDeskMaterialAccessibilityActions(actions: organizationActions)
+        }
         if WorkboardCardActionPolicy.allows(.open, when: material.availability) {
             if material.kind == .audio {
                 Button(LocalizedStringResource("workboard.material.open", defaultValue: "Open"), action: openMaterial)
@@ -534,6 +547,8 @@ struct WorkboardMaterialListRow: View {
 
     private var accessibilityValue: Text {
         var parts: [String] = []
+        if let organizationActions, organizationActions.showsLocation,
+           let project = organizationActions.project { parts.append(project.title) }
         if let availabilityLabel { parts.append(String(localized: availabilityLabel)) }
         if let audioStatus { parts.append(String(localized: audioStatus)) }
         if hasTransport, player.duration > 0 { parts.append(clockText) }
