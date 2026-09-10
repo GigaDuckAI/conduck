@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // A viewport onto the private desk. Direct input updates only local presentation;
-// releasing a grip persists one atomic movement. Pan and zoom compose incremental
+// releasing an object persists one atomic movement. Pan and zoom compose incremental
 // screen deltas, while cards keep a stable world position and foreground order.
 // Drop feedback is a separate foreground layer, never a child hidden by the card
 // being held. Existing previews retain ownership of playback, sharing and repair.
@@ -23,6 +23,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
     let onOpenProject: (UUID) -> Void
     let onTogglePin: (UUID) -> Void
     let onSeedPositions: ([WorkDeskPositionSeed], [UUID: WorkDeskPoint]) async -> Bool
+    var onCreateProject: ((WorkDeskPoint) -> Void)? = nil
     @ViewBuilder var cardContent: (WorkboardMaterialSnapshot, CGSize) -> CardContent
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -39,12 +40,14 @@ struct WorkDeskCanvas<CardContent: View>: View {
     @State private var livePositions: [WorkDeskCanvasItemID: WorkDeskPoint] = [:]
     @State private var savedPositions: [WorkDeskCanvasItemID: WorkDeskPoint] = [:]
     @State private var defaultPositions: [WorkDeskCanvasItemID: WorkDeskPoint] = [:]
+    @State private var hasLoadedLayout = false
     @State private var visibleIDs: Set<WorkDeskCanvasItemID> = []
     @State private var materialIndices: [UUID: Int] = [:]
     @State private var pending = WorkDeskPendingPositions()
     @State private var dropCandidates: [WorkDeskDropCandidate] = []
     @State private var hover = WorkDeskDropHover()
     @State private var edgePanTask: Task<Void, Never>?
+    @State private var backgroundPointer = WorkDeskCanvasBackgroundPointer()
     @GestureState private var isPanning = false
 
     private var transform: WorkDeskCanvasTransform { session.transform }
@@ -74,6 +77,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
                 .coordinateSpace(name: coordinateSpace)
                 .onChange(of: proxy.size, initial: true) { _, size in
                     viewport = size
+                    session.viewportSize = size
                     guard size.width > 0, size.height > 0 else { return }
                     if !session.isInitialized {
                         session.isInitialized = true
@@ -132,6 +136,20 @@ struct WorkDeskCanvas<CardContent: View>: View {
             }
             .contentShape(Rectangle())
             .onTapGesture { dismissCaptureKeyboard() }
+            #if os(macOS)
+            .onContinuousHover(coordinateSpace: .named(coordinateSpace)) { phase in
+                if case .active(let point) = phase { backgroundPointer.point = point }
+            }
+            .contextMenu {
+                if let onCreateProject {
+                    Button(LocalizedStringResource("workdesk.project.new", defaultValue: "New project"), systemImage: "folder.badge.plus") {
+                        let point = backgroundPointer.point.map { WorkDeskCanvasGeometry.worldPoint($0, transform: transform) }
+                            ?? session.projectInsertionPoint
+                        if let point { onCreateProject(point) }
+                    }
+                }
+            }
+            #endif
             .gesture(
                 DragGesture(minimumDistance: 4)
                     .updating($isPanning) { _, active, _ in active = true }
@@ -157,7 +175,11 @@ struct WorkDeskCanvas<CardContent: View>: View {
         let lifted = livePositions[id] != nil
         return Group {
             if transform.scale < WorkDeskCanvasGeometry.overviewThreshold {
-                Button { activate(id); focus(id) } label: {
+                Button {
+                    activate(id)
+                    if isSelecting { onSelect(material.id) }
+                    else { focus(id) }
+                } label: {
                     VStack(spacing: 0) {
                         overviewHeader
                         materialPreview(material, bodySize: bodySize,
@@ -168,11 +190,18 @@ struct WorkDeskCanvas<CardContent: View>: View {
                     .frame(width: frame.width, height: frame.height)
                     .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 7))
                     .clipShape(RoundedRectangle(cornerRadius: 7))
-                    .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(AppColors.border, lineWidth: 1) }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7).strokeBorder(
+                            selectedIDs.contains(material.id) ? AppColors.accent : AppColors.border,
+                            lineWidth: selectedIDs.contains(material.id) ? 2 : 1)
+                    }
                 }
                 .choiceCardButton(cornerRadius: 7)
                 .accessibilityLabel(Text(verbatim: material.name))
-                .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.focusMaterial", defaultValue: "Zoom in to this material")))
+                .accessibilityAddTraits(selectedIDs.contains(material.id) ? .isSelected : [])
+                .accessibilityHint(Text(isSelecting
+                    ? LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material")
+                    : LocalizedStringResource("workdesk.canvas.focusMaterial", defaultValue: "Zoom in to this material")))
             } else {
                 WorkDeskCard(
                     title: material.name, width: frame.width,
@@ -180,16 +209,10 @@ struct WorkDeskCanvas<CardContent: View>: View {
                     isPinned: placements[material.id]?.isPinned == true,
                     isSelecting: isSelecting, isLifted: lifted,
                     isGroupTarget: hover.target == id,
-                    coordinateSpace: coordinateSpace,
                     onSelect: { activate(id); onSelect(material.id) },
                     onTogglePin: { activate(id); onTogglePin(material.id) },
-                    onDragChanged: { updateDrag(id: id, translation: $0) },
-                    onDragEnded: { finishDrag(id: id, translation: $0) },
-                    onDragCancelled: { cancelDrag(id: id) },
                     onNudge: { nudge(id: id, translation: $0) },
                     isNavigating: nativeNavigation,
-                    cancellationGeneration: cancellationGeneration,
-                    onDragLocation: recordDragPointer,
                     onActivate: { activate(id) }
                 ) {
                     materialPreview(material, bodySize: bodySize, scale: transform.scale)
@@ -207,6 +230,15 @@ struct WorkDeskCanvas<CardContent: View>: View {
                 }
             }
         }
+        .workDeskObjectDrag(
+            coordinateSpace: coordinateSpace, isEnabled: isActive && !nativeNavigation,
+            cancellationGeneration: cancellationGeneration,
+            onChanged: { updateDrag(id: id, translation: $0) },
+            onEnded: { finishDrag(id: id, translation: $0) },
+            onCancelled: { cancelDrag(id: id) },
+            onNudge: { nudge(id: id, translation: $0) },
+            onLocation: recordDragPointer, onActivate: { activate(id) }
+        )
         .position(x: frame.midX, y: frame.midY)
         .zIndex(session.layer(for: id) + (lifted ? WorkDeskCanvasGeometry.liftedLayer : 0))
         .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
@@ -243,13 +275,9 @@ struct WorkDeskCanvas<CardContent: View>: View {
             if isOverview { overviewHeader }
             else {
                 WorkDeskDragGrip(
-                    title: project.record.title, coordinateSpace: coordinateSpace,
-                    onChanged: { updateDrag(id: id, translation: $0) },
-                    onEnded: { finishDrag(id: id, translation: $0) },
-                    onCancelled: { cancelDrag(id: id) },
+                    title: project.record.title,
                     onNudge: { nudge(id: id, translation: $0) },
-                    cancellationGeneration: cancellationGeneration,
-                    onLocation: recordDragPointer,
+                    isLifted: lifted,
                     onActivate: { activate(id) }
                 )
                 .environment(\.workbenchDestinationIsActive, isActive && !nativeNavigation)
@@ -285,6 +313,15 @@ struct WorkDeskCanvas<CardContent: View>: View {
         .shadow(color: .black.opacity(lifted ? 0.4 : 0.25), radius: lifted ? 22 : 14, y: lifted ? 12 : 8)
         .animation(motion, value: lifted)
         .animation(motion, value: highlighted)
+        .workDeskObjectDrag(
+            coordinateSpace: coordinateSpace, isEnabled: isActive && !nativeNavigation,
+            cancellationGeneration: cancellationGeneration,
+            onChanged: { updateDrag(id: id, translation: $0) },
+            onEnded: { finishDrag(id: id, translation: $0) },
+            onCancelled: { cancelDrag(id: id) },
+            onNudge: { nudge(id: id, translation: $0) },
+            onLocation: recordDragPointer, onActivate: { activate(id) }
+        )
         .position(x: frame.midX, y: frame.midY)
         .zIndex(session.layer(for: id) + (lifted ? WorkDeskCanvasGeometry.liftedLayer : 0))
         .transition(reduceMotion ? .opacity : .scale(scale: 0.86).combined(with: .opacity))
@@ -415,6 +452,11 @@ struct WorkDeskCanvas<CardContent: View>: View {
     }
 
     private func refreshLayout() {
+        // A remount after search/layout changes must preserve the saved camera,
+        // even if it points at blank space. Only a live empty-to-first-item
+        // transition needs to reveal a capture seeded outside the viewport.
+        let wasEmpty = hasLoadedLayout && visibleIDs.isEmpty
+        hasLoadedLayout = true
         let ids = projects.map { WorkDeskCanvasItemID.project($0.id) } + materials.map { WorkDeskCanvasItemID.material($0.id) }
         visibleIDs = Set(ids)
         materialIndices = Dictionary(materials.enumerated().map { ($0.element.id, $0.offset + 1) }, uniquingKeysWith: { first, _ in first })
@@ -426,6 +468,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
         savedPositions = saved
         defaultPositions = defaultPositions.filter { visibleIDs.contains($0.key) }
         seedDefaultPositions(ids)
+        if wasEmpty, !ids.isEmpty, session.isInitialized { revealDeskIfOffscreen() }
         if drag != nil { cacheDropCandidates(); updateDropTarget() }
     }
 
@@ -684,6 +727,12 @@ struct WorkDeskCanvas<CardContent: View>: View {
         KeyboardDismissal.dismissKeyboard()
         #endif
     }
+}
+
+/// Hover only supplies the next background menu's creation point. Keeping it
+/// out of observation avoids rebuilding every card while the pointer moves.
+@MainActor private final class WorkDeskCanvasBackgroundPointer {
+    var point: CGPoint?
 }
 
 /// Camera movement changes the surrounding frame, not the preview's inputs.
