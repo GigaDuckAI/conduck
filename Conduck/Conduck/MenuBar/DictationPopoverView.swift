@@ -1823,9 +1823,7 @@ struct DictationPopoverView: View {
                     tint: AppColors.textTertiary,
                     onCopy: { copyTapped(reply: reply, vm: vm) },
                     onSaveToWork: { saveReplyToWork(reply, conversationID: vm.conversationID) }
-                ) {
-                    EmptyView()
-                }
+                )
             }
             if let notice = replyWorkCaptureNotice {
                 replyWorkCaptureFeedback(notice)

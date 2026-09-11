@@ -2597,7 +2597,7 @@ private struct MessageBubble: View, Equatable {
         .accessibilityElement(children: .contain)
     }
 
-    /// Progress + verdict for a manual look started from the footer menu, on a
+    /// Progress + verdict for a manual look started from a recovery action, on a
     /// turn with no fault row to carry them. Renders nothing at all in the
     /// resting state, which is almost always — this is a transient answer to a
     /// question the user just asked, not a standing diagnostic.
@@ -2664,34 +2664,6 @@ private struct MessageBubble: View, Equatable {
         }
     }
 
-    /// File recovery remains reachable from the visible message menu even on
-    /// replies without a diagnostic row. Keep menus off the message body so
-    /// long-press and right-click continue to belong to native text selection.
-    @ViewBuilder
-    private var outputMenuActions: some View {
-        if canRecheckOutputs || canSearchMentionedFiles {
-            Divider()
-        }
-        if canRecheckOutputs {
-            Button(action: onRecheckOutputs) {
-                Label(
-                    LocalizedStringResource(
-                        "thread.outputs.action.checkAgain",
-                        defaultValue: "Check for returned files"),
-                    systemImage: "arrow.clockwise")
-            }
-        }
-        if canSearchMentionedFiles {
-            Button(action: onSearchMentionedFiles) {
-                Label(
-                    LocalizedStringResource(
-                        "thread.outputs.action.searchMentioned",
-                        defaultValue: "Search for files this reply mentions"),
-                    systemImage: "magnifyingglass")
-            }
-        }
-    }
-
     private var footer: some View {
         HStack(spacing: 10) {
             // Device chip is meaningful only for user turns (which device sent
@@ -2745,9 +2717,7 @@ private struct MessageBubble: View, Equatable {
                 tint: footerTint,
                 onCopy: copyTapped,
                 onSaveToWork: onAddToWork
-            ) {
-                outputMenuActions
-            }
+            )
         }
     }
 

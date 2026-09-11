@@ -99,15 +99,15 @@ extension MessageActionButton where Label == AnyView {
 // MARK: - MessageActionsMenu
 
 /// A visible menu keeps secondary actions discoverable without taking over
-/// text selection. Hosts may append file-recovery actions when applicable.
+/// text selection. File recovery belongs beside a relevant file problem,
+/// so every host offers only Copy and Save to Work here.
 /// The checkmark briefly acknowledges Copy even after the native menu closes.
-struct MessageActionsMenu<AdditionalActions: View>: View {
+struct MessageActionsMenu: View {
     let didCopy: Bool
     var size: CGFloat = 16
     let tint: Color
     let onCopy: () -> Void
     let onSaveToWork: () -> Void
-    @ViewBuilder var additionalActions: () -> AdditionalActions
 
     var body: some View {
         Menu {
@@ -123,7 +123,6 @@ struct MessageActionsMenu<AdditionalActions: View>: View {
                     systemImage: "rectangle.stack.badge.plus"
                 )
             }
-            additionalActions()
         } label: {
             Image(systemName: didCopy ? "checkmark" : "ellipsis")
                 .font(.system(size: size))
