@@ -22,7 +22,10 @@ final class WorkDeskWorkspaceState {
         didSet {
             let searching = !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             if isSearching != searching { isSearching = searching }
-            if searching { suspendConversation() }
+            if searching {
+                suspendConversation()
+                conversationSelectionRequest = nil
+            }
         }
     }
     private(set) var isSearching = false
@@ -39,10 +42,16 @@ final class WorkDeskWorkspaceState {
     var briefDrafts: [UUID: WorkDeskBriefDraft] = [:]
     var briefRevisions: [UUID: Date] = [:]
     var preparingProjectID: UUID?
+    var conversationSelectionRequest: WorkDeskConversationSelectionRequest?
     var editingContextProjectID: UUID?
     var deletingProjectID: UUID?
+    var projectDeletionReview: WorkDeskProjectDeletionReview?
+    var materialUsePickerID: UUID?
+    var materialRevealRequest: WorkDeskMaterialRevealRequest?
     private(set) var projectConversations: [ConversationRecord] = []
     private(set) var results: [UUID: WorkDeskResultRecord] = [:]
+    private(set) var materialUses: [UUID: [WorkDeskMaterialUseRecord]] = [:]
+    private var materialGroupIDs: [UUID: Set<UUID>] = [:]
     private var resultMaterialIDs: Set<UUID> = []
     private var remoteResultMaterialIDs: Set<UUID> = []
     var selectedConversationID: UUID?
@@ -155,6 +164,7 @@ final class WorkDeskWorkspaceState {
 
     func selectConversation(_ id: UUID, projectID: UUID) {
         suspendConversation()
+        conversationSelectionRequest = nil
         scope = .project(projectID)
         search = ""
         selectedIDs = []
@@ -166,11 +176,34 @@ final class WorkDeskWorkspaceState {
     }
 
     func openResultSource(_ result: WorkDeskResultRecord) {
-        if organization.project(id: result.projectID) != nil {
-            selectConversation(result.conversationID, projectID: result.projectID)
+        openRelatedConversation(result.conversationID)
+    }
+
+    func openRelatedConversation(_ conversationID: UUID) {
+        materialUsePickerID = nil
+        if let projectID = projectConversations.first(where: { $0.id == conversationID })?.projectID,
+           organization.project(id: projectID) != nil {
+            selectConversation(conversationID, projectID: projectID)
         } else {
             NotificationCenter.default.post(name: .openConversationDeepLink, object: nil,
-                userInfo: [NotificationDeepLink.conversationIDKey: result.conversationID.uuidString])
+                userInfo: [NotificationDeepLink.conversationIDKey: conversationID.uuidString])
+        }
+    }
+
+    /// A folded card can have sent its picture and words together. Count the
+    /// actual conversations once, without treating a project's other chats as
+    /// uses or making the historical receipt a second material owner.
+    func uses(for materialID: UUID) -> [WorkDeskMaterialUseRecord] {
+        let ids = materialGroupIDs[materialID] ?? [materialID]
+        var byConversation: [UUID: WorkDeskMaterialUseRecord] = [:]
+        for id in ids {
+            for use in materialUses[id] ?? [] {
+                if byConversation[use.conversationID].map({ $0.sentAt >= use.sentAt }) == true { continue }
+                byConversation[use.conversationID] = use
+            }
+        }
+        return byConversation.values.sorted {
+            $0.sentAt != $1.sentAt ? $0.sentAt > $1.sentAt : $0.conversationID.uuidString < $1.conversationID.uuidString
         }
     }
 
@@ -196,6 +229,7 @@ final class WorkDeskWorkspaceState {
         do {
             let conversations = try await conversationStore.fetchConversations(activity: .turnStates)
             let sources = try await conversationStore.fetchWorkDeskResults()
+            let uses = try await conversationStore.fetchWorkDeskMaterialUses()
             guard generation == conversationReloadGeneration else { return }
             projectConversations = conversations.filter { $0.projectID != nil }
             let arrivingResults = Set(sources.keys).subtracting(results.keys)
@@ -205,6 +239,7 @@ final class WorkDeskWorkspaceState {
                 draft.remoteResultIDs = Set(sources.values.filter(\.isRemoteReference).map(\.materialID)).union(remoteResultMaterialIDs)
             }
             results = sources
+            materialUses = uses
             conversationLoadError = nil
             if let id = selectedConversationID, !projectConversations.contains(where: { $0.id == id }) {
                 suspendConversation()
@@ -229,7 +264,8 @@ final class WorkDeskWorkspaceState {
             if !query.isEmpty {
                 if let projectID, matchingProjects.contains(projectID) { return true }
                 return [material.name, material.textContent ?? "", material.detail ?? "",
-                        material.companion?.textContent ?? ""]
+                        material.annotation ?? "", material.companion?.textContent ?? "",
+                        material.companion?.annotation ?? ""]
                     .contains { $0.localizedStandardContains(query) }
             }
             switch scope {
@@ -264,6 +300,8 @@ final class WorkDeskWorkspaceState {
     func selectScope(_ scope: WorkDeskScope) {
         suspendConversation()
         selectedConversationID = nil
+        conversationSelectionRequest = nil
+        materialRevealRequest = nil
         pruneConversationModels()
         self.scope = scope
         search = ""
@@ -279,6 +317,9 @@ final class WorkDeskWorkspaceState {
     }
 
     func reconcile(materials: [WorkboardMaterialSnapshot]) {
+        materialGroupIDs = Dictionary(uniqueKeysWithValues: materials.map {
+            ($0.id, Set([$0.id] + ($0.companion.map { [$0.id] } ?? [])))
+        })
         let materialResults = Set(materials.filter(\.isProjectResult).map(\.id))
         let newResults = materialResults.subtracting(resultMaterialIDs)
         resultMaterialIDs = materialResults
@@ -303,6 +344,35 @@ final class WorkDeskWorkspaceState {
     func beginProject(materialIDs: [UUID] = [], position: WorkDeskPoint? = nil) {
         presentEditor(WorkDeskProjectEditorRequest(project: nil, materialIDs: materialIDs,
             position: projectCreationPosition(materialIDs: materialIDs, requested: position)))
+    }
+
+    /// A card menu retains identifiers rather than a copied snapshot/resolver.
+    /// The visible workspace checks them against its latest material snapshot
+    /// before opening preparation, so a delayed menu action cannot change scope
+    /// or quietly shrink the set the person asked to use.
+    func requestConversation(materialIDs: Set<UUID>) {
+        guard !isSearching, let project = currentProject, !materialIDs.isEmpty else { return }
+        conversationSelectionRequest = WorkDeskConversationSelectionRequest(projectID: project.id, materialIDs: materialIDs)
+    }
+
+    @discardableResult
+    func beginConversation(materialIDs: Set<UUID>, materials: [WorkboardMaterialSnapshot],
+                           resolver: WorkDeskConversationResolver) -> Bool {
+        guard isActive, !isSearching, let project = currentProject, !materialIDs.isEmpty else { return false }
+        let available = Set(visibleMaterials(in: materials).map(\.id))
+        guard materialIDs.isSubset(of: available) else {
+            organization.errorMessage = String(localized: "workdesk.conversation.selectionChanged",
+                defaultValue: "The selected materials changed. Choose them again.")
+            return false
+        }
+        if let existing = briefDrafts[project.id],
+           existing.isSaving || existing.handoff.isPreparing || existing.handoff.isSending {
+            return false
+        }
+        let draft = briefDraft(for: project, resolver: resolver)
+        guard draft.useOnlyMaterials(materialIDs, materials: materials) else { return false }
+        preparingProjectID = project.id
+        return true
     }
 
     /// Freeze the intended spot before presenting the editor. A delayed save
@@ -337,8 +407,48 @@ final class WorkDeskWorkspaceState {
         presentEditor(WorkDeskProjectEditorRequest(project: project, materialIDs: []))
     }
 
+    func requestProjectDeletion(_ id: UUID) {
+        guard isActive, deletingProjectID == nil, projectDeletionReview == nil else { return }
+        deletingProjectID = id
+        if showsProjectPicker { showsProjectPicker = false }
+        else { Task { await prepareProjectDeletion(id: id) } }
+    }
+
+    func prepareProjectDeletion(id: UUID) async {
+        guard deletingProjectID == id, isActive else { return }
+        let review = await organization.reviewProjectDeletion(id: id)
+        guard deletingProjectID == id, isActive else { return }
+        deletingProjectID = nil
+        projectDeletionReview = review
+    }
+
+    /// Selecting All materials must not reset its saved layout. Retained cards
+    /// are highlighted there, and their own cluster is revealed in Desk view.
+    func finishProjectDeletion(_ review: WorkDeskProjectDeletionReview, keptMaterials: Bool,
+                               materials: [WorkboardMaterialSnapshot]) {
+        projectDeletionReview = nil
+        deletingProjectID = nil
+        selectScope(.all)
+        guard keptMaterials else { return }
+        selectedIDs = Set(review.visibleMaterialIDs).intersection(materials.map(\.id))
+        isSelecting = !selectedIDs.isEmpty
+        materialRevealRequest = review.visibleMaterialIDs.first(where: { selectedIDs.contains($0) })
+            .map { WorkDeskMaterialRevealRequest(materialID: $0) }
+        let frames = selectedIDs.compactMap { id -> CGRect? in
+            guard let point = organization.placements[id]?.resolvedHomePosition else { return nil }
+            return WorkDeskCanvasGeometry.frame(at: point, bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: 1)
+        }
+        let session = canvasSession(for: .all)
+        session.reveal(frames: frames)
+        session.bringToFront(selectedIDs.map { .material($0) })
+    }
+
     func suspend() {
         isActive = false
+        deletingProjectID = nil
+        projectDeletionReview = nil
+        materialUsePickerID = nil
+        conversationSelectionRequest = nil
         suspendConversation()
         for draft in briefDrafts.values { draft.suspendPresentation() }
         pruneConversationModels()
@@ -383,6 +493,8 @@ final class WorkDeskWorkspaceState {
         if let pendingProjectEditor {
             projectEditor = pendingProjectEditor
             self.pendingProjectEditor = nil
+        } else if let deletingProjectID {
+            Task { await prepareProjectDeletion(id: deletingProjectID) }
         }
     }
 
@@ -426,4 +538,15 @@ struct WorkDeskProjectEditorRequest: Identifiable {
     let project: WorkDeskProjectRecord?
     let materialIDs: [UUID]
     var position: WorkDeskPoint? = nil
+}
+
+struct WorkDeskConversationSelectionRequest: Identifiable {
+    let id = UUID()
+    let projectID: UUID
+    let materialIDs: Set<UUID>
+}
+
+struct WorkDeskMaterialRevealRequest: Identifiable {
+    let id = UUID()
+    let materialID: UUID
 }

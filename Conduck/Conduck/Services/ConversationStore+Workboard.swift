@@ -157,6 +157,7 @@ nonisolated struct WorkMaterialRowProbe: Sendable, Hashable {
     /// looks correct through the projection and is only visible here.
     let title: String?
     let textContent: String?
+    let annotation: String?
 }
 
 /// One PHYSICAL `WorkMaterialBlob` row. `payloadByteCount` rather than the
@@ -432,6 +433,7 @@ nonisolated struct WorkMaterialCanonicalOrder: Comparable, Sendable {
     let byteSize: Int64?
     let kind: String?
     let textContent: String?
+    let annotation: String?
     let urlString: String?
     let filename: String?
     let mimeType: String?
@@ -468,7 +470,8 @@ nonisolated struct WorkMaterialCanonicalOrder: Comparable, Sendable {
         cardSize: String?,
         attachedToMaterialID: UUID? = nil,
         thumbnailData: Data?,
-        rowKey: String
+        rowKey: String,
+        annotation: String? = nil
     ) {
         self.revision = Self.ordered(revision) ?? .distantPast
         self.createdAt = Self.ordered(createdAt)
@@ -479,6 +482,7 @@ nonisolated struct WorkMaterialCanonicalOrder: Comparable, Sendable {
         self.byteSize = byteSize
         self.kind = kind
         self.textContent = textContent
+        self.annotation = annotation
         self.urlString = urlString
         self.filename = filename
         self.mimeType = mimeType
@@ -515,6 +519,7 @@ nonisolated struct WorkMaterialCanonicalOrder: Comparable, Sendable {
         if let decided = decide(lhs.byteSize, rhs.byteSize) { return decided }
         if let decided = decide(lhs.kind, rhs.kind) { return decided }
         if let decided = decide(lhs.textContent, rhs.textContent) { return decided }
+        if let decided = decide(lhs.annotation, rhs.annotation) { return decided }
         if let decided = decide(lhs.urlString, rhs.urlString) { return decided }
         if let decided = decide(lhs.filename, rhs.filename) { return decided }
         if let decided = decide(lhs.mimeType, rhs.mimeType) { return decided }
@@ -1130,6 +1135,10 @@ extension ConversationStore {
         resultSource: WorkDeskResultRecord?,
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws {
+        if let annotation = incoming.annotation,
+           annotation.count > WorkItemContentLimits.maximumFieldCharacters {
+            throw WorkboardStoreError.contentTooLong
+        }
         if let resultSource,
            resultSource.materialID != incoming.id || resultSource.projectID != projectID {
             throw WorkboardStoreError.invalidMaterialOwner
@@ -1321,6 +1330,14 @@ extension ConversationStore {
         let context = newWriteContext()
         let outcome: WorkMaterialWriteOutcome
         do {
+            // New project membership joins deletion's queue only for the final
+            // material save. Slow sizing/staging does not block desk gestures.
+            // Material -> organization is the acquisition order on both paths.
+            if projectID != nil { await acquireWorkDeskMutation() }
+            defer { if projectID != nil { releaseWorkDeskMutation() } }
+            let organizationHold = projectID != nil
+                ? try await workMaterialPublicationLock?.acquireOrganization() : nil
+            defer { organizationHold?.release() }
             outcome = try await context.perform { [context] () -> WorkMaterialWriteOutcome in
                 // THE MUTATION BOUNDARY, and the last place a cancel can still
                 // mean something. Everything above this line — the two claims,
@@ -3303,6 +3320,28 @@ extension ConversationStore {
         if outcome.0 { await postDidChange() }
     }
 
+    /// Invoked only after the reviewed project mutation validated its exact
+    /// membership and canonical material revisions. Payload rows share its
+    /// save; filesystem leaves are reclaimed by the caller only after success.
+    /// Conversation attachments and result receipts are independent history.
+    nonisolated static func deleteReviewedDeskMaterials(
+        ids: [UUID], in context: NSManagedObjectContext
+    ) throws -> [String] {
+        var vaultKeys: Set<String> = []
+        for id in ids {
+            let rows = try workMaterialRows(id: id, ownedBy: Constants.workboardDeskItemID, in: context)
+            guard !rows.isEmpty else { throw WorkDeskStoreError.staleProjectDeletion }
+            vaultKeys.formUnion(rows.compactMap { $0.value(forKey: "localVaultKey") as? String })
+            rows.forEach(context.delete)
+            try deleteBlobRows(materialID: id, in: context)
+        }
+        if !ids.isEmpty, let owner = try workItemRow(id: Constants.workboardDeskItemID, in: context) {
+            owner.setValue(advancedWriteStamp(Date(), notBelow: [owner.value(forKey: "updatedAt") as? Date].compactMap { $0 }),
+                           forKey: "updatedAt")
+        }
+        return vaultKeys.sorted()
+    }
+
     /// The desk's compare-and-swap, in ONE place.
     ///
     /// The token is the bit pattern of a `Date`, not a rounded timestamp
@@ -3645,6 +3684,111 @@ extension ConversationStore {
             throw WorkboardStoreError.itemNotFound
         }
         return record
+    }
+
+    /// Edit only user-authored text on one existing material. File/link source
+    /// content is never rewritten here, and user notes remain synced metadata
+    /// even when the original payload is device-local. The material revision
+    /// guards this edit independently of unrelated cards and layout changes.
+    /// Publication locking serializes this writer with capture and reattach;
+    /// every physical duplicate receives the edited fields, while the current
+    /// canonical row keeps revision precedence over older source variants.
+    func updateWorkMaterialText(
+        id: UUID,
+        textContent: String?,
+        annotation: String?,
+        expectedRevision: Int64
+    ) async throws -> WorkMaterialRecord {
+        guard [textContent, annotation].compactMap({ $0 }).allSatisfy({
+            $0.count <= WorkItemContentLimits.maximumFieldCharacters
+        }) else { throw WorkboardStoreError.contentTooLong }
+        let savedAnnotation = annotation.flatMap {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+        }
+        while workMaterialPublicationClaims.contains(id) {
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        workMaterialPublicationClaims.insert(id)
+        defer { workMaterialPublicationClaims.remove(id) }
+        try await ensureLoaded()
+        let hold = try await workMaterialPublicationLock?.acquire(materialID: id)
+        defer { hold?.release() }
+        let context = newWriteContext()
+        // A concurrent import/delete must refuse this edit rather than let
+        // object-trump merge silently replace a newer field or recreate a row.
+        context.mergePolicy = NSErrorMergePolicy
+        let changed = try await context.perform {
+            let rows = try Self.workMaterialRows(id: id, in: context)
+            guard let canonical = Self.canonicalRow(among: rows) else {
+                throw WorkboardStoreError.materialNotFound
+            }
+            let owners = Set(rows.compactMap { $0.value(forKey: "workItemID") as? UUID })
+            guard owners.count == 1, let ownerID = owners.first,
+                  rows.allSatisfy({ $0.value(forKey: "workItemID") as? UUID == ownerID }),
+                  canonical.entity.attributesByName["annotation"] != nil else {
+                throw WorkboardStoreError.invalidMaterialOwner
+            }
+            let currentStamp = Self.materialRevisionDate(
+                updatedAt: canonical.value(forKey: "updatedAt") as? Date,
+                createdAt: canonical.value(forKey: "createdAt") as? Date)
+            guard Self.workRevision(for: currentStamp) == expectedRevision else {
+                throw WorkboardStoreError.staleRevision
+            }
+            if textContent != nil {
+                guard rows.allSatisfy({ row in
+                    let kind = WorkMaterialKind(stored: row.value(forKey: "kind") as? String)
+                    let result = WorkMaterialProjectResultKind.decode(row.value(forKey: "projectResultKind") as? String)
+                    return (kind == .note || kind == .transcript)
+                        && result != .reference && result != .unknown
+                        && WorkMaterialStorageMode(stored: row.value(forKey: "storageMode") as? String) == .metadataOnly
+                }) else { throw WorkboardStoreError.invalidMaterialOwner }
+            }
+            let needsWrite = rows.contains { row in
+                row.value(forKey: "annotation") as? String != savedAnnotation
+                    || textContent.map { row.value(forKey: "textContent") as? String != $0 } == true
+            }
+            guard needsWrite else { return false }
+            let stamp = Self.advancedWriteStamp(Date(), notBelow: rows.map {
+                Self.materialRevisionDate(updatedAt: $0.value(forKey: "updatedAt") as? Date,
+                                          createdAt: $0.value(forKey: "createdAt") as? Date)
+            })
+            // Older duplicates may carry different untouched source bytes,
+            // names, ranks or companion links. Equal timestamps would let
+            // those stale fields win the content tie-break after this edit.
+            // Keep the previously canonical source strictly newer instead of
+            // rewriting unrelated source metadata merely to edit a note.
+            let canonicalStamp = rows.count > 1
+                ? Self.advancedWriteStamp(stamp, notBelow: [stamp]) : stamp
+            for row in rows {
+                if let textContent {
+                    let oldText = row.value(forKey: "textContent") as? String ?? ""
+                    let oldDerivedTitle = WorkboardWorkspaceCaptureLogic.title(for: oldText)
+                    if !oldDerivedTitle.isEmpty, row.value(forKey: "title") as? String == oldDerivedTitle {
+                        row.setValue(WorkboardWorkspaceCaptureLogic.title(for: textContent), forKey: "title")
+                    }
+                    row.setValue(textContent, forKey: "textContent")
+                }
+                row.setValue(savedAnnotation, forKey: "annotation")
+                row.setValue(row.objectID == canonical.objectID ? canonicalStamp : stamp, forKey: "updatedAt")
+            }
+            // The desk's membership and order have not changed. Touch only
+            // these material rows, so simultaneous edits to other cards do
+            // not contend on the shared owner row.
+            do { try context.save() }
+            catch let error as NSError {
+                if error.domain == NSCocoaErrorDomain,
+                   [NSManagedObjectMergeError, NSPersistentStoreSaveConflictsError].contains(error.code) {
+                    throw WorkboardStoreError.staleRevision
+                }
+                throw error
+            }
+            return true
+        }
+        if changed { await postDidChange() }
+        guard let material = try await fetchWorkMaterial(id: id) else {
+            throw WorkboardStoreError.materialNotFound
+        }
+        return material
     }
 
     /// Resize one card. Card size is a fact about the board, never about the
@@ -4259,7 +4403,8 @@ extension ConversationStore {
             cardSize: row.value(forKey: "cardSize") as? String,
             attachedToMaterialID: row.value(forKey: "attachedToMaterialID") as? UUID,
             thumbnailData: row.value(forKey: "thumbnailData") as? Data,
-            rowKey: row.objectID.uriRepresentation().absoluteString
+            rowKey: row.objectID.uriRepresentation().absoluteString,
+            annotation: row.entity.attributesByName["annotation"] == nil ? nil : row.value(forKey: "annotation") as? String
         )
     }
 
@@ -4417,6 +4562,7 @@ extension ConversationStore {
         row.setValue(draft.kind.rawValue, forKey: "kind")
         row.setValue(draft.title, forKey: "title")
         row.setValue(draft.caption, forKey: "caption")
+        if row.entity.attributesByName["annotation"] != nil { row.setValue(draft.annotation, forKey: "annotation") }
         row.setValue(
             workboardSyncedTextContent(
                 kind: draft.kind,
@@ -4534,6 +4680,7 @@ extension ConversationStore {
         let title: String
         let caption: String
         let textContent: String?
+        let annotation: String?
         let urlString: String?
         let filename: String?
         let mimeType: String?
@@ -4571,6 +4718,7 @@ extension ConversationStore {
             kind = WorkMaterialKind(stored: row.value(forKey: "kind") as? String)
             title = row.value(forKey: "title") as? String ?? ""
             caption = row.value(forKey: "caption") as? String ?? ""
+            annotation = row.entity.attributesByName["annotation"] == nil ? nil : row.value(forKey: "annotation") as? String
             textContent = ConversationStore.workboardSyncedTextContent(
                 kind: kind,
                 storageMode: WorkMaterialStorageMode(
@@ -4653,7 +4801,8 @@ extension ConversationStore {
                 attachedToMaterialID: attachedToMaterialID,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
-                projectResultKind: projectResultKind
+                projectResultKind: projectResultKind,
+                annotation: annotation
             )
         }
     }
@@ -4691,7 +4840,8 @@ extension ConversationStore {
                     updatedAt: row.value(forKey: "updatedAt") as? Date,
                     thumbnailByteCount: (row.value(forKey: "thumbnailData") as? Data)?.count,
                     title: row.value(forKey: "title") as? String,
-                    textContent: row.value(forKey: "textContent") as? String
+                    textContent: row.value(forKey: "textContent") as? String,
+                    annotation: row.value(forKey: "annotation") as? String
                 )
             }
         }

@@ -378,7 +378,7 @@ final class WorkboardAudioCardTests: XCTestCase {
         XCTAssertEqual(WorkboardAudioCardPresentation.transportAction(for: .blocked), .play)
     }
 
-    func testOpenIsOfferedOnlyForReadableBytesAndOnlyWhenTheBoardWiredIt() {
+    func testDetailsAreOfferedForEveryAvailabilityWhenTheBoardWiredIt() {
         let everyAvailability: [WorkboardMaterialAvailability] =
             [.available, .localOnly, .syncPending, .unavailableOnThisDevice]
         for availability in everyAvailability {
@@ -394,8 +394,8 @@ final class WorkboardAudioCardTests: XCTestCase {
                     availability: availability,
                     hasOpenAction: true
                 ),
-                availability.isAvailable,
-                "Open must be offered exactly for bytes this device can read (\(availability))."
+                true,
+                "Details and notes do not require the recording bytes (\(availability))."
             )
         }
     }

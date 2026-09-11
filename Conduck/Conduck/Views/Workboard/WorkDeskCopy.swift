@@ -7,6 +7,30 @@
 import Foundation
 
 nonisolated enum WorkDeskCopy {
+    static func conversationUses(_ count: Int) -> LocalizedStringResource {
+        if count == 1 {
+            return LocalizedStringResource("workdesk.material.used.once", defaultValue: "Used in 1 conversation")
+        }
+        return LocalizedStringResource("workdesk.material.used.count", defaultValue: "Used in \(count) conversations")
+    }
+
+    static func deleteProjectAndMaterials(_ count: Int) -> LocalizedStringResource {
+        if count == 0 {
+            return LocalizedStringResource("workdesk.project.delete.empty", defaultValue: "Delete project")
+        }
+        if count == 1 {
+            return LocalizedStringResource("workdesk.project.delete.one", defaultValue: "Delete project and 1 material")
+        }
+        return LocalizedStringResource("workdesk.project.delete.materials", defaultValue: "Delete project and \(count) materials")
+    }
+
+    static func retainedConversationCount(_ count: Int) -> LocalizedStringResource {
+        if count == 1 {
+            return LocalizedStringResource("workdesk.project.delete.conversation.one", defaultValue: "Its 1 conversation will remain in Chats.")
+        }
+        return LocalizedStringResource("workdesk.project.delete.conversations", defaultValue: "Its \(count) conversations will remain in Chats.")
+    }
+
     static func materialCount(_ count: Int) -> LocalizedStringResource {
         if count == 1 {
             return LocalizedStringResource("workdesk.material.count.one", defaultValue: "1 material")

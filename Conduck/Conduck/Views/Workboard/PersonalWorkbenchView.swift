@@ -373,19 +373,12 @@ final class PersonalWorkbenchRouter {
     }
 
     struct MaterialPresentation: Identifiable {
-        /// What the sheet draws. A FILE is deliberately absent: files, and the
-        /// recordings that reach this presenter through Open, go to Quick Look,
-        /// which is the surface that already knows how to render a PDF, play a
-        /// recording and offer the system's own share and open-with routes.
-        /// A sheet of ours could only re-describe the file and hand those routes
-        /// back to the system anyway.
-        ///
-        /// A LINK is absent for the opposite reason: it has no content of its
-        /// own to draw. Opening one is the browser's job, so the router hands
-        /// the address straight to it rather than raising a sheet whose whole
-        /// body is the URL and a button that does what the click already meant.
+        /// App-owned details keep editable notes reachable for every kind,
+        /// including unavailable files. Native source preview remains a separate
+        /// explicit action with its existing byte-readability and lifetime gates.
         enum Content {
             case note(String)
+            case details(WorkboardMaterialSnapshot)
             /// Every openable image on the desk, in board order, with the tapped
             /// card's position. The whole desk rather than the one card because
             /// a picture is looked at NEXT to its neighbours; the tapped card
@@ -402,8 +395,10 @@ final class PersonalWorkbenchRouter {
         /// raised behind any other sheet still reaches the desk's alert rather
         /// than being swallowed by a surface with nowhere to put it.
         var rendersShareFailure: Bool {
-            if case .imageGallery = content { return true }
-            return false
+            switch content {
+            case .imageGallery, .details: return true
+            case .note: return false
+            }
         }
     }
 
@@ -428,6 +423,7 @@ final class PersonalWorkbenchRouter {
         let pages: [AttachmentGalleryPage]
         let startIndex: Int
         var companions: [UUID: WorkboardCompanionSnapshot] = [:]
+        var materials: [UUID: WorkboardMaterialSnapshot] = [:]
 
         /// The recording folded into the page the cursor is on, if any.
         func companion(forPage pageID: UUID?) -> WorkboardCompanionSnapshot? {
@@ -498,6 +494,7 @@ final class PersonalWorkbenchRouter {
     /// `closeMaterial()` does on the way out of Work, mirroring the
     /// `cancelPendingPresentation()` Chat runs when its own thread is hidden.
     @ObservationIgnored let filePreview: FilePreviewCoordinator
+    private(set) var nativePreviewLease: WorkMaterialPreviewLease?
 
     /// Work's own share presenter, owned exactly where Quick Look's is and for
     /// the same reason: it holds one in-flight claim and one window anchor, and
@@ -529,6 +526,31 @@ final class PersonalWorkbenchRouter {
     }
 
     private var materialRequestID: UUID?
+    private var textEditorSessions: [WorkMaterialTextEditorID: WorkMaterialTextEditorSession] = [:]
+    @ObservationIgnored var openSourceConversation: @MainActor (UUID) -> Void = { _ in }
+    @ObservationIgnored var hasSourceConversation: @MainActor (UUID) -> Bool = { _ in false }
+
+    func textEditor(for material: WorkboardMaterialSnapshot, field: WorkMaterialTextField) -> WorkMaterialTextEditorSession {
+        let key = WorkMaterialTextEditorID(materialID: material.id, field: field)
+        if let existing = textEditorSessions[key] { return existing }
+        let session = WorkMaterialTextEditorSession(material: material, field: field)
+        textEditorSessions[key] = session
+        return session
+    }
+
+    func textState(for material: WorkboardMaterialSnapshot) -> WorkMaterialTextState {
+        let current = Self.currentDeskCard(in: deskMaterials(), for: material)
+        var state = WorkMaterialTextState(material: current)
+        for field in [WorkMaterialTextField.annotation, .source] {
+            let key = WorkMaterialTextEditorID(materialID: material.id, field: field)
+            if let saved = textEditorSessions[key]?.saved, saved.revision >= state.revision { state = saved }
+        }
+        return state
+    }
+
+    func hasUnsavedNotes(for materialID: UUID) -> Bool {
+        textEditorSessions[.init(materialID: materialID, field: .annotation)]?.isDirty == true
+    }
 
     /// `nil` rather than a default-constructed coordinator: a default argument
     /// is evaluated in the CALLER's context, which is nonisolated, and the
@@ -542,8 +564,31 @@ final class PersonalWorkbenchRouter {
         self.share = share ?? WorkMaterialShareCoordinator()
     }
 
+    /// Reading metadata never requires local source bytes. Only a readable
+    /// image enters the full gallery; an unavailable one gets an honest details
+    /// shell with notes and the current availability explanation.
     func present(_ tapped: WorkboardMaterialSnapshot) async {
         closeMaterial()
+        let requestID = UUID()
+        materialRequestID = requestID
+        let desk = deskMaterials()
+        let material = Self.currentDeskCard(in: desk, for: tapped)
+        if material.kind == .image, WorkboardCardActionPolicy.allows(.open, when: material.availability) {
+            commit(MaterialPresentation(title: material.name,
+                content: .imageGallery(Self.gallerySelection(desk: desk, tapped: material))), requestID: requestID)
+        } else {
+            commit(MaterialPresentation(title: material.name, content: .details(material)), requestID: requestID)
+        }
+    }
+
+    func openOriginal(_ tapped: WorkboardMaterialSnapshot) async {
+        // A file's native preview can cover its details without discarding the
+        // app-owned notes shell. Direct callers retain the original lifecycle.
+        if case .details(let shown) = materialPresentation?.content, shown.id == tapped.id {
+            previewNotice = nil
+        } else {
+            closeMaterial()
+        }
         let requestID = UUID()
         materialRequestID = requestID
         // Minted here, at the moment of user intent, and NOT next to the
@@ -634,13 +679,12 @@ final class PersonalWorkbenchRouter {
                     snapshot.reclaim()
                     return
                 }
+                let lease = WorkMaterialPreviewLease(url: snapshot.url, reclaim: { snapshot.reclaim() })
                 filePreview.present(
-                    PreviewedFile(
-                        url: snapshot.url,
-                        reclaim: { snapshot.reclaim() }
-                    ),
+                    PreviewedFile(url: snapshot.url, reclaim: { lease.requestReclaim() }),
                     token: previewToken
                 )
+                nativePreviewLease = lease
             }
         } catch {
             guard materialRequestID == requestID else { return }
@@ -659,6 +703,7 @@ final class PersonalWorkbenchRouter {
         // this a Work preview could stay on screen over Chats — and on macOS the
         // panel both sections share would be owned by the hidden one.
         filePreview.cancelPendingPresentation()
+        nativePreviewLease = nil
     }
 
     /// The card the desk holds under the tapped card's id, or the tapped card
@@ -723,7 +768,8 @@ final class PersonalWorkbenchRouter {
         return GallerySelection(
             pages: materials.map(galleryPage(for:)),
             startIndex: startIndex,
-            companions: companions
+            companions: companions,
+            materials: Dictionary(uniqueKeysWithValues: materials.map { ($0.id, $0) })
         )
     }
 
@@ -1032,6 +1078,14 @@ final class PersonalWorkbenchModel {
         // already replaced or deleted — while the bytes are resolved from the
         // store by id, which is how a replacement leaves the device under the
         // previous revision's name and type.
+        router.hasSourceConversation = { [weak workboardViewModel] materialID in
+            workboardViewModel?.deskWorkspace.results[materialID] != nil
+        }
+        router.openSourceConversation = { [weak router, weak workboardViewModel] materialID in
+            guard let workboardViewModel, let source = workboardViewModel.deskWorkspace.results[materialID] else { return }
+            router?.closeMaterial()
+            workboardViewModel.deskWorkspace.openResultSource(source)
+        }
         router.share.currentMaterial = { materialID in
             try await WorkboardLiveRepository.currentMaterialSnapshot(id: materialID)
         }
@@ -1213,9 +1267,13 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 model.router.destination = .chats
             }
             .modifier(WorkbenchPlatformRoutingModifier(router: model.router))
+            .onChange(of: model.router.materialPresentation?.id) { oldValue, newValue in
+                if oldValue != nil && newValue == nil && model.router.materialPresentation == nil { model.router.closeMaterial() }
+            }
             .sheet(item: $model.router.materialPresentation) { presentation in
                 WorkboardMaterialPreviewView(
                     presentation: presentation,
+                    router: model.router,
                     onClose: model.router.closeMaterial,
                     onSharePage: { pageID in
                         model.router.share.share(materialID: pageID)
@@ -1244,7 +1302,10 @@ struct PersonalWorkbenchView<Chats: View>: View {
                     model.router.filePreview.handleDismiss()
                 }
             }
-            .alert(item: $model.router.previewNotice) { notice in
+            .alert(item: Binding(
+                get: { model.router.materialPresentation == nil ? model.router.previewNotice : nil },
+                set: { model.router.previewNotice = $0 }
+            )) { notice in
                 Alert(
                     title: Text(LocalizedStringResource(
                         "workboard.material.preview.failed.title",
@@ -1282,8 +1343,11 @@ struct PersonalWorkbenchView<Chats: View>: View {
     /// state — the desk shell is remounted by the platform shells, and a
     /// presenter living here would lose an in-flight claim with it.
     private var workMaterialPreviewURL: Binding<URL?> {
-        @Bindable var filePreview = model.router.filePreview
-        return $filePreview.previewURL
+        Binding(get: {
+            model.router.materialPresentation == nil ? model.router.filePreview.previewURL : nil
+        }, set: { value in
+            if model.router.materialPresentation == nil { model.router.filePreview.previewURL = value }
+        })
     }
 
     /// Launch/foreground repair for device-local Work storage. Both passes have
@@ -1477,7 +1541,7 @@ private struct WorkbenchPlatformRoutingModifier: ViewModifier {
 /// gallery, which is exactly where a slow export of a camera original is most
 /// likely to look like a dead tap. Both read the SAME coordinator, so there is
 /// one piece of state and two renderers rather than two states to keep in step.
-private struct WorkShareStatusBanner: View {
+struct WorkShareStatusBanner: View {
     let share: WorkMaterialShareCoordinator
     /// Whether this surface also draws refusals. The desk does not — it has an
     /// alert for that — so only a surface covering the desk sets this.
@@ -1542,6 +1606,7 @@ private struct WorkShareStatusBanner: View {
 
 private struct WorkboardMaterialPreviewView: View {
     let presentation: PersonalWorkbenchRouter.MaterialPresentation
+    let router: PersonalWorkbenchRouter
     let onClose: () -> Void
     /// Share the page currently on screen. The gallery hands over the CURRENT
     /// selection's card id, so a swipe changes what a tap here shares.
@@ -1555,9 +1620,12 @@ private struct WorkboardMaterialPreviewView: View {
         case .imageGallery(let selection):
             WorkboardGallerySheet(
                 selection: selection,
+                router: router,
                 onSharePage: onSharePage,
                 share: share
             )
+        case .details(let material):
+            WorkMaterialDetailsSheet(material: material, router: router)
         case .note:
             textualPreview
         }
@@ -1574,7 +1642,7 @@ private struct WorkboardMaterialPreviewView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(20)
                     }
-                case .imageGallery:
+                case .imageGallery, .details:
                     // Unreachable: the gallery is drawn above, outside this
                     // navigation chrome, because it carries its own Done control
                     // and its own black ground.
@@ -1604,6 +1672,9 @@ private struct WorkboardMaterialPreviewView: View {
 /// one swipe.
 private struct WorkboardGallerySheet: View {
     let selection: PersonalWorkbenchRouter.GallerySelection
+    let router: PersonalWorkbenchRouter
+    @State private var transcriptEditor: WorkMaterialTextEditorSession?
+    @State private var inlineEditor: WorkMaterialTextEditorSession?
     let onSharePage: (UUID) -> Void
     let share: WorkMaterialShareCoordinator
 
@@ -1621,10 +1692,12 @@ private struct WorkboardGallerySheet: View {
 
     init(
         selection: PersonalWorkbenchRouter.GallerySelection,
+        router: PersonalWorkbenchRouter,
         onSharePage: @escaping (UUID) -> Void,
         share: WorkMaterialShareCoordinator
     ) {
         self.selection = selection
+        self.router = router
         self.onSharePage = onSharePage
         self.share = share
         _cursor = State(initialValue: AttachmentGallerySelection(
@@ -1638,7 +1711,14 @@ private struct WorkboardGallerySheet: View {
     }
 
     private var currentCompanion: WorkboardCompanionSnapshot? {
-        selection.companion(forPage: currentPageID)
+        guard let companion = selection.companion(forPage: currentPageID) else { return nil }
+        let current = PersonalWorkbenchRouter.currentDeskCard(in: router.deskMaterials(), for: companion.material)
+        var snapshot = WorkboardCompanionSnapshot(current)
+        let text = router.textState(for: current)
+        snapshot.textContent = text.textContent
+        snapshot.annotation = text.annotation
+        snapshot.revision = text.revision
+        return snapshot
     }
 
     var body: some View {
@@ -1693,13 +1773,53 @@ private struct WorkboardGallerySheet: View {
         // The folded card, opened as ONE sheet: the picture in the gallery, its
         // recording's transport along the bottom of that page.
         .overlay(alignment: .bottom) {
-            if let companion = currentCompanion {
-                WorkboardGalleryCompanionBand(
-                    companion: companion,
-                    player: companionPlayer
-                )
+            VStack(spacing: 0) {
+                if let companion = currentCompanion {
+                    WorkboardGalleryCompanionBand(companion: companion, player: companionPlayer)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Button(LocalizedStringResource("workdesk.material.companionNotes", defaultValue: "Notes for attached material…")) {
+                                transcriptEditor = router.textEditor(for: companion.material, field: .annotation)
+                            }.inlineLinkButton()
+                            Spacer()
+                            if companion.kind == .transcript {
+                                Button(LocalizedStringResource("workboard.material.transcript.edit", defaultValue: "Edit transcript")) {
+                                    transcriptEditor = router.textEditor(for: companion.material, field: .source)
+                                }.inlineLinkButton()
+                            }
+                        }
+                        .font(.caption)
+                        if let notes = companion.annotation, !notes.isEmpty {
+                            Text(verbatim: notes).font(.caption).lineLimit(3)
+                                .foregroundStyle(AppColors.textSecondary)
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.bottom, 8)
+                    .background(AppColors.cardBackgroundElevated)
+                }
+                if let pageID = currentPageID, let material = selection.materials[pageID] {
+                    Group {
+                        if let inlineEditor, inlineEditor.id.materialID == pageID {
+                            ScrollView {
+                                WorkMaterialInlineNotesEditor(session: inlineEditor) { self.inlineEditor = nil }
+                                    .padding(12)
+                            }
+                            .scrollDismissesKeyboard(.interactively)
+                            .frame(maxHeight: 220)
+                        } else {
+                            WorkMaterialNotesSummary(material: material, router: router) {
+                                // Freeze this page's identity before editing.
+                                inlineEditor = router.textEditor(for: material, field: .annotation)
+                            }.padding(12)
+                        }
+                    }
+                    .background(AppColors.cardBackgroundElevated)
+                }
             }
         }
+        .onChange(of: currentPageID) { _, _ in inlineEditor = nil }
+        .sheet(item: $transcriptEditor) { session in WorkMaterialTextEditor(session: session) }
+        .interactiveDismissDisabled(inlineEditor?.isDirty == true || inlineEditor?.isBusy == true)
         // Watched on the SHEET, not inside the band: moving from a folded
         // picture to an ordinary one removes the band, and a paused player
         // resumes the clip it already holds — so a player left alive here would

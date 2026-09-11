@@ -4,7 +4,8 @@
 // ConversationStore+WorkDesk.swift
 //
 // Private CloudKit metadata for spatial organization of the canonical capture
-// desk. Transactions never change a WorkMaterial, WorkItem or payload. UUID
+// desk. Ordinary organization never changes a material or payload. An explicitly
+// reviewed project-and-material deletion also reclaims paired payload rows. UUID
 // links tolerate imports arriving in either order; a project tombstone wins
 // over every live duplicate so a late placement cannot resurrect a deletion.
 // Each intent updates one item's fields, not a JSON copy of the entire desk.
@@ -15,6 +16,7 @@
 
 import Foundation
 import CoreData
+import CoreGraphics
 
 extension ConversationStore {
     /// Called only after the canonical writer proves the material is new. The
@@ -43,6 +45,173 @@ extension ConversationStore {
         return try await context.perform { try Self.deskOrganization(in: context) }
     }
 
+    func reviewWorkDeskProjectDeletion(id: UUID) async throws -> WorkDeskProjectDeletionReview {
+        try await ensureLoaded()
+        let context = newReadContext()
+        return try await context.perform {
+            try Self.pinProjectDeletionReads(in: context)
+            return try Self.projectDeletionReview(id: id, in: context)
+        }
+    }
+
+    /// CloudKit imports bypass application advisory locks. A fixed SQLite
+    /// generation keeps later refetches from adding a newly imported physical
+    /// duplicate to the rows this confirmation validated. NSErrorMergePolicy
+    /// still refuses changes to the reviewed rows themselves. In-memory test
+    /// stores do not support query generations and never import CloudKit data.
+    private nonisolated static func pinProjectDeletionReads(in context: NSManagedObjectContext) throws {
+        guard let stores = context.persistentStoreCoordinator?.persistentStores,
+              !stores.isEmpty, stores.allSatisfy({ $0.type == NSSQLiteStoreType }) else { return }
+        try context.setQueryGenerationFrom(.current)
+    }
+
+    /// Reads canonical placement and material identities without normalizing
+    /// duplicates. Even a refused confirmation must leave the store untouched.
+    private nonisolated static func projectDeletionReview(
+        id: UUID, in context: NSManagedObjectContext
+    ) throws -> WorkDeskProjectDeletionReview {
+        let organization = try deskOrganization(in: context)
+        guard let project = organization.projects.first(where: { $0.id == id }) else {
+            throw WorkDeskStoreError.projectNotFound
+        }
+        let placementRows = try context.fetch(NSFetchRequest<NSManagedObject>(entityName: "WorkDeskPlacement"))
+            .sorted(by: deskRowPrecedes)
+        var placements: [UUID: WorkDeskPlacementRecord] = [:]
+        for row in placementRows {
+            guard let materialID = row.value(forKey: "materialID") as? UUID, placements[materialID] == nil else { continue }
+            placements[materialID] = WorkDeskPlacementRecord(materialID: materialID,
+                projectID: row.value(forKey: "projectID") as? UUID, position: deskPoint(on: row),
+                homePosition: homePoint(on: row), isPinned: row.value(forKey: "isPinned") as? Bool ?? false,
+                updatedAt: row.value(forKey: "updatedAt") as? Date ?? .distantPast)
+        }
+        // Include placements whose material is still in transit. If that row
+        // arrives while the dialog is open, its new content token invalidates
+        // the review instead of being swept into a destructive choice.
+        let assigned = Set(placements.values.filter { $0.projectID == id }.map(\.materialID))
+        let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+        request.predicate = NSPredicate(format: "workItemID == %@", Constants.workboardDeskItemID as CVarArg)
+        var rowsByID: [UUID: [NSManagedObject]] = [:]
+        for row in try context.fetch(request) {
+            if let materialID = row.value(forKey: "id") as? UUID { rowsByID[materialID, default: []].append(row) }
+        }
+        let canonical = rowsByID.compactMapValues { canonicalRow(among: $0) }
+        let childByParent = deskFoldedCompanions(canonical: canonical)
+        // A displayed picture is the organizational unit. Older builds moved
+        // only its parent placement, so a hidden child's raw project may be
+        // stale. Resolve its home through the visible parent: deleting the old
+        // project must not delete words that now draw inside another project.
+        let hiddenChildren = Set(childByParent.values)
+        var included = assigned.intersection(canonical.keys).subtracting(hiddenChildren)
+        for (parent, child) in childByParent where included.contains(parent) { included.insert(child) }
+        if !included.isEmpty {
+            let ownership = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            ownership.predicate = NSPredicate(format: "id IN %@", Array(included))
+            guard try context.fetch(ownership).allSatisfy({
+                $0.value(forKey: "workItemID") as? UUID == Constants.workboardDeskItemID
+            }) else { throw WorkDeskStoreError.staleProjectDeletion }
+        }
+        let ordered = included.sorted { lhs, rhs in
+            let left = (canonical[lhs]?.value(forKey: "sequence") as? NSNumber)?.intValue ?? 0
+            let right = (canonical[rhs]?.value(forKey: "sequence") as? NSNumber)?.intValue ?? 0
+            return left != right ? left < right : lhs.uuidString < rhs.uuidString
+        }
+        let hidden = Set(childByParent.filter { included.contains($0.key) }.values)
+        let visible = ordered.filter { !hidden.contains($0) }
+        let positions = releasedProjectPositions(project: project, visibleIDs: visible,
+            allMemberIDs: included, childByParent: childByParent, organization: organization)
+        let conversations = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
+        conversations.predicate = NSPredicate(format: "projectID == %@", id as CVarArg)
+        let reviewedPlacements = assigned.union(included)
+        return WorkDeskProjectDeletionReview(id: UUID(), projectID: id, projectTitle: project.title,
+            materialIDs: ordered, visibleMaterialIDs: visible, conversationCount: try context.count(for: conversations),
+            retainedPositions: positions, focusPoint: visible.first.flatMap { positions[$0] } ?? project.position ?? .init(x: 28, y: 26),
+            project: project, assignedMaterialIDs: assigned,
+            placementTokens: placements.filter { reviewedPlacements.contains($0.key) },
+            materialTokens: canonical.filter { included.contains($0.key) }.mapValues { canonicalOrder(of: $0) })
+    }
+
+    private nonisolated static func releasedProjectPositions(
+        project: WorkDeskProjectRecord, visibleIDs: [UUID], allMemberIDs: Set<UUID>,
+        childByParent: [UUID: UUID], organization: WorkDeskOrganizationSnapshot
+    ) -> [UUID: WorkDeskPoint] {
+        guard !visibleIDs.isEmpty else { return [:] }
+        let card = WorkDeskCanvasGeometry.cardBodySize
+        let gap: CGFloat = 24
+        let columns = max(1, Int(ceil(sqrt(Double(visibleIDs.count)))))
+        let rows = Int(ceil(Double(visibleIDs.count) / Double(columns)))
+        let block = CGSize(width: CGFloat(columns) * (card.width + gap) - gap,
+                           height: CGFloat(rows) * (card.height + gap) - gap)
+        let desired = project.position ?? .init(x: 28, y: 26)
+        var occupied = organization.placements.values.compactMap { placement -> CGRect? in
+            guard !allMemberIDs.contains(placement.materialID), let point = placement.resolvedHomePosition else { return nil }
+            return WorkDeskCanvasGeometry.frame(at: point, bodySize: card, scale: 1)
+        }
+        occupied += organization.projects.compactMap { other -> CGRect? in
+            guard other.id != project.id, let point = other.position else { return nil }
+            return WorkDeskCanvasGeometry.frame(at: point, bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: 1)
+        }
+        // The whole block must fit inside the coordinate range. Clamping each
+        // card independently at an edge would stack several cards on one point.
+        let limit = WorkDeskPoint.coordinateLimit
+        let maximumX = limit - Double(columns - 1) * Double(card.width + gap)
+        let maximumY = limit - Double(rows - 1) * Double(card.height + gap)
+        func boundedOrigin(_ point: WorkDeskPoint) -> WorkDeskPoint {
+            .init(x: min(max(-limit, point.x), maximumX), y: min(max(-limit, point.y), maximumY))
+        }
+        let preferred = boundedOrigin(desired)
+        var candidates = [preferred]
+        for obstacle in occupied {
+            let xs = [obstacle.minX - block.width - 24, CGFloat(preferred.x), obstacle.maxX + 24]
+            let ys = [obstacle.minY - block.height - 24, CGFloat(preferred.y), obstacle.maxY + 24]
+            for x in xs { for y in ys { candidates.append(boundedOrigin(.init(x: Double(x), y: Double(y)))) } }
+        }
+        let origin = Set(candidates).filter { point in
+            let frame = CGRect(x: point.x, y: point.y, width: block.width, height: block.height).insetBy(dx: -10, dy: -10)
+            return !occupied.contains { $0.intersects(frame) }
+        }.min { lhs, rhs in
+            let left = hypot(lhs.x - desired.x, lhs.y - desired.y), right = hypot(rhs.x - desired.x, rhs.y - desired.y)
+            if left != right { return left < right }
+            if lhs.x != rhs.x { return lhs.x < rhs.x }
+            return lhs.y < rhs.y
+        } ?? preferred
+        var result: [UUID: WorkDeskPoint] = [:]
+        for (index, materialID) in visibleIDs.enumerated() {
+            let point = WorkDeskPoint(x: origin.x + Double(index % columns) * Double(card.width + gap),
+                                     y: origin.y + Double(index / columns) * Double(card.height + gap))
+            result[materialID] = point
+            if let child = childByParent[materialID] { result[child] = point }
+        }
+        return result
+    }
+
+    private nonisolated static func applyReviewedProjectDeletion(
+        _ review: WorkDeskProjectDeletionReview, deleteMaterials: Bool, in context: NSManagedObjectContext,
+        afterValidation: (@Sendable () -> Void)? = nil
+    ) throws -> [String] {
+        let current = try projectDeletionReview(id: review.projectID, in: context)
+        guard current.project == review.project,
+              current.assignedMaterialIDs == review.assignedMaterialIDs,
+              current.materialTokens == review.materialTokens,
+              current.placementTokens == review.placementTokens,
+              current.visibleMaterialIDs == review.visibleMaterialIDs else {
+            throw WorkDeskStoreError.staleProjectDeletion
+        }
+        afterValidation?()
+        // The metadata tombstone remains the authority for a placement that
+        // imports later. Conversations and result receipts deliberately remain.
+        try applyDeskMutation(.deleteProject(id: review.projectID), in: context)
+        for materialID in current.materialIDs {
+            let placements = try deskPlacementRows(materialID, in: context)
+            editDeskRows(placements) { row in
+                row.setValue(nil, forKey: "projectID")
+                setDeskPoint(nil, on: row)
+                if !deleteMaterials { setHomePoint(current.retainedPositions[materialID], on: row) }
+            }
+        }
+        if deleteMaterials { return try deleteReviewedDeskMaterials(ids: current.materialIDs, in: context) }
+        return []
+    }
+
     /// A fallback inserts no placement. A successfully filed capture retains
     /// its placement row even when deletion clears its membership locally or
     /// a synced project tombstone makes that membership resolve to All materials.
@@ -63,22 +232,53 @@ extension ConversationStore {
 
     @discardableResult
     func applyWorkDeskMutation(_ mutation: WorkDeskMutation) async throws -> WorkDeskOrganizationSnapshot {
+        // Material -> organization is the shared order with initial captures.
+        // Claim the complete reviewed set at once so two deletions cannot each
+        // retain one material while waiting forever for the other's claim.
+        let reviewedIDs: Set<UUID>
+        if case let .deleteReviewedProject(review, _) = mutation { reviewedIDs = Set(review.materialIDs) }
+        else { reviewedIDs = [] }
+        while !workMaterialPublicationClaims.isDisjoint(with: reviewedIDs) {
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        workMaterialPublicationClaims.formUnion(reviewedIDs)
+        defer { workMaterialPublicationClaims.subtract(reviewedIDs) }
+        try await ensureLoaded()
+        var materialHolds: [WorkMaterialPublicationLock.Hold] = []
+        defer { materialHolds.forEach { $0.release() } }
+        for id in reviewedIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            if let hold = try await workMaterialPublicationLock?.acquire(materialID: id) { materialHolds.append(hold) }
+        }
         await acquireWorkDeskMutation()
         defer { releaseWorkDeskMutation() }
         try Task.checkCancellation()
-        try await ensureLoaded()
+        let organizationHold = try await workMaterialPublicationLock?.acquireOrganization()
+        defer { organizationHold?.release() }
         let context = newWriteContext()
-        let (snapshot, changed) = try await context.perform {
+        context.mergePolicy = NSErrorMergePolicy
+        #if CONDUCK_TESTING
+        let afterValidation = workDeskDeletionValidationHookForTesting
+        #else
+        let afterValidation: (@Sendable () -> Void)? = nil
+        #endif
+        let (snapshot, changed, vaultKeys) = try await context.perform {
+            var vaultKeys: [String] = []
+            if case let .deleteReviewedProject(review, deleteMaterials) = mutation {
+                try Self.pinProjectDeletionReads(in: context)
+                vaultKeys = try Self.applyReviewedProjectDeletion(review, deleteMaterials: deleteMaterials, in: context,
+                    afterValidation: afterValidation)
+            }
             try Self.applyDeskMutation(mutation, in: context)
             let changed = context.hasChanges
             if changed { try context.save() }
-            return (try Self.deskOrganization(in: context), changed)
+            return (try Self.deskOrganization(in: context), changed, vaultKeys)
         }
+        for key in vaultKeys { try? await workAssetVault.remove(key) }
         if changed { await postDidChange() }
         return snapshot
     }
 
-    private func acquireWorkDeskMutation() async {
+    func acquireWorkDeskMutation() async {
         if !workDeskMutationInProgress {
             workDeskMutationInProgress = true
             return
@@ -86,7 +286,7 @@ extension ConversationStore {
         await withCheckedContinuation { workDeskMutationWaiters.append($0) }
     }
 
-    private func releaseWorkDeskMutation() {
+    func releaseWorkDeskMutation() {
         if workDeskMutationWaiters.isEmpty { workDeskMutationInProgress = false }
         else { workDeskMutationWaiters.removeFirst().resume() }
     }
@@ -95,6 +295,9 @@ extension ConversationStore {
         _ mutation: WorkDeskMutation, in context: NSManagedObjectContext
     ) throws {
         switch mutation {
+        case .deleteReviewedProject:
+            // Validated and applied before this metadata-only switch.
+            break
         case let .createProject(project, materialIDs):
             try validateDeskText(title: project.title, brief: project.brief)
             try requireDeskMaterials(materialIDs, in: context)
@@ -298,7 +501,31 @@ extension ConversationStore {
     private nonisolated static func assignDeskMaterials(
         _ ids: [UUID], projectID: UUID?, in context: NSManagedObjectContext
     ) throws {
-        for id in Set(ids) {
+        let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+        request.predicate = NSPredicate(format: "workItemID == %@ AND id IN %@", Constants.workboardDeskItemID as CVarArg, ids)
+        var grouped: [UUID: [NSManagedObject]] = [:]
+        for row in try context.fetch(request) {
+            if let id = row.value(forKey: "id") as? UUID { grouped[id, default: []].append(row) }
+        }
+        var expanded = Set(ids)
+        let hasPicture = grouped.values.contains { rows in
+            guard let row = canonicalRow(among: rows) else { return false }
+            return WorkMaterialKind(stored: row.value(forKey: "kind") as? String) == .image
+                && row.value(forKey: "attachedToMaterialID") == nil
+        }
+        if hasPicture {
+            // New capture placement happens before its material insert and
+            // cannot have a displayed companion yet. Notes/files also bypass
+            // this scan; only moving an existing picture needs the global fold.
+            request.predicate = NSPredicate(format: "workItemID == %@", Constants.workboardDeskItemID as CVarArg)
+            grouped.removeAll(keepingCapacity: true)
+            for row in try context.fetch(request) {
+                if let id = row.value(forKey: "id") as? UUID { grouped[id, default: []].append(row) }
+            }
+            let children = deskFoldedCompanions(canonical: grouped.compactMapValues { canonicalRow(among: $0) })
+            for parent in ids { if let child = children[parent] { expanded.insert(child) } }
+        }
+        for id in expanded {
             let rows = try deskPlacementRows(id, in: context)
             editDeskRows(rows) { row in
                 if row.value(forKey: "projectID") as? UUID != projectID {
@@ -312,6 +539,29 @@ extension ConversationStore {
                 }
             }
         }
+    }
+
+    /// Same eligibility and lowest-child identity rule as the visible fold.
+    /// A duplicate or late linked note cannot invent a second displayed child.
+    private nonisolated static func deskFoldedCompanions(
+        canonical: [UUID: NSManagedObject]
+    ) -> [UUID: UUID] {
+        var childByParent: [UUID: UUID] = [:]
+        for (childID, row) in canonical {
+            let kind = WorkMaterialKind(stored: row.value(forKey: "kind") as? String)
+            guard kind == .audio || kind == .transcript,
+                  let link = row.value(forKey: "attachedToMaterialID") as? UUID, link != childID else { continue }
+            for parentID in [link, WorkMaterialCollisionEscape.materialID(forCapture: link)] {
+                guard parentID != childID, let parent = canonical[parentID],
+                      WorkMaterialKind(stored: parent.value(forKey: "kind") as? String) == .image,
+                      parent.value(forKey: "attachedToMaterialID") == nil else { continue }
+                if childByParent[parentID].map({ childID.uuidString < $0.uuidString }) ?? true {
+                    childByParent[parentID] = childID
+                }
+                break
+            }
+        }
+        return childByParent
     }
 
     private nonisolated static func liveDeskProjectRows(

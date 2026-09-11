@@ -11,8 +11,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// The free-placement layout. `.desk` and its stored raw value are frozen —
-/// `save()` persists `rawValue`, so the label is free to differ — and "Canvas" names
-/// the layout independently of the All materials or project scope.
+/// `save()` persists `rawValue`. Desk names the same spatial layout in both
+/// All materials and an individual project.
 enum WorkboardLayoutMode: String, CaseIterable {
     case desk
     case tiles
@@ -20,7 +20,7 @@ enum WorkboardLayoutMode: String, CaseIterable {
 
     var title: LocalizedStringResource {
         switch self {
-        case .desk: LocalizedStringResource("workdesk.layout.desk", defaultValue: "Canvas")
+        case .desk: LocalizedStringResource("workdesk.layout.desk", defaultValue: "Desk")
         case .tiles: LocalizedStringResource("workboard.layout.tiles", defaultValue: "Tiles")
         case .list: LocalizedStringResource("workboard.layout.list", defaultValue: "List")
         }

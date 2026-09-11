@@ -4050,6 +4050,9 @@ final class ConversationDetailViewModel {
         // the same built-in/custom ref can be edited while persistence awaits.
         // Generic composer sends omit this and retain their existing behavior.
         expectedGatewaySnapshot: SettingsManager.RemoteAgentSnapshot? = nil,
+        // Non-nil only for a reviewed Work handoff. Provenance is committed
+        // with this exact user turn and refuses any omitted reviewed attachment.
+        workMaterialInputs: [WorkDeskMaterialInput]? = nil,
         // Called exactly once when supplied: true only after the user turn and
         // all attachment drafts have been durably appended; false on any
         // pre-acceptance rejection/write failure. This lets the composer retain
@@ -4164,6 +4167,14 @@ final class ConversationDetailViewModel {
         // file-transfer route now sends originals, so only the inline copy is
         // capped, at the de-facto vision sweet spot).
         let processed = await Self.processAttachments(attachments)
+        if workMaterialInputs != nil && !processed.preservesReviewedAttachments {
+            #if os(macOS)
+            isAwaitingReply = false
+            #endif
+            reportComposerDispatchRejection()
+            onLocalAcceptance?(false)
+            return
+        }
         let handsOffStoredKeys =
             !processed.serverFileRefs.isEmpty
             || !processed.imageFileRefs.isEmpty
@@ -4205,7 +4216,8 @@ final class ConversationDetailViewModel {
                 fileTransferLaneID: handsOffStoredKeys
                     ? dispatchFileLane?.durableLaneID
                     : nil,
-                attachments: processed.drafts
+                attachments: processed.drafts,
+                workMaterialInputs: workMaterialInputs
             )
             await reload()
         } catch {
@@ -4635,7 +4647,8 @@ final class ConversationDetailViewModel {
         attachments: [PendingAttachment],
         expectedRef: RemoteAgentRef,
         expectedFileLaneID: String?,
-        expectedGatewaySnapshot: SettingsManager.RemoteAgentSnapshot? = nil
+        expectedGatewaySnapshot: SettingsManager.RemoteAgentSnapshot? = nil,
+        workMaterialInputs: [WorkDeskMaterialInput]? = nil
     ) async -> Bool {
         await withCheckedContinuation { continuation in
             Task { @MainActor [weak self] in
@@ -4650,6 +4663,7 @@ final class ConversationDetailViewModel {
                     expectedRef: expectedRef,
                     expectedFileLaneID: expectedFileLaneID,
                     expectedGatewaySnapshot: expectedGatewaySnapshot,
+                    workMaterialInputs: workMaterialInputs,
                     onLocalAcceptance: { accepted in
                         continuation.resume(returning: accepted)
                     }
@@ -4705,7 +4719,17 @@ final class ConversationDetailViewModel {
         /// surfaces an honest notice instead of silently dropping a chip the
         /// user saw in the strip.
         var droppedCount = 0
+        var preservesReviewedAttachments: Bool { droppedCount == 0 }
     }
+
+    #if CONDUCK_TESTING
+    /// Exercises the real decoding/drop decision without dispatching or opening
+    /// settings. The Work boundary consumes this same processed-result verdict.
+    nonisolated static func _preservesReviewedAttachmentsForTesting(_ attachments: [PendingAttachment]) async -> Bool {
+        let processed = await processAttachments(attachments)
+        return processed.preservesReviewedAttachments
+    }
+    #endif
 
     /// Run images through `ImageProcessor` (downsize + EXIF/GPS strip → JPEG +
     /// thumbnail) and text files through `TextFileExtractor`, building drafts +

@@ -191,15 +191,13 @@ enum WorkboardAudioCardPresentation {
         }
     }
 
-    /// Open is offered only for bytes this device can read — the board's one
-    /// permission policy decides that, so the audio card cannot open what a
-    /// source card beside it refuses — and only when the board gave the card
-    /// somewhere to open them.
+    /// Details and notes remain readable without the audio file. Playback and
+    /// sharing keep their separate byte-availability gates.
     static func showsOpenAction(
         availability: WorkboardMaterialAvailability,
         hasOpenAction: Bool
     ) -> Bool {
-        WorkboardCardActionPolicy.allows(.open, when: availability) && hasOpenAction
+        WorkboardCardActionPolicy.allows(.details, when: availability) && hasOpenAction
     }
 
     /// The availability corner. `nil` for a card whose bytes are simply here.
@@ -1070,6 +1068,8 @@ struct WorkboardAudioCardView: View {
             progressBar
             transportStatus
             Spacer(minLength: 0)
+            WorkboardMaterialNotesIndicator(material: material)
+                .foregroundStyle(AppColors.textSecondary)
             cardFooter
         }
     }
@@ -1286,8 +1286,8 @@ struct WorkboardAudioCardView: View {
                 Label(transportActionTitle, systemImage: transportActionSymbol)
             }
         }
-        if showsOpenAction, let onOpen {
-            Button(action: onOpen) {
+        if showsOpenAction {
+            Button(action: openDetails) {
                 Label(
                     LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
                     systemImage: "arrow.up.forward.app"
@@ -1348,10 +1348,10 @@ struct WorkboardAudioCardView: View {
 
     @ViewBuilder
     private var cardAccessibilityActions: some View {
-        if showsOpenAction, let onOpen {
+        if showsOpenAction {
             Button(
                 LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
-                action: onOpen
+                action: openDetails
             )
         }
         // The ellipsis menu is hidden from VoiceOver, so Share reaches the
@@ -1418,6 +1418,13 @@ struct WorkboardAudioCardView: View {
     /// The label says what the card IS and what tapping it does; the value says
     /// what it is doing. Splitting them is what lets VoiceOver re-read the state
     /// after a tap without repeating the name and the transcript.
+    private func openDetails() {
+        // The native preview can own playback, so relinquish this card's
+        // player (including an in-flight load) before handing over.
+        player.deactivate()
+        onOpen?()
+    }
+
     private var accessibilityLabel: Text {
         // The kind's own copy, never a second name for the same thing: the
         // enum owns what a voice note is called everywhere else on the board.
@@ -1429,6 +1436,9 @@ struct WorkboardAudioCardView: View {
             parts.append(String(localized: transportActionTitle))
         }
         parts.append(contentsOf: face.spokenParts)
+        if WorkboardMaterialNotesIndicator.isVisible(for: material) {
+            parts.append(String(localized: WorkboardMaterialNotesIndicator.title))
+        }
         if boardCount > 0, boardPosition > 0 {
             parts.append(Self.boardPositionLabel(position: boardPosition, count: boardCount))
         }

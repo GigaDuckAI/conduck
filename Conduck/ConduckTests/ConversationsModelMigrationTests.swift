@@ -1692,10 +1692,51 @@ final class ConversationsModelMigrationTests: XCTestCase {
         XCTAssertTrue(current.entities(forConfigurationName: "Core")?.contains(receipt) == true)
     }
 
+    func testV20ToV21AddsOptionalAnnotationsWithoutChangingSourceContent() async throws {
+        let old = try requiredModel(named: "Conversations 20.mom")
+        let current = try requiredModel(named: "Conversations 21.mom")
+        XCTAssertNil(old.entitiesByName["Conversation"]?.attributesByName["workMaterialUsageJSON"])
+        XCTAssertTrue(current.entitiesByName["Conversation"]?.attributesByName["workMaterialUsageJSON"]?.isOptional == true)
+        let id = UUID()
+        let bytes = Data("original payload".utf8)
+        do {
+            let container = try await loadStore(model: old)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let material = NSEntityDescription.insertNewObject(forEntityName: "WorkMaterial", into: context)
+                material.setValue(id, forKey: "id")
+                material.setValue("note", forKey: "kind")
+                material.setValue("Original note", forKey: "textContent")
+                material.setValue("Original provenance", forKey: "caption")
+                let blob = NSEntityDescription.insertNewObject(forEntityName: "WorkMaterialBlob", into: context)
+                blob.setValue(id, forKey: "materialID")
+                blob.setValue(bytes, forKey: "payload")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+        let container = try await loadStore(model: current)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let material = try XCTUnwrap(context.fetch(NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")).first)
+            XCTAssertEqual(material.value(forKey: "id") as? UUID, id)
+            XCTAssertEqual(material.value(forKey: "textContent") as? String, "Original note")
+            XCTAssertEqual(material.value(forKey: "caption") as? String, "Original provenance")
+            XCTAssertNil(material.value(forKey: "annotation"))
+            XCTAssertTrue(material.entity.attributesByName["annotation"]?.isOptional == true)
+            material.setValue("Added notes", forKey: "annotation")
+            try context.save()
+            let blob = try XCTUnwrap(context.fetch(NSFetchRequest<NSManagedObject>(entityName: "WorkMaterialBlob")).first)
+            XCTAssertEqual(blob.value(forKey: "payload") as? Data, bytes)
+        }
+    }
+
     /// The app must open the newest schema. A stale version pointer would
     /// omit the home coordinates its Work layout reads and writes, while the
     /// older models below remain available for inferred migration.
-    func testTheCurrentModelVersionIsV20() throws {
+    func testTheCurrentModelVersionIsV21() throws {
         let bundles = [Bundle.main, Bundle(for: Self.self)]
         let momd = try XCTUnwrap(
             bundles.compactMap { $0.url(forResource: "Conversations", withExtension: "momd") }.first,
@@ -1703,7 +1744,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
         let plist = try XCTUnwrap(
             NSDictionary(contentsOf: momd.appendingPathComponent("VersionInfo.plist")),
             "a compiled momd always carries VersionInfo.plist")
-        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 20")
+        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 21")
     }
 
     /// THE SOURCE MODEL MUST STAY IN THE BUNDLE. Lightweight migration infers a
@@ -1712,7 +1753,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
     /// left with a file nothing can open — which on this app is the user's whole
     /// conversation history.
     func testEveryShippedModelVersionIsStillInTheBundle() throws {
-        for version in 2...20 {
+        for version in 2...21 {
             _ = try requiredModel(named: "Conversations \(version).mom")
         }
         _ = try requiredModel(named: "Conversations.mom")

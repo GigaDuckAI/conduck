@@ -385,16 +385,9 @@ struct WorkboardCaptureCanvas: View {
         }
     }
 
-    /// The desk's one door to the preview router, and the gate in front of it.
-    /// `WorkboardCardActionPolicy` decides what this card's bytes allow, so a
-    /// card still waiting for iCloud reaches nothing: opening it would present a
-    /// thumbnail in place of the material, and offering to reattach it would ask
-    /// a person to repair bytes that are already on their way.
+    /// Details and editable notes do not require the source bytes. The router
+    /// separately gates source preview and sharing against current availability.
     private func openMaterial(_ material: WorkboardMaterialSnapshot) {
-        if material.kind == .note, let source = viewModel.deskWorkspace.results[material.id] {
-            viewModel.deskWorkspace.openResultSource(source)
-            return
-        }
         WorkboardCardActionPolicy.performPrimaryAction(
             for: material.availability,
             open: { viewModel.openMaterial(material) },
@@ -1150,8 +1143,8 @@ private struct WorkboardPaneDropModifier: ViewModifier {
 /// Delete, and that Delete removes both members together through
 /// `WorkboardViewModel.removeGroupFromBoard`.
 struct WorkboardCompanionActions {
-    /// Quick Look on the recording. The same route the recording's own card
-    /// used before it folded.
+    /// Details for the folded material, including its text and attached notes.
+    /// The details surface owns whether native source preview is available.
     var open: () -> Void
     /// The system share sheet on the recording's file, not the picture's.
     var share: () -> Void
@@ -2145,6 +2138,7 @@ enum WorkboardCompanionAction: String, Equatable, Sendable, CaseIterable {
     case pause
     case cancelLoading
     case openRecording
+    case openTranscript
     case shareRecording
     /// The recording's own repair. A folded card that dropped this row would
     /// take the only route back for a recording whose local bytes are gone —
@@ -2370,19 +2364,16 @@ enum WorkboardCompanionBand {
         }
     }
 
-    /// The rows this card offers about the recording, in menu order.
+    /// The rows this card offers about its folded material, in menu order.
     ///
     /// Each one asks the COMPANION's availability, never the picture's: a
     /// screenshot that is readable here says nothing about whether its
     /// recording's bytes arrived, and the two are separate materials with
     /// separate lanes.
     ///
-    /// A WORDS-ONLY COMPANION OFFERS NONE OF THEM. Every row here names a file
-    /// — play it, open it, share those bytes, repair them — and a `.transcript`
-    /// has no file at all, so each row would be an action that fails the moment
-    /// it is chosen. The words themselves are already drawn in the band and
-    /// spoken in the card's label, and the card's own Share still hands over
-    /// the picture.
+    /// Opening details always keeps the companion's words and notes reachable,
+    /// including when recording bytes are still arriving. A transcript offers
+    /// only its own details; playback, sharing and repair are recording actions.
     static func actions(
         for companion: WorkboardCompanionSnapshot,
         phase: WorkboardAudioPhase,
@@ -2390,6 +2381,10 @@ enum WorkboardCompanionBand {
         hasShareRecording: Bool,
         hasReattachRecording: Bool = false
     ) -> [WorkboardCompanionAction] {
+        if companion.kind == .transcript {
+            return hasOpenRecording && WorkboardCardActionPolicy.allows(.details, when: companion.availability)
+                ? [.openTranscript] : []
+        }
         guard companion.kind == .audio else { return [] }
         var actions: [WorkboardCompanionAction] = []
         if WorkboardCardActionPolicy.allows(.play, when: companion.availability) {
@@ -2399,10 +2394,11 @@ enum WorkboardCompanionBand {
             case .cancelLoading: actions.append(.cancelLoading)
             }
         }
-        // Open and Share ride the SAME permission — both read the recording's
-        // bytes — so a recording that cannot be opened cannot be shared either.
+        if hasOpenRecording,
+           WorkboardCardActionPolicy.allows(.details, when: companion.availability) {
+            actions.append(.openRecording)
+        }
         if WorkboardCardActionPolicy.allows(.open, when: companion.availability) {
-            if hasOpenRecording { actions.append(.openRecording) }
             if hasShareRecording { actions.append(.shareRecording) }
         }
         if hasReattachRecording,
@@ -2428,6 +2424,8 @@ enum WorkboardCompanionBand {
                 "workboard.companion.open.recording",
                 defaultValue: "Open Recording"
             )
+        case .openTranscript:
+            return LocalizedStringResource("workdesk.companion.openTranscript", defaultValue: "Open transcript")
         case .shareRecording:
             return LocalizedStringResource(
                 "workboard.companion.share.recording",
@@ -2447,6 +2445,7 @@ enum WorkboardCompanionBand {
         case .pause: return "pause.fill"
         case .cancelLoading: return "xmark"
         case .openRecording: return "arrow.up.forward.app"
+        case .openTranscript: return "text.alignleft"
         case .shareRecording: return "square.and.arrow.up"
         case .reattachRecording: return "paperclip"
         }
@@ -2551,9 +2550,8 @@ struct WorkboardSourceCard: View {
     var onMoveEarlier: (() -> Void)?
     var onMoveLater: (() -> Void)?
     var onRemove: (() -> Void)?
-    /// Quick Look the RECORDING folded into this picture — the route the
-    /// recording's own card had before it was folded away. Absent leaves the
-    /// row off rather than naming an action the card cannot perform.
+    /// Open details for the recording or transcript folded into this picture.
+    /// Absent leaves the row off rather than naming an unwired action.
     var onOpenCompanion: (() -> Void)?
     /// Hand the recording to the system's share UI, as its own single item.
     /// The picture's `onShare` still shares the picture.
@@ -2597,6 +2595,7 @@ struct WorkboardSourceCard: View {
                     content.opacity(showsMenuAffordance ? 1 : 0)
                 }
         }
+        .workDeskMetadataControls(organizationActions)
         .contextMenu { cardMenuContent }
         #if os(macOS)
         .onHover { hovering in isHovering = hovering }
@@ -2647,10 +2646,7 @@ struct WorkboardSourceCard: View {
 
     /// The tile, and the decision about whether it is a control.
     ///
-    /// A card whose bytes are still arriving is not a control: it is NOT
-    /// wrapped in a button, so it carries no button trait and offers no
-    /// activation that would do nothing. Its availability line is the answer,
-    /// and the arrange actions stay reachable either way.
+    /// Opening details remains available while source bytes are still arriving.
     @ViewBuilder
     private var tileControl: some View {
         if let primaryAction {
@@ -2802,6 +2798,8 @@ struct WorkboardSourceCard: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Color.white)
                 .lineLimit(2)
+            WorkboardMaterialNotesIndicator(material: material)
+                .foregroundStyle(Color.white.opacity(0.85))
             if let label = face.availability {
                 Label(label, systemImage: availabilityGlyphName)
                     .font(.caption2)
@@ -2809,8 +2807,7 @@ struct WorkboardSourceCard: View {
                     .lineLimit(2)
                     .accessibilityHidden(true)
             }
-            if let organizationActions,
-               organizationActions.showsSource || (organizationActions.showsLocation && organizationActions.project != nil) {
+            if let organizationActions, organizationActions.showsMetadata {
                 WorkDeskMaterialLocation(actions: organizationActions)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
@@ -2965,7 +2962,8 @@ struct WorkboardSourceCard: View {
             let id = companion.id
             let load = loadCompanionPayload
             companionPlayer.toggle { try await load(id) }
-        case .openRecording:
+        case .openRecording, .openTranscript:
+            companionPlayer.deactivate()
             onOpenCompanion?()
         case .shareRecording:
             onShareCompanion?()
@@ -2982,7 +2980,7 @@ struct WorkboardSourceCard: View {
     }
 
     private var openAction: (() -> Void)? {
-        guard permittedActions.contains(.open) else { return nil }
+        guard permittedActions.contains(.details) else { return nil }
         return { openMaterial() }
     }
 
@@ -3009,11 +3007,10 @@ struct WorkboardSourceCard: View {
         permittedActions.contains(.reattach) ? onReattach : nil
     }
 
-    /// The tile's single tap: open readable bytes, offer to bring back missing
-    /// ones, and do nothing at all while they are still arriving.
+    /// The tile opens details even while its original file is unavailable.
     private var primaryAction: (() -> Void)? {
         switch WorkboardCardActionPolicy.primaryAction(for: material.availability) {
-        case .open: return openAction
+        case .details, .open: return openAction
         case .reattach: return reattachAction
         case .play, .none: return nil
         }
@@ -3051,6 +3048,8 @@ struct WorkboardSourceCard: View {
             faceText
             Spacer(minLength: 0)
             availabilityLine
+            WorkboardMaterialNotesIndicator(material: material)
+                .foregroundStyle(AppColors.textSecondary)
             if let organizationActions {
                 WorkDeskMaterialLocation(actions: organizationActions)
             }
@@ -3390,8 +3389,8 @@ struct WorkboardSourceCard: View {
             boardPosition: boardPosition,
             boardCount: boardCount
         ))
-        if let actions = organizationActions, actions.showsLocation, let project = actions.project {
-            return summary + Text(verbatim: ", " + project.title)
+        if let actions = organizationActions, !actions.accessibilityMetadata.isEmpty {
+            return summary + Text(verbatim: ", " + actions.accessibilityMetadata.joined(separator: ". "))
         }
         return summary
     }
@@ -3433,6 +3432,9 @@ enum WorkboardCardAccessibility {
             WorkboardCompanionBand.accessibilityKindLabel(for:)
         ) ?? material.kind.title)]
         parts.append(contentsOf: face.spokenParts)
+        if WorkboardMaterialNotesIndicator.isVisible(for: material) {
+            parts.append(String(localized: WorkboardMaterialNotesIndicator.title))
+        }
         // The recording's own slots, said once: the SAME deduplicated pair the
         // band draws, so what is heard and what is seen cannot disagree.
         if let companion = material.companion {

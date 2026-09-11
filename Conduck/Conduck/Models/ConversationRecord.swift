@@ -18,6 +18,42 @@
 import Foundation
 import CoreData
 
+/// Explicit provenance of a reviewed Work input. The attachment sequence names
+/// its immutable history snapshot; nil means the material's words live in the
+/// user message. This never changes where the original material is filed.
+nonisolated struct WorkDeskMaterialInput: Codable, Hashable, Sendable {
+    let materialID: UUID
+    var attachmentSequence: Int? = nil
+}
+
+/// Written with the accepted user message in one save. An empty conversation,
+/// an ordinary later send, or a process death before acceptance cannot invent
+/// usage. Kept in the shared model file so Watch clones preserve provenance too.
+nonisolated struct WorkDeskMaterialUsage: Codable, Sendable {
+    let version: Int
+    let messageID: UUID
+    let inputs: [WorkDeskMaterialInput]
+
+    init(messageID: UUID, inputs: [WorkDeskMaterialInput]) {
+        version = 1
+        self.messageID = messageID
+        var seen = Set<UUID>()
+        self.inputs = inputs.filter { seen.insert($0.materialID).inserted }
+    }
+
+    init?(json: String?) {
+        guard let data = json?.data(using: .utf8),
+              let value = try? JSONDecoder().decode(Self.self, from: data),
+              value.version == 1, !value.inputs.isEmpty,
+              value.inputs.allSatisfy({ ($0.attachmentSequence ?? 0) >= 0 }) else { return nil }
+        self = value
+    }
+
+    func encoded() throws -> String {
+        String(decoding: try JSONEncoder().encode(self), as: UTF8.self)
+    }
+}
+
 /// Snapshot of a persisted conversation thread. The `sessionID` is the
 /// LOCAL conversation identity — never sent to the gateway under client-owned
 /// history; retained for store identity + a future gateway-side

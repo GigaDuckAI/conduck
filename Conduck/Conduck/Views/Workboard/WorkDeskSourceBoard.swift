@@ -101,7 +101,7 @@ struct WorkDeskSourceBoard: View {
                 return await workspace.organization.moveMaterials(positions: positions, expectedProjectID: projectID)
             },
             onMoveProject: { id, point in await workspace.organization.moveProject(id: id, to: point) },
-            onGroup: { ids, point in workspace.beginProject(materialIDs: ids, position: projectID == nil ? point : nil) },
+            onGroup: isHome ? { ids, point in workspace.beginProject(materialIDs: ids, position: point) } : nil,
             onAssign: { ids, projectID in
                 let saved = await workspace.organization.assign(materialIDs: ids, to: projectID)
                 if saved { workspace.selectedIDs.subtract(ids) }
@@ -130,44 +130,54 @@ struct WorkDeskSourceBoard: View {
         let visible = materials
         let visibleIDs = visible.map(\.id)
         let indices = Dictionary(visibleIDs.enumerated().map { ($0.element, $0.offset + 1) }, uniquingKeysWith: { first, _ in first })
-        return ScrollView {
-            LazyVStack(spacing: 12) {
-                ForEach(projects) { project in
-                    Button { workspace.selectScope(.project(project.record.id)) } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "folder.fill").foregroundStyle(AppColors.accent)
-                            Text(verbatim: project.record.title).font(.headline)
-                            Spacer()
-                            Text(verbatim: String(project.materialCount)).foregroundStyle(AppColors.textSecondary)
-                            Image(systemName: "chevron.right").font(.caption)
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    ForEach(projects) { project in
+                        Button { workspace.selectScope(.project(project.record.id)) } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "folder.fill").foregroundStyle(AppColors.accent)
+                                Text(verbatim: project.record.title).font(.headline)
+                                Spacer()
+                                Text(verbatim: String(project.materialCount)).foregroundStyle(AppColors.textSecondary)
+                                Image(systemName: "chevron.right").font(.caption)
+                            }
+                            .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 14))
+                        }.choiceCardButton(cornerRadius: 14)
+                    }
+                    if renderedLayout == .tiles {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 250), spacing: 16)], spacing: 16) {
+                            ForEach(visible) { material in
+                                sourceCard(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
+                                    .id(material.id)
+                                    .frame(height: WorkDeskCanvasGeometry.cardBodySize.height)
+                                    .overlay(RoundedRectangle(cornerRadius: 13).stroke(workspace.selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2)
+                                        .allowsHitTesting(false))
+                                    .overlay(alignment: .topLeading) { selectionIndicator(material) }
+                            }
                         }
-                        .padding(18).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 14))
-                    }.choiceCardButton(cornerRadius: 14)
-                }
-                if renderedLayout == .tiles {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 250), spacing: 16)], spacing: 16) {
+                    } else {
                         ForEach(visible) { material in
-                            sourceCard(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
-                                .frame(height: 190)
+                            sourceRow(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
+                                .id(material.id)
                                 .overlay(RoundedRectangle(cornerRadius: 13).stroke(workspace.selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2)
                                     .allowsHitTesting(false))
                                 .overlay(alignment: .topLeading) { selectionIndicator(material) }
                         }
                     }
-                } else {
-                    ForEach(visible) { material in
-                        sourceRow(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
-                            .overlay(RoundedRectangle(cornerRadius: 13).stroke(workspace.selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2)
-                                .allowsHitTesting(false))
-                            .overlay(alignment: .topLeading) { selectionIndicator(material) }
-                    }
                 }
+                .padding(16)
+                .frame(maxWidth: .infinity)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity)
+            .dismissesKeyboardOnScrollOrTap()
+            .onChange(of: workspace.materialRevealRequest?.id, initial: true) { _, _ in
+                guard let request = workspace.materialRevealRequest,
+                      visibleIDs.contains(request.materialID) else { return }
+                proxy.scrollTo(request.materialID, anchor: .top)
+                workspace.materialRevealRequest = nil
+            }
         }
-        .dismissesKeyboardOnScrollOrTap()
     }
 
     @ViewBuilder
@@ -225,13 +235,26 @@ struct WorkDeskSourceBoard: View {
     }
 
     private func selectionShield(_ material: WorkboardMaterialSnapshot) -> some View {
-        Button { workspace.toggleSelection(material.id) } label: {
+        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id)
+        return Button { workspace.toggleSelection(material.id) } label: {
             Color.clear.contentShape(Rectangle())
         }
         .choiceCardButton(cornerRadius: 14)
         .accessibilityLabel(Text(LocalizedStringResource("workdesk.material.select", defaultValue: "Select material")))
         .accessibilityValue(Text(verbatim: material.name))
         .accessibilityAddTraits(workspace.selectedIDs.contains(material.id) ? .isSelected : [])
+        .contextMenu {
+            if workspace.selectedIDs.contains(material.id), actions.canStartConversation {
+                Button(actions.conversationTitle, systemImage: "bubble.left.and.bubble.right") {
+                    actions.startConversation()
+                }
+            }
+        }
+        .accessibilityActions {
+            if workspace.selectedIDs.contains(material.id), actions.canStartConversation {
+                Button(actions.conversationTitle) { actions.startConversation() }
+            }
+        }
     }
 
     private func moveAction(_ material: WorkboardMaterialSnapshot, direction: WorkboardMoveDirection, position: Int, visibleIDs: [UUID]) -> (() -> Void)? {

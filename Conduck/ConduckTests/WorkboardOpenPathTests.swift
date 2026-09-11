@@ -3,17 +3,9 @@
 // ConduckTests
 // WorkboardOpenPathTests.swift
 //
-// The one rule every desk card obeys before anything is opened, played, shared
-// or repaired: what a card offers is decided by what its bytes actually are on
-// THIS device, and it is decided in one place.
-//
-// The two states that are not "readable bytes here" are the whole subject. A
-// card whose bytes are gone may be repaired and nothing else; a card whose bytes
-// are still arriving through the person's own iCloud may do NOTHING — opening it
-// would present a thumbnail in place of the material, and offering to reattach
-// it would ask for work that is already happening. These tests hold both the
-// policy that says so and the two places that must not be able to disagree with
-// it: the board card's tap funnel and the preview router.
+// Source bytes still gate native preview, sharing and playback. Material
+// details are independently available so a pending or missing file's notes
+// can be read and edited without opening a thumbnail as the original file.
 
 import UniformTypeIdentifiers
 import XCTest
@@ -22,93 +14,28 @@ import XCTest
 @MainActor
 final class WorkboardOpenPathTests: XCTestCase {
 
-    // MARK: - The policy
+    // MARK: - Metadata and source-byte permissions
 
-    /// Every availability state, and the exact set of things it permits. The
-    /// policy's own switch is exhaustive, so a new state cannot be added without
-    /// deciding this; these rows pin what the four existing ones decided.
-    func testEveryAvailabilityStateMapsToItsOwnActionSet() {
-        XCTAssertEqual(
-            WorkboardCardActionPolicy.actions(for: .available),
-            [.open, .play],
-            "bytes that are readable here permit both verbs"
-        )
-        XCTAssertEqual(
-            WorkboardCardActionPolicy.actions(for: .localOnly),
-            [.open, .play],
-            "bytes that never left the device are still bytes this device can read"
-        )
-        XCTAssertEqual(
-            WorkboardCardActionPolicy.actions(for: .unavailableOnThisDevice),
-            [.reattach],
-            "bytes only the person can bring back permit the repair and nothing else"
-        )
-        XCTAssertEqual(
-            WorkboardCardActionPolicy.actions(for: .syncPending),
-            [],
-            "bytes still arriving permit nothing: there is nothing to open and nothing to repair"
-        )
-
-        XCTAssertEqual(WorkboardCardActionPolicy.primaryAction(for: .available), .open)
-        XCTAssertEqual(WorkboardCardActionPolicy.primaryAction(for: .localOnly), .open)
-        XCTAssertEqual(
-            WorkboardCardActionPolicy.primaryAction(for: .unavailableOnThisDevice),
-            .reattach
-        )
-        XCTAssertNil(
-            WorkboardCardActionPolicy.primaryAction(for: .syncPending),
-            "a waiting card is not a control at all"
-        )
-
-        // Playback is a permission, never a tile's verb: an audio card owns its
-        // own transport and asks for the permission rather than being routed.
-        XCTAssertTrue(WorkboardCardActionPolicy.allows(.play, when: .available))
-        XCTAssertTrue(WorkboardCardActionPolicy.allows(.play, when: .localOnly))
-        XCTAssertFalse(WorkboardCardActionPolicy.allows(.play, when: .unavailableOnThisDevice))
-        XCTAssertFalse(WorkboardCardActionPolicy.allows(.play, when: .syncPending))
-    }
-
-    /// The tap funnel the desk canvas drives. A waiting card must reach neither
-    /// the preview router nor the file importer — before this rule existed it
-    /// reached the router, which opened the card's thumbnail in place of the
-    /// image it stands for.
-    func testASyncPendingCardInvokesNeitherOpenPlayNorReattach() {
-        var opened = 0
-        var reattached = 0
-
-        WorkboardCardActionPolicy.performPrimaryAction(
-            for: .syncPending,
-            open: { opened += 1 },
-            reattach: { reattached += 1 }
-        )
-
-        XCTAssertEqual(opened, 0, "a waiting card never reaches the preview router")
-        XCTAssertEqual(reattached, 0, "and is never offered a repair it does not need")
-        XCTAssertFalse(WorkboardCardActionPolicy.allows(.play, when: .syncPending))
-    }
-
-    func testAReadableCardOnlyOpensAndAMissingOneOnlyRepairs() {
-        for readable in [WorkboardMaterialAvailability.available, .localOnly] {
+    func testDetailsAreAvailableWhileSourceActionsRemainGated() {
+        let rows: [(WorkboardMaterialAvailability, Set<WorkboardCardAction>)] = [
+            (.available, [.details, .open, .play]),
+            (.localOnly, [.details, .open, .play]),
+            (.unavailableOnThisDevice, [.details, .reattach]),
+            (.syncPending, [.details])
+        ]
+        for (availability, expected) in rows {
+            XCTAssertEqual(WorkboardCardActionPolicy.actions(for: availability), expected)
+            XCTAssertEqual(WorkboardCardActionPolicy.primaryAction(for: availability), .details)
             var opened = 0
             var reattached = 0
             WorkboardCardActionPolicy.performPrimaryAction(
-                for: readable,
-                open: { opened += 1 },
-                reattach: { reattached += 1 }
+                for: availability, open: { opened += 1 }, reattach: { reattached += 1 }
             )
-            XCTAssertEqual(opened, 1, "\(readable) opens")
-            XCTAssertEqual(reattached, 0, "\(readable) is not damaged, so it is never repaired")
+            XCTAssertEqual(opened, 1, "Every material opens its notes and details")
+            XCTAssertEqual(reattached, 0, "Opening details never asks to replace a file")
+            XCTAssertEqual(WorkboardCardActionPolicy.allows(.open, when: availability), availability.isAvailable)
+            XCTAssertEqual(WorkboardCardActionPolicy.allows(.play, when: availability), availability.isAvailable)
         }
-
-        var opened = 0
-        var reattached = 0
-        WorkboardCardActionPolicy.performPrimaryAction(
-            for: .unavailableOnThisDevice,
-            open: { opened += 1 },
-            reattach: { reattached += 1 }
-        )
-        XCTAssertEqual(reattached, 1, "bytes that are gone are repaired")
-        XCTAssertEqual(opened, 0, "and never opened, because there is nothing behind the card")
     }
 
     // MARK: - The router boundary
@@ -137,7 +64,7 @@ final class WorkboardOpenPathTests: XCTestCase {
             WorkboardMaterialSnapshot(kind: .image, name: "Photo 2", availability: .available)
         ] }
 
-        await router.present(pending)
+        await router.openOriginal(pending)
         XCTAssertNil(router.materialPresentation, "a waiting card opens nothing")
         XCTAssertNil(
             router.filePreview.previewURL,
@@ -155,7 +82,7 @@ final class WorkboardOpenPathTests: XCTestCase {
             mimeType: "application/pdf",
             availability: .unavailableOnThisDevice
         )
-        await router.present(missing)
+        await router.openOriginal(missing)
         XCTAssertNil(router.materialPresentation)
         XCTAssertNil(router.filePreview.previewURL)
         let missingMessage = try XCTUnwrap(router.previewNotice?.message)
@@ -179,7 +106,7 @@ final class WorkboardOpenPathTests: XCTestCase {
             availability: .available
         )
 
-        await router.present(note)
+        await router.openOriginal(note)
 
         XCTAssertNil(router.previewNotice, "a readable card explains nothing")
         let presentation = try XCTUnwrap(router.materialPresentation)
@@ -206,7 +133,7 @@ final class WorkboardOpenPathTests: XCTestCase {
             )
             router.deskMaterials = { [photo] }
 
-            await router.present(photo)
+            await router.openOriginal(photo)
 
             XCTAssertNil(router.previewNotice, "\(availability) opens without explanation")
             let presentation = try XCTUnwrap(router.materialPresentation)
@@ -255,7 +182,7 @@ final class WorkboardOpenPathTests: XCTestCase {
             refreshed
         ] }
 
-        await router.present(tapped)
+        await router.openOriginal(tapped)
 
         XCTAssertNil(
             router.materialPresentation,
@@ -283,7 +210,7 @@ final class WorkboardOpenPathTests: XCTestCase {
             WorkboardMaterialSnapshot(kind: .image, name: "Photo 1", availability: .available)
         ] }
 
-        await router.present(photo)
+        await router.openOriginal(photo)
 
         XCTAssertNil(router.previewNotice)
         let presentation = try XCTUnwrap(router.materialPresentation)
@@ -294,61 +221,6 @@ final class WorkboardOpenPathTests: XCTestCase {
             gallery.pages.map(\.id), [photo.id], "it opens alone, on the card that was tapped"
         )
         XCTAssertEqual(gallery.startIndex, 0)
-    }
-
-    // MARK: - A click is never silent
-
-    /// The state that offers no primary action is the one state a card face has
-    /// to explain, and the explanation is derived from the same rule that
-    /// refuses the tap. Without this the only account of a dead tap is a 12pt
-    /// glyph and a sentence that exists in VoiceOver alone.
-    func testTheOneStateWithNoPrimaryActionSaysWhatItIsWaitingFor() {
-        XCTAssertEqual(
-            WorkboardCardActionPolicy.blockedReason(for: .syncPending),
-            .waitingForICloud,
-            "arriving bytes are the silent state, so they are the state that must speak"
-        )
-
-        for actionable in [
-            WorkboardMaterialAvailability.available,
-            .localOnly,
-            .unavailableOnThisDevice
-        ] {
-            XCTAssertNil(
-                WorkboardCardActionPolicy.blockedReason(for: actionable),
-                "\(actionable) does something when it is clicked, so it explains nothing"
-            )
-            XCTAssertNotNil(WorkboardCardActionPolicy.primaryAction(for: actionable))
-        }
-    }
-
-    /// The reason and the refusal cannot drift: every state that offers no
-    /// primary action carries a reason, and every state that offers one does
-    /// not. Stated as an equivalence rather than four rows so a state added
-    /// later cannot satisfy the rows above while being silent.
-    func testAReasonExistsForExactlyTheStatesThatRefuseEveryPrimaryAction() {
-        for availability in [
-            WorkboardMaterialAvailability.available,
-            .localOnly,
-            .unavailableOnThisDevice,
-            .syncPending
-        ] {
-            XCTAssertEqual(
-                WorkboardCardActionPolicy.blockedReason(for: availability) == nil,
-                WorkboardCardActionPolicy.primaryAction(for: availability) != nil,
-                "\(availability) must either do something or say why it does not"
-            )
-        }
-
-        // The words the card draws are the row the availability glyph already
-        // speaks, not a second sentence for the same fact.
-        XCTAssertEqual(
-            String(localized: WorkboardCardBlockedReason.waitingForICloud.label),
-            String(localized: LocalizedStringResource(
-                "workboard.material.syncPending",
-                defaultValue: "Waiting for iCloud…"
-            ))
-        )
     }
 
     // MARK: - Links
@@ -367,7 +239,7 @@ final class WorkboardOpenPathTests: XCTestCase {
             availability: .available
         )
 
-        await router.present(link)
+        await router.openOriginal(link)
 
         XCTAssertEqual(opened.map(\.absoluteString), ["https://example.com/a-page"])
         XCTAssertNil(router.materialPresentation, "the browser is the surface, not a sheet of ours")
@@ -394,7 +266,7 @@ final class WorkboardOpenPathTests: XCTestCase {
                 availability: refused
             )
 
-            await router.present(link)
+            await router.openOriginal(link)
 
             XCTAssertTrue(opened.isEmpty, "\(refused) reaches no browser")
             XCTAssertNil(router.materialPresentation)
@@ -408,7 +280,7 @@ final class WorkboardOpenPathTests: XCTestCase {
         var opened: [URL] = []
         router.openExternalURL = { opened.append($0) }
 
-        await router.present(WorkboardMaterialSnapshot(
+        await router.openOriginal(WorkboardMaterialSnapshot(
             kind: .link,
             name: "Broken",
             urlString: nil,

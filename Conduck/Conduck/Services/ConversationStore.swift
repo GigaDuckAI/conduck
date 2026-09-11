@@ -2107,6 +2107,8 @@ actor ConversationStore {
                 throw StoreError.conversationNotFound
             }
             let sourceTitleSnippet = source.value(forKey: "titleSnippet") as? String
+            let sourceWorkUsage = source.entity.attributesByName["workMaterialUsageJSON"] == nil ? nil
+                : WorkDeskMaterialUsage(json: source.value(forKey: "workMaterialUsageJSON") as? String)
             var projectID: UUID?
             #if !os(watchOS)
             if let sourceProjectID = source.value(forKey: "projectID") as? UUID,
@@ -2220,6 +2222,28 @@ actor ConversationStore {
                     laneCarries: laneCarries,
                     at: createdAt
                 )
+                if let sourceWorkUsage, role == "user", !text.isEmpty,
+                   sourceMessage.value(forKey: "id") as? UUID == sourceWorkUsage.messageID {
+                    // Cloned history still contains the reviewed input, except
+                    // files whose server lane could not carry to the new AI.
+                    // Sequence refers to the actual copied attachment, never
+                    // a filename or a material's current project membership.
+                    let copiedAttachments = message.value(forKey: "attachments") as? Set<NSManagedObject> ?? []
+                    let retainedInputs = sourceWorkUsage.inputs.filter { input in
+                        guard let sequence = input.attachmentSequence else { return true }
+                        return copiedAttachments.contains { attachment in
+                            guard (attachment.value(forKey: "sequence") as? NSNumber)?.intValue == sequence else { return false }
+                            if (attachment.value(forKey: "isServerReference") as? NSNumber)?.boolValue == true {
+                                return laneCarries && (attachment.value(forKey: "storedKey") as? String)?.isEmpty == false
+                            }
+                            return (attachment.value(forKey: "data") as? Data)?.isEmpty == false
+                        }
+                    }
+                    if !retainedInputs.isEmpty {
+                        let usage = WorkDeskMaterialUsage(messageID: messageID, inputs: retainedInputs)
+                        conversation.setValue(try usage.encoded(), forKey: "workMaterialUsageJSON")
+                    }
+                }
                 // The lane rides along ONLY when a key actually did. Writing it
                 // otherwise would leave a lane with nothing to own; omitting it
                 // when a key carried would strand that key unusable.
@@ -2993,7 +3017,8 @@ actor ConversationStore {
         /// file-server credential), and nil means UNKNOWN, which selects the
         /// row out of the automatic pass rather than closing it.
         outputBoxKey: String? = nil,
-        attachments: [AttachmentDraft] = []
+        attachments: [AttachmentDraft] = [],
+        workMaterialInputs: [WorkDeskMaterialInput]? = nil
     ) async throws -> MessageRecord {
         try await ensureLoaded()
 
@@ -3108,6 +3133,15 @@ actor ConversationStore {
 
             for draft in attachments {
                 Self.insertAttachment(draft, on: message, into: bgContext, at: now)
+            }
+
+            // Only the explicit Work send supplies provenance. This is the
+            // SAME commit as the accepted turn; a later ordinary send into an
+            // empty conversation left by a crash cannot acquire its materials.
+            if role == "user", let workMaterialInputs, !workMaterialInputs.isEmpty,
+               conversation.entity.attributesByName["workMaterialUsageJSON"] != nil {
+                let usage = WorkDeskMaterialUsage(messageID: id, inputs: workMaterialInputs)
+                conversation.setValue(try usage.encoded(), forKey: "workMaterialUsageJSON")
             }
 
             // Bump the parent's activity stamp so list sort reflects this turn,
@@ -4873,6 +4907,18 @@ actor ConversationStore {
     /// Gated on the isolated test store as well as the flag, so a signed suite
     /// run can never hold a publication open over the founder's real data.
     var workMaterialPublicationLockHoldForTesting: (@Sendable (UUID) async -> Void)?
+
+    /// Pauses the real reviewed deletion after its validation fetch and before
+    /// its deletion refetch. A second isolated SQLite coordinator can then
+    /// import a duplicate without obeying application advisory locks, as
+    /// CloudKit does. The closure is synchronous because it runs on the private
+    /// context queue; the test owns its bounded gate and releases it on failure.
+    var workDeskDeletionValidationHookForTesting: (@Sendable () -> Void)?
+
+    func _setWorkDeskDeletionValidationHookForTesting(_ hook: (@Sendable () -> Void)?) {
+        guard isIsolatedTestStore else { return }
+        workDeskDeletionValidationHookForTesting = hook
+    }
 
     func _setWorkMaterialPublicationLockHoldForTesting(
         _ hold: (@Sendable (UUID) async -> Void)?

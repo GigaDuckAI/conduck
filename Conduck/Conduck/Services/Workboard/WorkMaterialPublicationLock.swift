@@ -102,8 +102,18 @@ nonisolated struct WorkMaterialPublicationLock: Sendable {
     /// -aware: a cancelled task stops waiting and throws rather than holding a
     /// capture open for a lock it will never use.
     func acquire(materialID: UUID) async throws -> Hold {
+        try await acquire(filename: "\(materialID.uuidString).lock")
+    }
+
+    /// Project membership and a reviewed project deletion use a separate name
+    /// from material identities. Always acquire material holds before this one.
+    func acquireOrganization() async throws -> Hold {
+        try await acquire(filename: "desk-organization.lock")
+    }
+
+    private func acquire(filename: String) async throws -> Hold {
         try Task.checkCancellation()
-        let descriptor = try openDescriptor(for: materialID)
+        let descriptor = try openDescriptor(filename: filename)
         while true {
             if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
                 return Hold(descriptor: descriptor)
@@ -125,12 +135,12 @@ nonisolated struct WorkMaterialPublicationLock: Sendable {
     /// The lock file for one material. `O_CLOEXEC` so a hold is never inherited
     /// by a child process this one spawns, which would keep the lock alive past
     /// the holder's own death.
-    private func openDescriptor(for materialID: UUID) throws -> Int32 {
+    private func openDescriptor(filename: String) throws -> Int32 {
         try? FileManager.default.createDirectory(
             at: directoryURL,
             withIntermediateDirectories: true
         )
-        let url = directoryURL.appendingPathComponent("\(materialID.uuidString).lock")
+        let url = directoryURL.appendingPathComponent(filename)
         let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
             guard let path else { return -1 }
             return open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)

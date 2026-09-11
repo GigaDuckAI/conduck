@@ -100,12 +100,32 @@ nonisolated struct WorkDeskPositionSeed: Sendable, Hashable {
     var isHome: Bool = false
 }
 
+/// The exact project and materials shown by a deletion confirmation. The store
+/// revalidates every member before either choice writes anything; a newly
+/// arrived file is never silently added to an already-reviewed deletion.
+nonisolated struct WorkDeskProjectDeletionReview: Identifiable, Sendable, Equatable {
+    let id: UUID
+    let projectID: UUID
+    let projectTitle: String
+    let materialIDs: [UUID]
+    let visibleMaterialIDs: [UUID]
+    var materialCount: Int { visibleMaterialIDs.count }
+    let conversationCount: Int
+    let retainedPositions: [UUID: WorkDeskPoint]
+    let focusPoint: WorkDeskPoint
+    let project: WorkDeskProjectRecord
+    let assignedMaterialIDs: Set<UUID>
+    let placementTokens: [UUID: WorkDeskPlacementRecord]
+    let materialTokens: [UUID: WorkMaterialCanonicalOrder]
+}
+
 /// Intent-specific writes change only the fields the person acted on. Moving
 /// a card must not write an old copy of its project membership or pin state.
 nonisolated enum WorkDeskMutation: Sendable {
     case createProject(WorkDeskProjectRecord, materialIDs: [UUID])
     case updateProject(id: UUID, title: String, brief: String, preferredGatewayRef: String?, expectedUpdatedAt: Date? = nil)
     case deleteProject(id: UUID)
+    case deleteReviewedProject(WorkDeskProjectDeletionReview, deleteMaterials: Bool)
     case assign(materialIDs: [UUID], projectID: UUID?)
     case moveMaterial(id: UUID, position: WorkDeskPoint?)
     /// A selected group moves only while every member still belongs to the
@@ -128,11 +148,12 @@ nonisolated enum WorkDeskStoreError: Error, Equatable, LocalizedError {
     case contentTooLong
     case identifierCollision
     case staleProject
+    case staleProjectDeletion
 
     var errorDescription: String? {
         switch self {
         case .projectNotFound:
-            String(localized: "workdesk.error.projectMissing", defaultValue: "That project is no longer available. Your ideas are still on the desk.")
+            String(localized: "workdesk.error.projectMissing", defaultValue: "That project is no longer available.")
         case .materialNotFound:
             String(localized: "workdesk.error.materialMissing", defaultValue: "An item has changed or been removed. Refresh the desk and try again.")
         case .materialMoved:
@@ -145,6 +166,8 @@ nonisolated enum WorkDeskStoreError: Error, Equatable, LocalizedError {
             String(localized: "workdesk.error.conflict", defaultValue: "The desk changed. Try that action again.")
         case .staleProject:
             String(localized: "workdesk.error.projectChanged", defaultValue: "This project changed while you were editing. Reopen it to use the latest version.")
+        case .staleProjectDeletion:
+            String(localized: "workdesk.error.deletionChanged", defaultValue: "This project or its materials changed. Review the deletion again.")
         }
     }
 }

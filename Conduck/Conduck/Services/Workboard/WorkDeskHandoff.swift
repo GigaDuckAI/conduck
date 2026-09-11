@@ -74,6 +74,7 @@ enum WorkDeskHandoffPolicy {
         lhs.id == rhs.id && lhs.revision == rhs.revision && lhs.kind == rhs.kind
             && lhs.projectResultKind == rhs.projectResultKind
             && lhs.name == rhs.name && lhs.textContent == rhs.textContent
+            && lhs.annotation == rhs.annotation
             && lhs.urlString == rhs.urlString && lhs.mimeType == rhs.mimeType
             && lhs.byteCount == rhs.byteCount
     }
@@ -113,6 +114,9 @@ enum WorkDeskHandoffPolicy {
             if let text = material.textContent, !text.isEmpty { content += "\n\(text)" }
             if let link = material.urlString, !link.isEmpty { content += "\n\(link)" }
             if needsBytes(material) { content += "\n[Attached material]" }
+            if let annotation = material.annotation?.trimmingCharacters(in: .whitespacesAndNewlines), !annotation.isEmpty {
+                content += "\nYour notes:\n\(annotation)"
+            }
             sections.append(content)
         }
         return sections.filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -140,6 +144,16 @@ struct WorkDeskPreparedHandoff: Identifiable, Sendable {
     let files: [WorkDeskPreparedFile]
     var gatewayName: String { connection.option.name }
     var attachmentNames: [String] { files.map { $0.snapshot.filename } }
+    var materialInputs: [WorkDeskMaterialInput] {
+        var sequence = 0
+        return materials.map { material in
+            guard WorkDeskHandoffPolicy.needsBytes(material) else {
+                return WorkDeskMaterialInput(materialID: material.id)
+            }
+            defer { sequence += 1 }
+            return WorkDeskMaterialInput(materialID: material.id, attachmentSequence: sequence)
+        }
+    }
     var textAttachments: [(name: String, text: String)] {
         files.compactMap {
             if case .text(let text, _) = $0.content { return ($0.snapshot.filename, text) }
@@ -159,7 +173,7 @@ final class WorkDeskHandoff {
         var removeUpload: @MainActor (String, SettingsManager.FileTransferSnapshot) async -> Void
         var createConversation: @MainActor (UUID, RemoteAgentRef, UUID?, String?) async throws -> Void
         var removeConversation: @MainActor (UUID) async -> Void
-        var submit: @MainActor (UUID, String, [PendingAttachment], RemoteAgentRef, String?, SettingsManager.RemoteAgentSnapshot) async -> Bool
+        var submit: @MainActor (UUID, String, [PendingAttachment], RemoteAgentRef, String?, SettingsManager.RemoteAgentSnapshot, [WorkDeskMaterialInput]) async -> Bool
 
         static func live(conversationResolver: WorkDeskConversationResolver) -> Self {
             Self(
@@ -191,7 +205,7 @@ final class WorkDeskHandoff {
                     _ = try await ConversationStore.shared.createConversation(id: id, backend: ref.rawString, projectID: projectID, title: title)
                 },
                 removeConversation: { try? await ConversationStore.shared.deleteConversation(id: $0) },
-                submit: { id, prompt, attachments, ref, laneID, agent in
+                submit: { id, prompt, attachments, ref, laneID, agent, materialInputs in
                     #if os(macOS)
                     // The window's Stop control and send lock must address the
                     // SAME live VM that owns this request. A private VM would
@@ -203,7 +217,7 @@ final class WorkDeskHandoff {
                     #else
                     let viewModel = conversationResolver.resolve(id) ?? ConversationDetailViewModel(conversationID: id)
                     #endif
-                    return await viewModel.submitUserTurnAwaitingLocalAcceptance(prompt, attachments: attachments, expectedRef: ref, expectedFileLaneID: laneID, expectedGatewaySnapshot: agent)
+                    return await viewModel.submitUserTurnAwaitingLocalAcceptance(prompt, attachments: attachments, expectedRef: ref, expectedFileLaneID: laneID, expectedGatewaySnapshot: agent, workMaterialInputs: materialInputs)
                 }
             )
         }
@@ -317,7 +331,7 @@ final class WorkDeskHandoff {
             try await validateConnection(packet.connection)
             try await dependencies.createConversation(packet.id, packet.connection.option.ref, packet.projectID, packet.taskTitle)
             conversationCreated = true
-            let accepted = await dependencies.submit(packet.id, packet.prompt, attachments, packet.connection.option.ref, packet.connection.files?.durableLaneID, packet.connection.agent)
+            let accepted = await dependencies.submit(packet.id, packet.prompt, attachments, packet.connection.option.ref, packet.connection.files?.durableLaneID, packet.connection.agent, packet.materialInputs)
             guard accepted else { throw WorkDeskHandoffError.submissionRefused }
             acceptedConversationID = packet.id
             packet.reclaim()

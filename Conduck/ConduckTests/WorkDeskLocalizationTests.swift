@@ -36,7 +36,7 @@ final class WorkDeskLocalizationTests: XCTestCase {
             "workdesk.search": "Find an idea or file",
             "workdesk.select": "Select",
             "workdesk.select.all": "Select all",
-            "workdesk.layout.desk": "Canvas",
+            "workdesk.layout.desk": "Desk",
             "workdesk.group": "Create project",
             "workdesk.move": "Move to",
             "workdesk.conversation.new": "New conversation…",
@@ -142,7 +142,7 @@ final class WorkDeskLocalizationTests: XCTestCase {
         let scope = compiledValue(for: "workdesk.all", bundle: bundle)
         let layout = compiledValue(for: "workdesk.layout.desk", bundle: bundle)
         XCTAssertEqual(scope, "All materials")
-        XCTAssertEqual(layout, "Canvas")
+        XCTAssertEqual(layout, "Desk")
         XCTAssertNotEqual(layout, scope)
     }
 

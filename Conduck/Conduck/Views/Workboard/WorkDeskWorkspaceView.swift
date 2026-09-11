@@ -4,7 +4,8 @@
 // on phones. Search stays in that navigation rail so the canvas remains a desk;
 // a compact picker submits its query back to the same global result surface.
 // All materials is home; projects focus the same collection. Only the explicit
-// brief sheet can create a conversation; deleting a project only ungroups it.
+// brief sheet can create a conversation. Deletion reviews an immutable set of
+// materials and offers to keep them together or remove them from Work.
 
 import SwiftUI
 
@@ -96,6 +97,13 @@ struct WorkDeskWorkspaceView: View {
         .onDisappear { workspace.suspend() }
         .onChange(of: item.materials) { _, _ in workspace.reconcile(materials: item.materials) }
         .onChange(of: workspace.search) { _, _ in workspace.reconcile(materials: item.materials) }
+        .onChange(of: workspace.conversationSelectionRequest?.id) { _, _ in
+            guard let request = workspace.conversationSelectionRequest else { return }
+            workspace.conversationSelectionRequest = nil
+            guard request.projectID == workspace.currentProject?.id else { return }
+            workspace.beginConversation(materialIDs: request.materialIDs, materials: item.materials,
+                resolver: effectiveConversationResolver)
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active && isActive { Task { await reloadOrganization(reconcileResults: true) } }
         }
@@ -155,6 +163,23 @@ struct WorkDeskWorkspaceView: View {
                 }
             }
         }
+        .sheet(item: Binding(
+            get: { isActive ? workspace.projectDeletionReview : nil },
+            set: { if isActive { workspace.projectDeletionReview = $0 } }
+        )) { review in
+            WorkDeskProjectDeletionSheet(review: review, organization: workspace.organization) { kept in
+                workspace.finishProjectDeletion(review, keptMaterials: kept, materials: item.materials)
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { isActive && workspace.materialUsePickerID != nil },
+            set: { if !$0 { workspace.materialUsePickerID = nil } }
+        )) {
+            if let materialID = workspace.materialUsePickerID {
+                WorkDeskMaterialUsesSheet(workspace: workspace, materialID: materialID,
+                    materialName: item.materials.first(where: { $0.id == materialID })?.name ?? "")
+            }
+        }
         .sheet(isPresented: Binding(
             get: { isActive && workspace.preparingProjectID != nil },
             set: { if isActive && !$0 { workspace.preparingProjectID = nil } }
@@ -164,6 +189,7 @@ struct WorkDeskWorkspaceView: View {
                let draft = workspace.briefDrafts[id] {
                 WorkDeskBriefHost(project: project,
                     materials: item.materials.filter { workspace.organization.projectID(for: $0.id) == id },
+                    availableMaterials: item.materials,
                     workspace: workspace,
                     draft: draft,
                     onOpenConversation: { conversationID in
@@ -176,7 +202,7 @@ struct WorkDeskWorkspaceView: View {
                 )
             } else {
                 VStack(spacing: 16) {
-                    Text(LocalizedStringResource("workdesk.project.unavailable", defaultValue: "This project is no longer available. Your materials are still in All materials."))
+                    Text(LocalizedStringResource("workdesk.project.unavailable", defaultValue: "This project is no longer available."))
                     Button(LocalizedStringResource("common.done", defaultValue: "Done")) { workspace.preparingProjectID = nil }
                         .buttonStyle(.bordered)
                 }.padding(24)
@@ -199,7 +225,7 @@ struct WorkDeskWorkspaceView: View {
         }
         .alert(Text(LocalizedStringResource("workdesk.update.failed", defaultValue: "Couldn’t update the desk")),
                isPresented: Binding(
-                get: { isActive && workspace.organization.errorMessage != nil && workspace.projectEditor == nil && workspace.preparingProjectID == nil },
+                get: { isActive && workspace.organization.errorMessage != nil && workspace.projectEditor == nil && workspace.preparingProjectID == nil && workspace.projectDeletionReview == nil },
                 set: { if !$0 { workspace.organization.errorMessage = nil } }
                )) {
             Button(LocalizedStringResource("common.ok", defaultValue: "OK")) {
@@ -207,25 +233,6 @@ struct WorkDeskWorkspaceView: View {
             }
         } message: {
             Text(verbatim: workspace.organization.errorMessage ?? "")
-        }
-        .confirmationDialog(
-            Text(LocalizedStringResource("workdesk.project.delete.title", defaultValue: "Ungroup this project?")),
-            isPresented: Binding(
-                get: { isActive && workspace.deletingProjectID != nil },
-                set: { if !$0 { workspace.deletingProjectID = nil } }
-            ), titleVisibility: .visible
-        ) {
-            Button(LocalizedStringResource("workdesk.project.ungroup", defaultValue: "Ungroup Project"), role: .destructive) {
-                guard let id = workspace.deletingProjectID else { return }
-                workspace.deletingProjectID = nil
-                Task {
-                    if await workspace.organization.deleteProject(id: id) {
-                        workspace.selectScope(.all)
-                    }
-                }
-            }
-        } message: {
-            Text(LocalizedStringResource("workdesk.project.delete.message", defaultValue: "Its ideas and files will stay in All materials. Nothing is deleted."))
         }
     }
 
@@ -246,8 +253,9 @@ struct WorkDeskWorkspaceView: View {
     }
 
     /// Project actions and collection tools occupy separate, quiet rows.
-    /// Selecting materials organizes them; only the conversation sheet chooses
-    /// what leaves the device. Compact windows retain a named primary action.
+    /// Selection offers organization and an explicitly counted conversation
+    /// draft; the review sheet still owns what leaves the device. Compact
+    /// windows retain a named primary action.
     private func header(isCompact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             ViewThatFits(in: .horizontal) {
@@ -445,8 +453,8 @@ struct WorkDeskWorkspaceView: View {
                 Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
                     workspace.editProject(project)
                 }
-                Button(LocalizedStringResource("workdesk.project.ungroup", defaultValue: "Ungroup Project"), systemImage: "rectangle.stack.badge.minus") {
-                    workspace.deletingProjectID = project.id
+                Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {
+                    workspace.requestProjectDeletion(project.id)
                 }
             }
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
@@ -459,16 +467,27 @@ struct WorkDeskWorkspaceView: View {
             HStack(spacing: 12) {
                 Text(LocalizedStringResource("workdesk.selected.count", defaultValue: "\(workspace.selectedIDs.count) selected"))
                     .font(.caption.monospacedDigit())
-                Button(LocalizedStringResource("workdesk.group", defaultValue: "Create project"), systemImage: "folder.badge.plus") {
-                    workspace.beginProject(materialIDs: item.materials.map(\.id).filter { workspace.selectedIDs.contains($0) })
-                }.buttonStyle(.bordered).disabled(workspace.selectedIDs.isEmpty)
+                if workspace.currentProject != nil && !workspace.isSearching {
+                    Button(WorkDeskMaterialConversationCopy.title(count: workspace.selectedIDs.count),
+                           systemImage: "bubble.left.and.bubble.right") {
+                        workspace.beginConversation(materialIDs: workspace.selectedIDs, materials: item.materials,
+                            resolver: effectiveConversationResolver)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(workspace.selectedIDs.isEmpty)
+                    .accessibilityIdentifier("workdesk-selection-new-conversation")
+                } else if workspace.scope == .all {
+                    Button(LocalizedStringResource("workdesk.group", defaultValue: "Create project"), systemImage: "folder.badge.plus") {
+                        workspace.beginProject(materialIDs: workspace.visibleMaterials(in: item.materials).map(\.id).filter { workspace.selectedIDs.contains($0) })
+                    }.buttonStyle(.bordered).disabled(workspace.selectedIDs.isEmpty)
+                }
                 Menu {
                     if workspace.selectedIDs.contains(where: { workspace.organization.projectID(for: $0) != nil }) {
                         Button(LocalizedStringResource("workdesk.removeFromProject", defaultValue: "Remove from project")) {
                             Task { await workspace.assignSelection(to: nil, materials: item.materials) }
                         }
                     }
-                    ForEach(workspace.organization.projects) { project in
+                    ForEach(workspace.organization.projects.filter { workspace.isSearching || $0.id != workspace.currentProject?.id }) { project in
                         Button { Task { await workspace.assignSelection(to: project.id, materials: item.materials) } }
                         label: { Text(verbatim: project.title) }
                     }
@@ -549,7 +568,9 @@ struct WorkDeskWorkspaceView: View {
             }
             .contextMenu {
                 Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project")) { workspace.editProject(project) }
-                Button(LocalizedStringResource("workdesk.project.ungroup", defaultValue: "Ungroup Project")) { workspace.deletingProjectID = project.id }
+                Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…")) {
+                    workspace.requestProjectDeletion(project.id)
+                }
             }
             if expanded {
                 ForEach(conversations) { conversation in
@@ -662,6 +683,7 @@ private struct WorkDeskProjectEditor: View {
 private struct WorkDeskBriefHost: View {
     let project: WorkDeskProjectRecord
     let materials: [WorkboardMaterialSnapshot]
+    let availableMaterials: [WorkboardMaterialSnapshot]
     let workspace: WorkDeskWorkspaceState
     let draft: WorkDeskBriefDraft
     let onOpenConversation: (UUID) -> Void
@@ -669,7 +691,12 @@ private struct WorkDeskBriefHost: View {
     var body: some View {
         WorkDeskBriefView(projectID: project.id, title: project.title,
             initialBrief: project.brief, preferredGatewayRef: project.preferredGatewayRef,
-            materials: materials, draft: draft,
+            materials: materials, availableMaterials: availableMaterials,
+            materialProjectNames: Dictionary(uniqueKeysWithValues: availableMaterials.compactMap { material in
+                guard let projectID = workspace.organization.projectID(for: material.id),
+                      let project = workspace.organization.project(id: projectID) else { return nil }
+                return (material.id, project.title)
+            }), draft: draft,
             onSave: { brief, gateway in
                 let saved = await workspace.organization.updateProject(id: project.id, title: project.title,
                     brief: brief, preferredGatewayRef: gateway,

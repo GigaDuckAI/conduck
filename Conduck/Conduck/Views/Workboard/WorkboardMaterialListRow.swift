@@ -88,6 +88,7 @@ struct WorkboardMaterialListRow: View {
             }
             .padding(.trailing, 8)
         }
+        .workDeskMetadataControls(organizationActions)
         // The recording's own control, over the picture it belongs to. It is a
         // sibling of the row's button rather than content inside it, because a
         // control nested in a button's label never receives the tap — and the
@@ -235,6 +236,8 @@ struct WorkboardMaterialListRow: View {
 
     private var metadata: some View {
         VStack(alignment: .leading, spacing: 3) {
+            WorkboardMaterialNotesIndicator(material: material)
+                .foregroundStyle(AppColors.textSecondary)
             if let organizationActions {
                 WorkDeskMaterialLocation(actions: organizationActions)
             }
@@ -289,11 +292,11 @@ struct WorkboardMaterialListRow: View {
                 Label(transportTitle, systemImage: transportSymbol)
             }
         }
-        if WorkboardCardActionPolicy.allows(.open, when: material.availability) {
+        if WorkboardCardActionPolicy.allows(.details, when: material.availability) {
             Button(action: openMaterial) {
                 Label(LocalizedStringResource("workboard.material.open", defaultValue: "Open"), systemImage: "arrow.up.forward.app")
             }
-            if let onShare {
+            if WorkboardCardActionPolicy.allows(.open, when: material.availability), let onShare {
                 Button(action: onShare) {
                     Label(
                         WorkboardCompanionBand.shareTitle(hasCompanion: material.companion != nil),
@@ -349,11 +352,11 @@ struct WorkboardMaterialListRow: View {
         if let organizationActions {
             WorkDeskMaterialAccessibilityActions(actions: organizationActions)
         }
-        if WorkboardCardActionPolicy.allows(.open, when: material.availability) {
+        if WorkboardCardActionPolicy.allows(.details, when: material.availability) {
             if material.kind == .audio {
                 Button(LocalizedStringResource("workboard.material.open", defaultValue: "Open"), action: openMaterial)
             }
-            if let onShare {
+            if WorkboardCardActionPolicy.allows(.open, when: material.availability), let onShare {
                 Button(
                     WorkboardCompanionBand.shareTitle(hasCompanion: material.companion != nil),
                     action: onShare
@@ -392,7 +395,7 @@ struct WorkboardMaterialListRow: View {
     private var primaryAction: (() -> Void)? {
         if material.kind == .audio, isPlayable { return toggleTransport }
         switch WorkboardCardActionPolicy.primaryAction(for: material.availability) {
-        case .open: return openMaterial
+        case .details, .open: return openMaterial
         case .reattach: return onReattach
         case .play, .none: return nil
         }
@@ -451,7 +454,9 @@ struct WorkboardMaterialListRow: View {
     private func performCompanionAction(_ action: WorkboardCompanionAction) {
         switch action {
         case .play, .pause, .cancelLoading: toggleTransport()
-        case .openRecording: onOpenCompanion?()
+        case .openRecording, .openTranscript:
+            player.deactivate()
+            onOpenCompanion?()
         case .shareRecording: onShareCompanion?()
         case .reattachRecording: onReattachCompanion?()
         }
@@ -539,6 +544,9 @@ struct WorkboardMaterialListRow: View {
             // first line was read out twice.
             parts.append(contentsOf: face.spokenParts)
         }
+        if WorkboardMaterialNotesIndicator.isVisible(for: material) {
+            parts.append(String(localized: WorkboardMaterialNotesIndicator.title))
+        }
         if boardCount > 0, boardPosition > 0 {
             parts.append(WorkboardCardAccessibility.boardPositionLabel(position: boardPosition, count: boardCount))
         }
@@ -547,8 +555,7 @@ struct WorkboardMaterialListRow: View {
 
     private var accessibilityValue: Text {
         var parts: [String] = []
-        if let organizationActions, organizationActions.showsLocation,
-           let project = organizationActions.project { parts.append(project.title) }
+        if let organizationActions { parts.append(contentsOf: organizationActions.accessibilityMetadata) }
         if let availabilityLabel { parts.append(String(localized: availabilityLabel)) }
         if let audioStatus { parts.append(String(localized: audioStatus)) }
         if hasTransport, player.duration > 0 { parts.append(clockText) }

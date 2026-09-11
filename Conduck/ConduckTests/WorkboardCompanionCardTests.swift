@@ -464,8 +464,9 @@ final class WorkboardCompanionCardTests: XCTestCase {
     /// readable here says nothing about whether the audio's bytes arrived, and
     /// a card that asked the picture would offer playback over nothing.
     ///
-    /// Negative control: gating on `material.availability` offers play, open and
-    /// share for a recording still arriving from iCloud — this fails.
+    /// Negative control: gating on the picture's availability offers playback
+    /// and sharing for recording bytes that have not arrived. Details remain
+    /// available so the companion's text and notes can still be edited.
     func testTheRecordingsOwnAvailabilityDecidesItsRows() {
         for availability in [WorkboardMaterialAvailability.syncPending, .unavailableOnThisDevice] {
             XCTAssertEqual(
@@ -475,7 +476,7 @@ final class WorkboardCompanionCardTests: XCTestCase {
                     hasOpenRecording: true,
                     hasShareRecording: true
                 ),
-                [],
+                [.openRecording],
                 "\(availability)"
             )
         }
@@ -505,8 +506,8 @@ final class WorkboardCompanionCardTests: XCTestCase {
                 hasShareRecording: true,
                 hasReattachRecording: true
             ),
-            [.reattachRecording],
-            "missing bytes are repaired, never opened or shared"
+            [.openRecording, .reattachRecording],
+            "missing source bytes keep metadata details and repair, but never playback or sharing"
         )
         // Bytes that are simply still arriving are not something to repair, and
         // readable bytes need no repair at all.
@@ -542,6 +543,7 @@ final class WorkboardCompanionCardTests: XCTestCase {
             WorkboardCompanionAction.play,
             .pause,
             .openRecording,
+            .openTranscript,
             .shareRecording,
             .reattachRecording
         ].map { String(localized: WorkboardCompanionBand.title(for: $0)) }
@@ -560,15 +562,10 @@ final class WorkboardCompanionCardTests: XCTestCase {
 
     // MARK: - A words-only companion
 
-    /// The founder's other card: a screenshot with WORDS folded into it offers
-    /// nothing about a file, because there is no file. Every row here names one
-    /// — play it, open it, share it, repair it — so a words-only companion
-    /// offers none of them at any availability and in any transport phase.
-    ///
-    /// Negative control: without the kind gate, `.available` words offer Play,
-    /// Open Recording and Share Recording — three controls that fail the moment
-    /// they are chosen, and the only report of that failure is silence.
-    func testAWordsOnlyCompanionOffersNoRecordingRowsAtAll() {
+    /// A transcript keeps its own details/edit route after folding. It must
+    /// never gain recording playback, sharing or repair controls, whatever
+    /// availability or stale player phase the parent card currently holds.
+    func testAWordsOnlyCompanionOffersItsOwnDetailsWithoutRecordingRows() {
         let availabilities: [WorkboardMaterialAvailability] = [
             .available, .localOnly, .syncPending, .unavailableOnThisDevice
         ]
@@ -587,10 +584,25 @@ final class WorkboardCompanionCardTests: XCTestCase {
                         hasShareRecording: true,
                         hasReattachRecording: true
                     ),
-                    [],
+                    [.openTranscript],
                     "\(availability) \(phase)"
                 )
             }
+        }
+    }
+
+    func testWordsWithoutAnOpenCallbackNeverOfferAnUnwiredAction() {
+        XCTAssertEqual(WorkboardCompanionBand.actions(for: words(), phase: .idle,
+            hasOpenRecording: false, hasShareRecording: true, hasReattachRecording: true), [])
+    }
+
+    func testEveryCardPresentationRoutesTranscriptDetailsToTheCompanion() throws {
+        for path in ["Conduck/Views/Workboard/WorkboardCaptureCanvas.swift",
+                     "Conduck/Views/Workboard/WorkboardMaterialListRow.swift"] {
+            let source = try RefusalLaneSource.source(at: path)
+            let action = try RefusalLaneSource.body(ofFunction: "performCompanionAction", in: source, path: path)
+            XCTAssertTrue(action.contains("case .openRecording, .openTranscript:"), path)
+            XCTAssertTrue(action.contains("onOpenCompanion?()"), path)
         }
     }
 
@@ -1035,19 +1047,28 @@ final class WorkboardCompanionCardTests: XCTestCase {
         let canvas = try RefusalLaneSource.source(at: Self.canvasPath)
         XCTAssertTrue(
             canvas.contains(
-                "guard permittedActions.contains(.open) else { return nil }\n"
+                "guard permittedActions.contains(.details) else { return nil }\n"
                     + "        return { openMaterial() }"
             ),
             "the tile opens through the handover, not through the raw callback"
         )
         XCTAssertFalse(
-            canvas.contains("permittedActions.contains(.open) ? onOpen : nil"),
+            canvas.contains("permittedActions.contains(.details) ? onOpen : nil"),
             "the tile must not hand back the presenting callback unguarded"
         )
         XCTAssertTrue(
             canvas.contains("companionPlayer.deactivate()\n        onOpen()"),
             "the handover deactivates before it presents"
         )
+        XCTAssertTrue(canvas.contains("case .openRecording, .openTranscript:\n            companionPlayer.deactivate()\n            onOpenCompanion?()"))
+        let list = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkboardMaterialListRow.swift")
+        XCTAssertTrue(list.contains("case .openRecording, .openTranscript:\n            player.deactivate()\n            onOpenCompanion?()"))
+        let audio = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkboardAudioCardView.swift")
+        let openDetails = try RefusalLaneSource.body(ofFunction: "openDetails", in: audio,
+            path: "Conduck/Views/Workboard/WorkboardAudioCardView.swift")
+        XCTAssertTrue(openDetails.contains("player.deactivate()\n        onOpen?()"))
+        XCTAssertEqual(audio.components(separatedBy: "action: openDetails").count - 1, 2,
+            "Both pointer and accessible audio open actions relinquish the board player")
 
         let row = try RefusalLaneSource.source(at: Self.rowPath)
         XCTAssertTrue(

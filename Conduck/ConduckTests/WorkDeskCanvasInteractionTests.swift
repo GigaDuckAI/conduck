@@ -326,6 +326,23 @@ final class WorkDeskCanvasInteractionTests: XCTestCase {
         XCTAssertFalse(card.contains("workdesk.canvas.groupDrop"), "A card-local drop hint disappears under the held card.")
     }
 
+    func testProjectCanvasOverlapsOnlyMoveCardsWhileAllMaterialsKeepsCreation() throws {
+        let path = "Conduck/Views/Workboard/WorkDeskCanvas.swift"
+        let source = try RefusalLaneSource.source(at: path)
+        let candidates = try RefusalLaneSource.body(ofFunction: "cacheDropCandidates", in: source, path: path)
+        XCTAssertTrue(candidates.contains("$0.isProject || onGroup != nil"),
+                      "No material overlap target or dwell hint may appear without a grouping action")
+        let finish = try RefusalLaneSource.body(ofFunction: "finishDrag", in: source, path: path)
+        XCTAssertTrue(finish.contains("hover.target?.isProject == true || onGroup != nil"),
+                      "A previously armed hover cannot group after the capability disappears")
+        XCTAssertTrue(finish.contains("commitMove(points, memberships: finished.memberships)"))
+        XCTAssertFalse(finish.contains("beginConversation"), "Dragging must never dispatch or prepare an AI request")
+        let board = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskSourceBoard.swift")
+        XCTAssertTrue(board.contains("onGroup: isHome ?"))
+        XCTAssertTrue(board.contains("workspace.beginProject(materialIDs: ids, position: point) } : nil"))
+        XCTAssertTrue(board.contains("actions.startConversation()"), "A selected card must retain its explicit context action")
+    }
+
     func testPendingCompletionRefreshesDropTargetsDuringAnotherDrag() throws {
         let path = "Conduck/Views/Workboard/WorkDeskCanvas.swift"
         let source = try RefusalLaneSource.source(at: path)

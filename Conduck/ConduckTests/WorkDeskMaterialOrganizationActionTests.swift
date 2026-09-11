@@ -104,10 +104,89 @@ final class WorkDeskMaterialOrganizationActionTests: XCTestCase {
         XCTAssertTrue(flag.didChange, "the menu must invalidate below an unchanged cached material preview")
         XCTAssertEqual(actions.project?.title, "Renamed elsewhere")
         XCTAssertTrue(actions.destinations.isEmpty)
-        workspace.selectScope(.project(project.id))
+        actions.openProject()
+        XCTAssertEqual(workspace.scope, .project(project.id))
         XCTAssertFalse(actions.showsLocation)
         workspace.search = "Renamed"
         XCTAssertTrue(actions.showsLocation)
+    }
+
+    func testProjectMenuPreparesSelectedSetWithoutCreatingAnotherProject() async throws {
+        let store = isolated.make()
+        let first = try await capture(in: store)
+        let second = try await capture(in: store)
+        let project = WorkDeskProjectRecord(title: "Existing project")
+        try await store.applyWorkDeskMutation(.createProject(project, materialIDs: [first.id, second.id]))
+        let organization = WorkDeskOrganization(store: store)
+        await organization.reload()
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        workspace.selectScope(.project(project.id))
+        workspace.selectedIDs = [first.id, second.id]
+        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: first.id)
+        XCTAssertFalse(actions.canCreateProject)
+        actions.createProject()
+        XCTAssertNil(workspace.projectEditor)
+        XCTAssertTrue(actions.canStartConversation)
+        XCTAssertEqual(actions.conversationMaterialIDs, [first.id, second.id])
+        actions.startConversation()
+        XCTAssertEqual(workspace.conversationSelectionRequest?.materialIDs, [first.id, second.id])
+        XCTAssertEqual(workspace.conversationSelectionRequest?.projectID, project.id)
+        XCTAssertNil(workspace.preparingProjectID, "The host must validate the current snapshot first")
+        XCTAssertEqual(organization.projects.map(\.id), [project.id])
+        XCTAssertEqual(actions.projectID, project.id)
+    }
+
+    func testUnselectedCardUsesOnlyItselfAndSearchCannotBorrowProjectContext() async throws {
+        let store = isolated.make()
+        let material = try await capture(in: store)
+        let project = WorkDeskProjectRecord(title: "Existing project")
+        try await store.applyWorkDeskMutation(.createProject(project, materialIDs: [material.id]))
+        let organization = WorkDeskOrganization(store: store)
+        await organization.reload()
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        workspace.selectScope(.project(project.id))
+        workspace.selectedIDs = [UUID()]
+        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id)
+        XCTAssertEqual(actions.conversationMaterialIDs, [material.id])
+        workspace.search = "Existing project"
+        XCTAssertFalse(actions.canStartConversation)
+        actions.startConversation()
+        XCTAssertNil(workspace.conversationSelectionRequest)
+        XCTAssertFalse(actions.canCreateProject)
+        workspace.selectScope(.all)
+        XCTAssertTrue(actions.canCreateProject)
+        XCTAssertFalse(actions.canStartConversation)
+    }
+
+    func testUsageCountsActualConversationsOnceForAFoldedCard() async throws {
+        let store = isolated.make()
+        let project = WorkDeskProjectRecord(title: "Current home")
+        _ = try await store.applyWorkDeskMutation(.createProject(project, materialIDs: []))
+        let words = WorkboardMaterialSnapshot(kind: .transcript, name: "Words")
+        let picture = WorkboardMaterialSnapshot(kind: .image, name: "Picture", companion: WorkboardCompanionSnapshot(words))
+        let first = try await store.createConversation(backend: "hermes", projectID: project.id, title: "Used both")
+        _ = try await store.appendMessage(role: "user", text: "Sent together", conversationID: first.id,
+            sourceDevice: "test", workMaterialInputs: [.init(materialID: picture.id), .init(materialID: words.id)])
+        let second = try await store.createConversation(backend: "openclaw", projectID: project.id, title: "Used words")
+        _ = try await store.appendMessage(role: "user", text: "Sent words", conversationID: second.id,
+            sourceDevice: "test", workMaterialInputs: [.init(materialID: words.id)])
+        _ = try await store.createConversation(backend: "hermes", projectID: project.id, title: "Did not use this card")
+        let workspace = WorkDeskWorkspaceState(organization: WorkDeskOrganization(store: store), conversationStore: store)
+        await workspace.organization.reload()
+        workspace.reconcile(materials: [picture])
+        await workspace.reloadProjectActivity()
+        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: picture.id)
+        XCTAssertEqual(Set(actions.uses.map(\.conversationID)), [first.id, second.id])
+        XCTAssertEqual(actions.uses.count, 2, "Picture and companion sent together describe one conversation")
+        actions.showUses()
+        XCTAssertEqual(workspace.materialUsePickerID, picture.id)
+        workspace.openRelatedConversation(first.id)
+        XCTAssertNil(workspace.materialUsePickerID)
+        XCTAssertEqual(workspace.scope, .project(project.id))
+        XCTAssertEqual(workspace.selectedConversationID, first.id)
+        try await store.deleteConversation(id: second.id)
+        await workspace.reloadProjectActivity()
+        XCTAssertEqual(actions.uses.map(\.conversationID), [first.id])
     }
 
     private func capture(in store: ConversationStore) async throws -> WorkMaterialRecord {

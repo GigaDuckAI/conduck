@@ -116,6 +116,9 @@ struct WorkboardCompanionSnapshot: Identifiable, Hashable, Sendable {
     var name: String
     var detail: String?
     var textContent: String?
+    var annotation: String?
+    /// Identifies original bytes independently of editable notes.
+    var sourceByteIdentity: String?
     var urlString: String?
     var mimeType: String?
     var thumbnailData: Data?
@@ -135,6 +138,8 @@ struct WorkboardCompanionSnapshot: Identifiable, Hashable, Sendable {
         self.name = material.name
         self.detail = material.detail
         self.textContent = material.textContent
+        self.annotation = material.annotation
+        self.sourceByteIdentity = material.sourceByteIdentity
         self.urlString = material.urlString
         self.mimeType = material.mimeType
         self.thumbnailData = material.thumbnailData
@@ -170,7 +175,9 @@ struct WorkboardCompanionSnapshot: Identifiable, Hashable, Sendable {
             cardSize: cardSize,
             attachedToMaterialID: attachedToMaterialID,
             createdAt: createdAt,
-            revision: revision
+            revision: revision,
+            annotation: annotation,
+            sourceByteIdentity: sourceByteIdentity
         )
     }
 }
@@ -181,16 +188,17 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
     var name: String
     var detail: String?
     var textContent: String?
+    var annotation: String?
+    /// Identifies original bytes independently of editable notes.
+    var sourceByteIdentity: String?
     var urlString: String?
     var mimeType: String?
     var thumbnailData: Data?
     var byteCount: Int64?
     var availability: WorkboardMaterialAvailability
     var sequence: Int
-    /// Presentation-only board footprint. It is deliberately absent from
-    /// `WorkboardEditDraft.contentFingerprint` and from every prompt packet:
-    /// resizing a card must never advance the owner revision, trip the
-    /// card's own content revision.
+    /// Presentation-only board footprint, absent from prompt packets and
+    /// material-content validation. Resizing never changes content revisions.
     var cardSize: WorkMaterialCardSize
     /// The picture this card names, exactly as the store holds it — RAW, and
     /// resolved by nobody but `WorkboardCompanionFold`. A recording whose
@@ -224,13 +232,17 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
         createdAt: Date = Date(),
         revision: Int64 = 0,
         companion: WorkboardCompanionSnapshot? = nil,
-        projectResultKind: WorkMaterialProjectResultKind? = nil
+        projectResultKind: WorkMaterialProjectResultKind? = nil,
+        annotation: String? = nil,
+        sourceByteIdentity: String? = nil
     ) {
         self.id = id
         self.kind = kind
         self.name = name
         self.detail = detail
         self.textContent = textContent
+        self.annotation = annotation
+        self.sourceByteIdentity = sourceByteIdentity
         self.urlString = urlString
         self.mimeType = mimeType
         self.thumbnailData = thumbnailData

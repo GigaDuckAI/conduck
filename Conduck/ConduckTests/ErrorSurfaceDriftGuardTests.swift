@@ -448,6 +448,9 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
         "Conduck/Views/Workboard/WorkboardView.swift": .notErrorDriven(
             reason: "Reloads the private LOCAL/CloudKit Workboard store after a read failure; it does not replay a gateway request."
         ),
+        "Conduck/Views/Workboard/WorkMaterialDetailsSheet.swift": .notErrorDriven(
+            reason: "Retries a local disposable export for the embedded file preview; it performs no network request and receives no AppError."
+        ),
         "Conduck/Views/Workboard/WorkDeskWorkspaceView.swift": .notErrorDriven(
             reason: "Refreshes local project conversation and result metadata after a store read failure; no gateway request is sent or retried."
         ),

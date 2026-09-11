@@ -233,6 +233,8 @@ nonisolated struct WorkMaterialDraft: Sendable {
     let title: String
     let caption: String
     let textContent: String?
+    /// User-written notes, independent of original content and file storage.
+    let annotation: String?
     let urlString: String?
     let filename: String?
     let mimeType: String?
@@ -281,13 +283,15 @@ nonisolated struct WorkMaterialDraft: Sendable {
         sourceDevice: String? = nil,
         cardSize: WorkMaterialCardSize = .standard,
         attachedToMaterialID: UUID? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        annotation: String? = nil
     ) {
         self.id = id
         self.kind = kind
         self.title = title
         self.caption = caption
         self.textContent = textContent
+        self.annotation = annotation
         self.urlString = urlString
         self.filename = filename
         self.mimeType = mimeType
@@ -347,7 +351,8 @@ nonisolated struct WorkMaterialDraft: Sendable {
             sourceDevice: sourceDevice,
             cardSize: cardSize,
             attachedToMaterialID: attachedToMaterialID,
-            createdAt: createdAt
+            createdAt: createdAt,
+            annotation: annotation
         )
     }
 
@@ -400,6 +405,7 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
     let title: String
     let caption: String
     let textContent: String?
+    let annotation: String?
     let urlString: String?
     let filename: String?
     let mimeType: String?
@@ -458,7 +464,8 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
         attachedToMaterialID: UUID? = nil,
         createdAt: Date,
         updatedAt: Date,
-        projectResultKind: WorkMaterialProjectResultKind? = nil
+        projectResultKind: WorkMaterialProjectResultKind? = nil,
+        annotation: String? = nil
     ) {
         self.id = id
         self.workItemID = workItemID
@@ -466,6 +473,7 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
         self.title = title
         self.caption = caption
         self.textContent = textContent
+        self.annotation = annotation
         self.urlString = urlString
         self.filename = filename
         self.mimeType = mimeType

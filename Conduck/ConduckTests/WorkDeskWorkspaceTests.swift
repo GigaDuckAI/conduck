@@ -9,6 +9,16 @@ import XCTest
 
 @MainActor
 final class WorkDeskWorkspaceTests: XCTestCase {
+    func testSearchFindsNotesOnMaterialsAndTheirCompanions() async {
+        let workspace = await makeWorkspace(.init())
+        let words = WorkboardMaterialSnapshot(kind: .transcript, name: "Words", annotation: "remember the deadline")
+        let image = WorkboardMaterialSnapshot(kind: .image, name: "Photo", companion: WorkboardCompanionSnapshot(words))
+        let file = WorkboardMaterialSnapshot(kind: .file, name: "Document", annotation: "deadline is Friday")
+        let unrelated = WorkboardMaterialSnapshot(kind: .note, name: "Unrelated")
+        workspace.search = "deadline"
+        XCTAssertEqual(workspace.visibleMaterials(in: [image, file, unrelated]).map(\.id), [image.id, file.id])
+    }
+
     func testWideSidebarButtonCollapsesAndExpandsTheProjectRail() async {
         let workspace = await makeWorkspace(.init())
         workspace.updateSidebarLayout(isInline: true)
@@ -249,6 +259,104 @@ final class WorkDeskWorkspaceTests: XCTestCase {
         let ids = await recorder.assignedIDs
         XCTAssertEqual(ids, [a.id])
         XCTAssertTrue(workspace.selectedIDs.isEmpty)
+    }
+
+    func testSelectionOpensPreparationWithExactlyChosenMaterialsAndRetainsTaskAndGateway() async throws {
+        let chosen = material("Chosen"), other = material("Other"), outside = material("Outside")
+        let project = WorkDeskProjectRecord(title: "Project", brief: "Standing context", preferredGatewayRef: "openclaw")
+        let workspace = await makeWorkspace(.init(projects: [project], placements: [
+            chosen.id: .init(materialID: chosen.id, projectID: project.id),
+            other.id: .init(materialID: other.id, projectID: project.id)
+        ]))
+        workspace.selectScope(.project(project.id))
+        workspace.isActive = true
+        let draft = workspace.briefDraft(for: project, resolver: .init())
+        draft.brief = "Keep my unfinished task"
+        draft.selectedGateway = .builtin(.hermes)
+
+        XCTAssertTrue(workspace.beginConversation(materialIDs: [chosen.id], materials: [chosen, other, outside], resolver: .init()))
+        XCTAssertEqual(workspace.preparingProjectID, project.id)
+        XCTAssertTrue(workspace.briefDrafts[project.id] === draft)
+        XCTAssertTrue(draft.isMaterialIncluded(chosen.id))
+        XCTAssertFalse(draft.isMaterialIncluded(other.id))
+        XCTAssertFalse(draft.isMaterialIncluded(outside.id))
+        XCTAssertFalse(draft.isMaterialIncluded(UUID()), "A later arrival must not silently expand the requested set")
+        XCTAssertEqual(draft.projectContext, "Standing context")
+        XCTAssertEqual(draft.brief, "Keep my unfinished task")
+        XCTAssertEqual(draft.selectedGateway, .builtin(.hermes))
+        XCTAssertNil(draft.handoff.prepared, "Selection opens editable preparation, never review or send")
+        XCTAssertNil(draft.handoff.acceptedConversationID)
+        XCTAssertFalse(draft.handoff.isSending)
+        XCTAssertEqual(workspace.organization.projectID(for: chosen.id), project.id)
+        XCTAssertNil(workspace.projectEditor)
+    }
+
+    func testMissingOrForeignSelectionIsRefusedWithoutShrinkingIt() async {
+        let chosen = material("Chosen"), foreign = material("Foreign")
+        let project = WorkDeskProjectRecord(title: "Project"), other = WorkDeskProjectRecord(title: "Other")
+        let workspace = await makeWorkspace(.init(projects: [project, other], placements: [
+            chosen.id: .init(materialID: chosen.id, projectID: project.id),
+            foreign.id: .init(materialID: foreign.id, projectID: other.id)
+        ]))
+        workspace.selectScope(.project(project.id))
+        workspace.isActive = true
+        for invalidID in [foreign.id, UUID()] {
+            XCTAssertFalse(workspace.beginConversation(materialIDs: [chosen.id, invalidID], materials: [chosen, foreign], resolver: .init()))
+            XCTAssertNil(workspace.preparingProjectID)
+            XCTAssertNil(workspace.briefDrafts[project.id])
+            XCTAssertNotNil(workspace.organization.errorMessage)
+        }
+    }
+
+    func testEmptyHiddenAndGlobalSearchSelectionsNeverOpenProjectPreparation() async {
+        let chosen = material("Chosen")
+        let project = WorkDeskProjectRecord(title: "Project")
+        let workspace = await makeWorkspace(.init(projects: [project], placements: [
+            chosen.id: .init(materialID: chosen.id, projectID: project.id)
+        ]))
+        workspace.selectScope(.project(project.id))
+        XCTAssertFalse(workspace.beginConversation(materialIDs: [chosen.id], materials: [chosen], resolver: .init()))
+        workspace.isActive = true
+        XCTAssertFalse(workspace.beginConversation(materialIDs: [], materials: [chosen], resolver: .init()))
+        workspace.search = "Chosen"
+        XCTAssertFalse(workspace.beginConversation(materialIDs: [chosen.id], materials: [chosen], resolver: .init()))
+        workspace.selectScope(.all)
+        XCTAssertFalse(workspace.beginConversation(materialIDs: [chosen.id], materials: [chosen], resolver: .init()))
+        XCTAssertNil(workspace.preparingProjectID)
+    }
+
+    func testSelectionDoesNotDisturbADraftWhileItsSaveIsInProgress() async {
+        let chosen = material("Chosen")
+        let project = WorkDeskProjectRecord(title: "Project", brief: "Stored context")
+        let workspace = await makeWorkspace(.init(projects: [project], placements: [
+            chosen.id: .init(materialID: chosen.id, projectID: project.id)
+        ]))
+        workspace.selectScope(.project(project.id))
+        workspace.isActive = true
+        let draft = workspace.briefDraft(for: project, resolver: .init())
+        draft.projectContext = "Context being saved"
+        draft.isSaving = true
+        XCTAssertFalse(workspace.beginConversation(materialIDs: [chosen.id], materials: [chosen], resolver: .init()))
+        XCTAssertEqual(draft.projectContext, "Context being saved")
+        XCTAssertNil(draft.selectedMaterialIDs)
+        XCTAssertNil(workspace.preparingProjectID)
+    }
+
+    func testMaterialMenuRequestIsFrozenAndNavigationCancelsIt() async throws {
+        let project = WorkDeskProjectRecord(title: "First"), second = WorkDeskProjectRecord(title: "Second")
+        let workspace = await makeWorkspace(.init(projects: [project, second]))
+        workspace.selectScope(.project(project.id))
+        let id = UUID()
+        workspace.requestConversation(materialIDs: [id])
+        let request = try XCTUnwrap(workspace.conversationSelectionRequest)
+        workspace.selectedIDs = [UUID()]
+        XCTAssertEqual(request.projectID, project.id)
+        XCTAssertEqual(request.materialIDs, [id])
+        workspace.selectScope(.project(second.id))
+        XCTAssertNil(workspace.conversationSelectionRequest)
+        workspace.requestConversation(materialIDs: [id])
+        workspace.search = "Global search"
+        XCTAssertNil(workspace.conversationSelectionRequest)
     }
 
     private func makeWorkspace(_ snapshot: WorkDeskOrganizationSnapshot) async -> WorkDeskWorkspaceState {

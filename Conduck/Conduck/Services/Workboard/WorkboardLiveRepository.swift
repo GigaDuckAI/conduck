@@ -275,7 +275,13 @@ final class WorkboardLiveRepository {
         _ record: WorkMaterialRecord,
         transientThumbnail: Data? = nil
     ) -> WorkboardMaterialSnapshot {
-        WorkboardMaterialSnapshot(
+        let sourceIdentity: String?
+        switch record.storageMode {
+        case .syncedPayload: sourceIdentity = record.contentHash.map { "hash:" + $0 }
+        case .localVault: sourceIdentity = record.localVaultKey.map { "vault:" + $0 }
+        case .metadataOnly: sourceIdentity = nil
+        }
+        return WorkboardMaterialSnapshot(
             id: record.id,
             kind: presentationKind(record),
             name: materialName(record),
@@ -294,7 +300,9 @@ final class WorkboardLiveRepository {
             attachedToMaterialID: record.attachedToMaterialID,
             createdAt: record.createdAt,
             revision: revision(for: record.updatedAt),
-            projectResultKind: record.projectResultKind
+            projectResultKind: record.projectResultKind,
+            annotation: record.annotation,
+            sourceByteIdentity: sourceIdentity
         )
     }
 

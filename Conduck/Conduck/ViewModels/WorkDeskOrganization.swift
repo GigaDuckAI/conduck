@@ -22,6 +22,7 @@ final class WorkDeskOrganization {
 
     @ObservationIgnored private let fetch: @Sendable () async throws -> WorkDeskOrganizationSnapshot
     @ObservationIgnored private let apply: @Sendable (WorkDeskMutation) async throws -> WorkDeskOrganizationSnapshot
+    @ObservationIgnored private let reviewDeletion: @Sendable (UUID) async throws -> WorkDeskProjectDeletionReview
     @ObservationIgnored private var mutationTail: Task<Bool, Never>?
     @ObservationIgnored private var pendingMutationCount = 0
     @ObservationIgnored private var generation: UInt64 = 0
@@ -30,16 +31,19 @@ final class WorkDeskOrganization {
     init(store: ConversationStore = .shared) {
         fetch = { try await store.fetchWorkDeskOrganization() }
         apply = { try await store.applyWorkDeskMutation($0) }
+        reviewDeletion = { try await store.reviewWorkDeskProjectDeletion(id: $0) }
     }
 
     /// Isolated behavior seam for delayed-load and failure tests. Production
     /// uses the store initializer so no alternate persistent store is exposed.
     init(
         fetch: @escaping @Sendable () async throws -> WorkDeskOrganizationSnapshot,
-        apply: @escaping @Sendable (WorkDeskMutation) async throws -> WorkDeskOrganizationSnapshot
+        apply: @escaping @Sendable (WorkDeskMutation) async throws -> WorkDeskOrganizationSnapshot,
+        reviewDeletion: @escaping @Sendable (UUID) async throws -> WorkDeskProjectDeletionReview = { _ in throw WorkDeskStoreError.projectNotFound }
     ) {
         self.fetch = fetch
         self.apply = apply
+        self.reviewDeletion = reviewDeletion
     }
 
     func projectID(for materialID: UUID) -> UUID? {
@@ -93,6 +97,23 @@ final class WorkDeskOrganization {
 
     @discardableResult
     func deleteProject(id: UUID) async -> Bool { await enqueue(.deleteProject(id: id)) }
+
+    func reviewProjectDeletion(id: UUID) async -> WorkDeskProjectDeletionReview? {
+        _ = await mutationTail?.value
+        do {
+            let review = try await reviewDeletion(id)
+            errorMessage = nil
+            return review
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    @discardableResult
+    func deleteProject(review: WorkDeskProjectDeletionReview, deleteMaterials: Bool) async -> Bool {
+        await enqueue(.deleteReviewedProject(review, deleteMaterials: deleteMaterials))
+    }
 
     @discardableResult
     func assign(materialIDs: [UUID], to projectID: UUID?) async -> Bool {

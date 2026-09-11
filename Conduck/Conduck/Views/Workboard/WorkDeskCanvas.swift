@@ -17,7 +17,9 @@ struct WorkDeskCanvas<CardContent: View>: View {
     let isSelecting: Bool
     let onMoveMaterials: ([UUID: WorkDeskPoint], [UUID: UUID?]) async -> Bool
     let onMoveProject: (UUID, WorkDeskPoint) async -> Bool
-    let onGroup: ([UUID], WorkDeskPoint) -> Void
+    /// Only All materials groups cards into a new project. A project's canvas
+    /// omits this action, so overlapping cards simply keep their positions.
+    let onGroup: (([UUID], WorkDeskPoint) -> Void)?
     let onAssign: ([UUID], UUID) async -> Bool
     let onSelect: (UUID) -> Void
     let onOpenProject: (UUID) -> Void
@@ -84,6 +86,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
                         refreshLayout()
                         revealDeskIfOffscreen()
                     } else { refreshLayout() }
+                    session.applyPendingReveal()
                 }
                 .onChange(of: materials.map(\.id), initial: true) { _, _ in refreshLayout() }
                 .onChange(of: projects.map(\.record), initial: true) { _, _ in refreshLayout() }
@@ -467,7 +470,9 @@ struct WorkDeskCanvas<CardContent: View>: View {
 
     private func cacheDropCandidates() {
         let excluded = Set(drag?.origins.keys.map { $0 } ?? [])
-        dropCandidates = visibleIDs.filter { !excluded.contains($0) }.map { id in
+        dropCandidates = visibleIDs.filter {
+            !excluded.contains($0) && ($0.isProject || onGroup != nil)
+        }.map { id in
             WorkDeskDropCandidate(id: id,
                 frame: WorkDeskCanvasGeometry.frame(at: currentPoint(id), bodySize: bodySize(for: id), scale: transform.scale),
                 layer: session.layer(for: id))
@@ -493,7 +498,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
         updateDrag(id: id, translation: translation)
         guard let finished = drag else { return }
         let points = livePositions
-        let target = hover.isReady ? hover.target : nil
+        let target = hover.isReady && (hover.target?.isProject == true || onGroup != nil) ? hover.target : nil
         let materialIDs = finished.origins.keys.filter { !$0.isProject }.map(\.id).sorted { $0.uuidString < $1.uuidString }
         session.raiseGroup(Array(finished.origins.keys), lead: id)
         edgePanTask?.cancel(); edgePanTask = nil
@@ -504,7 +509,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
             switch target {
             case .material(let value):
                 withAnimation(motion) { livePositions = [:] }
-                onGroup(materialIDs + [value], currentPoint(target))
+                onGroup?(materialIDs + [value], currentPoint(target))
             case .project(let projectID):
                 // Filing changes membership, not the home arrangement. Keep
                 // the original positions while the assignment commits.

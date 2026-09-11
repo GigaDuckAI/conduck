@@ -14,9 +14,25 @@ final class WorkDeskCanvasSession {
     var isInitialized = false
     var columns = 3
     var viewportSize: CGSize = .zero
+    private var pendingRevealFrames: [CGRect] = []
     private(set) var layerRevision = 0
     @ObservationIgnored private var layers: [WorkDeskCanvasItemID: Int] = [:]
     @ObservationIgnored private var nextLayer = 0
+
+    /// Deletion can retain a cluster while All materials is showing a list or
+    /// has never opened spatially. Keep the reveal until a real viewport exists.
+    func reveal(frames: [CGRect]) {
+        guard !frames.isEmpty else { return }
+        pendingRevealFrames = frames
+        applyPendingReveal()
+    }
+
+    func applyPendingReveal() {
+        guard !pendingRevealFrames.isEmpty, viewportSize.width > 0, viewportSize.height > 0 else { return }
+        transform = WorkDeskCanvasGeometry.fit(frames: pendingRevealFrames, viewport: viewportSize)
+        pendingRevealFrames = []
+        isInitialized = true
+    }
 
     /// A new project belongs to the part of the desk the person is looking at.
     /// Convert its visible center back to world coordinates at the current zoom.

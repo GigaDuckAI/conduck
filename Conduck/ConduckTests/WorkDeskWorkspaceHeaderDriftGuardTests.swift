@@ -2,7 +2,8 @@
 //
 // Structural guard for the Work project's two levels of controls. Layout and
 // selection belong to the materials row; starting a conversation belongs to
-// the project header. Responsive alternatives reuse the same named action.
+// the project header or an explicitly counted selection action. Responsive
+// alternatives reuse the same named action.
 // These source checks protect ownership and discoverability, not rendered fit
 // or pointer behavior. Mutation cases verify that each regression is rejected.
 
@@ -19,6 +20,7 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
         var menu: String
         var primary: String
         var layout: String
+        var selection: String
     }
 
     static func violations(_ source: Surfaces) -> [String] {
@@ -55,6 +57,13 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
         if !source.layout.contains("Text(renderedMode.title)") || source.layout.contains("if !compact") {
             found.append("The layout control must name the layout even in compact presentation")
         }
+        if !source.selection.contains("WorkDeskMaterialConversationCopy.title(count: workspace.selectedIDs.count)")
+            || !source.selection.contains("workspace.beginConversation(materialIDs: workspace.selectedIDs") {
+            found.append("Selected materials must open a counted conversation draft using their exact identifiers")
+        }
+        if !source.selection.contains("else if workspace.scope == .all") {
+            found.append("Creating a project from selected materials must remain an All materials action")
+        }
         return found
     }
 
@@ -73,7 +82,8 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
             actions: try property("materialActions"),
             menu: try RefusalLaneSource.body(ofFunction: "workspaceMenu", in: source, path: Self.path),
             primary: try property("newConversationButton"),
-            layout: try RefusalLaneSource.source(at: Self.layoutPath)
+            layout: try RefusalLaneSource.source(at: Self.layoutPath),
+            selection: try property("selectionBar")
         )
     }
 
@@ -88,7 +98,8 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
         actions: "WorkDeskLayoutControl() selectionControls",
         menu: "renameProject ungroupProject",
         primary: "Button {} label: { Text(LocalizedStringResource(key)) }",
-        layout: "Text(renderedMode.title)"
+        layout: "Text(renderedMode.title)",
+        selection: "WorkDeskMaterialConversationCopy.title(count: workspace.selectedIDs.count) workspace.beginConversation(materialIDs: workspace.selectedIDs) else if workspace.scope == .all"
     )
 
     func testValidatorAcceptsSeparateControlsWithNamedResponsiveAction() {
@@ -128,6 +139,12 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
     func testPlacingConversationActionAmongCollectionToolsIsRejected() {
         var changed = Self.valid
         changed.collection += " newConversationButton"
+        XCTAssertFalse(Self.violations(changed).isEmpty)
+    }
+
+    func testLosingTheExactSelectedMaterialActionIsRejected() {
+        var changed = Self.valid
+        changed.selection = "New conversation Create project"
         XCTAssertFalse(Self.violations(changed).isEmpty)
     }
 

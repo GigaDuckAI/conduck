@@ -24,6 +24,11 @@ final class WorkDeskBriefDraft {
     var brief: String
     var selectedGateway: RemoteAgentRef?
     var excludedIDs: Set<UUID> = []
+    /// A selected-material request is an explicit whitelist. Newly synced
+    /// cards stay unchecked until the person includes them in this request.
+    private(set) var selectedMaterialIDs: Set<UUID>?
+    private var selectedCompanionIDs: [UUID: UUID] = [:]
+    private(set) var additionalMaterialIDs: Set<UUID> = []
     var remoteResultIDs: Set<UUID> = []
     var projectResultIDs: Set<UUID> = []
     let handoff: WorkDeskHandoff
@@ -82,11 +87,90 @@ final class WorkDeskBriefDraft {
         handoff.discardPreparation()
     }
 
+    @discardableResult
+    func useOnlyMaterials(_ ids: Set<UUID>, materials: [WorkboardMaterialSnapshot] = []) -> Bool {
+        guard !ids.isEmpty, !isSaving, !handoff.isPreparing, !handoff.isSending else { return false }
+        handoff.beginAnotherHandoff()
+        handoff.discardPreparation()
+        selectedMaterialIDs = ids
+        additionalMaterialIDs.formIntersection(ids)
+        selectedCompanionIDs = Dictionary(uniqueKeysWithValues: materials.compactMap { material in
+            guard ids.contains(material.id), let companion = material.companion else { return nil }
+            return (material.id, companion.id)
+        })
+        excludedIDs.subtract(ids)
+        return true
+    }
+
+    func isMaterialIncluded(_ id: UUID) -> Bool {
+        if let selectedMaterialIDs { return selectedMaterialIDs.contains(id) }
+        return !excludedIDs.contains(id)
+    }
+
+    /// Adding references never moves their project homes. It makes the whole
+    /// request explicit, so future arrivals cannot broaden the selected set.
+    @discardableResult
+    func addMaterials(_ added: [WorkboardMaterialSnapshot], to current: [WorkboardMaterialSnapshot]) -> Bool {
+        guard !added.isEmpty, !hasMissingSelectedMaterials(in: current) else { return false }
+        let included = includedCards(from: current)
+        var seen = Set<UUID>()
+        let cards = (included + added).filter { seen.insert($0.id).inserted }
+        guard useOnlyMaterials(Set(cards.map(\.id)), materials: cards) else { return false }
+        additionalMaterialIDs.formUnion(added.map(\.id))
+        return true
+    }
+
+    /// A new companion arriving on a chosen photo is also a new material.
+    /// It enters an explicit selection only when that card is selected again.
+    func includedCards(from materials: [WorkboardMaterialSnapshot]) -> [WorkboardMaterialSnapshot] {
+        materials.filter { isMaterialIncluded($0.id) }.map { material in
+            guard selectedMaterialIDs != nil,
+                  material.companion?.id != selectedCompanionIDs[material.id] else { return material }
+            var card = material
+            card.companion = nil
+            return card
+        }
+    }
+
+    func hasMissingSelectedMaterials(in materials: [WorkboardMaterialSnapshot]) -> Bool {
+        guard let selectedMaterialIDs else { return false }
+        let currentIDs = Set(materials.map(\.id))
+        if !selectedMaterialIDs.isSubset(of: currentIDs) { return true }
+        return materials.contains { material in
+            guard selectedMaterialIDs.contains(material.id), let selectedCompanion = selectedCompanionIDs[material.id] else { return false }
+            return material.companion?.id != selectedCompanion
+        }
+    }
+
+    /// Explicitly accept a smaller set after removal or reassignment. Newly
+    /// attached companions still stay out until their parent is selected again.
+    func leaveOutMissingMaterials(in materials: [WorkboardMaterialSnapshot]) {
+        guard let selectedMaterialIDs, !isSaving, !handoff.isPreparing, !handoff.isSending else { return }
+        self.selectedMaterialIDs = selectedMaterialIDs.intersection(materials.map(\.id))
+        selectedCompanionIDs = selectedCompanionIDs.filter { parentID, companionID in
+            materials.contains { $0.id == parentID && $0.companion?.id == companionID }
+        }
+        handoff.discardPreparation()
+    }
+
+    func setMaterialIncluded(_ included: Bool, id: UUID, includingCompanionID: UUID? = nil) {
+        guard !isSaving, !handoff.isPreparing, !handoff.isSending else { return }
+        handoff.discardPreparation()
+        if selectedMaterialIDs != nil {
+            if included { selectedMaterialIDs?.insert(id) } else { selectedMaterialIDs?.remove(id) }
+            selectedCompanionIDs[id] = included ? includingCompanionID : nil
+        }
+        if included { excludedIDs.remove(id) } else { excludedIDs.insert(id) }
+    }
+
     func discardUnsavedChanges() {
         projectContext = savedProjectContext
         brief = ""
         selectedGateway = savedGateway
         excludedIDs = projectResultIDs
+        selectedMaterialIDs = nil
+        selectedCompanionIDs = [:]
+        additionalMaterialIDs = []
         saveError = nil
         handoff.discardPreparation()
     }
@@ -97,6 +181,9 @@ final class WorkDeskBriefDraft {
         handoff.beginAnotherHandoff()
         brief = ""
         excludedIDs = projectResultIDs
+        selectedMaterialIDs = nil
+        selectedCompanionIDs = [:]
+        additionalMaterialIDs = []
         saveError = nil
     }
 }
@@ -105,6 +192,8 @@ struct WorkDeskBriefView: View {
     let projectID: UUID
     let title: String
     let materials: [WorkboardMaterialSnapshot]
+    let availableMaterials: [WorkboardMaterialSnapshot]
+    let materialProjectNames: [UUID: String]
     let onSave: @MainActor (String, String?) async -> Bool
     let onOpenConversation: @MainActor (UUID) -> Void
     let onEndEditing: @MainActor () -> Void
@@ -114,6 +203,7 @@ struct WorkDeskBriefView: View {
     @State private var presentationID: UUID?
     @State private var showingDiscardConfirmation = false
     @State private var showsMaterials = false
+    @State private var showsMaterialPicker = false
 
     init(
         projectID: UUID,
@@ -121,6 +211,8 @@ struct WorkDeskBriefView: View {
         initialBrief: String,
         preferredGatewayRef: String?,
         materials: [WorkboardMaterialSnapshot],
+        availableMaterials: [WorkboardMaterialSnapshot] = [],
+        materialProjectNames: [UUID: String] = [:],
         draft: WorkDeskBriefDraft? = nil,
         onSave: @escaping @MainActor (String, String?) async -> Bool,
         onOpenConversation: @escaping @MainActor (UUID) -> Void,
@@ -129,6 +221,8 @@ struct WorkDeskBriefView: View {
         self.projectID = projectID
         self.title = title
         self.materials = materials
+        self.availableMaterials = availableMaterials
+        self.materialProjectNames = materialProjectNames
         self.onSave = onSave
         self.onOpenConversation = onOpenConversation
         self.onEndEditing = onEndEditing
@@ -137,14 +231,19 @@ struct WorkDeskBriefView: View {
 
     private var handoff: WorkDeskHandoff { draft.handoff }
 
+    private var requestMaterials: [WorkboardMaterialSnapshot] {
+        let projectIDs = Set(materials.map(\.id))
+        return materials + availableMaterials.filter { !projectIDs.contains($0.id) && draft.additionalMaterialIDs.contains($0.id) }
+    }
     private var included: [WorkboardMaterialSnapshot] {
-        materials.filter { !draft.excludedIDs.contains($0.id) }
+        draft.includedCards(from: requestMaterials)
     }
     private var expanded: [WorkboardMaterialSnapshot] { WorkDeskHandoffPolicy.expanded(included) }
     private var gateway: WorkDeskGatewayOption? { handoff.gateways.first { $0.ref == draft.selectedGateway } }
     private var busy: Bool { draft.isSaving || handoff.isPreparing || handoff.isSending }
     private var blocked: Bool {
-        expanded.contains { draft.remoteResultIDs.contains($0.id) || WorkDeskHandoffPolicy.blockingReason($0, gateway: gateway) != nil }
+        draft.hasMissingSelectedMaterials(in: requestMaterials)
+            || expanded.contains { draft.remoteResultIDs.contains($0.id) || WorkDeskHandoffPolicy.blockingReason($0, gateway: gateway) != nil }
     }
 
     var body: some View {
@@ -201,6 +300,16 @@ struct WorkDeskBriefView: View {
                         .disabled(busy)
                     }
                 }
+            }
+        }
+        .sheet(isPresented: $showsMaterialPicker) {
+            WorkDeskMaterialPicker(
+                materials: availableMaterials.filter { candidate in !requestMaterials.contains { $0.id == candidate.id } },
+                projectNames: materialProjectNames
+            ) { added in
+                let success = draft.addMaterials(added, to: requestMaterials)
+                if success { showsMaterials = true }
+                return success
             }
         }
         .alert(Text(LocalizedStringResource("workdesk.brief.discardTitle", defaultValue: "Discard unsaved changes?")), isPresented: $showingDiscardConfirmation) {
@@ -280,13 +389,13 @@ struct WorkDeskBriefView: View {
 
     private var materialChecklist: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if materials.isEmpty {
+            if requestMaterials.isEmpty {
                 Text(LocalizedStringResource("workdesk.conversation.materials.empty", defaultValue: "No materials yet. You can start with a task alone."))
                     .font(.callout).foregroundStyle(AppColors.textSecondary)
             } else {
                 DisclosureGroup(isExpanded: $showsMaterials) {
                     VStack(spacing: 8) {
-                        ForEach(materials) { material in materialRow(material) }
+                        ForEach(requestMaterials) { material in materialRow(material) }
                     }
                     .padding(.top, 8)
                 } label: {
@@ -311,17 +420,32 @@ struct WorkDeskBriefView: View {
                     }
                 }
             }
-            if !draft.excludedIDs.isEmpty {
-                Text(LocalizedStringResource("workdesk.brief.excluded", defaultValue: "Unchecked materials stay in your project and will not be sent."))
+            if availableMaterials.contains(where: { candidate in !requestMaterials.contains { $0.id == candidate.id } }) {
+                Button(LocalizedStringResource("workdesk.conversation.addMaterials", defaultValue: "Add materials…"), systemImage: "plus") {
+                    showsMaterialPicker = true
+                }.inlineLinkButton().disabled(draft.hasMissingSelectedMaterials(in: requestMaterials))
+            }
+            if draft.hasMissingSelectedMaterials(in: requestMaterials) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(LocalizedStringResource("workdesk.conversation.missingSelection", defaultValue: "Some selected materials were removed or moved. Leave them out to continue."))
+                        .font(.callout).foregroundStyle(AppColors.textSecondary)
+                    Button(LocalizedStringResource("workdesk.conversation.leaveOutMissing", defaultValue: "Leave out missing materials")) {
+                        draft.leaveOutMissingMaterials(in: requestMaterials)
+                    }.inlineLinkButton()
+                }
+            }
+            if !draft.excludedIDs.isEmpty || draft.selectedMaterialIDs != nil {
+                Text(LocalizedStringResource("workdesk.brief.excluded", defaultValue: "Unchecked materials will not be sent. Their project locations stay the same."))
                     .font(.caption).foregroundStyle(AppColors.textSecondary)
             }
         }
     }
 
     private func materialRow(_ material: WorkboardMaterialSnapshot) -> some View {
-        let selected = !draft.excludedIDs.contains(material.id)
+        let selected = draft.isMaterialIncluded(material.id)
+        let includedCard = draft.includedCards(from: [material]).first
         return Button {
-            if selected { draft.excludedIDs.insert(material.id) } else { draft.excludedIDs.remove(material.id) }
+            draft.setMaterialIncluded(!selected, id: material.id, includingCompanionID: material.companion?.id)
         } label: {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
@@ -329,9 +453,29 @@ struct WorkDeskBriefView: View {
                     .font(.title3)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(material.name).font(.callout.weight(.medium)).foregroundStyle(AppColors.textPrimary).lineLimit(2)
-                    if let companion = material.companion {
+                    if !materials.contains(where: { $0.id == material.id }) {
+                        Label {
+                            Text(verbatim: materialProjectNames[material.id] ?? String(localized: "workdesk.material.unfiled", defaultValue: "No project"))
+                        } icon: { Image(systemName: "folder") }
+                            .font(.caption).foregroundStyle(AppColors.textSecondary)
+                    }
+                    if let companion = material.companion, !selected || includedCard?.companion?.id == companion.id {
                         Text(companion.material.textContent ?? companion.name)
                             .font(.caption).foregroundStyle(AppColors.textSecondary).lineLimit(2)
+                    }
+                    if selected, material.companion != nil, includedCard?.companion == nil {
+                        Text(LocalizedStringResource("workdesk.conversation.newCompanionExcluded", defaultValue: "New attached material left out. Uncheck and select this card again to include it."))
+                            .font(.caption).foregroundStyle(AppColors.textSecondary)
+                    }
+                    ForEach(WorkDeskHandoffPolicy.expanded([includedCard ?? material])) { part in
+                        if let notes = part.annotation, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes"))
+                                    .font(.caption.weight(.semibold))
+                                Text(verbatim: notes).font(.caption).lineLimit(3)
+                            }
+                            .foregroundStyle(AppColors.textSecondary)
+                        }
                     }
                     if material.isRemoteProjectResult || draft.remoteResultIDs.contains(material.id) {
                         Text(verbatim: WorkDeskHandoffError.remoteResult.localizedDescription)
@@ -444,7 +588,7 @@ struct WorkDeskBriefView: View {
                 }
             }
             if !draft.excludedIDs.isEmpty {
-                Text(LocalizedStringResource("workdesk.brief.excluded", defaultValue: "Unchecked materials stay in your project and will not be sent."))
+                Text(LocalizedStringResource("workdesk.brief.excluded", defaultValue: "Unchecked materials will not be sent. Their project locations stay the same."))
                     .font(.caption).foregroundStyle(AppColors.textSecondary)
             }
         }
@@ -530,7 +674,7 @@ struct WorkDeskBriefView: View {
                 Button {
                     Task {
                         let token = presentationID
-                        guard await save(), draft.isCurrentPresentation(token) else { return }
+                        guard await save(), draft.isCurrentPresentation(token), !blocked else { return }
                         await handoff.prepare(title: title, brief: draft.brief, cards: included, ref: draft.selectedGateway,
                             projectID: projectID, projectContext: draft.projectContext, remoteResultIDs: draft.remoteResultIDs)
                     }

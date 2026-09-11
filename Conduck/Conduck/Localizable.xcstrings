@@ -1,6 +1,600 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "workboard.material.notes.continue" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue editing…"
+          }
+        }
+      }
+    },
+    "workdesk.companion.openTranscript" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open transcript"
+          }
+        }
+      }
+    },
+    "workdesk.material.companionNotes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes for attached material…"
+          }
+        }
+      }
+    },
+    "workboard.material.image.open" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open image"
+          }
+        }
+      }
+    },
+    "workboard.material.link.open" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open link"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.add" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add notes…"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.draftKept" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your changes are still here. Try saving again, or load the saved text to replace your changes."
+          }
+        }
+      }
+    },
+    "workboard.material.notes.edit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit notes…"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep context with this material. These notes are included when you bring it into a new conversation."
+          }
+        }
+      }
+    },
+    "workboard.material.notes.placeholder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Write here…"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.reload" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load saved text…"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.reloadAction" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load saved text"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.reloadConfirm" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replace your changes with the saved text?"
+          }
+        }
+      }
+    },
+    "workboard.material.original.preview" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preview original"
+          }
+        }
+      }
+    },
+    "workboard.material.original.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The original isn’t available on this device. Your notes are still available here."
+          }
+        }
+      }
+    },
+    "workboard.material.sourceConversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open source conversation"
+          }
+        }
+      }
+    },
+    "workboard.material.text.edit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit text"
+          }
+        }
+      }
+    },
+    "workboard.material.transcript.edit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit transcript"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.addMaterials" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add materials…"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.addMaterials.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use materials from anywhere in Work. They stay in their current projects."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.addMaterials.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add materials"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.addSelected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add selected"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.clearSelection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear selection"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.findMaterial" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Find a material"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.leaveOutMissing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leave out missing materials"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.missingSelection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Some selected materials were removed or moved. Leave them out to continue."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.newCompanionExcluded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New attached material left out. Uncheck and select this card again to include it."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.selectionChanged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The selected materials changed. Choose them again."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.withMaterials" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New conversation with %lld materials…"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.withOneMaterial" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New conversation with 1 material…"
+          }
+        }
+      }
+    },
+    "workdesk.error.deletionChanged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This project or its materials changed. Review the deletion again."
+          }
+        }
+      }
+    },
+    "workdesk.material.notes.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your notes"
+          }
+        }
+      }
+    },
+    "workdesk.material.openProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open project"
+          }
+        }
+      }
+    },
+    "workdesk.material.unfiled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No project"
+          }
+        }
+      }
+    },
+    "workdesk.material.used.count" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Used in %lld conversations"
+          }
+        }
+      }
+    },
+    "workdesk.material.used.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No saved conversations use this material."
+          }
+        }
+      }
+    },
+    "workdesk.material.used.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These conversations used a copy of the material as it was when sent. Moving or editing it in Work doesn’t change earlier messages."
+          }
+        }
+      }
+    },
+    "workdesk.material.used.once" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Used in 1 conversation"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete project…"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.context" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The project and its saved context will be removed."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.conversation.one" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its 1 conversation will remain in Chats."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.conversations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its %lld conversations will remain in Chats."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete project"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The project couldn’t be deleted."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.keep" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep materials"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.keep.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "They stay in All materials, grouped together in Desk view. Notes attached to them are kept too."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.materials" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete project and %lld materials"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.one" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete project and 1 material"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.question" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete “%@”?"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.remove.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removes these materials and their attached notes from Work on your synced devices. Existing conversations and files already sent to gateways remain."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.reopen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close this review and choose Delete project again to review the latest materials."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.review" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete project"
+          }
+        }
+      }
+    },
+    "workdesk.result.from" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From %@"
+          }
+        }
+      }
+    },
+    "workdesk.result.sourceConversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "project conversation"
+          }
+        }
+      }
+    },
     "" : {
 
     },
@@ -24428,7 +25022,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Unchecked materials stay in your project and will not be sent."
+            "value" : "Unchecked materials will not be sent. Their project locations stay the same."
           }
         }
       }
@@ -25141,7 +25735,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "That project is no longer available. Your ideas are still on the desk."
+            "value" : "That project is no longer available."
           }
         }
       }
@@ -25306,7 +25900,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Canvas"
+            "value" : "Desk"
           }
         }
       }
@@ -25465,28 +26059,8 @@
         }
       }
     },
-    "workdesk.project.delete.message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Its ideas and files will stay in All materials. Nothing is deleted."
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ungroup this project?"
-          }
-        }
-      }
-    },
+
+
     "workdesk.project.empty.message" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25548,22 +26122,12 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This project is no longer available. Your materials are still in All materials."
+            "value" : "This project is no longer available."
           }
         }
       }
     },
-    "workdesk.project.ungroup" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ungroup Project"
-          }
-        }
-      }
-    },
+
     "workdesk.projects" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25619,17 +26183,7 @@
         }
       }
     },
-    "workdesk.result.label" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Result"
-          }
-        }
-      }
-    },
+
     "workdesk.result.openSource" : {
       "extractionState" : "manual",
       "localizations" : {

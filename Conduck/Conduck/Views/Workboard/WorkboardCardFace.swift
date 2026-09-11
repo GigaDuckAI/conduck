@@ -44,9 +44,8 @@ nonisolated struct WorkboardCardFace: Equatable, Sendable {
     /// Whether the card states when it was captured, beside `meta`.
     let showsAge: Bool
     /// The availability sentence, or nil for a card whose bytes are here. It is
-    /// a SENTENCE and not only a glyph on purpose: `.syncPending` is the one
-    /// state whose card refuses the tap, so a 12-point symbol was the only
-    /// explanation a sighted person got for a click that did nothing.
+    /// a sentence as well as a glyph so a person knows when the source file
+    /// is still arriving even though its metadata and notes are available.
     let availability: LocalizedStringResource?
     /// A filename's tail is the part that distinguishes it, so a heading that
     /// does not fit gives up its middle rather than its extension.
@@ -324,12 +323,8 @@ nonisolated enum WorkboardCardFacePolicy {
 
     /// The ONE place a card's availability becomes words.
     ///
-    /// CONVERGENCE POINT, and it is wired. The preview router resolves the same
-    /// three unreadable states when it decides what a tap may do, and the one
-    /// state it refuses outright arrives here as
-    /// `WorkboardCardBlockedReason.waitingForICloud` — the drawn sentence and
-    /// the refused tap read the SAME value, so the desk cannot grow a second
-    /// spelling of "waiting for iCloud" beside the first.
+    /// Source availability remains visible even though the card can open its
+    /// metadata and notes before those source bytes arrive.
     ///
     /// `.localOnly` is not an error and does not wear one: its bytes are right
     /// here and readable, and the sentence exists to explain why the card is
@@ -346,7 +341,7 @@ nonisolated enum WorkboardCardFacePolicy {
                 defaultValue: "Available on this device"
             )
         case .syncPending:
-            return WorkboardCardBlockedReason.waitingForICloud.label
+            return LocalizedStringResource("workboard.material.syncPending", defaultValue: "Waiting for iCloud…")
         case .unavailableOnThisDevice:
             return LocalizedStringResource(
                 "workboard.material.reattach.short",

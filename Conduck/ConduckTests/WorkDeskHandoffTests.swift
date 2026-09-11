@@ -75,6 +75,128 @@ final class WorkDeskHandoffTests: XCTestCase {
         XCTAssertTrue(fixture.events.isEmpty)
     }
 
+    func testSelectedMaterialsStayExplicitWhenNewCardsArrive() {
+        let chosen = UUID(), leftOut = UUID(), arrivedLater = UUID()
+        let draft = WorkDeskBriefDraft(brief: "Project context", preferredGatewayRef: gatewayRef.rawString, task: "Compare these")
+        draft.projectResultIDs = [chosen]
+        draft.excludedIDs = [chosen]
+        XCTAssertTrue(draft.useOnlyMaterials([chosen]))
+        XCTAssertTrue(draft.isMaterialIncluded(chosen), "Explicitly selected results may be included")
+        XCTAssertFalse(draft.isMaterialIncluded(leftOut))
+        XCTAssertFalse(draft.isMaterialIncluded(arrivedLater), "A later sync cannot broaden a reviewed selection")
+        draft.setMaterialIncluded(true, id: arrivedLater)
+        XCTAssertTrue(draft.isMaterialIncluded(arrivedLater))
+        draft.setMaterialIncluded(false, id: chosen)
+        XCTAssertFalse(draft.isMaterialIncluded(chosen))
+        XCTAssertEqual(draft.brief, "Compare these")
+        XCTAssertEqual(draft.projectContext, "Project context")
+        XCTAssertEqual(draft.selectedGateway, gatewayRef)
+        draft.startAnotherConversation()
+        XCTAssertNil(draft.selectedMaterialIDs)
+        XCTAssertFalse(draft.isMaterialIncluded(chosen), "Reset again excludes results by default")
+        XCTAssertTrue(draft.isMaterialIncluded(leftOut))
+    }
+
+    func testSelectingMaterialsInvalidatesOldReviewAndRefusesWhileSaving() async {
+        let fixture = Fixture()
+        let model = WorkDeskHandoff(dependencies: fixture.dependencies)
+        let draft = WorkDeskBriefDraft(brief: "", preferredGatewayRef: gatewayRef.rawString, handoff: model)
+        await model.prepare(title: "Project", brief: "Old task", cards: [], ref: gatewayRef)
+        XCTAssertNotNil(model.prepared)
+        let chosen = UUID()
+        draft.isSaving = true
+        XCTAssertFalse(draft.useOnlyMaterials([chosen]))
+        XCTAssertNotNil(model.prepared)
+        draft.isSaving = false
+        XCTAssertFalse(draft.useOnlyMaterials([]))
+        XCTAssertTrue(draft.useOnlyMaterials([chosen]))
+        XCTAssertNil(model.prepared)
+        XCTAssertTrue(fixture.events.isEmpty)
+    }
+
+    func testSelectedPhotoDoesNotAutomaticallyIncludeANewOrReplacedCompanion() {
+        let first = WorkboardMaterialSnapshot(kind: .transcript, name: "Original words", textContent: "Selected with photo")
+        let later = WorkboardMaterialSnapshot(kind: .transcript, name: "Later words", textContent: "Arrived after selection")
+        var photo = WorkboardMaterialSnapshot(kind: .image, name: "Photo", companion: WorkboardCompanionSnapshot(first))
+        let draft = WorkDeskBriefDraft(brief: "", preferredGatewayRef: gatewayRef.rawString)
+        XCTAssertTrue(draft.useOnlyMaterials([photo.id], materials: [photo]))
+        XCTAssertEqual(WorkDeskHandoffPolicy.expanded(draft.includedCards(from: [photo])).map(\.id), [photo.id, first.id])
+        photo.companion = WorkboardCompanionSnapshot(later)
+        XCTAssertTrue(draft.hasMissingSelectedMaterials(in: [photo]))
+        XCTAssertEqual(WorkDeskHandoffPolicy.expanded(draft.includedCards(from: [photo])).map(\.id), [photo.id])
+        draft.leaveOutMissingMaterials(in: [photo])
+        XCTAssertFalse(draft.hasMissingSelectedMaterials(in: [photo]))
+        XCTAssertEqual(WorkDeskHandoffPolicy.expanded(draft.includedCards(from: [photo])).map(\.id), [photo.id])
+        draft.setMaterialIncluded(false, id: photo.id)
+        draft.setMaterialIncluded(true, id: photo.id, includingCompanionID: later.id)
+        XCTAssertEqual(WorkDeskHandoffPolicy.expanded(draft.includedCards(from: [photo])).map(\.id), [photo.id, later.id])
+
+        photo.companion = nil
+        XCTAssertTrue(draft.useOnlyMaterials([photo.id], materials: [photo]))
+        photo.companion = WorkboardCompanionSnapshot(first)
+        XCTAssertFalse(draft.hasMissingSelectedMaterials(in: [photo]))
+        XCTAssertEqual(WorkDeskHandoffPolicy.expanded(draft.includedCards(from: [photo])).map(\.id), [photo.id])
+    }
+
+    func testRemovingSelectedCardsRequiresExplicitlyLeavingThemOut() {
+        let chosen = WorkboardMaterialSnapshot(kind: .note, name: "Chosen")
+        let other = WorkboardMaterialSnapshot(kind: .note, name: "Other")
+        let draft = WorkDeskBriefDraft(brief: "", preferredGatewayRef: gatewayRef.rawString)
+        XCTAssertTrue(draft.useOnlyMaterials([chosen.id], materials: [chosen, other]))
+        XCTAssertTrue(draft.hasMissingSelectedMaterials(in: [other]))
+        draft.leaveOutMissingMaterials(in: [other])
+        XCTAssertFalse(draft.hasMissingSelectedMaterials(in: [other]))
+        XCTAssertEqual(draft.selectedMaterialIDs, [])
+        XCTAssertTrue(draft.includedCards(from: [other]).isEmpty, "Leaving out a removed card never opts into other cards")
+    }
+
+    func testAddingMaterialFromAnotherProjectPreservesExistingSelectionWithoutIncludingOtherCards() {
+        let chosen = WorkboardMaterialSnapshot(kind: .note, name: "Chosen")
+        let leftOut = WorkboardMaterialSnapshot(kind: .note, name: "Leave out")
+        let external = WorkboardMaterialSnapshot(kind: .file, name: "Shared reference", sourceByteIdentity: "synced:reference")
+        let draft = WorkDeskBriefDraft(brief: "Context", preferredGatewayRef: gatewayRef.rawString, task: "Compare")
+        XCTAssertTrue(draft.useOnlyMaterials([chosen.id], materials: [chosen, leftOut]))
+        XCTAssertTrue(draft.addMaterials([external], to: [chosen, leftOut]))
+        XCTAssertEqual(draft.includedCards(from: [chosen, leftOut, external]).map(\.id), [chosen.id, external.id])
+        XCTAssertEqual(draft.additionalMaterialIDs, [external.id])
+        XCTAssertEqual(draft.brief, "Compare")
+        XCTAssertEqual(draft.projectContext, "Context")
+        XCTAssertFalse(draft.addMaterials([leftOut], to: [external]), "Adding a file cannot silently drop a missing previously chosen card")
+        XCTAssertTrue(draft.useOnlyMaterials([chosen.id], materials: [chosen]))
+        XCTAssertTrue(draft.additionalMaterialIDs.isEmpty)
+    }
+
+    func testAnnotationsFollowTheirMaterialAndFoldedTranscriptExactlyOnce() {
+        let words = WorkboardMaterialSnapshot(kind: .transcript, name: "Spoken words", textContent: "Captured text", annotation: "Correction context")
+        let image = WorkboardMaterialSnapshot(kind: .image, name: "Screenshot.png", companion: WorkboardCompanionSnapshot(words), annotation: "Focus on the header")
+        let excluded = WorkboardMaterialSnapshot(kind: .note, name: "Private", annotation: "Do not include this")
+        let expanded = WorkDeskHandoffPolicy.expanded([image, words])
+        let prompt = WorkDeskHandoffPolicy.prompt(title: "Project", brief: "Review", materials: expanded)
+        XCTAssertEqual(prompt.components(separatedBy: "Focus on the header").count, 2)
+        XCTAssertEqual(prompt.components(separatedBy: "Correction context").count, 2)
+        XCTAssertTrue(prompt.contains("Screenshot.png\n[Attached material]\nYour notes:\nFocus on the header"))
+        XCTAssertTrue(prompt.contains("Spoken words\nCaptured text\nYour notes:\nCorrection context"))
+        XCTAssertFalse(prompt.contains(excluded.annotation!))
+    }
+
+    func testAnnotationChangedAfterReviewRefusesSendAndKeepsReviewedPacketImmutable() async {
+        let fixture = Fixture()
+        var note = fixture.add(kind: .note, name: "Idea", text: "Source text")
+        note.annotation = "First notes"
+        fixture.materials[note.id] = note
+        let model = WorkDeskHandoff(dependencies: fixture.dependencies)
+        await model.prepare(title: "Project", brief: "Read", cards: [note], ref: gatewayRef)
+        let reviewed = model.prepared
+        XCTAssertTrue(reviewed?.prompt.contains("First notes") == true)
+        fixture.materials[note.id]?.annotation = "Changed notes"
+        let sent = await model.send()
+        XCTAssertNil(sent)
+        XCTAssertEqual(model.errorMessage, WorkDeskHandoffError.materialChanged.localizedDescription)
+        XCTAssertTrue(reviewed?.prompt.contains("First notes") == true)
+        XCTAssertFalse(reviewed?.prompt.contains("Changed notes") == true)
+        XCTAssertTrue(fixture.events.isEmpty)
+    }
+
     func testRemoteResultCannotBeSentAsAFileBySelectingItsReferenceCard() async {
         let fixture = Fixture()
         let reference = fixture.add(kind: .note, name: "Report.pdf", text: "")
@@ -317,6 +439,39 @@ final class WorkDeskHandoffTests: XCTestCase {
         XCTAssertEqual(model.errorMessage, WorkDeskHandoffError.submissionRefused.localizedDescription)
     }
 
+    func testReviewedInputsKeepCanonicalIdentityAndAttachmentSequence() async {
+        let fixture = Fixture()
+        let first = fixture.add(kind: .note, name: "same.txt", text: "Source words")
+        let file = fixture.add(kind: .file, name: "same.txt", data: Data("File words".utf8), mime: "text/plain")
+        let second = fixture.add(kind: .note, name: "same.txt", text: "Another source")
+        let model = WorkDeskHandoff(dependencies: fixture.dependencies)
+        await model.prepare(title: "Project", brief: "Compare these", cards: [first, file, second], ref: gatewayRef)
+        let result = await model.send()
+        XCTAssertNotNil(result)
+        XCTAssertEqual(fixture.submittedMaterialInputs, [
+            .init(materialID: first.id),
+            .init(materialID: file.id, attachmentSequence: 0),
+            .init(materialID: second.id)
+        ], "Identical filenames cannot merge distinct inputs or invent membership")
+        XCTAssertEqual(fixture.submittedAttachments.count, 1)
+    }
+
+    func testUnreadableAttachmentRefusesAReviewedSendBeforeAcceptance() async throws {
+        let readable = PendingAttachment.dualText(url: URL(fileURLWithPath: "/not-read-for-prepared-text"),
+            extractedText: "Prepared words", filename: "input.txt", mimeType: "text/plain", storedKey: nil)
+        let preserved = await ConversationDetailViewModel._preservesReviewedAttachmentsForTesting([readable])
+        XCTAssertTrue(preserved)
+        let omitted = await ConversationDetailViewModel._preservesReviewedAttachmentsForTesting([
+            readable, .image(Data("not an image".utf8))
+        ])
+        XCTAssertFalse(omitted, "A valid sibling cannot hide an omitted reviewed input")
+        let source = try RefusalLaneSource.source(at: "Conduck/ViewModels/ConversationDetailViewModel.swift")
+        let guardStart = try XCTUnwrap(source.range(of: "if workMaterialInputs != nil && !processed.preservesReviewedAttachments"))
+        let guardBody = try RefusalLaneSource.trailingClosure(after: "if workMaterialInputs != nil && !processed.preservesReviewedAttachments", in: String(source[guardStart.lowerBound...]), path: "Conduck/ViewModels/ConversationDetailViewModel.swift")
+        XCTAssertTrue(guardBody.contains("onLocalAcceptance?(false)"))
+        XCTAssertTrue(guardBody.contains("return"))
+    }
+
     func testRapidRepeatedSendSubmitsReviewedPacketOnlyOnce() async {
         let fixture = Fixture()
         fixture.holdSubmission = true
@@ -513,6 +668,7 @@ final class WorkDeskHandoffTests: XCTestCase {
         var submittedAttachments: [PendingAttachment] = []
         var submittedRef: RemoteAgentRef?
         var submittedLaneID: String?
+        var submittedMaterialInputs: [WorkDeskMaterialInput] = []
 
         init(files: Bool = false) { connections = [Self.connection(files: files)] }
 
@@ -550,11 +706,12 @@ final class WorkDeskHandoffTests: XCTestCase {
                 removeUpload: { [self] _, _ in events.append("remove-upload") },
                 createConversation: { [self] _, _, _, _ in events.append("create") },
                 removeConversation: { [self] _ in events.append("remove-conversation") },
-                submit: { [self] _, _, attachments, ref, lane, _ in
+                submit: { [self] _, _, attachments, ref, lane, _, inputs in
                     events.append("submit")
                     submittedAttachments = attachments
                     submittedRef = ref
                     submittedLaneID = lane
+                    submittedMaterialInputs = inputs
                     if holdSubmission {
                         return await withCheckedContinuation { submissionContinuation = $0 }
                     }

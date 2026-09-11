@@ -355,10 +355,9 @@ final class WorkboardCompanionActionsTests: XCTestCase {
         )
     }
 
-    /// The routes off a folded words card are still WIRED. The band offers no
-    /// rows for them — there is no file to open or share — but Open on the card
-    /// itself still reaches the gallery, and the routing is what the card reads
-    /// to decide it holds a companion at all.
+    /// A folded transcript keeps its own details route. The action policy
+    /// exposes Open transcript and omits recording playback/share/repair rows;
+    /// these bindings preserve the child's identity for every consumer.
     ///
     /// Negative control: gating the routing itself on `.audio` returns nil, the
     /// card stops drawing a band, and the words vanish from the desk.
@@ -382,6 +381,27 @@ final class WorkboardCompanionActionsTests: XCTestCase {
         XCTAssertEqual(opened, [spoken.id])
         XCTAssertEqual(shared, [spoken.id])
         XCTAssertEqual(reattached, [spoken.id])
+    }
+
+    func testUnavailableCompanionsOpenTheirOwnMetadataAndNotes() throws {
+        for kind in [WorkboardMaterialKind.transcript, .audio] {
+            var child = card(kind: kind, name: "Folded material")
+            child.annotation = "User notes are still here"
+            child.availability = .unavailableOnThisDevice
+            let parent = folded(card(kind: .image, name: "Picture"), around: child)
+            var opened: WorkboardMaterialSnapshot?
+            let routes = try XCTUnwrap(WorkboardCompanionRouting.actions(for: parent,
+                onOpen: { opened = $0 }, onShare: { _ in XCTFail("Source sharing was not requested") },
+                onReattach: { _ in XCTFail("Source repair was not requested") }))
+            let companion = try XCTUnwrap(parent.companion)
+            let actions = WorkboardCompanionBand.actions(for: companion, phase: .idle,
+                hasOpenRecording: true, hasShareRecording: true)
+            XCTAssertEqual(actions, kind == .audio ? [.openRecording] : [.openTranscript])
+            routes.open()
+            XCTAssertEqual(opened?.id, child.id)
+            XCTAssertEqual(opened?.annotation, child.annotation)
+            XCTAssertEqual(opened?.availability, .unavailableOnThisDevice)
+        }
     }
 
     // MARK: - Member lookup and order expansion
