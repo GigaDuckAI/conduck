@@ -13,7 +13,9 @@
 // Controls are hotkey-first: there is NO mic/stop button. ⌘⇧1 starts; ⌘⇧1 or
 // clicking the menu-bar icon stops-and-sends; Esc cancels (wired in
 // `MenuBarController`). The only on-screen buttons are a CANCEL while
-// recording/thinking, and COPY + SPEAK on a settled reply. CANCEL (the X) and
+// recording/thinking, and SPEAK + a message menu on a settled reply. The menu
+// offers Copy message and Save message to Work; saving leaves the reply in place
+// and reports the same capture receipt as the full chat thread. CANCEL (the X) and
 // Esc both ABORT-AND-CLOSE — they discard the active recording / in-flight
 // reply AND any staged ⌘⇧2 screenshot + typed draft, then dismiss the popover
 // in one press (never land on the start screen). Only an IMPLICIT click-away
@@ -68,8 +70,8 @@
 //
 // Header + the bottom footer band are HIDDEN during recording and the whole
 // working phase (their Cancel X is inline), so chrome never pops in mid-turn.
-// They return on the settled reply (Open-in-Window header + Copy/Speak footer),
-// on error (Retry/Dismiss footer), and on the empty state. Copy + Speak mirror
+// They return on the settled reply (Open-in-Window header + Speak/menu footer),
+// on error (Retry/Dismiss footer), and on the empty state. The reply actions mirror
 // `ConversationThreadView.MessageBubble` (same `ThreadSpeaker` + `bubble.*`
 // strings — play/pause/resume parity).
 //
@@ -119,8 +121,13 @@ struct DictationPopoverView: View {
     /// chat bubble uses (play/pause/resume parity). View-local. Backed by the
     /// iOS/macOS `ReplyVoice` speak engine.
     @State private var speaker = ThreadSpeaker(engine: ReplyVoice())
-    /// Drives the Copy control's 1.5s checkmark flip (mirrors `MessageBubble`).
+    /// Drives the message menu's 1.5s copy checkmark (mirrors `MessageBubble`).
     @State private var didCopy = false
+    @State private var copyFeedbackID: UUID?
+    /// The async save belongs to the displayed reply, never the next quick turn
+    /// or an unread-thread override selected while its material is being saved.
+    @State private var replyWorkCaptureID: UUID?
+    @State private var replyWorkCaptureNotice: MessageWorkCaptureNotice?
 
     /// Measured natural height of the reply Markdown — lets the reply ScrollView
     /// self-size to its content up to a cap (so a short answer hugs instead of
@@ -173,7 +180,7 @@ struct DictationPopoverView: View {
             }
             // TEXT input mode: the compose surface (staged thumbnail + field)
             // is the BOTTOM-MOST band, chat-convention — below the reply's
-            // Copy/Speak (or an error's Retry/Dismiss) so those stay attached to
+            // Speak/menu (or an error's Retry/Dismiss) so those stay attached to
             // the content they act on. Present in the settled/idle states, hidden
             // while a turn is in flight (the chrome-free working HUD, matching voice).
             if showsComposeSurface {
@@ -221,7 +228,13 @@ struct DictationPopoverView: View {
         // because staging and the retained-reply render can land in either
         // order; `attemptAutoSpeak` no-ops until both are true.
         .onChange(of: AutoSpeakMailbox.shared.pending) { _, _ in attemptAutoSpeak() }
-        .onChange(of: lastAgentReply?.id) { _, _ in attemptAutoSpeak() }
+        .onChange(of: lastAgentReply?.id) { _, _ in
+            clearReplyActionFeedback()
+            attemptAutoSpeak()
+        }
+        .onChange(of: coordinator.displayedPopoverConversationID) { _, _ in
+            clearReplyActionFeedback()
+        }
         // Glance-and-dismiss belt-and-braces: the AUTHORITATIVE close teardown
         // lives in `MenuBarController.popoverDidClose` (the NSPopoverDelegate
         // callback fires on EVERY close path; this `.onDisappear` does not
@@ -1567,7 +1580,7 @@ struct DictationPopoverView: View {
 
     // MARK: - Footer control row
     //
-    // The footer band renders ONLY for the settled reply (Copy + Speak), for a
+    // The footer band renders ONLY for the settled reply (Speak + message menu), for a
     // capture/STT error (Retry / Dismiss), and for a failed agent turn
     // (`sendError` → Retry / Dismiss). Recording's and the working phase's
     // cancel is inline in their own views, so the footer is hidden there (see
@@ -1592,7 +1605,7 @@ struct DictationPopoverView: View {
                     errorFooter(message: message, isRetryable: isRetryable)
                 }
             case .idle:
-                // A failed AGENT turn takes the footer over Copy/Speak — Retry
+                // A failed AGENT turn takes the footer over Speak/menu — Retry
                 // re-fires the failed bubble; Dismiss returns to the reply/hint.
                 if activeSendError != nil, let vm = coordinator.displayedPopoverViewModel {
                     sendErrorActions(vm: vm)
@@ -1611,7 +1624,7 @@ struct DictationPopoverView: View {
                     savedRecordingRecoveryAction
                         .transition(.opacity)
                     if let reply = lastAgentReply, let vm = coordinator.displayedPopoverViewModel {
-                        // Copy + Speak on the retained reply (idle after a finished turn).
+                        // Speak + message menu on the retained reply (idle after a finished turn).
                         replyActions(reply: reply, vm: vm)
                             .transition(.opacity)
                     }
@@ -1678,7 +1691,7 @@ struct DictationPopoverView: View {
         }
     }
 
-    /// The agent reply the popover shows (drives the Copy + Speak control row +
+    /// The agent reply the popover shows (drives the Speak + message menu control row +
     /// the reply view). Provenance-scoped, NOT "the last agent message in the
     /// bound conversation":
     /// - A dot-click OVERRIDE (a peek at another thread's unread reply) is an
@@ -1715,9 +1728,9 @@ struct DictationPopoverView: View {
     /// Gates the bottom divider + footer band. Hidden during recording AND the
     /// whole working phase (their Cancel X is inline) so the popover doesn't pop a
     /// footer in mid-turn. Shows on error (Retry/Dismiss), on a failed agent turn
-    /// (`sendError` → Retry/Dismiss), and on a settled reply (Copy + Speak).
+    /// (`sendError` → Retry/Dismiss), and on a settled reply (Speak + message menu).
     private var hasFooterControls: Bool {
-        // The Work HUD owns the whole surface; Copy/Speak/Retry below it would
+        // The Work HUD owns the whole surface; Speak/menu/Retry below it would
         // act on a conversation that is not on screen.
         if coordinator.workCaptureIsActive { return false }
         if service.state == .recording || isWorking { return false }
@@ -1783,43 +1796,116 @@ struct DictationPopoverView: View {
         .accessibilityLabel(Text(String(localized: label)))
     }
 
-    // MARK: - Reply actions (Copy + Speak)
+    // MARK: - Reply actions (Speak + message menu)
     //
-    // Mirrors `ConversationThreadView.MessageBubble`'s footer locally (the
-    // popover convention is to DUPLICATE small presentation, not extract). Same
-    // `ThreadSpeaker` engine + the same `bubble.*` strings, so play/pause/resume
-    // and the Copy checkmark flip behave exactly like the chat bubble. No iOS
-    // foreground gate (this file is macOS-only).
+    // Direct playback mirrors the thread's state machine; the shared menu owns
+    // Copy and Save message to Work. Saving captures the complete displayed
+    // reply, including its attachments, and never starts a turn or changes chat.
 
     private func replyActions(reply: MessageRecord, vm: ConversationDetailViewModel) -> some View {
-        HStack(spacing: 6) {
-            // Copy + Speak trail right; the quiet header "Open in Window" icon is
-            // the single escape to the full window (a long reply scrolls in place,
-            // its bottom edge faded as the "more below" cue — no inline CTA).
-            Spacer(minLength: 4)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Spacer(minLength: 4)
 
-            MessageActionButton(
-                accessibilityLabel: Text(speakAccessibilityLabel(for: reply.id)),
-                action: {
-                    // Cross-engine arbitration (silencing the shared arrival
-                    // voice) happens inside `ThreadSpeaker.speak` via the
-                    // `SpeechExclusivity` bus.
-                    speaker.speak(reply.text, messageID: reply.id)
+                MessageActionButton(
+                    accessibilityLabel: Text(speakAccessibilityLabel(for: reply.id)),
+                    action: {
+                        // Cross-engine arbitration happens inside ThreadSpeaker.
+                        speaker.speak(reply.text, messageID: reply.id)
+                    }
+                ) {
+                    speakGlyph(for: reply.id)
                 }
-            ) {
-                speakGlyph(for: reply.id)
-            }
 
-            MessageActionButton(
-                systemImage: didCopy ? "checkmark" : "doc.on.doc",
-                size: 14,
-                tint: AppColors.textTertiary,
-                accessibilityLabel: Text(didCopy
-                    ? LocalizedStringResource("bubble.copy.copied", defaultValue: "Copied")
-                    : LocalizedStringResource("bubble.copy.copy", defaultValue: "Copy")),
-                action: { copyTapped(reply: reply, vm: vm) }
-            )
+                MessageActionsMenu(
+                    didCopy: didCopy,
+                    size: 14,
+                    tint: AppColors.textTertiary,
+                    onCopy: { copyTapped(reply: reply, vm: vm) },
+                    onSaveToWork: { saveReplyToWork(reply, conversationID: vm.conversationID) }
+                ) {
+                    EmptyView()
+                }
+            }
+            if let notice = replyWorkCaptureNotice {
+                replyWorkCaptureFeedback(notice)
+            }
         }
+    }
+
+    private func saveReplyToWork(_ reply: MessageRecord, conversationID: UUID) {
+        let requestID = UUID()
+        replyWorkCaptureID = requestID
+        replyWorkCaptureNotice = nil
+        Task { @MainActor in
+            let notice: MessageWorkCaptureNotice
+            do {
+                let receipt = try await ConversationStore.shared.captureMessageToWork(
+                    reply,
+                    conversationID: conversationID
+                )
+                notice = MessageWorkCaptureNotice(receipt: receipt)
+            } catch {
+                notice = MessageWorkCaptureNotice(
+                    itemID: nil,
+                    message: error.localizedDescription,
+                    isError: true
+                )
+            }
+            guard replyWorkCaptureID == requestID,
+                  coordinator.displayedPopoverConversationID == conversationID,
+                  lastAgentReply?.id == reply.id else { return }
+            replyWorkCaptureNotice = notice
+            AccessibilityAnnouncer.announce(notice.message)
+        }
+    }
+
+    /// A persistent, dismissible receipt: partial or refused attachments must be
+    /// readable at the HUD's narrow width. Only a receipt with a saved card can
+    /// open Work; the save itself keeps the person in the current reply.
+    private func replyWorkCaptureFeedback(_ notice: MessageWorkCaptureNotice) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 6) {
+                Label(notice.message, systemImage: notice.isError
+                    ? "exclamationmark.triangle.fill" : "rectangle.stack.badge.checkmark")
+                    .font(.caption)
+                    .foregroundStyle(notice.isError ? AppColors.warning : AppColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                MessageActionButton(
+                    systemImage: "xmark",
+                    size: 12,
+                    tint: AppColors.textTertiary,
+                    accessibilityLabel: Text(LocalizedStringResource("common.dismiss", defaultValue: "Dismiss"))
+                ) {
+                    replyWorkCaptureNotice = nil
+                }
+            }
+            if let itemID = notice.itemID {
+                Button {
+                    NSApp.activate(ignoringOtherApps: true)
+                    NotificationCenter.default.post(
+                        name: .openWorkboardDeepLink,
+                        object: nil,
+                        userInfo: [NotificationDeepLink.workItemIDKey: itemID.uuidString]
+                    )
+                    dismiss()
+                } label: {
+                    Text(LocalizedStringResource("workboard.chatCapture.open", defaultValue: "Open Work"))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppColors.brandAmber)
+                }
+                .inlineLinkButton()
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func clearReplyActionFeedback() {
+        replyWorkCaptureID = nil
+        replyWorkCaptureNotice = nil
+        copyFeedbackID = nil
+        didCopy = false
     }
 
     /// Consume a staged quick-lane arrival and speak it through the popover's
@@ -1848,13 +1934,12 @@ struct DictationPopoverView: View {
     }
 
     /// State-driven Speak glyph — uniform bare fills, sized to optically match the
-    /// popover's smaller Copy glyph (`doc.on.doc` at 14pt). These run a touch
-    /// smaller than the chat bubble's (17/16) because the popover footer is a
-    /// compact HUD strip. Every state renders the gray idle tint
-    /// (`textTertiary`) — the button reads uniform like the neighboring Copy
-    /// glyph, and only the glyph SHAPE signals state: idle `speaker.wave.2.fill`
-    /// 15pt (the wide-but-short symbol needs +1pt to area-match the dense 14pt
-    /// Copy) → loading spinner (its motion confirms the tap; no color flip) →
+    /// popover's compact message menu. These run a touch smaller than the chat
+    /// bubble's (17/16) because the popover footer is a compact HUD strip. Every
+    /// state renders the gray idle tint (`textTertiary`) — the button reads
+    /// uniform like the neighboring menu, and only the glyph SHAPE signals
+    /// state: idle `speaker.wave.2.fill` 15pt → loading spinner (its motion
+    /// confirms the tap; no color flip) →
     /// playing `pause.fill` 14pt → paused `play.fill` (glyph shape says
     /// "resumable").
     @ViewBuilder
@@ -1894,14 +1979,20 @@ struct DictationPopoverView: View {
         }
     }
 
-    /// Copy the reply to the clipboard + flip to a checkmark for 1.5s (exact
-    /// `MessageBubble.copyTapped()` logic).
+    /// Acknowledge copying after the menu closes; a newer copy or reply change
+    /// supersedes the previous checkmark timer.
     private func copyTapped(reply: MessageRecord, vm: ConversationDetailViewModel) {
         vm.copy(reply)
-        withAnimation(.easeOut(duration: 0.15)) { didCopy = true }
-        Task {
+        AccessibilityAnnouncer.announce(String(localized: LocalizedStringResource(
+            "bubble.copy.copied", defaultValue: "Copied"
+        )))
+        let feedbackID = UUID()
+        copyFeedbackID = feedbackID
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { didCopy = true }
+        Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            withAnimation(.easeOut(duration: 0.2)) { didCopy = false }
+            guard copyFeedbackID == feedbackID else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { didCopy = false }
         }
     }
 

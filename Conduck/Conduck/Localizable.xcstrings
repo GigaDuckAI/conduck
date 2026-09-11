@@ -920,6 +920,28 @@
     "Bind %@" : {
 
     },
+    "bubble.actions.copy" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy message"
+          }
+        }
+      }
+    },
+    "bubble.actions.menu" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Message actions"
+          }
+        }
+      }
+    },
     "bubble.copy.copied" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23024,8 +23046,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Add message to Work"
+            "state" : "translated",
+            "value" : "Save message to Work"
           }
         }
       }

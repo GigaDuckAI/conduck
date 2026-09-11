@@ -1387,52 +1387,7 @@ struct ConversationThreadView: View {
                     message,
                     conversationID: viewModel.conversationID
                 )
-                let detail: String
-                if receipt.failedMaterialCount > 0 {
-                    detail = receipt.failedMaterialCount == 1
-                        ? String(
-                            localized: "workboard.chatCapture.partial.one",
-                            defaultValue: "Added to Work. One attachment needs another try."
-                        )
-                        : String.localizedStringWithFormat(
-                            String(
-                                localized: "workboard.chatCapture.partial",
-                                defaultValue: "Added to Work. %lld attachments need another try."
-                            ),
-                            Int64(receipt.failedMaterialCount)
-                        )
-                } else if receipt.refusedMaterialCount > 0 {
-                    // A sibling of the partial notice, not a variant of it:
-                    // nothing failed and nothing is going to be retried, so the
-                    // sentence names the door that does keep a recording. No
-                    // count in it — one sentence for one recording and for five
-                    // is the honest answer, and a number would buy a plural rule
-                    // in every language for a case nobody can act on differently.
-                    detail = String(
-                        localized: "workboard.chatCapture.recordingRefused",
-                        defaultValue: "Added to Work without the recording. Add recordings yourself with the attachment button in Work."
-                    )
-                } else if receipt.referencedOnlyMaterialCount > 0 {
-                    detail = receipt.referencedOnlyMaterialCount == 1
-                        ? String(
-                            localized: "workboard.chatCapture.remote.one",
-                            defaultValue: "Added to Work. One gateway file remains available from the original chat."
-                        )
-                        : String.localizedStringWithFormat(
-                            String(
-                                localized: "workboard.chatCapture.remote",
-                                defaultValue: "Added to Work. %lld gateway files remain available from the original chat."
-                            ),
-                            Int64(receipt.referencedOnlyMaterialCount)
-                        )
-                } else {
-                    detail = receipt.wasAlreadyCaptured
-                        ? String(localized: "workboard.chatCapture.already", defaultValue: "This message is already in Work.")
-                        : String(localized: "workboard.chatCapture.saved", defaultValue: "Added to Work. Nothing was sent.")
-                }
-                // Work is one desk and the receipt names it, so the banner's
-                // Open Work link resolves there however the turn was captured.
-                presentWorkCaptureNotice(.init(itemID: receipt.itemID, message: detail, isError: false))
+                presentWorkCaptureNotice(MessageWorkCaptureNotice(receipt: receipt))
             } catch {
                 presentWorkCaptureNotice(.init(itemID: nil, message: error.localizedDescription, isError: true))
             }
@@ -1549,11 +1504,66 @@ struct ConversationThreadView: View {
     private static let thinkingAnchorID = "thread.thinking.anchor"
 }
 
-private struct MessageWorkCaptureNotice: Identifiable, Equatable {
+/// Shared capture acknowledgement for the full thread and Mac quick reply.
+/// Attachment caveats outrank the ordinary success or duplicate wording.
+struct MessageWorkCaptureNotice: Identifiable, Equatable {
     let id = UUID()
     let itemID: UUID?
     let message: String
     let isError: Bool
+
+    init(itemID: UUID?, message: String, isError: Bool) {
+        self.itemID = itemID
+        self.message = message
+        self.isError = isError
+    }
+
+    init(receipt: WorkMessageCaptureReceipt) {
+        let detail: String
+        if receipt.failedMaterialCount > 0 {
+            detail = receipt.failedMaterialCount == 1
+                ? String(
+                    localized: "workboard.chatCapture.partial.one",
+                    defaultValue: "Added to Work. One attachment needs another try."
+                )
+                : String.localizedStringWithFormat(
+                    String(
+                        localized: "workboard.chatCapture.partial",
+                        defaultValue: "Added to Work. %lld attachments need another try."
+                    ),
+                    Int64(receipt.failedMaterialCount)
+                )
+        } else if receipt.refusedMaterialCount > 0 {
+            // A sibling of the partial notice, not a variant of it:
+            // nothing failed and nothing is going to be retried, so the
+            // sentence names the door that does keep a recording. No
+            // count in it — one sentence for one recording and for five
+            // is the honest answer, and a number would buy a plural rule
+            // in every language for a case nobody can act on differently.
+            detail = String(
+                localized: "workboard.chatCapture.recordingRefused",
+                defaultValue: "Added to Work without the recording. Add recordings yourself with the attachment button in Work."
+            )
+        } else if receipt.referencedOnlyMaterialCount > 0 {
+            detail = receipt.referencedOnlyMaterialCount == 1
+                ? String(
+                    localized: "workboard.chatCapture.remote.one",
+                    defaultValue: "Added to Work. One gateway file remains available from the original chat."
+                )
+                : String.localizedStringWithFormat(
+                    String(
+                        localized: "workboard.chatCapture.remote",
+                        defaultValue: "Added to Work. %lld gateway files remain available from the original chat."
+                    ),
+                    Int64(receipt.referencedOnlyMaterialCount)
+                )
+        } else {
+            detail = receipt.wasAlreadyCaptured
+                ? String(localized: "workboard.chatCapture.already", defaultValue: "This message is already in Work.")
+                : String(localized: "workboard.chatCapture.saved", defaultValue: "Added to Work. Nothing was sent.")
+        }
+        self.init(itemID: receipt.itemID, message: detail, isError: false)
+    }
 }
 
 // MARK: - MessageBubble
@@ -1855,7 +1865,7 @@ private struct MessageBubble: View, Equatable {
                     bubbleBody
                 }
 
-                footerWithOutputActions
+                footer
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -2654,49 +2664,31 @@ private struct MessageBubble: View, Equatable {
         }
     }
 
-    /// The footer exposes Work beside Copy/Speak; its context menu keeps the
-    /// same action plus the less-common file-lane recovery verbs. Keeping these
-    /// off the Textual bubble preserves its long-press/right-click selection.
-    ///
-    /// Within an agent row that HAS a lane, the entry stays available whether or
-    /// not the app decided to show a diagnostic row — including a turn whose
-    /// folder was never named (a wrist-originated turn, a lane that cannot hold a
-    /// nested collection), which is exactly the population that gets no automatic
-    /// delivery. An affordance that appears only on a row the app decided to show
-    /// is one the user cannot find when they need it.
+    /// File recovery remains reachable from the visible message menu even on
+    /// replies without a diagnostic row. Keep menus off the message body so
+    /// long-press and right-click continue to belong to native text selection.
     @ViewBuilder
-    private var footerWithOutputActions: some View {
-        footer.contextMenu {
-            Button(action: onAddToWork) {
+    private var outputMenuActions: some View {
+        if canRecheckOutputs || canSearchMentionedFiles {
+            Divider()
+        }
+        if canRecheckOutputs {
+            Button(action: onRecheckOutputs) {
                 Label(
                     LocalizedStringResource(
-                        "workboard.chatCapture.action",
-                        defaultValue: "Add message to Work"
-                    ),
-                    systemImage: "rectangle.stack.badge.plus"
-                )
+                        "thread.outputs.action.checkAgain",
+                        defaultValue: "Check for returned files"),
+                    systemImage: "arrow.clockwise")
             }
-            if canRecheckOutputs || canSearchMentionedFiles {
-                Divider()
+        }
+        if canSearchMentionedFiles {
+            Button(action: onSearchMentionedFiles) {
+                Label(
+                    LocalizedStringResource(
+                        "thread.outputs.action.searchMentioned",
+                        defaultValue: "Search for files this reply mentions"),
+                    systemImage: "magnifyingglass")
             }
-                if canRecheckOutputs {
-                    Button(action: onRecheckOutputs) {
-                        Label(
-                            LocalizedStringResource(
-                                "thread.outputs.action.checkAgain",
-                                defaultValue: "Check for returned files"),
-                            systemImage: "arrow.clockwise")
-                    }
-                }
-                if canSearchMentionedFiles {
-                    Button(action: onSearchMentionedFiles) {
-                        Label(
-                            LocalizedStringResource(
-                                "thread.outputs.action.searchMentioned",
-                                defaultValue: "Search for files this reply mentions"),
-                            systemImage: "magnifyingglass")
-                    }
-                }
         }
     }
 
@@ -2724,7 +2716,7 @@ private struct MessageBubble: View, Equatable {
             // built-in voice (cloud TTS failed), surface a subtle caption so the
             // substitution is visible rather than silent. Assistant bubbles only;
             // conditional view → zero layout footprint when false. Sits with the
-            // trailing speak/copy controls so it reads as playback metadata.
+            // trailing playback/menu controls so it reads as playback metadata.
             if !isUser && usedFallbackVoice {
                 Text(LocalizedStringResource(
                     "thread.speak.fallbackVoice", defaultValue: "Built-in voice"))
@@ -2748,45 +2740,20 @@ private struct MessageBubble: View, Equatable {
                 }
             }
 
-            MessageActionButton(
-                systemImage: "rectangle.stack.badge.plus",
+            MessageActionsMenu(
+                didCopy: didCopy,
                 tint: footerTint,
-                accessibilityLabel: Text(LocalizedStringResource(
-                    "workboard.chatCapture.action",
-                    defaultValue: "Add message to Work"
-                )),
-                action: onAddToWork
-            )
-
-            MessageActionButton(
-                systemImage: didCopy ? "checkmark" : "doc.on.doc",
-                tint: footerTint,
-                accessibilityLabel: Text(didCopy
-                    ? LocalizedStringResource("bubble.copy.copied", defaultValue: "Copied")
-                    : LocalizedStringResource("bubble.copy.copy", defaultValue: "Copy")),
-                action: copyTapped
-            )
+                onCopy: copyTapped,
+                onSaveToWork: onAddToWork
+            ) {
+                outputMenuActions
+            }
         }
     }
 
-    /// State-driven Speak glyph — all bare fills at a matched optical size so the
-    /// footer controls read UNIFORM (no circle-enclosed chips, which look heavier
-    /// + larger next to the bare `doc.on.doc` Copy glyph):
-    ///   idle    → `speaker.wave.2.fill` at **17pt** — the FILLED variant gives
-    ///             the right weight, but `speaker.wave.2.fill` is a WIDE-but-SHORT
-    ///             symbol, so at the Copy glyph's 16pt it renders ~12% less ink
-    ///             and reads smaller (equal point size ≠ equal rendered size
-    ///             across differently-shaped SF Symbols). 17pt area-matches the
-    ///             dense, near-square `doc.on.doc` (empirically: 16pt was −12%,
-    ///             18pt overshot to +14%, 17pt ≈ parity).
-    ///   loading → a `.small` spinner (NOT `.mini`, which visibly shrank the
-    ///             control the instant it was tapped), gray footer tint — its
-    ///             MOTION confirms the tap (no color flip).
-    ///   playing → `pause.fill` (gray footer tint, 16pt) — tap to pause.
-    ///   paused  → `play.fill`  (gray footer tint, 16pt) — tap to resume from
-    ///             position.
-    /// Every state reads the uniform gray footer tint (like the neighboring
-    /// Copy glyph); only the glyph SHAPE signals state — nothing goes amber.
+    /// Direct playback stays visible beside the menu through loading, playing
+    /// and paused states. Only the glyph changes; its tint stays quiet so the
+    /// active control does not compete with message content.
     @ViewBuilder
     private var speakGlyph: some View {
         switch speakState {
@@ -2857,10 +2824,13 @@ private struct MessageBubble: View, Equatable {
 
     private func copyTapped() {
         onCopy()
-        withAnimation(.easeOut(duration: 0.15)) { didCopy = true }
+        AccessibilityAnnouncer.announce(String(localized: LocalizedStringResource(
+            "bubble.copy.copied", defaultValue: "Copied"
+        )))
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { didCopy = true }
         Task {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            withAnimation(.easeOut(duration: 0.2)) { didCopy = false }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { didCopy = false }
         }
     }
 

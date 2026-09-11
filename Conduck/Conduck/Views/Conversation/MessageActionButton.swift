@@ -3,8 +3,9 @@
 // Conduck
 // MessageActionButton.swift
 //
-// P3 — the reusable per-message footer action control (Speak / Copy) used by
-// `MessageBubble.footer` in `ConversationThreadView.swift`. Two jobs:
+// Message footer controls shared by the iPhone/iPad/Mac thread and Mac quick
+// reply. Playback stays directly accessible; Copy and Save to Work live in a
+// labelled ellipsis menu, separate from the selectable message text. Two jobs:
 //   1. A generous, platform-correct INVISIBLE hit region around a small visible
 //      glyph (the old 12pt glyph had a sub-minimum tap target with zero slop).
 //      iOS gets a full 44×44pt touch target (Apple HIG minimum is 44pt); macOS —
@@ -30,7 +31,7 @@ import SwiftUI
 
 /// Footer action-button hit-region size. iOS uses a full 44×44pt target (the HIG
 /// minimum in both axes); macOS uses a tighter pointer-precise target.
-/// Centralized so Speak + Copy stay identical.
+/// Centralized so playback and the actions menu stay identical.
 private enum FooterHitRegion {
     #if os(macOS)
     static let width: CGFloat = 28
@@ -92,6 +93,58 @@ extension MessageActionButton where Label == AnyView {
                     .foregroundStyle(tint)
             )
         }
+    }
+}
+
+// MARK: - MessageActionsMenu
+
+/// A visible menu keeps secondary actions discoverable without taking over
+/// text selection. Hosts may append file-recovery actions when applicable.
+/// The checkmark briefly acknowledges Copy even after the native menu closes.
+struct MessageActionsMenu<AdditionalActions: View>: View {
+    let didCopy: Bool
+    var size: CGFloat = 16
+    let tint: Color
+    let onCopy: () -> Void
+    let onSaveToWork: () -> Void
+    @ViewBuilder var additionalActions: () -> AdditionalActions
+
+    var body: some View {
+        Menu {
+            Button(action: onCopy) {
+                Label(
+                    LocalizedStringResource("bubble.actions.copy", defaultValue: "Copy message"),
+                    systemImage: "doc.on.doc"
+                )
+            }
+            Button(action: onSaveToWork) {
+                Label(
+                    LocalizedStringResource("workboard.chatCapture.action", defaultValue: "Save message to Work"),
+                    systemImage: "rectangle.stack.badge.plus"
+                )
+            }
+            additionalActions()
+        } label: {
+            Image(systemName: didCopy ? "checkmark" : "ellipsis")
+                .font(.system(size: size))
+                .foregroundStyle(tint)
+                .frame(width: FooterHitRegion.width, height: FooterHitRegion.height)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .menuOrder(.fixed)
+        #if os(macOS)
+        .pointerIconButton()
+        #else
+        .buttonStyle(PressableFooterButtonStyle())
+        #endif
+        .accessibilityLabel(Text(LocalizedStringResource(
+            "bubble.actions.menu", defaultValue: "Message actions"
+        )))
+        .help(Text(LocalizedStringResource(
+            "bubble.actions.menu", defaultValue: "Message actions"
+        )))
     }
 }
 
