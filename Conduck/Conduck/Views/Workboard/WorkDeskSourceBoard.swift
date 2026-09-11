@@ -27,9 +27,8 @@ struct WorkDeskSourceBoard: View {
         return workspace.organization.projects.filter { project in
             if !query.isEmpty { return project.title.localizedStandardContains(query) }
             switch workspace.scope {
-            case .desk: return true
-            case .pinned: return project.isPinned
-            case .all, .project: return false
+            case .all: return renderedLayout == .desk
+            case .project: return false
             }
         }.map { WorkDeskCanvasProject(record: $0, materialCount: counts[$0.id] ?? 0) }
     }
@@ -80,15 +79,26 @@ struct WorkDeskSourceBoard: View {
         let visibleIDs = visible.map(\.id)
         let indices = Dictionary(visible.enumerated().map { ($0.element.id, $0.offset + 1) }, uniquingKeysWith: { first, _ in first })
         let projectID = workspace.currentProject?.id
+        let isHome = workspace.scope == .all
+        let placements = workspace.organization.placements.mapValues { placement in
+            var displayed = placement
+            if isHome { displayed.position = placement.resolvedHomePosition }
+            return displayed
+        }
         return WorkDeskCanvas(
             materials: visible,
-            placements: workspace.organization.placements,
+            placements: placements,
             projects: projects,
             session: workspace.canvasSession(for: workspace.scope),
             selectedIDs: workspace.selectedIDs,
             isSelecting: workspace.isSelecting,
-            onMoveMaterials: { positions in
-                await workspace.organization.moveMaterials(positions: positions, expectedProjectID: projectID)
+            onMoveMaterials: { positions, memberships in
+                if isHome {
+                    return await workspace.organization.moveHomeMaterials(positions.map { id, point in
+                        .init(materialID: id, projectID: memberships[id] ?? nil, position: point, isHome: true)
+                    })
+                }
+                return await workspace.organization.moveMaterials(positions: positions, expectedProjectID: projectID)
             },
             onMoveProject: { id, point in await workspace.organization.moveProject(id: id, to: point) },
             onGroup: { ids, point in workspace.beginProject(materialIDs: ids, position: projectID == nil ? point : nil) },
@@ -100,15 +110,15 @@ struct WorkDeskSourceBoard: View {
             onSelect: workspace.toggleSelection,
             onOpenProject: { workspace.selectScope(.project($0)) },
             onSeedPositions: { materials, projects in
-                await workspace.organization.seedPositions(materials: materials, projects: projects)
+                await workspace.organization.seedPositions(materials: materials.map { seed in
+                    var scoped = seed
+                    scoped.isHome = isHome
+                    return scoped
+                }, projects: projects)
             },
-            onCreateProject: workspace.scope == .desk ? { point in
+            onCreateProject: workspace.scope == .all ? { point in
                 workspace.beginProject(position: point)
-            } : nil,
-            onToggleProjectPin: { id in
-                guard let project = workspace.organization.project(id: id) else { return }
-                Task { await workspace.organization.setProjectPinned(!project.isPinned, id: id) }
-            }
+            } : nil
         ) { material, size in
             sourceCard(material, spatial: true, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
                 .frame(width: size.width, height: size.height)
@@ -243,11 +253,15 @@ struct WorkDeskSourceBoard: View {
                 .foregroundStyle(AppColors.accent)
             Text(workspace.isSearching
                  ? LocalizedStringResource("workdesk.search.empty.title", defaultValue: "Nothing found")
-                 : LocalizedStringResource("workdesk.empty.title", defaultValue: "Room to think"))
+                 : workspace.currentProject != nil
+                    ? LocalizedStringResource("workdesk.project.empty.title", defaultValue: "This project is ready for ideas")
+                    : LocalizedStringResource("workdesk.empty.title", defaultValue: "Room to think"))
                 .font(.title2.weight(.semibold))
-            Text(!workspace.isSearching
-                ? LocalizedStringResource("workdesk.empty.message", defaultValue: "Capture a thought below, or bring ideas together in a project. Everything starts on your desk.")
-                : LocalizedStringResource("workdesk.search.empty", defaultValue: "No ideas, files or projects match this search. Try another word."))
+            Text(workspace.isSearching
+                ? LocalizedStringResource("workdesk.search.empty", defaultValue: "No ideas, files or projects match this search. Try another word.")
+                : workspace.currentProject != nil
+                    ? LocalizedStringResource("workdesk.project.empty.message", defaultValue: "Capture a thought below, or move materials into this project from All materials.")
+                    : LocalizedStringResource("workdesk.all.empty.message", defaultValue: "Capture a thought or add a file below. Everything you collect appears here, including materials in projects."))
                 .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 340)
         }

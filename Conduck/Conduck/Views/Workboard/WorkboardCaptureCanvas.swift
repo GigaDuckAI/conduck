@@ -16,25 +16,42 @@ enum WorkboardCaptureCanvasMode: Sendable {
     case composer
 }
 
-/// Work is ONE desk, so capture has a single destination and its copy names no
-/// target: there is nothing to choose between and no title to interpolate.
-/// `private` because a host does not pick it — the canvas and the pane-wide drop
-/// state it, which is what keeps a second destination from creeping back in.
-private enum WorkboardCaptureDestination: Equatable, Sendable {
-    case desk
+/// Capture remains on the canonical desk; this value freezes the optional
+/// project membership before a picker, provider, or store operation suspends.
+enum WorkboardCaptureDestination: Equatable, Sendable {
+    case all
+    case project(UUID, title: String)
+
+    @MainActor
+    init(workspace: WorkDeskWorkspaceState?) {
+        if let workspace, !workspace.isSearching, let project = workspace.currentProject {
+            self = .project(project.id, title: project.title)
+        } else {
+            self = .all
+        }
+    }
+
+    var projectID: UUID? {
+        if case .project(let id, _) = self { return id }
+        return nil
+    }
 
     var composerPrompt: LocalizedStringResource {
-        LocalizedStringResource(
-            "workboard.workspace.composer.prompt",
-            defaultValue: "Add to Work…"
-        )
+        switch self {
+        case .all:
+            LocalizedStringResource("workdesk.capture.all.prompt", defaultValue: "Add to All materials…")
+        case .project(_, let title):
+            LocalizedStringResource("workdesk.capture.project.prompt", defaultValue: "Add to \(title)…")
+        }
     }
 
     var dropTitle: LocalizedStringResource {
-        LocalizedStringResource(
-            "workboard.workspace.drop.overlay.title",
-            defaultValue: "Drop into Work"
-        )
+        switch self {
+        case .all:
+            LocalizedStringResource("workdesk.capture.all.drop", defaultValue: "Drop into All materials")
+        case .project(_, let title):
+            LocalizedStringResource("workdesk.capture.project.drop", defaultValue: "Drop into \(title)")
+        }
     }
 
     var dropCaption: LocalizedStringResource {
@@ -55,9 +72,10 @@ struct WorkboardCaptureCanvas: View {
     let mode: WorkboardCaptureCanvasMode
     var deskWorkspace: WorkDeskWorkspaceState?
 
-    /// Capture always lands on the desk, so the destination is a constant the
-    /// canvas states rather than an argument a host chooses.
-    private let destination = WorkboardCaptureDestination.desk
+    private var destination: WorkboardCaptureDestination {
+        WorkboardCaptureDestination(workspace: deskWorkspace)
+    }
+    @State private var pickerDestination: WorkboardCaptureDestination = .all
 
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -132,11 +150,13 @@ struct WorkboardCaptureCanvas: View {
                 photoSelection.removeAll()
                 return
             }
-            Task { await importPhotos(selection) }
+            let target = pickerDestination
+            Task { await importPhotos(selection, destination: target) }
         }
         .sheet(isPresented: activeLinkComposerIsPresented) {
             WorkboardTextMaterialSheet { materialImport in
-                Task { await viewModel.importMaterials([materialImport]) }
+                let target = pickerDestination
+                Task { await viewModel.importMaterials([materialImport], projectID: target.projectID) }
             }
         }
         .sheet(isPresented: activeVoiceCaptureIsPresented) {
@@ -176,7 +196,7 @@ struct WorkboardCaptureCanvas: View {
             item: activeLargeImportConfirmation,
             onConfirm: { confirmation in
                 largeImportConfirmation = nil
-                Task { await importResolvedBatch(confirmation.batch) }
+                Task { await importResolvedBatch(confirmation.batch, destination: confirmation.destination) }
             },
             onCancel: { confirmation in
                 largeImportConfirmation = nil
@@ -403,22 +423,8 @@ struct WorkboardCaptureCanvas: View {
     /// The host's material band is unaffected: the modifier's second frame
     /// re-expands to `.infinity`, so the band still reaches both window edges even
     /// though the card inside it does not.
-    private var captureNeedsDeskDirection: Bool {
-        guard let deskWorkspace else { return false }
-        return deskWorkspace.scope != .desk || deskWorkspace.isSearching
-    }
-
     private var pinnedComposer: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if captureNeedsDeskDirection, let deskWorkspace {
-                Button { deskWorkspace.selectScope(.desk) } label: {
-                    Label(LocalizedStringResource("workdesk.capture.destination.short", defaultValue: "Captures go to Your desk"),
-                          systemImage: "arrow.turn.up.left")
-                        .font(.caption)
-                }
-                .inlineLinkButton()
-                .foregroundStyle(AppColors.textSecondary)
-            }
             if usesComposerCard {
                 #if os(macOS)
                 composerCard
@@ -494,15 +500,18 @@ struct WorkboardCaptureCanvas: View {
             presentation: .menu,
             onPickPhotos: {
                 guard workbenchDestinationIsActive else { return }
+                pickerDestination = destination
                 showsPhotoPicker = true
             },
             onTakePhoto: takePhoto,
             onPickFiles: {
                 guard workbenchDestinationIsActive else { return }
+                pickerDestination = destination
                 showsFileImporter = true
             },
             onAddLink: {
                 guard workbenchDestinationIsActive else { return }
+                pickerDestination = destination
                 showsLinkComposer = true
             },
             iconPointSize: attachmentIconPointSize,
@@ -523,9 +532,7 @@ struct WorkboardCaptureCanvas: View {
         inCard: Bool = false
     ) -> some View {
         TextField(
-            String(localized: captureNeedsDeskDirection
-                ? LocalizedStringResource("workdesk.capture.prompt", defaultValue: "Add to your desk…")
-                : destination.composerPrompt),
+            String(localized: destination.composerPrompt),
             text: composerTextBinding,
             axis: .vertical
         )
@@ -624,6 +631,7 @@ struct WorkboardCaptureCanvas: View {
     private func takePhoto() {
         #if os(iOS)
         guard workbenchDestinationIsActive else { return }
+        pickerDestination = destination
         switch CameraPermission.current {
         case .proceed: showsCamera = true
         case .denied: showsCameraDeniedAlert = true
@@ -652,15 +660,21 @@ struct WorkboardCaptureCanvas: View {
               !thought.isEmpty,
               !isAddingThought else { return }
         isAddingThought = true
+        let target = destination
+        let capturedDraft = composerText
         Task {
-            let added = await viewModel.addThought(thought)
+            let added = await viewModel.addThought(thought, projectID: target.projectID)
             if added {
-                viewModel.setComposerDraft("")
+                // An import may finish after the person continues typing or
+                // voice appends new words. Clear only the draft we captured.
+                if viewModel.composerDraft == capturedDraft { viewModel.setComposerDraft("") }
                 let message = String(localized: LocalizedStringResource(
                     "workboard.workspace.thought.saved",
                     defaultValue: "Added to Work. Nothing was sent."
                 ))
-                viewModel.workspaceStatus = WorkboardTransientStatus(message: message)
+                if viewModel.notice == nil {
+                    viewModel.workspaceStatus = WorkboardTransientStatus(message: message)
+                }
                 AccessibilityAnnouncer.announce(message)
             }
             isAddingThought = false
@@ -685,11 +699,12 @@ struct WorkboardCaptureCanvas: View {
             items: [.image(data: data, displayName: name)],
             failedCount: 0
         )
-        Task { await importResolvedBatch(batch) }
+        let target = pickerDestination
+        Task { await importResolvedBatch(batch, destination: target) }
     }
     #endif
 
-    private func importPhotos(_ selection: [PhotosPickerItem]) async {
+    private func importPhotos(_ selection: [PhotosPickerItem], destination: WorkboardCaptureDestination) async {
         defer { photoSelection = [] }
         guard !viewModel.isCapturingIntoDesk else { return }
         var items: [WorkboardResolvedImportItem] = []
@@ -717,13 +732,14 @@ struct WorkboardCaptureCanvas: View {
         let batch = WorkboardResolvedImportBatch(items: items, failedCount: failures)
         guard !batch.items.isEmpty || batch.failedCount > 0 else { return }
         if batch.hasLargeFiles {
-            largeImportConfirmation = WorkboardWorkspaceLargeImportConfirmation(batch: batch)
+            largeImportConfirmation = WorkboardWorkspaceLargeImportConfirmation(batch: batch, destination: destination)
         } else {
-            await importResolvedBatch(batch)
+            await importResolvedBatch(batch, destination: destination)
         }
     }
 
     private func handleFileImport(_ result: Result<[URL], Error>) {
+        let destination = pickerDestination
         Task {
             do {
                 let urls = try result.get()
@@ -736,9 +752,9 @@ struct WorkboardCaptureCanvas: View {
                 let batch = await resolvedPickerBatch(urls)
                 guard !batch.items.isEmpty || batch.failedCount > 0 else { return }
                 if batch.hasLargeFiles {
-                    largeImportConfirmation = WorkboardWorkspaceLargeImportConfirmation(batch: batch)
+                    largeImportConfirmation = WorkboardWorkspaceLargeImportConfirmation(batch: batch, destination: destination)
                 } else {
-                    await importResolvedBatch(batch)
+                    await importResolvedBatch(batch, destination: destination)
                 }
             } catch {
                 materialPendingReattachment = nil
@@ -802,10 +818,11 @@ struct WorkboardCaptureCanvas: View {
     }
 
     @MainActor
-    private func importResolvedBatch(_ batch: WorkboardResolvedImportBatch) async {
+    private func importResolvedBatch(_ batch: WorkboardResolvedImportBatch, destination: WorkboardCaptureDestination) async {
         let mapped = WorkboardImportMapping.imports(from: batch)
         await viewModel.importMaterials(
             mapped.imports,
+            projectID: destination.projectID,
             additionalFailureCount: batch.failedCount
         )
         for url in mapped.scopedURLs { url.stopAccessingSecurityScopedResource() }
@@ -824,8 +841,8 @@ extension View {
     /// Makes the complete Work detail region a capture target. This deliberately
     /// lives above both the scrolling canvas and pinned composer: nested drop
     /// handlers caused the composer to reject a valid drop while the populated
-    /// desk had no handler at all. A drop names no target: the desk is the only
-    /// one there is.
+    /// desk had no handler at all. The optional project destination is frozen
+    /// when the drop starts, before any provider begins loading.
     func workboardPaneDropDestination(viewModel: WorkboardViewModel) -> some View {
         modifier(WorkboardPaneDropModifier(viewModel: viewModel))
     }
@@ -834,7 +851,10 @@ extension View {
 private struct WorkboardPaneDropModifier: ViewModifier {
     @Bindable var viewModel: WorkboardViewModel
 
-    private let destination = WorkboardCaptureDestination.desk
+    private var destination: WorkboardCaptureDestination {
+        WorkboardCaptureDestination(workspace: viewModel.deskWorkspace)
+    }
+    @State private var sessionDestination: WorkboardCaptureDestination = .all
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
@@ -866,7 +886,7 @@ private struct WorkboardPaneDropModifier: ViewModifier {
                 item: activeLargeImportConfirmation,
                 onConfirm: { confirmation in
                     largeImportConfirmation = nil
-                    Task { await importResolvedBatch(confirmation.batch) }
+                    Task { await importResolvedBatch(confirmation.batch, destination: confirmation.destination) }
                 },
                 onCancel: { confirmation in
                     largeImportConfirmation = nil
@@ -941,6 +961,7 @@ private struct WorkboardPaneDropModifier: ViewModifier {
             count: routed.count,
             initialFailureCount: providers.count - routed.count
         )
+        sessionDestination = destination
         dropSession = session
         for (index, entry) in routed.enumerated() {
             startDropLoad(entry.0, route: entry.1, index: index, session: session)
@@ -1052,20 +1073,22 @@ private struct WorkboardPaneDropModifier: ViewModifier {
             try? FileManager.default.removeItem(at: orphan)
         }
         guard let batch = session.takeBatch() else { return }
+        let destination = sessionDestination
         clearDropLoadBookkeeping()
         dropSession = nil
         if batch.hasLargeFiles {
-            largeImportConfirmation = WorkboardWorkspaceLargeImportConfirmation(batch: batch)
+            largeImportConfirmation = WorkboardWorkspaceLargeImportConfirmation(batch: batch, destination: destination)
         } else {
-            Task { await importResolvedBatch(batch) }
+            Task { await importResolvedBatch(batch, destination: destination) }
         }
     }
 
     @MainActor
-    private func importResolvedBatch(_ batch: WorkboardResolvedImportBatch) async {
+    private func importResolvedBatch(_ batch: WorkboardResolvedImportBatch, destination: WorkboardCaptureDestination) async {
         let mapped = WorkboardImportMapping.imports(from: batch)
         await viewModel.importMaterials(
             mapped.imports,
+            projectID: destination.projectID,
             additionalFailureCount: batch.failedCount
         )
         for url in mapped.scopedURLs { url.stopAccessingSecurityScopedResource() }
@@ -2772,6 +2795,12 @@ struct WorkboardSourceCard: View {
                     .lineLimit(2)
                     .accessibilityHidden(true)
             }
+            if let organizationActions, organizationActions.showsLocation, organizationActions.project != nil {
+                WorkDeskMaterialLocation(actions: organizationActions)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 4))
+            }
             // The size and the age wait for the pointer, in space this block
             // reserves either way: revealing them by ADDING a row would move
             // the name every time the cursor crossed the card.
@@ -3007,6 +3036,9 @@ struct WorkboardSourceCard: View {
             faceText
             Spacer(minLength: 0)
             availabilityLine
+            if let organizationActions {
+                WorkDeskMaterialLocation(actions: organizationActions)
+            }
             cardFooter
         }
     }
@@ -3338,11 +3370,15 @@ struct WorkboardSourceCard: View {
     }
 
     private var accessibilitySummary: Text {
-        Text(WorkboardCardAccessibility.summary(
+        let summary = Text(WorkboardCardAccessibility.summary(
             material: material,
             boardPosition: boardPosition,
             boardCount: boardCount
         ))
+        if let actions = organizationActions, actions.showsLocation, let project = actions.project {
+            return summary + Text(verbatim: ", " + project.title)
+        }
+        return summary
     }
 
     static func boardPositionLabel(position: Int, count: Int) -> String {
@@ -3560,6 +3596,7 @@ struct WorkboardResolvedImportBatch: Sendable {
 private struct WorkboardWorkspaceLargeImportConfirmation: WorkboardLargeImportConfirming {
     let id = UUID()
     let batch: WorkboardResolvedImportBatch
+    let destination: WorkboardCaptureDestination
 
     var largeItemByteCounts: [Int64] { batch.largeItemByteCounts }
 }

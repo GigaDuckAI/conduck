@@ -62,16 +62,23 @@ nonisolated struct WorkDeskPlacementRecord: Identifiable, Hashable, Sendable {
     let materialID: UUID
     var projectID: UUID?
     var position: WorkDeskPoint?
+    var homePosition: WorkDeskPoint?
     var isPinned: Bool
     var updatedAt: Date
 
     init(materialID: UUID, projectID: UUID? = nil, position: WorkDeskPoint? = nil,
-         isPinned: Bool = false, updatedAt: Date = Date()) {
+         homePosition: WorkDeskPoint? = nil, isPinned: Bool = false, updatedAt: Date = Date()) {
         self.materialID = materialID
         self.projectID = projectID
         self.position = position
+        self.homePosition = homePosition
         self.isPinned = isPinned
         self.updatedAt = updatedAt
+    }
+    /// Older loose placements are already in home coordinates. Project-local
+    /// coordinates must never be interpreted as positions on All materials.
+    var resolvedHomePosition: WorkDeskPoint? {
+        homePosition ?? (projectID == nil ? position : nil)
     }
 }
 
@@ -87,6 +94,7 @@ nonisolated struct WorkDeskPositionSeed: Sendable, Hashable {
     let materialID: UUID
     let projectID: UUID?
     let position: WorkDeskPoint
+    var isHome: Bool = false
 }
 
 /// Intent-specific writes change only the fields the person acted on. Moving
@@ -100,6 +108,9 @@ nonisolated enum WorkDeskMutation: Sendable {
     /// A selected group moves only while every member still belongs to the
     /// scope where its drag began. One stale member refuses the whole move.
     case moveMaterials(positions: [UUID: WorkDeskPoint], expectedProjectID: UUID?)
+    /// All materials spans projects. Each captured membership is validated
+    /// before this atomic move writes only the independent home coordinates.
+    case moveHomeMaterials([WorkDeskPositionSeed])
     case pinMaterial(id: UUID, isPinned: Bool)
     case moveProject(id: UUID, position: WorkDeskPoint?)
     case pinProject(id: UUID, isPinned: Bool)

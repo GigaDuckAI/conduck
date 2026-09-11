@@ -1,32 +1,32 @@
 # Work desk verification
 
-Use the `codex/work-desk-20260909` worktree. Build the `Conduck` scheme for your device or Mac. This checklist covers behavior that compilation and unit tests cannot establish.
+Build the `Conduck` scheme for your device or Mac. This checklist covers behavior that compilation and unit tests cannot establish.
 
 Rebuild and relaunch after pulling these fixes; an already running app still holds its old compiled labels.
 
 Check the reported regressions first:
 
-- Work shows readable labels such as Your desk, Projects and Select, with "1 material" or "14 materials" below the title. No internal `workdesk.*` keys appear, including in project sheets and the reviewed Send action.
+- Work shows readable labels such as All materials, Projects and Select, with "1 material" or "14 materials" below the title. No internal `workdesk.*` keys appear, including in project sheets and the reviewed Send action.
 - On Mac, Work has no New Conversation or Delete All button. Its native sidebar button collapses and expands the project rail. Switch back to Chats and verify its conversation buttons and previous sidebar state return. Repeat quick Work/Chats switches.
 - On iPhone and iPad, Work's leading sidebar button opens project navigation. A wide iPad has an expandable rail; a compact window or phone has a picker. Resize across the wide/compact boundary while the picker is open, then return to wide and verify the rail still responds. No hidden Chat toolbar actions should appear in Work.
-- The named Desk/Tiles/List control matches what is drawn. With Desk selected, search or open All materials/Pinned: the control should show List. Clear search or return to Your desk: Desk returns at its previous zoom and position. With accessibility text enabled, the control shows List and cannot select a layout the board would ignore.
+- The named Desk/Tiles/List control matches what is drawn. All materials and projects support Desk. Search temporarily shows List; clearing search restores the previous layout, zoom and position. With accessibility text enabled, the control shows List and cannot select a layout the board would ignore.
 
 Check Desk input with the actual device controls:
 
-- On iPhone/iPad, drag a card by its handle with one finger. Pan empty space with one finger, or pan/pinch anywhere on the desk with two fingers. An off-centre pinch should keep the content under the fingers. Start on a preview/play button, add a second finger, navigate and release: no accidental preview or playback should fire.
-- On Mac, drag handles with the primary mouse button; scroll or use two fingers on a trackpad to pan. Shift-wheel pans horizontally, Command/Control-wheel zooms around the pointer, and trackpad pinch zooms around its focal point. Middle-button pan should resume after crossing outside and back into the canvas. A scroll begun in the project rail must stay there when the pointer crosses into the desk.
-- Focus a handle with the keyboard. Arrow keys move the card or selected group; Shift moves farther. Escape during a held drag cancels once, and moving the still-held pointer must not restart it. Switching away from Work or starting two-finger navigation must also cancel the old card drag.
+- On iPhone/iPad, drag anywhere on a card with one finger. Pan empty space with one finger, or pan/pinch anywhere on the desk with two fingers. An off-centre pinch should keep the content under the fingers. Start on a preview/play button, add a second finger, navigate and release: no accidental preview or playback should fire.
+- On Mac, drag cards with the primary mouse button; scroll or use two fingers on a trackpad to pan. Shift-wheel pans horizontally, Command/Control-wheel zooms around the pointer, and trackpad pinch zooms around its focal point. Middle-button pan should resume after crossing outside and back into the canvas. A scroll begun in the project rail must stay there when the pointer crosses into the desk.
+- Focus a card with the keyboard. Arrow keys move the card or selected group; Shift moves farther. Escape during a held drag cancels once, and moving the still-held pointer must not restart it. Switching away from Work or starting two-finger navigation must also cancel the old card drag.
 - Select several overlapping cards and drag one. All selected cards should move together, preserve their spacing at desk edges, and keep their relative foreground order on release. Click or move a project pile behind a card and verify it can come to the front too.
 - Overlap a card/project and briefly hold until the foreground instruction says to release. The instruction and destination name must remain above the moving cards, even at viewport edges. Passing quickly across an item should only arrange the cards. A hidden project underneath a visible card must never capture that card's drop.
-- Hold either end of a wide handle near an edge at high zoom. The desk should pan while the finger/pointer keeps its grip. Move far outside the viewport and cancel: the grouping instruction should remain within the visible area and then disappear.
+- Hold a card near an edge at high zoom. The desk should pan while the finger/pointer keeps its grip. Move far outside the viewport and cancel: the grouping instruction should remain within the visible area and then disappear.
 - Zoom far out and use Fit with widely separated cards, including in a short split window or with the keyboard visible. Overview cards retain a usable focus target; tapping one zooms in before opening anything. Clicking the percentage resets zoom. Visit a project, change its view, open Chats, and return: each desk/project should retain its own view.
 - With a deliberately delayed/failed save, release a group and drag again immediately. Old completions must not snap the new drag backwards. If a prospective drop target's pending move fails, its highlight must follow the returned card. Reassign/delete a selected member from another device before releasing: the whole stale movement should be refused without scattering the other members.
 
 1. Open Work on iPhone, iPad and Mac. The Desk view should show movable cards and project stacks, with a project picker on a phone and a collapsible rail in a wide window. Switch among Desk, Tiles and List; relaunch and check the choice remains.
-2. Capture text, a screenshot, an attached file and a voice note. Repeat with the existing share sheet, Shortcut, menu bar, Watch and CarPlay routes. Each capture should land unfiled on the same desk. Spoken notes keep their words; an audio file deliberately attached in Work remains playable.
-3. Move a card using its top handle. Pan empty space, pinch to zoom, use the zoom buttons and Fit. Move cards far apart, leave Work, return and relaunch. Positions should remain, and Fit should reveal the whole arrangement. Capturing after grouping or deleting an early card should use free space.
-4. Overlap two cards and hold for the release instruction, or select several and choose Create project. Name it, open it, rename it and move more materials into it. A project created by overlapping on Your desk should appear at that cluster's location. Canceling the naming sheet should keep all materials where they were. Ungrouping a project should return its materials without deleting any file.
-5. Pin materials and use Pinned, All materials and search. Search should reveal a matching item even if its canvas position is far away. In Select mode, tapping an audio card should select it; it should not start playback. Move Earlier/Later should move through the visible list, including inside a project.
+2. Capture text, a screenshot, an attached file and a voice note. Repeat with the existing share sheet, Shortcut, menu bar, Watch and CarPlay routes. In-app capture inside a project should appear in that project and All materials. Capture from All materials, global search, or an external route should remain outside projects. Spoken notes keep their words; an audio file deliberately attached in Work remains playable.
+3. Move a card by its body. Pan empty space, pinch to zoom, use the zoom buttons and Fit. Move cards far apart, leave Work, return and relaunch. Positions should remain, and Fit should reveal the whole arrangement. Capturing after grouping or deleting an early card should use free space.
+4. Overlap two cards and hold for the release instruction, or select several and choose Create project. Name it, open it, rename it and move more materials into it. A project created by overlapping in All materials should appear near the cluster without covering retained cards, including after relaunch. Canceling the naming sheet should keep all materials where they were. Ungrouping a project should keep its materials in All materials without deleting any file.
+5. Check that navigation contains only All materials and Projects, and no card, project or accessibility menu offers pinning. Search should reveal a matching item even if its canvas position is far away. In Select mode, tapping an audio card should select it; it should not start playback. Move Earlier/Later should move through the visible list, including inside a project.
 6. Open a project's Prepare screen. Enter an instruction, choose a configured gateway and review the included materials. Exclude a material and verify it stays in the project. Check a hosted connection and a gateway with file transfer: unsupported files and missing bytes should explain what needs to change before review.
 7. Review the prompt and attachment list, then explicitly send to the named connection. Exactly one new bound chat should open, with the original project intact. Double-tap Send. On Mac, use Stop in the resulting chat and verify it cancels that work. Check upload failure and normal Chat retry behavior with a deliberately unavailable test destination.
 8. While reviewing, change or delete a selected source, gateway configuration or project on another window/device. Sending or saving stale work should be refused with a recoverable explanation. Test a missing local file and a file still arriving from iCloud. No file should silently turn into only a filename in the handoff.
@@ -35,18 +35,17 @@ Check Desk input with the actual device controls:
 
 Private iCloud propagation, production CloudKit schema readiness, real provider behavior and physical capture surfaces require device/account verification. The unit suites use isolated stores and transport doubles; they do not prove those external behaviors.
 
-Automated verification for this worktree:
+Additional checks for the simplified workspace:
 
-- iOS suite after the Desk interaction refinements: 6,090 tests, zero failures, one skipped; `TEST SUCCEEDED`.
-- Watch suite: 302 tests, zero failures; `TEST EXECUTE SUCCEEDED`.
-- iPhone/iPad simulator Debug-Testing build: passed.
-- Native macOS arm64 Release build: passed.
-- Compiled Mac Release and iOS English resources: all 109 Work desk/tutorial values match the authored catalog, including grouping instructions, material counts and the named Send action. The app suite checks actual bundle lookups and interpolation.
-- Localization synchronizer: nine regression tests passed, including generated-symbol contamination, stale/incomplete compiler metadata, conflicting defaults, translation readiness and preservation of unrelated translations.
-- Builds use `CODE_SIGNING_ALLOWED=NO`; these results prove compilation and isolated tests, not signing or installation.
-- Independent interaction, native input, batch-storage and localization reviews completed. Actionable findings were fixed and affected checks rerun. This is source/failure-case review, not an on-screen UI pass.
-- Storage seam, folder map, spec citations/size, bundled legal copies, localization coverage, source headers, diff whitespace and scoped secret scan: passed.
+- Select is absent on an empty view. Select shows a clear Done exit and Select all; organisation actions appear only after selecting a material. Check a narrow window and large text.
+- Assign cards to projects: they remain visible in All materials with project names. Rename or reassign a project and check the labels update, including image cards and VoiceOver.
+- Move a card in All materials, then move it inside its project. Return to each view and relaunch: the two arrangements remain independent.
+- Start a file/photo import or drop in project A, then switch views while it finishes. Only the captured items go to A. Delete A before completion: successfully imported items remain in All materials, and the notice reports any import failures as well as the unavailable project.
+- Type more text while a previous thought saves: the newer draft remains. A failed project assignment must not invite submitting an already saved thought twice.
+- Empty projects invite adding materials; empty search results explain that no matches were found. A matching empty project remains discoverable in search.
 
-Verification covers local source and builds. No merge, push, deployment or device installation is included. The main checkout's existing changes are preserved. Task-specific build caches are removed after verification.
+Automated checks cover both simulator suites, iOS and macOS Release compilation,
+compiled English copy, migration from existing stores, capture failure cases and
+source guards. These checks do not replace the device/account verification above.
 
 For future headless Work-copy updates, compile first, then run `python3 scripts/sync-workdesk-strings.py --objects <app Objects-normal/arm64>`. This checks authored compiler defaults without changing the catalog; add `--write` to apply them and rebuild before testing. The synchronizer refuses generated-accessor metadata, stale or incomplete extraction, and conflicting values. Its regression fixtures run with `python3 scripts/test_sync_workdesk_strings.py`; the app suite separately checks the English resources actually compiled into the app.

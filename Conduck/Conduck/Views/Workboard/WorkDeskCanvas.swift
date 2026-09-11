@@ -15,7 +15,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
     @Bindable var session: WorkDeskCanvasSession
     let selectedIDs: Set<UUID>
     let isSelecting: Bool
-    let onMoveMaterials: ([UUID: WorkDeskPoint]) async -> Bool
+    let onMoveMaterials: ([UUID: WorkDeskPoint], [UUID: UUID?]) async -> Bool
     let onMoveProject: (UUID, WorkDeskPoint) async -> Bool
     let onGroup: ([UUID], WorkDeskPoint) -> Void
     let onAssign: ([UUID], UUID) async -> Bool
@@ -23,7 +23,6 @@ struct WorkDeskCanvas<CardContent: View>: View {
     let onOpenProject: (UUID) -> Void
     let onSeedPositions: ([WorkDeskPositionSeed], [UUID: WorkDeskPoint]) async -> Bool
     var onCreateProject: ((WorkDeskPoint) -> Void)? = nil
-    var onToggleProjectPin: ((UUID) -> Void)? = nil
     @ViewBuilder var cardContent: (WorkboardMaterialSnapshot, CGSize) -> CardContent
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -240,8 +239,6 @@ struct WorkDeskCanvas<CardContent: View>: View {
         .accessibilityHint(Text(isOverview
             ? LocalizedStringResource("workdesk.canvas.focusMaterial", defaultValue: "Zoom in to this material")
             : LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project")))
-        .contextMenu { projectPinAction(project) }
-        .accessibilityActions { projectPinAction(project) }
         .overlay {
             RoundedRectangle(cornerRadius: 13 * transform.scale)
                 .strokeBorder(highlighted || lifted ? AppColors.brandAmber : .clear, lineWidth: 2)
@@ -281,16 +278,6 @@ struct WorkDeskCanvas<CardContent: View>: View {
         .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 13))
         .overlay { RoundedRectangle(cornerRadius: 13).strokeBorder(AppColors.brandAmber.opacity(0.35), lineWidth: 1) }
         .contentShape(Rectangle())
-    }
-
-    @ViewBuilder private func projectPinAction(_ project: WorkDeskCanvasProject) -> some View {
-        if let onToggleProjectPin {
-            Button(project.record.isPinned
-                ? LocalizedStringResource("workdesk.project.unpin", defaultValue: "Unpin project")
-                : LocalizedStringResource("workdesk.project.pin", defaultValue: "Pin project")) {
-                onToggleProjectPin(project.id)
-            }
-        }
     }
 
     private func backgroundTapped(_ location: CGPoint) {
@@ -465,7 +452,10 @@ struct WorkDeskCanvas<CardContent: View>: View {
             }
             session.raiseGroup(ids, lead: id)
             let origins = Dictionary(uniqueKeysWithValues: ids.map { ($0, currentPoint($0)) })
-            drag = WorkDeskCanvasDrag(lead: id, origins: origins, startTransform: transform)
+            drag = WorkDeskCanvasDrag(lead: id, origins: origins, startTransform: transform,
+                memberships: Dictionary(uniqueKeysWithValues: ids.filter { !$0.isProject }.map {
+                    ($0.id, placements[$0.id]?.projectID)
+                }))
             cacheDropCandidates()
             startEdgePanning()
         }
@@ -516,12 +506,12 @@ struct WorkDeskCanvas<CardContent: View>: View {
                 withAnimation(motion) { livePositions = [:] }
                 onGroup(materialIDs + [value], currentPoint(target))
             case .project(let projectID):
-                let destination = currentPoint(target)
-                let settling = points.mapValues { _ in destination }
-                withAnimation(motion) { commitAssignment(materialIDs, to: projectID, points: settling); livePositions = [:] }
+                // Filing changes membership, not the home arrangement. Keep
+                // the original positions while the assignment commits.
+                withAnimation(motion) { commitAssignment(materialIDs, to: projectID, points: finished.origins); livePositions = [:] }
             }
         } else {
-            commitMove(points)
+            commitMove(points, memberships: finished.memberships)
             livePositions = [:]
         }
     }
@@ -547,12 +537,15 @@ struct WorkDeskCanvas<CardContent: View>: View {
         withAnimation(motion) { commitMove(points) }
     }
 
-    private func commitMove(_ points: [WorkDeskCanvasItemID: WorkDeskPoint]) {
+    private func commitMove(_ points: [WorkDeskCanvasItemID: WorkDeskPoint], memberships: [UUID: UUID?]? = nil) {
+        let expectedMemberships = memberships ?? Dictionary(uniqueKeysWithValues: points.keys.filter { !$0.isProject }.map {
+            ($0.id, placements[$0.id]?.projectID)
+        })
         let token = pending.begin(points)
         Task { @MainActor in
             let success: Bool
             if let entry = points.first, entry.key.isProject { success = await onMoveProject(entry.key.id, entry.value) }
-            else { success = await onMoveMaterials(Dictionary(uniqueKeysWithValues: points.map { ($0.key.id, $0.value) })) }
+            else { success = await onMoveMaterials(Dictionary(uniqueKeysWithValues: points.map { ($0.key.id, $0.value) }), expectedMemberships) }
             withAnimation(motion) {
                 let owned = pending.finish(token: token)
                 if success {

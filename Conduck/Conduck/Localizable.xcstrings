@@ -1,24 +1,123 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "workdesk.project.unpin" : {
+    "workdesk.all.empty.message" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Unpin project"
+            "value" : "Capture a thought or add a file below. Everything you collect appears here, including materials in projects."
           }
         }
       }
     },
-    "workdesk.project.pin" : {
+    "workdesk.capture.all.drop" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pin project"
+            "value" : "Drop into All materials"
+          }
+        }
+      }
+    },
+    "workdesk.capture.all.prompt" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to All materials…"
+          }
+        }
+      }
+    },
+    "workdesk.capture.project.drop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop into %@"
+          }
+        }
+      }
+    },
+    "workdesk.capture.project.failed.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your added items are safe in All materials, but couldn’t be added to the project. Open All materials to organise them."
+          }
+        }
+      }
+    },
+    "workdesk.capture.project.failed.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved in All materials"
+          }
+        }
+      }
+    },
+    "workdesk.capture.project.partial.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld added to All materials; %2$lld couldn’t be added. Saved items couldn’t be placed in the project. Open All materials to organise them."
+          }
+        }
+      }
+    },
+    "workdesk.capture.project.prompt" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to %@…"
+          }
+        }
+      }
+    },
+    "workdesk.project.empty.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Capture a thought below, or move materials into this project from All materials."
+          }
+        }
+      }
+    },
+    "workdesk.project.empty.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This project is ready for ideas"
+          }
+        }
+      }
+    },
+    "workdesk.removeFromProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from project"
           }
         }
       }
@@ -63,28 +162,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Clear search"
-          }
-        }
-      }
-    },
-    "workdesk.capture.prompt" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add to your desk…"
-          }
-        }
-      }
-    },
-    "workdesk.capture.destination.short" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Captures go to Your desk"
           }
         }
       }
@@ -24404,17 +24481,6 @@
         }
       }
     },
-    "workboard.workspace.composer.prompt" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Add to Work…"
-          }
-        }
-      }
-    },
     "workboard.workspace.drop.image" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24433,17 +24499,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Files, photos, screenshots, links and text will be added here. Nothing is sent."
-          }
-        }
-      }
-    },
-    "workboard.workspace.drop.overlay.title" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Drop into Work"
           }
         }
       }
@@ -24976,17 +25031,6 @@
         }
       }
     },
-    "workdesk.canvas.pin" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pin material"
-          }
-        }
-      }
-    },
     "workdesk.canvas.selectCard" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24994,17 +25038,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Select material"
-          }
-        }
-      }
-    },
-    "workdesk.canvas.unpin" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Unpin material"
           }
         }
       }
@@ -25027,28 +25060,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Zoom out"
-          }
-        }
-      }
-    },
-    "workdesk.desk" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your desk"
-          }
-        }
-      }
-    },
-    "workdesk.empty.message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Capture a thought below, or bring ideas together in a project. Everything starts on your desk."
           }
         }
       }
@@ -25328,28 +25339,6 @@
         }
       }
     },
-    "workdesk.pin.selection" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pin selected"
-          }
-        }
-      }
-    },
-    "workdesk.pinned" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pinned"
-          }
-        }
-      }
-    },
     "workdesk.prepare" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25378,7 +25367,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Its ideas and files will return to your desk. Nothing is deleted."
+            "value" : "Its ideas and files will stay in All materials. Nothing is deleted."
           }
         }
       }
@@ -25416,17 +25405,6 @@
         }
       }
     },
-    "workdesk.project.pin.toggle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Toggle project pin"
-          }
-        }
-      }
-    },
     "workdesk.project.rename" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25444,7 +25422,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This project is no longer available. Your materials are still on the desk."
+            "value" : "This project is no longer available. Your materials are still in All materials."
           }
         }
       }
@@ -25489,17 +25467,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bring related ideas together. Select a few cards to create your first project."
-          }
-        }
-      }
-    },
-    "workdesk.return" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Return to desk"
           }
         }
       }

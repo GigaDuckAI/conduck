@@ -30,10 +30,9 @@ final class WorkDeskLocalizationTests: XCTestCase {
     func testNavigationAndProjectWorkflowHaveTheirEnglishLabels() throws {
         let bundle = try englishAppBundle()
         let expected = [
-            "workdesk.desk": "Your desk",
             "workdesk.all": "All materials",
-            "workdesk.pinned": "Pinned",
             "workdesk.projects": "Projects",
+            "workdesk.removeFromProject": "Remove from project",
             "workdesk.search": "Find an idea or file",
             "workdesk.select": "Select",
             "workdesk.select.all": "Select all",
@@ -109,8 +108,16 @@ final class WorkDeskLocalizationTests: XCTestCase {
 
     func testProjectCaptureNamesItsActualDestinationInTheCompiledBundle() throws {
         let bundle = try englishAppBundle()
-        XCTAssertEqual(compiledValue(for: "workdesk.capture.prompt", bundle: bundle), "Add to your desk…")
-        XCTAssertEqual(compiledValue(for: "workdesk.capture.destination.short", bundle: bundle), "Captures go to Your desk")
+        XCTAssertEqual(compiledValue(for: "workdesk.capture.all.prompt", bundle: bundle), "Add to All materials…")
+        XCTAssertEqual(compiledValue(for: "workdesk.capture.project.prompt", bundle: bundle), "Add to %@…")
+        for title in ["Research", "Notes %@ 100%", "旅行"] {
+            var label = WorkboardCaptureDestination.project(UUID(), title: title).composerPrompt
+            label.locale = Locale(identifier: "en")
+            XCTAssertEqual(String(localized: label), "Add to \(title)…")
+        }
+        XCTAssertEqual(compiledValue(for: "workdesk.project.empty.title", bundle: bundle), "This project is ready for ideas")
+        XCTAssertEqual(compiledValue(for: "workdesk.all.empty.message", bundle: bundle),
+            "Capture a thought or add a file below. Everything you collect appears here, including materials in projects.")
     }
 
     private func englishAppBundle() throws -> Bundle {

@@ -9,13 +9,13 @@ import XCTest
 
 @MainActor
 final class WorkDeskLayoutPresentationTests: XCTestCase {
-    func testDeskAndProjectHonorEverySavedLayout() {
+    func testAllMaterialsAndProjectHonorEverySavedLayout() {
         for mode in WorkboardLayoutMode.allCases {
             XCTAssertEqual(resolve(mode, spatial: true), mode)
         }
     }
 
-    func testSearchAndAggregateViewsReportTheReadableFallback() {
+    func testSearchReportsTheReadableFallback() {
         XCTAssertEqual(resolve(.desk, spatial: false), .list)
         XCTAssertEqual(resolve(.tiles, spatial: false), .tiles)
         XCTAssertEqual(resolve(.list, spatial: false), .list)

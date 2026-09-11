@@ -155,6 +155,20 @@ extension ConversationStore {
                     setDeskPoint(position, on: row)
                 }
             }
+        case let .moveHomeMaterials(moves):
+            guard !moves.isEmpty else { return }
+            try requireDeskMaterials(moves.map(\.materialID), in: context)
+            for move in moves {
+                let rows = try deskRows("WorkDeskPlacement", key: "materialID", id: move.materialID, in: context)
+                let storedProjectID = rows.first?.value(forKey: "projectID") as? UUID
+                guard try resolvedDeskProjectID(storedProjectID, in: context) == move.projectID else {
+                    throw WorkDeskStoreError.materialMoved
+                }
+            }
+            for move in moves {
+                let rows = try deskPlacementRows(move.materialID, in: context)
+                editDeskRows(rows) { setHomePoint(move.position, on: $0) }
+            }
         case let .pinMaterial(id, isPinned):
             try requireDeskMaterials([id], in: context)
             let rows = try deskPlacementRows(id, in: context)
@@ -172,6 +186,16 @@ extension ConversationStore {
                 // of the batch or inventing a missing capture.
                 do { try requireDeskMaterials([seed.materialID], in: context) }
                 catch WorkDeskStoreError.materialNotFound { continue }
+                if seed.isHome {
+                    let existing = try deskRows("WorkDeskPlacement", key: "materialID", id: seed.materialID, in: context)
+                    let storedProjectID = existing.first?.value(forKey: "projectID") as? UUID
+                    guard try resolvedDeskProjectID(storedProjectID, in: context) == seed.projectID else { continue }
+                    if let row = existing.first,
+                       homePoint(on: row) != nil || (storedProjectID == nil && deskPoint(on: row) != nil) { continue }
+                    let rows = try deskPlacementRows(seed.materialID, in: context)
+                    editDeskRows(rows) { setHomePoint(seed.position, on: $0) }
+                    continue
+                }
                 if let projectID = seed.projectID {
                     do { _ = try liveDeskProjectRows(projectID, in: context) }
                     catch WorkDeskStoreError.projectNotFound { continue }
@@ -238,6 +262,11 @@ extension ConversationStore {
             let rows = try deskPlacementRows(id, in: context)
             editDeskRows(rows) { row in
                 if row.value(forKey: "projectID") as? UUID != projectID {
+                    // Preserve the pre-upgrade loose desk location before the
+                    // project position is cleared for its new local layout.
+                    if row.value(forKey: "projectID") == nil, homePoint(on: row) == nil {
+                        setHomePoint(deskPoint(on: row), on: row)
+                    }
                     row.setValue(projectID, forKey: "projectID")
                     setDeskPoint(nil, on: row)
                 }
@@ -329,6 +358,18 @@ extension ConversationStore {
         row.setValue(position?.y, forKey: "positionY")
     }
 
+    private nonisolated static func setHomePoint(_ position: WorkDeskPoint?, on row: NSManagedObject) {
+        row.setValue(position?.x, forKey: "homePositionX")
+        row.setValue(position?.y, forKey: "homePositionY")
+    }
+
+    private nonisolated static func homePoint(on row: NSManagedObject) -> WorkDeskPoint? {
+        guard let x = row.value(forKey: "homePositionX") as? Double,
+              let y = row.value(forKey: "homePositionY") as? Double,
+              x.isFinite, y.isFinite else { return nil }
+        return WorkDeskPoint(x: x, y: y)
+    }
+
     private nonisolated static func deskPoint(on row: NSManagedObject) -> WorkDeskPoint? {
         guard let x = row.value(forKey: "positionX") as? Double,
               let y = row.value(forKey: "positionY") as? Double,
@@ -357,7 +398,6 @@ extension ConversationStore {
             ))
         }
         projects.sort {
-            if $0.isPinned != $1.isPinned { return $0.isPinned }
             if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
             return $0.id.uuidString < $1.id.uuidString
         }
@@ -376,6 +416,7 @@ extension ConversationStore {
             placements[id] = WorkDeskPlacementRecord(
                 materialID: id, projectID: unresolved ? nil : projectID,
                 position: unresolved ? nil : deskPoint(on: row),
+                homePosition: homePoint(on: row),
                 isPinned: row.value(forKey: "isPinned") as? Bool ?? false,
                 updatedAt: row.value(forKey: "updatedAt") as? Date ?? .distantPast
             )

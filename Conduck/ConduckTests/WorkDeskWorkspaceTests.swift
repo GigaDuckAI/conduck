@@ -74,7 +74,7 @@ final class WorkDeskWorkspaceTests: XCTestCase {
         XCTAssertFalse(a.handoff === b.handoff)
     }
 
-    func testSearchAndAggregateScopesUseReadableResults() async {
+    func testAllAndProjectScopesSupportCanvasWhileSearchUsesReadableResults() async {
         let workspace = await makeWorkspace(.init())
         XCTAssertTrue(workspace.supportsSpatialLayout)
         workspace.search = "offscreen material"
@@ -82,9 +82,7 @@ final class WorkDeskWorkspaceTests: XCTestCase {
         workspace.search = "  "
         XCTAssertTrue(workspace.supportsSpatialLayout)
         workspace.selectScope(.all)
-        XCTAssertFalse(workspace.supportsSpatialLayout)
-        workspace.selectScope(.pinned)
-        XCTAssertFalse(workspace.supportsSpatialLayout)
+        XCTAssertTrue(workspace.supportsSpatialLayout)
         workspace.selectScope(.project(UUID()))
         XCTAssertTrue(workspace.supportsSpatialLayout)
     }
@@ -110,21 +108,21 @@ final class WorkDeskWorkspaceTests: XCTestCase {
         XCTAssertNil(workspace.pendingProjectEditor)
     }
 
-    func testDeskKeepsUnfiledAndDanglingMembersVisible() async {
+    func testAllMaterialsKeepsFiledUnfiledAndDanglingMembersVisible() async {
         let a = material("A"), b = material("B"), c = material("C")
         let project = WorkDeskProjectRecord(title: "Project")
         let workspace = await makeWorkspace(.init(projects: [project], placements: [
             b.id: .init(materialID: b.id, projectID: project.id),
             c.id: .init(materialID: c.id, projectID: UUID())
         ]))
-        XCTAssertEqual(workspace.visibleMaterials(in: [a, b, c]).map(\.id), [a.id, c.id])
+        XCTAssertEqual(workspace.visibleMaterials(in: [a, b, c]).map(\.id), [a.id, b.id, c.id])
         workspace.selectScope(.project(project.id))
         XCTAssertEqual(workspace.visibleMaterials(in: [a, b, c]).map(\.id), [b.id])
         workspace.selectScope(.all)
         XCTAssertEqual(workspace.visibleMaterials(in: [a, b, c]).map(\.id), [a.id, b.id, c.id])
     }
 
-    func testPinnedSearchIncludesVoiceWordsWithoutChangingMembership() async {
+    func testHomeSearchIncludesVoiceWordsWithoutChangingMembership() async {
         let voice = material("Voice", text: "Remember the blue packaging")
         var photo = material("Image")
         photo.companion = WorkboardCompanionSnapshot(voice)
@@ -132,7 +130,7 @@ final class WorkDeskWorkspaceTests: XCTestCase {
         let workspace = await makeWorkspace(.init(projects: [project], placements: [
             photo.id: .init(materialID: photo.id, projectID: project.id, isPinned: true)
         ]))
-        workspace.selectScope(.pinned)
+        workspace.selectScope(.all)
         workspace.search = "BLUE"
         XCTAssertEqual(workspace.visibleMaterials(in: [photo]).map(\.id), [photo.id])
         XCTAssertEqual(workspace.organization.projectID(for: photo.id), project.id)
@@ -155,21 +153,23 @@ final class WorkDeskWorkspaceTests: XCTestCase {
     func testReconciliationDropsHiddenAndDeletedSelection() async {
         let a = material("Needle"), b = material("Other")
         let workspace = await makeWorkspace(.init())
+        workspace.isSelecting = true
         workspace.selectedIDs = [a.id, b.id, UUID()]
         workspace.search = "Needle"
         workspace.reconcile(materials: [a, b])
         XCTAssertEqual(workspace.selectedIDs, [a.id])
         workspace.reconcile(materials: [b])
         XCTAssertTrue(workspace.selectedIDs.isEmpty)
+        XCTAssertFalse(workspace.isSelecting, "empty search results dismiss selection controls")
     }
 
-    func testMissingProjectReturnsToDeskAndClearsSelection() async {
+    func testMissingProjectReturnsToAllMaterialsAndClearsSelection() async {
         let a = material("Thought")
         let workspace = await makeWorkspace(.init())
         workspace.scope = .project(UUID())
         workspace.selectedIDs = [a.id]
         workspace.reconcile(materials: [a])
-        XCTAssertEqual(workspace.scope, .desk)
+        XCTAssertEqual(workspace.scope, .all)
         XCTAssertEqual(workspace.visibleMaterials(in: [a]).map(\.id), [a.id])
         XCTAssertTrue(workspace.selectedIDs.isEmpty)
     }

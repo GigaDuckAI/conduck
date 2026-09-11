@@ -8,13 +8,13 @@
 import SwiftUI
 
 enum WorkDeskScope: Hashable {
-    case desk, all, pinned, project(UUID)
+    case all, project(UUID)
 }
 
 @Observable @MainActor
 final class WorkDeskWorkspaceState {
     let organization: WorkDeskOrganization
-    var scope: WorkDeskScope = .desk
+    var scope: WorkDeskScope = .all
     var isActive = false
     var search = ""
     var selectedIDs: Set<UUID> = []
@@ -65,20 +65,14 @@ final class WorkDeskWorkspaceState {
                     .contains { $0.localizedStandardContains(query) }
             }
             switch scope {
-            case .desk: return projectID == nil
             case .all: return true
-            case .pinned: return organization.placements[material.id]?.isPinned == true
             case .project(let id): return projectID == id
             }
         }
     }
 
     var supportsSpatialLayout: Bool {
-        guard !isSearching else { return false }
-        return switch scope {
-        case .desk, .project: true
-        case .all, .pinned: false
-        }
+        !isSearching
     }
 
     static func moveTarget(_ materialID: UUID, direction: WorkboardMoveDirection, visibleIDs: [UUID]) -> UUID? {
@@ -116,34 +110,29 @@ final class WorkDeskWorkspaceState {
     func reconcile(materials: [WorkboardMaterialSnapshot]) {
         if case .project(let id) = scope,
            !organization.projects.contains(where: { $0.id == id }) {
-            selectScope(.desk)
+            selectScope(.all)
         }
-        selectedIDs.formIntersection(Set(visibleMaterials(in: materials).map(\.id)))
+        let visibleIDs = Set(visibleMaterials(in: materials).map(\.id))
+        selectedIDs.formIntersection(visibleIDs)
+        if visibleIDs.isEmpty { isSelecting = false }
     }
 
     func beginProject(materialIDs: [UUID] = [], position: WorkDeskPoint? = nil) {
         presentEditor(WorkDeskProjectEditorRequest(project: nil, materialIDs: materialIDs,
-            position: position ?? projectCreationPosition(materialIDs: materialIDs)))
+            position: projectCreationPosition(materialIDs: materialIDs, requested: position)))
     }
 
     /// Freeze the intended spot before presenting the editor. A delayed save
     /// or a later camera movement must not relocate the project being named.
-    private func projectCreationPosition(materialIDs: [UUID]) -> WorkDeskPoint {
-        let selectedPoints = Set(materialIDs).compactMap { id -> WorkDeskPoint? in
-            guard organization.projectID(for: id) == nil else { return nil }
-            return organization.placements[id]?.position
-        }
-        if !selectedPoints.isEmpty {
-            return WorkDeskPoint(
-                x: selectedPoints.reduce(0) { $0 + $1.x } / Double(selectedPoints.count),
-                y: selectedPoints.reduce(0) { $0 + $1.y } / Double(selectedPoints.count)
-            )
-        }
-        if let point = canvasSession(for: .desk).projectInsertionPoint { return point }
-
+    private func projectCreationPosition(materialIDs: [UUID], requested: WorkDeskPoint?) -> WorkDeskPoint {
+        let selectedPoints = Set(materialIDs).compactMap { organization.placements[$0]?.resolvedHomePosition }
+        let centroid: WorkDeskPoint? = selectedPoints.isEmpty ? nil : WorkDeskPoint(
+            x: selectedPoints.reduce(0) { $0 + $1.x } / Double(selectedPoints.count),
+            y: selectedPoints.reduce(0) { $0 + $1.y } / Double(selectedPoints.count)
+        )
+        let desired = requested ?? centroid ?? canvasSession(for: .all).projectInsertionPoint
         let materialFrames = organization.placements.values.compactMap { placement -> CGRect? in
-            guard organization.projectID(for: placement.materialID) == nil,
-                  let point = placement.position else { return nil }
+            guard let point = placement.resolvedHomePosition else { return nil }
             return WorkDeskCanvasGeometry.frame(at: point,
                 bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: 1)
         }
@@ -152,10 +141,13 @@ final class WorkDeskWorkspaceState {
             return WorkDeskCanvasGeometry.frame(at: point,
                 bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: 1)
         }
-        return WorkDeskCanvasGeometry.availablePoint(occupied: materialFrames + projectFrames,
-            columns: canvasSession(for: .desk).columns,
+        let occupied = materialFrames + projectFrames
+        if let desired, let nearby = WorkDeskCanvasGeometry.availablePoint(near: desired,
+            occupied: occupied, bodySize: WorkDeskCanvasGeometry.projectBodySize) { return nearby }
+        return WorkDeskCanvasGeometry.availablePoint(occupied: occupied,
+            columns: canvasSession(for: .all).columns,
             bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: 1)
-            ?? WorkDeskCanvasGeometry.defaultPoint(index: 0, columns: 1)
+            ?? desired ?? WorkDeskCanvasGeometry.defaultPoint(index: 0, columns: 1)
     }
 
     func editProject(_ project: WorkDeskProjectRecord) {

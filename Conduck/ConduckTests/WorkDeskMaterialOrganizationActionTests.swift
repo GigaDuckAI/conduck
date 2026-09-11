@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The menu retains a live workspace across cached preview refreshes. Exercise
-// its pin, move, selection and project-creation intents against isolated stores,
+// its move, selection and project-creation intents against isolated stores,
 // including stale destinations and observed changes from another presentation.
 
 import XCTest
@@ -15,25 +15,6 @@ final class WorkDeskMaterialOrganizationActionTests: XCTestCase {
     override func tearDown() async throws {
         await isolated.cleanUp()
         try await super.tearDown()
-    }
-
-    func testPinActionUpdatesTheSameDescriptorWithoutEditingCapture() async throws {
-        let store = isolated.make()
-        let material = try await capture(in: store)
-        let organization = WorkDeskOrganization(store: store)
-        await organization.reload()
-        let actions = WorkDeskMaterialOrganizationActions(
-            workspace: .init(organization: organization), materialID: material.id
-        )
-        XCTAssertFalse(actions.isPinned)
-        let pinned = await actions.togglePin()
-        XCTAssertTrue(pinned)
-        XCTAssertTrue(actions.isPinned)
-        let unpinned = await actions.togglePin()
-        XCTAssertTrue(unpinned)
-        XCTAssertFalse(actions.isPinned)
-        let preserved = try await store.fetchWorkMaterial(id: material.id)
-        XCTAssertEqual(preserved, material)
     }
 
     func testMoveOffersOtherProjectsAndReturnToDeskUsesTheSameMaterial() async throws {
@@ -94,14 +75,14 @@ final class WorkDeskMaterialOrganizationActionTests: XCTestCase {
         let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id)
         actions.createProject()
         XCTAssertEqual(workspace.projectEditor?.materialIDs, [material.id])
-        XCTAssertEqual(workspace.projectEditor?.position, point)
+        XCTAssertEqual(workspace.projectEditor?.position, WorkDeskPoint(x: point.x, y: point.y - 188))
         XCTAssertTrue(organization.projects.isEmpty, "menu activation must not create an unnamed project")
         actions.select()
         XCTAssertTrue(workspace.isSelecting)
         XCTAssertEqual(workspace.selectedIDs, [material.id])
     }
 
-    func testCachedDescriptorObservesPinRenameAndMembershipFromOtherPresentations() async throws {
+    func testCachedDescriptorObservesRenameAndMembershipFromOtherPresentations() async throws {
         let store = isolated.make()
         let material = try await capture(in: store)
         let project = WorkDeskProjectRecord(title: "Original")
@@ -112,18 +93,15 @@ final class WorkDeskMaterialOrganizationActionTests: XCTestCase {
         let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id)
         let flag = ChangeFlag()
         withObservationTracking {
-            _ = actions.isPinned
             _ = actions.project
             _ = actions.destinations
         } onChange: { MainActor.assumeIsolated { flag.didChange = true } }
-        try await store.applyWorkDeskMutation(.pinMaterial(id: material.id, isPinned: true))
         try await store.applyWorkDeskMutation(.assign(materialIDs: [material.id], projectID: project.id))
         try await store.applyWorkDeskMutation(.updateProject(
             id: project.id, title: "Renamed elsewhere", brief: "", preferredGatewayRef: nil
         ))
         await organization.reload()
         XCTAssertTrue(flag.didChange, "the menu must invalidate below an unchanged cached material preview")
-        XCTAssertTrue(actions.isPinned)
         XCTAssertEqual(actions.project?.title, "Renamed elsewhere")
         XCTAssertTrue(actions.destinations.isEmpty)
         workspace.selectScope(.project(project.id))

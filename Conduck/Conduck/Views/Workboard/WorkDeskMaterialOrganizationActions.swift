@@ -2,8 +2,8 @@
 
 // Organization lives in each material's existing actions, not a second strip
 // around its card. The descriptor keeps the live workspace rather than copied
-// pin/project values: cached canvas previews must still see a renamed project,
-// changed membership or a pin toggled from another presentation. Menu, row
+// project values: cached canvas previews must still see a renamed project,
+// or changed membership from another presentation. Menu, row
 // caption and VoiceOver each observe that workspace below the preview cache.
 
 import SwiftUI
@@ -13,25 +13,13 @@ struct WorkDeskMaterialOrganizationActions {
     let workspace: WorkDeskWorkspaceState
     let materialID: UUID
 
-    var isPinned: Bool { workspace.organization.placements[materialID]?.isPinned == true }
     var projectID: UUID? { workspace.organization.projectID(for: materialID) }
     var project: WorkDeskProjectRecord? { projectID.flatMap { workspace.organization.project(id: $0) } }
     var destinations: [WorkDeskProjectRecord] {
         let current = projectID
         return workspace.organization.projects.filter { $0.id != current }
     }
-    var showsLocation: Bool { workspace.isSearching || workspace.scope == .all || workspace.scope == .pinned }
-    var pinTitle: LocalizedStringResource {
-        isPinned
-            ? LocalizedStringResource("workdesk.canvas.unpin", defaultValue: "Unpin material")
-            : LocalizedStringResource("workdesk.canvas.pin", defaultValue: "Pin material")
-    }
-
-    @discardableResult
-    func togglePin() async -> Bool {
-        await workspace.organization.setPinned(!isPinned, materialID: materialID)
-    }
-
+    var showsLocation: Bool { workspace.isSearching || workspace.scope == .all }
     func createProject() { workspace.beginProject(materialIDs: [materialID]) }
     func select() { workspace.toggleSelection(materialID) }
 
@@ -60,15 +48,12 @@ struct WorkDeskMaterialMenuActions: View {
         Button { actions.select() } label: {
             Label(LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material"), systemImage: "checkmark.circle")
         }
-        Button { Task { await actions.togglePin() } } label: {
-            Label(actions.pinTitle, systemImage: actions.isPinned ? "pin.slash" : "pin")
-        }
         Button { actions.createProject() } label: {
             Label(LocalizedStringResource("workdesk.group", defaultValue: "Create project"), systemImage: "folder.badge.plus")
         }
         if actions.projectID != nil {
             Button { Task { await actions.move(to: nil) } } label: {
-                Label(LocalizedStringResource("workdesk.return", defaultValue: "Return to desk"), systemImage: "arrow.uturn.backward")
+                Label(LocalizedStringResource("workdesk.removeFromProject", defaultValue: "Remove from project"), systemImage: "arrow.uturn.backward")
             }
         }
         if !actions.destinations.isEmpty {
@@ -102,10 +87,9 @@ struct WorkDeskMaterialAccessibilityActions: View {
 
     var body: some View {
         Button(LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material")) { actions.select() }
-        Button(actions.pinTitle) { Task { await actions.togglePin() } }
         Button(LocalizedStringResource("workdesk.group", defaultValue: "Create project")) { actions.createProject() }
         if actions.projectID != nil {
-            Button(LocalizedStringResource("workdesk.return", defaultValue: "Return to desk")) {
+            Button(LocalizedStringResource("workdesk.removeFromProject", defaultValue: "Remove from project")) {
                 Task { await actions.move(to: nil) }
             }
         }

@@ -1,28 +1,12 @@
 # Work desk polish — local verification
 
 The freely arranged Desk uses one uniformly scaled surface per object, including
-overview cards. Pin and organization actions live in item menus. Search lives
+overview cards. Organization actions live in item menus; pinning is absent. Search lives
 in project navigation and finds materials across Work. Creating a project keeps
 the desk visible at the intended location.
 
-## Automated verification
-
-- Full iOS simulator app suite: 6,136 tests, zero failures; `TEST SUCCEEDED`.
-- Native macOS arm64 Release build: `BUILD SUCCEEDED`.
-- All 113 authored Work strings match the compiled English resources on both
-  platforms. Localization synchronizer: nine tests passed.
-- Storage seam, source headers, folder map, spec citations/size, bundled legal
-  copies, scoped secret scan and diff whitespace checks passed.
-- Independent implementation/design review and separate first-time/frequent
-  user reviews completed; actionable findings were resolved.
-
-The unsigned tested app is installed and launched on the iPhone simulator.
-The build cache is temporary; installed simulator app data is separate.
-The zoom-input suite also passes its isolated platform-math harness.
-Test/build logs are `/private/tmp/conduck-work-zoom-ios-tests.log` and
-`/private/tmp/conduck-work-zoom-mac-build.log`. The local source changes are
-committed; no push or release is included. Unrelated existing localization edits
-are preserved.
+See [Work desk verification](work-desk.md) for the sidebar, capture, migration and
+selection checks. This checklist focuses on native interaction and appearance.
 
 ## Hands-on checks
 
@@ -43,18 +27,17 @@ are preserved.
    in the visible area, with the desk still open. Select cards and create a
    project: it appears at their cluster. On Mac, right-click blank desk space
    and create a project there. Cancel naming: nothing moves or groups.
-5. Pin a project, open Pinned, and check both the project and navigation count.
-   Search by project title and confirm its materials are discoverable too.
-   Inside a project, the composer names Your desk as its destination. Capture
-   a note and use its destination link to find the new card on Your desk.
+5. Search by project title and confirm its materials are discoverable. Inside
+   a project, the composer names that project. Capture a note and find the same
+   card in the project and All materials. Search captures go to All materials.
 6. On an empty desk, pan before adding the first material. It should become
    visible. After arranging existing materials, deliberately pan to blank
    space, search or switch layout, and return: the camera must stay there.
 7. On a narrow phone project view, the title and Prepare action remain usable;
    layout options are available in the project options menu. Check large text,
-   VoiceOver selection/pin/movement actions, and keyboard movement with the
-   whole card focused. Pin a material from its menu: it appears in Pinned and
-   stays freely movable. Check its menu updates to Unpin after a sidebar change.
+   VoiceOver selection and movement actions, and keyboard movement with the
+   whole card focused. Verify pin actions are absent from card and project menus.
+   Select/Done and Select all remain reachable in a narrow window.
 8. Delay/fail a save, drag again, and ensure old completions cannot undo the
    newer position. Delete or reassign a selected source in another window
    before release: the stale movement must fail without scattering the group.

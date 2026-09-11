@@ -708,8 +708,9 @@ final class WorkboardViewModel {
     @ObservationIgnored private var loadRequestedWhileLoading = false
     @ObservationIgnored private var deskMutationWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(dependencies: Dependencies) {
+    init(dependencies: Dependencies, deskWorkspace: WorkDeskWorkspaceState? = nil) {
         self.dependencies = dependencies
+        self.cachedDeskWorkspace = deskWorkspace
         self.layoutMode = WorkboardLayoutMode.load()
     }
 
@@ -758,16 +759,16 @@ final class WorkboardViewModel {
     /// Every thought is a note card, so what the person typed stays a
     /// rearrangeable card. The thought is durable before this method returns.
     @discardableResult
-    func addThought(_ rawValue: String) async -> Bool {
+    func addThought(_ rawValue: String, projectID: UUID? = nil) async -> Bool {
         let thought = WorkboardWorkspaceCaptureLogic.normalizedThought(rawValue)
         guard !thought.isEmpty else { return false }
 
         await acquireDeskMutation()
         defer { releaseDeskMutation() }
-        return await addThoughtUnlocked(thought)
+        return await addThoughtUnlocked(thought, projectID: projectID)
     }
 
-    private func addThoughtUnlocked(_ thought: String) async -> Bool {
+    private func addThoughtUnlocked(_ thought: String, projectID: UUID?) async -> Bool {
         // One route for every thought, on the empty desk as much as on a desk
         // already full of cards. A first thought lands atomically: the store's
         // desk write publishes the desk row and the note in a single
@@ -779,6 +780,7 @@ final class WorkboardViewModel {
         )
         let report = await importMaterialsUnlocked(
             [material],
+            projectID: projectID,
             announcesResult: false
         )
         return report.addedCount == 1
@@ -792,6 +794,7 @@ final class WorkboardViewModel {
     @discardableResult
     func importMaterials(
         _ imports: [WorkboardMaterialImport],
+        projectID: UUID? = nil,
         additionalFailureCount: Int = 0,
         announcesResult: Bool = true
     ) async -> WorkboardImportReport {
@@ -799,6 +802,7 @@ final class WorkboardViewModel {
         defer { releaseDeskMutation() }
         return await importMaterialsUnlocked(
             imports,
+            projectID: projectID,
             additionalFailureCount: additionalFailureCount,
             announcesResult: announcesResult
         )
@@ -806,6 +810,7 @@ final class WorkboardViewModel {
 
     private func importMaterialsUnlocked(
         _ imports: [WorkboardMaterialImport],
+        projectID: UUID? = nil,
         additionalFailureCount: Int = 0,
         announcesResult: Bool = true
     ) async -> WorkboardImportReport {
@@ -836,6 +841,7 @@ final class WorkboardViewModel {
             failedCount: priorFailures
         )
         var added = 0
+        var capturedIDs: [UUID] = []
         var failed = priorFailures
         var firstFailure: Error?
 
@@ -862,6 +868,7 @@ final class WorkboardViewModel {
                 current = refreshed
                 adopt(refreshed)
                 added += 1
+                capturedIDs.append(materialImport.id)
             } catch {
                 failed += 1
                 if firstFailure == nil { firstFailure = error }
@@ -880,6 +887,33 @@ final class WorkboardViewModel {
         } else if report.hasFailures {
             presentCaptureFailure(
                 firstFailure ?? WorkboardLiveRepositoryError.missingPayload
+            )
+        }
+        // Membership follows the exact committed capture IDs, never a before/
+        // after snapshot difference that could include an unrelated sync arrival.
+        // Failed organization cannot undo a durable capture or prompt a duplicate
+        // retry: return capture success, and explain where its materials remain.
+        if let projectID, !capturedIDs.isEmpty,
+           !(await deskWorkspace.organization.assign(materialIDs: capturedIDs, to: projectID)) {
+            deskWorkspace.organization.errorMessage = nil
+            workspaceStatus = nil
+            notice = WorkboardNotice(
+                kind: .information,
+                title: LocalizedStringResource(
+                    "workdesk.capture.project.failed.title",
+                    defaultValue: "Saved in All materials"
+                ),
+                message: report.hasFailures
+                    ? String.localizedStringWithFormat(
+                        String(localized: LocalizedStringResource(
+                            "workdesk.capture.project.partial.message",
+                            defaultValue: "%1$lld added to All materials; %2$lld couldn’t be added. Saved items couldn’t be placed in the project. Open All materials to organise them."
+                        )), Int64(report.addedCount), Int64(report.failedCount)
+                    )
+                    : String(localized: LocalizedStringResource(
+                        "workdesk.capture.project.failed.message",
+                        defaultValue: "Your added items are safe in All materials, but couldn’t be added to the project. Open All materials to organise them."
+                    ))
             )
         }
         return report

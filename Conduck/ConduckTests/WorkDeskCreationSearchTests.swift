@@ -22,7 +22,7 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         let workspace = await makeWorkspace(.init(projects: [project], placements: [
             filed.id: .init(materialID: filed.id, projectID: project.id)
         ]))
-        let scopes: [WorkDeskScope] = [.desk, .all, .pinned, .project(project.id)]
+        let scopes: [WorkDeskScope] = [.all, .project(project.id)]
         for scope in scopes {
             workspace.selectScope(scope)
             workspace.search = "  TRAVEL\n"
@@ -40,10 +40,10 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         workspace.search = "  packaging "
         XCTAssertEqual(workspace.visibleMaterials(in: [loose, member]).map(\.id), [member.id])
         XCTAssertEqual(workspace.organization.projectID(for: member.id), project.id)
-        XCTAssertEqual(workspace.scope, .desk)
+        XCTAssertEqual(workspace.scope, .all)
     }
 
-    func testClearingGlobalSearchRestoresProjectOrPinnedScope() async {
+    func testClearingGlobalSearchRestoresProjectOrAllScope() async {
         let member = material("Related"), pinned = material("Pinned"), loose = material("Loose")
         let project = WorkDeskProjectRecord(title: "Project")
         let workspace = await makeWorkspace(.init(projects: [project], placements: [
@@ -55,11 +55,11 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         XCTAssertEqual(workspace.visibleMaterials(in: [loose, member, pinned]).map(\.id), [loose.id])
         workspace.search = " \n "
         XCTAssertEqual(workspace.visibleMaterials(in: [loose, member, pinned]).map(\.id), [member.id])
-        workspace.selectScope(.pinned)
+        workspace.selectScope(.all)
         workspace.search = "Related"
         XCTAssertEqual(workspace.visibleMaterials(in: [loose, member, pinned]).map(\.id), [member.id])
         workspace.search = ""
-        XCTAssertEqual(workspace.visibleMaterials(in: [loose, member, pinned]).map(\.id), [pinned.id])
+        XCTAssertEqual(workspace.visibleMaterials(in: [loose, member, pinned]).map(\.id), [loose.id, member.id, pinned.id])
     }
 
     func testCountsIncludeLooseAndOrphanedCardsAndOnlyDisplayedCompanionGroups() async {
@@ -83,9 +83,12 @@ final class WorkDeskCreationSearchTests: XCTestCase {
     func testClearingGlobalSearchRemovesForeignSelectionBeforeCreatingProject() async {
         let local = material("Local"), foreign = material("Find me")
         let project = WorkDeskProjectRecord(title: "Other project")
-        let workspace = await makeWorkspace(.init(projects: [project], placements: [
+        let localProject = WorkDeskProjectRecord(title: "Local project")
+        let workspace = await makeWorkspace(.init(projects: [project, localProject], placements: [
+            local.id: .init(materialID: local.id, projectID: localProject.id),
             foreign.id: .init(materialID: foreign.id, projectID: project.id)
         ]))
+        workspace.selectScope(.project(localProject.id))
         workspace.search = "Find me"
         XCTAssertEqual(workspace.visibleMaterials(in: [local, foreign]).map(\.id), [foreign.id])
         workspace.toggleSelection(foreign.id)
@@ -102,6 +105,7 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         let source = WorkDeskProjectRecord(title: "Other project")
         let destination = WorkDeskProjectRecord(title: "Destination")
         let snapshot = WorkDeskOrganizationSnapshot(projects: [source, destination], placements: [
+            local.id: .init(materialID: local.id, projectID: destination.id),
             foreign.id: .init(materialID: foreign.id, projectID: source.id)
         ])
         let recorder = AssignmentRecorder()
@@ -111,6 +115,7 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         })
         await organization.reload()
         let workspace = WorkDeskWorkspaceState(organization: organization)
+        workspace.selectScope(.project(destination.id))
         workspace.search = "Shared"
         workspace.toggleSelection(local.id)
         workspace.toggleSelection(foreign.id)
@@ -125,7 +130,8 @@ final class WorkDeskCreationSearchTests: XCTestCase {
     func testForeignOnlySelectionCannotMoveAfterSearchClearsWithoutReconciliation() async {
         let foreign = material("Find me")
         let project = WorkDeskProjectRecord(title: "Other project")
-        let snapshot = WorkDeskOrganizationSnapshot(projects: [project], placements: [
+        let localProject = WorkDeskProjectRecord(title: "Local project")
+        let snapshot = WorkDeskOrganizationSnapshot(projects: [project, localProject], placements: [
             foreign.id: .init(materialID: foreign.id, projectID: project.id)
         ])
         let recorder = AssignmentRecorder()
@@ -135,6 +141,7 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         })
         await organization.reload()
         let workspace = WorkDeskWorkspaceState(organization: organization)
+        workspace.selectScope(.project(localProject.id))
         workspace.search = "Find me"
         workspace.toggleSelection(foreign.id)
         workspace.search = ""
@@ -173,7 +180,7 @@ final class WorkDeskCreationSearchTests: XCTestCase {
             two: .init(materialID: two, position: .init(x: 1500, y: 1100))
         ]))
         workspace.beginProject(materialIDs: [one, two, one])
-        XCTAssertEqual(workspace.projectEditor?.position, WorkDeskPoint(x: 1350, y: 1000))
+        XCTAssertEqual(workspace.projectEditor?.position, WorkDeskPoint(x: 1350, y: 712))
     }
 
     func testExplicitCreationPointWinsOverSelectionAndCamera() async {
@@ -188,7 +195,7 @@ final class WorkDeskCreationSearchTests: XCTestCase {
 
     func testToolbarCreationUsesTheVisibleDeskAndFreezesItBeforeEditing() async throws {
         let workspace = await makeWorkspace(.init())
-        let session = workspace.canvasSession(for: .desk)
+        let session = workspace.canvasSession(for: .all)
         session.viewportSize = CGSize(width: 900, height: 700)
         session.transform = .init(scale: 0.75, offset: CGSize(width: -1600, height: -800))
         let insertion = try XCTUnwrap(session.projectInsertionPoint)

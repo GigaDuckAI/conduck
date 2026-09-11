@@ -60,6 +60,74 @@ final class WorkDeskMigrationTests: XCTestCase {
         }
     }
 
+    func testV19AddsOnlyOptionalHomeCoordinatesAndEveryShippedModelCanUpgrade() throws {
+        let before = try model(version: 18), after = try model(version: 19)
+        XCTAssertEqual(Set(before.entitiesByName.keys), Set(after.entitiesByName.keys))
+        for (name, entity) in before.entitiesByName where name != "WorkDeskPlacement" {
+            XCTAssertEqual(after.entitiesByName[name]?.versionHash, entity.versionHash)
+        }
+        let placement = try XCTUnwrap(after.entitiesByName["WorkDeskPlacement"])
+        let oldPlacement = try XCTUnwrap(before.entitiesByName["WorkDeskPlacement"])
+        XCTAssertEqual(Set(placement.attributesByName.keys).subtracting(oldPlacement.attributesByName.keys),
+                       ["homePositionX", "homePositionY"])
+        for key in ["homePositionX", "homePositionY"] {
+            let attribute = try XCTUnwrap(placement.attributesByName[key])
+            XCTAssertTrue(attribute.isOptional)
+            XCTAssertNil(attribute.defaultValue)
+            XCTAssertEqual(attribute.attributeType, .doubleAttributeType)
+        }
+        for version in 1...18 {
+            XCTAssertNoThrow(try NSMappingModel.inferredMappingModel(forSourceModel: model(version: version),
+                                                                    destinationModel: after))
+        }
+    }
+
+    func testV18SQLiteRetainsLooseAndProjectPositionsAndReopensIndependentHomeLayout() async throws {
+        let looseID = UUID(), filedID = UUID(), projectID = UUID()
+        let old = try await container(version: 18)
+        let context = old.newBackgroundContext()
+        try await context.perform {
+            let project = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
+            project.setValue(projectID, forKey: "id")
+            project.setValue("Existing", forKey: "title")
+            project.setValue(true, forKey: "isPinned")
+            for id in [looseID, filedID] {
+                let material = NSEntityDescription.insertNewObject(forEntityName: "WorkMaterial", into: context)
+                material.setValue(id, forKey: "id")
+                material.setValue(Constants.workboardDeskItemID, forKey: "workItemID")
+                material.setValue("note", forKey: "kind")
+                material.setValue("Preserved", forKey: "title")
+                let placement = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskPlacement", into: context)
+                placement.setValue(id, forKey: "materialID")
+                if id == filedID { placement.setValue(projectID, forKey: "projectID") }
+                placement.setValue(800, forKey: "positionX")
+                placement.setValue(500, forKey: "positionY")
+                placement.setValue(true, forKey: "isPinned")
+            }
+            try context.save()
+        }
+        try unload(old)
+        let upgraded = try await container(version: 19)
+        try unload(upgraded)
+        let store = isolated.make(storeURL: coreURL)
+        let migrated = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(migrated.placements[looseID]?.resolvedHomePosition, .init(x: 800, y: 500))
+        XCTAssertNil(migrated.placements[filedID]?.resolvedHomePosition,
+                     "Project coordinates must not overlap migrated loose home cards")
+        XCTAssertEqual(migrated.placements[filedID]?.position, .init(x: 800, y: 500))
+        try await store.applyWorkDeskMutation(.moveHomeMaterials([
+            .init(materialID: filedID, projectID: projectID, position: .init(x: 1200, y: 500))
+        ]))
+        try await store.applyWorkDeskMutation(.assign(materialIDs: [looseID], projectID: projectID))
+        let reopened = isolated.make(storeURL: coreURL)
+        let saved = try await reopened.fetchWorkDeskOrganization()
+        XCTAssertEqual(saved.placements[looseID]?.homePosition, .init(x: 800, y: 500))
+        XCTAssertEqual(saved.placements[filedID]?.homePosition, .init(x: 1200, y: 500))
+        XCTAssertEqual(saved.placements[filedID]?.position, .init(x: 800, y: 500))
+        XCTAssertEqual(saved.placements[filedID]?.isPinned, true)
+        XCTAssertEqual(saved.projects.first?.isPinned, true)
+    }
+
     func testV17SQLiteMigratesWithoutMovingCaptureOrPayloadAndOrganizationReopens() async throws {
         let materialID = UUID()
         let bytes = Data("Bytes captured before projects".utf8)

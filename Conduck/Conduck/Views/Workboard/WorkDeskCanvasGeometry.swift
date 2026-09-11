@@ -88,6 +88,29 @@ nonisolated enum WorkDeskCanvasGeometry {
         return nil
     }
 
+    /// Keep a new folder near the intent's location without covering cards
+    /// retained on All materials. Candidate edges also work far from origin;
+    /// ordering is independent of the dictionary order of saved placements.
+    static func availablePoint(near desired: WorkDeskPoint, occupied: [CGRect], bodySize: CGSize) -> WorkDeskPoint? {
+        let gap: CGFloat = 20
+        var candidates = [desired]
+        for obstacle in occupied {
+            let xs = [obstacle.minX - bodySize.width - gap, CGFloat(desired.x), obstacle.maxX + gap]
+            let ys = [obstacle.minY - bodySize.height - gap, CGFloat(desired.y), obstacle.maxY + gap]
+            for x in xs { for y in ys { candidates.append(.init(x: Double(x), y: Double(y))) } }
+        }
+        return Set(candidates).filter { point in
+            let proposed = frame(at: point, bodySize: bodySize, scale: 1).insetBy(dx: -10, dy: -10)
+            return !occupied.contains { $0.intersects(proposed) }
+        }.min { lhs, rhs in
+            let left = hypot(lhs.x - desired.x, lhs.y - desired.y)
+            let right = hypot(rhs.x - desired.x, rhs.y - desired.y)
+            if left != right { return left < right }
+            if lhs.x != rhs.x { return lhs.x > rhs.x }
+            return lhs.y < rhs.y
+        }
+    }
+
     static func frame(at point: WorkDeskPoint, bodySize: CGSize, scale _: CGFloat) -> CGRect {
         let point = bounded(point)
         return CGRect(x: point.x, y: point.y, width: bodySize.width, height: bodySize.height)
