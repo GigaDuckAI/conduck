@@ -36,7 +36,7 @@ final class WorkDeskLocalizationTests: XCTestCase {
             "workdesk.search": "Find an idea or file",
             "workdesk.select": "Select",
             "workdesk.select.all": "Select all",
-            "workdesk.layout.desk": "Desk",
+            "workdesk.layout.desk": "Canvas",
             "workdesk.group": "Create project",
             "workdesk.move": "Move to",
             "workdesk.prepare": "Prepare",
@@ -118,6 +118,74 @@ final class WorkDeskLocalizationTests: XCTestCase {
         XCTAssertEqual(compiledValue(for: "workdesk.project.empty.title", bundle: bundle), "This project is ready for ideas")
         XCTAssertEqual(compiledValue(for: "workdesk.all.empty.message", bundle: bundle),
             "Capture a thought or add a file below. Everything you collect appears here, including materials in projects.")
+    }
+
+    /// Both drop titles name the frozen destination; the shared caption keeps
+    /// the capture-only promise without contradicting project membership.
+    func testTheDropOverlayNamesItsActualDestination() throws {
+        let bundle = try englishAppBundle()
+        XCTAssertEqual(compiledValue(for: "workdesk.capture.all.drop", bundle: bundle), "Drop into All materials")
+        XCTAssertEqual(compiledValue(for: "workdesk.capture.project.drop", bundle: bundle), "Drop into %@")
+        for title in ["Research", "Notes %@ 100%", "旅行"] {
+            var label = WorkboardCaptureDestination.project(UUID(), title: title).dropTitle
+            label.locale = Locale(identifier: "en")
+            XCTAssertEqual(String(localized: label), "Drop into \(title)")
+        }
+        XCTAssertEqual(
+            compiledValue(for: "workboard.workspace.drop.overlay.caption", bundle: bundle),
+            "Files, photos, screenshots, links and text will be added here. Nothing is sent."
+        )
+    }
+
+    func testTheSpatialLayoutLabelIsDistinctFromTheAllMaterialsScope() throws {
+        let bundle = try englishAppBundle()
+        let scope = compiledValue(for: "workdesk.all", bundle: bundle)
+        let layout = compiledValue(for: "workdesk.layout.desk", bundle: bundle)
+        XCTAssertEqual(scope, "All materials")
+        XCTAssertEqual(layout, "Canvas")
+        XCTAssertNotEqual(layout, scope)
+    }
+
+    /// The count asks whether the DESK holds anything; the brief state is a fact
+    /// about the project. While one gated the other, creating a project on an
+    /// otherwise-empty desk and saving instructions showed nothing at all, and
+    /// deleting the desk's last material hid a project's saved instructions.
+    func testAProjectReportsItsStateEvenWhenTheDeskHoldsNothingElse() {
+        // The whole truth table, so the rule is pinned rather than sampled:
+        // exactly one of the eight combinations stays silent.
+        for materials in [false, true] {
+            for searching in [false, true] {
+                for project in [false, true] {
+                    let shows = WorkDeskCopy.showsHeaderSubtitle(
+                        deskHasMaterials: materials, isSearching: searching, hasProject: project)
+                    let expected = materials || searching || project
+                    XCTAssertEqual(
+                        shows, expected,
+                        "materials=\(materials) searching=\(searching) project=\(project)"
+                    )
+                }
+            }
+        }
+
+        // The one silent case, named: an empty desk, no project, no query.
+        XCTAssertFalse(WorkDeskCopy.showsHeaderSubtitle(
+            deskHasMaterials: false, isSearching: false, hasProject: false))
+        // The case the bug hid: a project with saved instructions on an empty desk.
+        XCTAssertTrue(WorkDeskCopy.showsHeaderSubtitle(
+            deskHasMaterials: false, isSearching: false, hasProject: true))
+    }
+
+    func testProjectBriefStateReadsAsContentsRatherThanReadiness() throws {
+        let bundle = try englishAppBundle()
+        let saved = compiledValue(for: "workdesk.project.brief.saved", bundle: bundle)
+        let none = compiledValue(for: "workdesk.project.brief.none", bundle: bundle)
+
+        XCTAssertEqual(saved, "Instructions saved")
+        XCTAssertEqual(none, "No instructions yet")
+        for value in [saved, none] {
+            XCTAssertFalse(value.lowercased().contains("ready"),
+                           "readiness needs a reachable gateway and present bytes, which this header cannot know: \(value)")
+        }
     }
 
     private func englishAppBundle() throws -> Bundle {

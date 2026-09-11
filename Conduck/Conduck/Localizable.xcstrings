@@ -24497,7 +24497,7 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
+            "state" : "translated",
             "value" : "Files, photos, screenshots, links and text will be added here. Nothing is sent."
           }
         }
@@ -25257,7 +25257,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Desk"
+            "value" : "Canvas"
           }
         }
       }
@@ -25434,6 +25434,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ungroup Project"
+          }
+        }
+      }
+    },
+    "workdesk.project.brief.none" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No instructions yet"
+          }
+        }
+      }
+    },
+    "workdesk.project.brief.saved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instructions saved"
           }
         }
       }

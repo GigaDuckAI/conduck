@@ -1,6 +1,6 @@
 # Work desk polish — local verification
 
-The freely arranged Desk uses one uniformly scaled surface per object, including
+The freely arranged Canvas uses one uniformly scaled surface per object, including
 overview cards. Organization actions live in item menus; pinning is absent. Search lives
 in project navigation and finds materials across Work. Creating a project keeps
 the desk visible at the intended location.

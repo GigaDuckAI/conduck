@@ -190,6 +190,31 @@ struct WorkDeskWorkspaceView: View {
         }
     }
 
+    /// The line under the title, as ONE `Text` rather than a row of them: three
+    /// independently truncating views let the count clip while the brief state
+    /// survives beside it, and a narrow phone at large Dynamic Type has room for
+    /// neither in full. Concatenated, the tail gives way first, which is the
+    /// half that can be dropped.
+    ///
+    /// A project reports its state even when Work holds nothing else. The count
+    /// asks whether the DESK has materials, which is not a fact about this
+    /// project's brief — gating the brief on it hid saved instructions whenever
+    /// the last material was deleted.
+    private var headerSubtitle: Text? {
+        let project = workspace.isSearching ? nil : workspace.currentProject
+        guard WorkDeskCopy.showsHeaderSubtitle(
+            deskHasMaterials: !item.materials.isEmpty,
+            isSearching: workspace.isSearching,
+            hasProject: project != nil
+        ) else { return nil }
+
+        let count = Text(WorkDeskCopy.materialCount(workspace.visibleMaterials(in: item.materials).count))
+        guard let project else { return count }
+
+        let hasBrief = !project.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return count + Text(verbatim: " · ") + Text(WorkDeskCopy.projectBriefState(hasBrief: hasBrief))
+    }
+
     private func header(isCompact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -206,9 +231,10 @@ struct WorkDeskWorkspaceView: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: title).font(.headline).lineLimit(1)
-                    if !item.materials.isEmpty || workspace.isSearching {
-                        Text(WorkDeskCopy.materialCount(workspace.visibleMaterials(in: item.materials).count))
+                    if let headerSubtitle {
+                        headerSubtitle
                             .font(.caption).foregroundStyle(AppColors.textSecondary)
+                            .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 0)
@@ -245,7 +271,7 @@ struct WorkDeskWorkspaceView: View {
                     .primaryCTAButton()
                     .accessibilityLabel(Text(LocalizedStringResource("workdesk.prepare", defaultValue: "Prepare")))
                     .accessibilityIdentifier("workdesk-prepare")
-                    workspaceMenu
+                    workspaceMenu(isCompact: isCompact)
                 }
             }
             if workspace.isSelecting && !workspace.selectedIDs.isEmpty { selectionBar }
@@ -313,10 +339,16 @@ struct WorkDeskWorkspaceView: View {
         }
     }
 
-    private var workspaceMenu: some View {
+    /// The header draws the layout control itself on anything but a narrow
+    /// window, so repeating it here would put the same picker on screen twice
+    /// in one project. A narrow window is the case the header skips, and there
+    /// this menu is the only door to it.
+    private func workspaceMenu(isCompact: Bool) -> some View {
         Menu {
-            WorkDeskLayoutControl(viewModel: viewModel,
-                supportsSpatialLayout: workspace.supportsSpatialLayout)
+            if isCompact {
+                WorkDeskLayoutControl(viewModel: viewModel,
+                    supportsSpatialLayout: workspace.supportsSpatialLayout)
+            }
             if let project = workspace.currentProject {
                 Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
                     workspace.editProject(project)
