@@ -24431,8 +24431,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Files, photos, screenshots, links and text will be added here. Nothing is sent."
+            "state" : "translated",
+            "value" : "Files, photos, screenshots, links and text will be added to Your desk. Nothing is sent."
           }
         }
       }
@@ -24442,8 +24442,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Drop into Work"
+            "state" : "translated",
+            "value" : "Drop onto Your desk"
           }
         }
       }
@@ -25246,7 +25246,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Desk"
+            "value" : "Canvas"
           }
         }
       }
@@ -25456,6 +25456,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ungroup Project"
+          }
+        }
+      }
+    },
+    "workdesk.project.brief.none" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No instructions yet"
+          }
+        }
+      }
+    },
+    "workdesk.project.brief.saved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instructions saved"
           }
         }
       }

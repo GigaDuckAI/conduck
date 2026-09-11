@@ -16,8 +16,10 @@ enum WorkboardCaptureCanvasMode: Sendable {
     case composer
 }
 
-/// Work is ONE desk, so capture has a single destination and its copy names no
-/// target: there is nothing to choose between and no title to interpolate.
+/// Work is ONE desk, so capture has a single destination: there is nothing to
+/// choose between and no title to interpolate. The copy NAMES that destination
+/// instead of saying "here", because the pane-wide drop is also drawn over an
+/// open project, where "here" promises a place the material does not reach.
 /// `private` because a host does not pick it — the canvas and the pane-wide drop
 /// state it, which is what keeps a second destination from creeping back in.
 private enum WorkboardCaptureDestination: Equatable, Sendable {
@@ -33,14 +35,14 @@ private enum WorkboardCaptureDestination: Equatable, Sendable {
     var dropTitle: LocalizedStringResource {
         LocalizedStringResource(
             "workboard.workspace.drop.overlay.title",
-            defaultValue: "Drop into Work"
+            defaultValue: "Drop onto Your desk"
         )
     }
 
     var dropCaption: LocalizedStringResource {
         LocalizedStringResource(
             "workboard.workspace.drop.overlay.caption",
-            defaultValue: "Files, photos, screenshots, links and text will be added here. Nothing is sent."
+            defaultValue: "Files, photos, screenshots, links and text will be added to Your desk. Nothing is sent."
         )
     }
 }

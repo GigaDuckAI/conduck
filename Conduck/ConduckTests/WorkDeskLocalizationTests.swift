@@ -37,7 +37,7 @@ final class WorkDeskLocalizationTests: XCTestCase {
             "workdesk.search": "Find an idea or file",
             "workdesk.select": "Select",
             "workdesk.select.all": "Select all",
-            "workdesk.layout.desk": "Desk",
+            "workdesk.layout.desk": "Canvas",
             "workdesk.group": "Create project",
             "workdesk.move": "Move to",
             "workdesk.prepare": "Prepare",
@@ -111,6 +111,88 @@ final class WorkDeskLocalizationTests: XCTestCase {
         let bundle = try englishAppBundle()
         XCTAssertEqual(compiledValue(for: "workdesk.capture.prompt", bundle: bundle), "Add to your desk…")
         XCTAssertEqual(compiledValue(for: "workdesk.capture.destination.short", bundle: bundle), "Captures go to Your desk")
+    }
+
+    /// The pane-wide drop is drawn over a project too, and the material still
+    /// lands on the desk, so this copy must NAME the desk. "here" was the one
+    /// capture door that promised the place the person was looking at.
+    func testTheDropOverlayNamesTheDeskRatherThanThePlaceItIsDrawnOver() throws {
+        let bundle = try englishAppBundle()
+        let title = compiledValue(for: "workboard.workspace.drop.overlay.title", bundle: bundle)
+        let caption = compiledValue(for: "workboard.workspace.drop.overlay.caption", bundle: bundle)
+
+        XCTAssertEqual(title, "Drop onto Your desk")
+        // Exact, not a fragment: these two rows are `translated`, so a later
+        // edit to the source defaultValue no longer updates the catalog. This
+        // pins the wording that actually SHIPS; it does not itself compare the
+        // source default with the catalog, so a drift shows up here as a
+        // failure against the expected sentence rather than as a diff report.
+        XCTAssertEqual(
+            caption,
+            "Files, photos, screenshots, links and text will be added to Your desk. Nothing is sent."
+        )
+        XCTAssertTrue(caption.contains("Your desk"), "the drop caption must name its destination: \(caption)")
+        XCTAssertFalse(caption.contains("added here"),
+                       "\"added here\" is false wherever the overlay is drawn over a project: \(caption)")
+        XCTAssertTrue(caption.contains("Nothing is sent"),
+                      "the drop caption keeps its inertness promise: \(caption)")
+    }
+
+    /// "Your desk" is a SCOPE and the spatial layout is a VIEW of it. While the
+    /// layout was also called "Desk", a project's view menu offered "Desk" for
+    /// something that was not the desk.
+    func testTheSpatialLayoutLabelDoesNotCollideWithTheDeskScope() throws {
+        let bundle = try englishAppBundle()
+        let scope = compiledValue(for: "workdesk.desk", bundle: bundle)
+        let layout = compiledValue(for: "workdesk.layout.desk", bundle: bundle)
+
+        XCTAssertEqual(scope, "Your desk")
+        XCTAssertEqual(layout, "Canvas")
+        XCTAssertNotEqual(layout, scope)
+        XCTAssertFalse(layout.lowercased().contains("desk"),
+                       "the layout label must not read as the desk scope: \(layout)")
+    }
+
+    /// The count asks whether the DESK holds anything; the brief state is a fact
+    /// about the project. While one gated the other, creating a project on an
+    /// otherwise-empty desk and saving instructions showed nothing at all, and
+    /// deleting the desk's last material hid a project's saved instructions.
+    func testAProjectReportsItsStateEvenWhenTheDeskHoldsNothingElse() {
+        // The whole truth table, so the rule is pinned rather than sampled:
+        // exactly one of the eight combinations stays silent.
+        for materials in [false, true] {
+            for searching in [false, true] {
+                for project in [false, true] {
+                    let shows = WorkDeskCopy.showsHeaderSubtitle(
+                        deskHasMaterials: materials, isSearching: searching, hasProject: project)
+                    let expected = materials || searching || project
+                    XCTAssertEqual(
+                        shows, expected,
+                        "materials=\(materials) searching=\(searching) project=\(project)"
+                    )
+                }
+            }
+        }
+
+        // The one silent case, named: an empty desk, no project, no query.
+        XCTAssertFalse(WorkDeskCopy.showsHeaderSubtitle(
+            deskHasMaterials: false, isSearching: false, hasProject: false))
+        // The case the bug hid: a project with saved instructions on an empty desk.
+        XCTAssertTrue(WorkDeskCopy.showsHeaderSubtitle(
+            deskHasMaterials: false, isSearching: false, hasProject: true))
+    }
+
+    func testProjectBriefStateReadsAsContentsRatherThanReadiness() throws {
+        let bundle = try englishAppBundle()
+        let saved = compiledValue(for: "workdesk.project.brief.saved", bundle: bundle)
+        let none = compiledValue(for: "workdesk.project.brief.none", bundle: bundle)
+
+        XCTAssertEqual(saved, "Instructions saved")
+        XCTAssertEqual(none, "No instructions yet")
+        for value in [saved, none] {
+            XCTAssertFalse(value.lowercased().contains("ready"),
+                           "readiness needs a reachable gateway and present bytes, which this header cannot know: \(value)")
+        }
     }
 
     private func englishAppBundle() throws -> Bundle {
