@@ -2421,9 +2421,11 @@ extension Notification.Name {
 /// Keys for notification userInfo deep-link payloads.
 enum NotificationDeepLink {
     /// userInfo key carrying the target conversation UUID string.
-    static let conversationIDKey = "conversationID"
+    nonisolated static let conversationIDKey = "conversationID"
+    /// userInfo key carrying a private Workboard card UUID string.
+    nonisolated static let workItemIDKey = "workItemID"
     /// userInfo key carrying an `AppError.errorCode` Int (turn-failed bus).
-    static let errorCodeKey = "errorCode"
+    nonisolated static let errorCodeKey = "errorCode"
 
     /// userInfo flag asking the app to land on Settings → Personal AI rather
     /// than on a thread. Carried by the default-needs-setup notification, which

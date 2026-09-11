@@ -129,12 +129,37 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
     /// per-scene service precisely because this set outlives it), and
     /// `endSession` cancels exactly the token it is ending. A token is
     /// therefore spent at most once in the process, so a mark left behind can
-    /// never name a later turn — it can only take up room. Both consumers prune
-    /// for that: `cancel` drops marks below the token it is marking, and the
-    /// recheck in `uploadConverse` drops marks below the token it is clearing.
-    /// `endSession` marks its last token whether or not that turn is still
-    /// live, so the leftovers are routine, not exceptional.
+    /// never name a later turn — it can only take up room. `endSession` marks
+    /// its last token whether or not that turn is still live, so leftovers are
+    /// routine; `cancelClaimCeiling` is what bounds them.
+    ///
+    /// A MARK IS NEVER DROPPED ON ANOTHER TURN'S BEHALF. Ordering by token said
+    /// nothing about whether the older turn had finished: an abandoned chat can
+    /// sit suspended above `uploadConverse` for as long as the file-lane
+    /// revalidation and the outbox mint take, and a newer turn reaching its own
+    /// recheck first would prune the older turn's claim on the way past. The
+    /// older task then resumed, found no claim, and dispatched the transcript
+    /// the driver had ended the session on.
     private var pendingDispatchCancels = Set<UInt64>()
+
+    /// Turn tokens whose PRE-DISPATCH attempt is still outstanding: minted, and
+    /// not yet past the recheck in `uploadConverse` that consumes their claim.
+    /// Registered at the ONE mint site (`CarPlayRecordingService.mintTurnToken`
+    /// is called by `startConverseHop`, which pairs `beginPendingDispatch` with
+    /// a `defer`-ed `endPendingDispatch`), so the window this covers is exactly
+    /// "a turn that could still ask whether it was cancelled".
+    ///
+    /// WHY THE CEILING NEEDS THIS. `cancelClaimCeiling` bounds the mark set by
+    /// AGE, and age is a heuristic for orphanhood, not a proof of it: the
+    /// oldest mark is normally the one whose turn finished long ago, but it is
+    /// also exactly the mark of a turn suspended since before every other one
+    /// started. Thirty-two newer cancellations on one long drive then evicted
+    /// the claim standing in front of an abandoned upload, and the resumed turn
+    /// found nothing and dispatched the transcript the driver had ended on.
+    /// A mark is now dropped only when its attempt is PROVEN gone — the hop
+    /// that owns the token has exited — and the ceiling picks its victims from
+    /// what is left.
+    private var outstandingDispatchTokens = Set<UInt64>()
 
     /// Drain bookkeeping for the `.backgroundTask(.urlSession)` wake handler
     /// (mirrors `BackgroundRemoteAgent`): waiters registered by
@@ -467,12 +492,7 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
         // driver's End can have landed while the store was working, or even
         // before this function was entered (the token is minted several awaits
         // upstream), and either way no task may now be created.
-        let cancelledBeforeDispatch: Bool = {
-            guard turnToken != 0 else { return false }
-            stateLock.lock()
-            defer { stateLock.unlock() }
-            return Self.consumeCancelClaim(from: &pendingDispatchCancels, turnToken: turnToken)
-        }()
+        let cancelledBeforeDispatch = consumeDispatchCancelMark(turnToken: turnToken)
         if cancelledBeforeDispatch {
             try? FileManager.default.removeItem(at: bodyURL)
             // Terminalize what was inserted rather than leaving it open: this
@@ -536,21 +556,138 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
     /// Pure and static, like `cancellationOutcome`, because the rule it encodes
     /// spans two CarPlay sessions and a scene teardown — none of which a test
     /// can stage, and all of which a stale mark outlives.
-    static func markCancelClaim(in marks: inout Set<UInt64>, turnToken: UInt64) {
-        marks = marks.filter { $0 >= turnToken }
+    /// `outstanding` names the tokens whose pre-dispatch attempt has not exited
+    /// yet; their marks are never eviction candidates. No default — a caller
+    /// that forgets it is the defect this parameter exists to stop.
+    static func markCancelClaim(
+        in marks: inout Set<UInt64>,
+        turnToken: UInt64,
+        outstanding: Set<UInt64>
+    ) {
         marks.insert(turnToken)
+        trimCancelClaims(&marks, outstanding: outstanding)
     }
 
     /// Consume the claim for `turnToken` — the pre-dispatch recheck. Returns
-    /// whether THIS turn was cancelled, and drops every lower mark on the way
-    /// out: a mark below the token being rechecked belongs to a turn that has
-    /// already dispatched or will never be rechecked, most often the one
-    /// `endSession` leaves for a turn that had already completed.
+    /// whether THIS turn was cancelled, and touches NO OTHER TURN'S MARK.
+    ///
+    /// Pruning the lower marks here read token order as proof that an older
+    /// turn had terminated, and it is not: turns overlap across the suspensions
+    /// between the mint and the dispatch, so the pruned claim was often the one
+    /// still standing in front of an abandoned upload. Retention is bounded by
+    /// `cancelClaimCeiling` instead — by age, which says nothing about
+    /// liveness, rather than by a newer turn's token, which pretended to.
     static func consumeCancelClaim(from marks: inout Set<UInt64>, turnToken: UInt64) -> Bool {
-        let claimed = marks.remove(turnToken) != nil
-        marks = marks.filter { $0 > turnToken }
-        return claimed
+        marks.remove(turnToken) != nil
     }
+
+    /// How many pending-dispatch cancel claims are retained at once.
+    ///
+    /// A claim is cleared by the turn it names — its recheck consumes it, or
+    /// its completion `defer` does — so the only leftovers are turns that never
+    /// reach either (a hop that returned above `uploadConverse`, or an
+    /// `endSession` marking a turn that had already completed). At most a
+    /// couple of dispatch attempts can be suspended together, so this is many
+    /// times the live population and exists only to stop leftovers accumulating
+    /// for the life of the process.
+    static let cancelClaimCeiling = 32
+
+    /// Drop the OLDEST ORPHANED marks once the retention ceiling is passed.
+    ///
+    /// Two rules, and the order between them is the whole point. A mark whose
+    /// token is still `outstanding` — its hop has not exited, so it can still
+    /// reach the pre-dispatch recheck — is NOT a candidate at any count: age is
+    /// evidence about orphanhood, and here we have the fact itself. Among what
+    /// is left, tokens are monotonic process-wide, so the lowest token is the
+    /// oldest claim and goes first.
+    ///
+    /// The ceiling is therefore a bound on ORPHANS, not on the set: a drive
+    /// with more than `cancelClaimCeiling` simultaneously suspended dispatches
+    /// keeps every one of their marks and the set exceeds the ceiling. That is
+    /// the correct trade — the alternative is dropping a live claim — and it
+    /// cannot run away, because each outstanding token is released by the
+    /// `defer` on the hop that minted it.
+    static func trimCancelClaims(_ marks: inout Set<UInt64>, outstanding: Set<UInt64>) {
+        guard marks.count > cancelClaimCeiling else { return }
+        var evictable = marks.subtracting(outstanding).sorted()
+        var excess = marks.count - cancelClaimCeiling
+        while excess > 0, !evictable.isEmpty {
+            marks.remove(evictable.removeFirst())
+            excess -= 1
+        }
+    }
+
+    /// Register `turnToken` as an OUTSTANDING pre-dispatch attempt: from here
+    /// until `endPendingDispatch`, its cancel claim cannot be evicted by the
+    /// retention ceiling. Called at the mint, which is the earliest instant the
+    /// token can be marked — `endSession` can cancel a turn the moment it
+    /// exists, several suspensions above `uploadConverse`.
+    func beginPendingDispatch(turnToken: UInt64) {
+        guard turnToken != 0 else { return }
+        stateLock.lock()
+        outstandingDispatchTokens.insert(turnToken)
+        stateLock.unlock()
+    }
+
+    /// The attempt for `turnToken` has exited — dispatched, refused, or thrown.
+    /// Its mark (if any) is now a leftover and becomes an eviction candidate
+    /// again. Unconditional on the caller's side (a `defer`), because "the hop
+    /// returned" is the only fact that makes the token orphaned.
+    func endPendingDispatch(turnToken: UInt64) {
+        guard turnToken != 0 else { return }
+        stateLock.lock()
+        outstandingDispatchTokens.remove(turnToken)
+        stateLock.unlock()
+    }
+
+    /// THE PRE-DISPATCH CONSUMER: whether this turn's cancel mark was standing,
+    /// consumed in the asking. The one thing `uploadConverse` is allowed to do
+    /// between the ledger insert and `task.resume()`, and the reason that insert
+    /// is safe to `await` — the driver's End can land while the store is
+    /// working, or before this turn's upload was even entered (the token is
+    /// minted several suspensions upstream), and either way no task may now be
+    /// created.
+    ///
+    /// A NAMED method, and internal rather than private, for one reason:
+    /// `uploadConverse` cannot be driven from the simulator suite (a background
+    /// `URLSession`, a live gateway, a ledger insert), so a decision written
+    /// inline there is asserted only by reading the source — and a body that
+    /// consumes the mark and then answers `false` reads exactly like one that
+    /// refuses the dispatch, while dispatching the turn the driver just ended.
+    /// Named here, the guard EXECUTES it, on the same singleton production
+    /// cancels deposit into.
+    ///
+    /// `turnToken == 0` is the sentinel for "this turn has no token yet"; it
+    /// belongs to no turn, so it consumes nothing and refuses nothing.
+    func consumeDispatchCancelMark(turnToken: UInt64) -> Bool {
+        guard turnToken != 0 else { return false }
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return Self.consumeCancelClaim(from: &pendingDispatchCancels, turnToken: turnToken)
+    }
+
+    #if DEBUG
+    /// Whether a pending-dispatch cancel claim is currently retained for
+    /// `turnToken`. READ-ONLY test seam, and the only way a test can assert
+    /// that the PRODUCTION `cancel(turnToken:)` deposits its mark at all — the
+    /// static helpers can be exercised on a local set, but a `cancel` that
+    /// stopped calling them would pass every one of those.
+    func hasPendingDispatchCancel(turnToken: UInt64) -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return pendingDispatchCancels.contains(turnToken)
+    }
+
+    /// Drop all cancellation bookkeeping. Test hygiene only: this singleton
+    /// outlives every test case, so a test that deposits marks has to leave the
+    /// set as it found it.
+    func resetDispatchCancellationState() {
+        stateLock.lock()
+        pendingDispatchCancels.removeAll()
+        outstandingDispatchTokens.removeAll()
+        stateLock.unlock()
+    }
+    #endif
 
     /// Cancel the in-flight CarPlay converse turn for `turnToken`, if any. The
     /// delegate sees `.cancelled` and drops the turn (no agent append, no TTS).
@@ -563,14 +700,17 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
     /// is what `uploadConverse` rechecks; a turn that did dispatch has its mark
     /// cleared by the completion `defer`.
     ///
-    /// Marks below `turnToken` are pruned here: tokens are monotonic across the
-    /// whole process and turns are serialized by the recording state machine,
-    /// so an older mark belongs to a turn nothing will recheck again. The
-    /// recheck in `uploadConverse` prunes the same way, which is what clears
-    /// the mark this method leaves for a turn that had already completed.
+    /// No other turn's mark is disturbed — see `consumeCancelClaim`. Retention
+    /// is bounded by `cancelClaimCeiling`, which drops the oldest ORPHANED
+    /// claims: a token still registered in `outstandingDispatchTokens` is not a
+    /// candidate, so no live claim is evicted however long the drive runs.
     func cancel(turnToken: UInt64) {
         stateLock.lock()
-        Self.markCancelClaim(in: &pendingDispatchCancels, turnToken: turnToken)
+        Self.markCancelClaim(
+            in: &pendingDispatchCancels,
+            turnToken: turnToken,
+            outstanding: outstandingDispatchTokens
+        )
         let identifiers = inFlight.values
             .filter { $0.turnToken == turnToken }
             .map(\.taskIdentifier)

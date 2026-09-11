@@ -35,10 +35,32 @@
 // the instant the completion handler returns. We therefore COPY the bytes into
 // `tmp/<uuid>/` INSIDE the handler, synchronously, before returning. See
 // `copyFileRepresentation(...)`.
+//
+// ── Work refuses a recording; Chat does not ───────────────────────────────────
+// Two lanes leave this appex. Send hands the shared bytes to a conversation and
+// takes everything, recordings included. The Work lane writes a capture envelope
+// onto the desk, and the desk keeps an audio file ONLY when a person attaches it
+// there themselves — the chat-bar attachment button, or a drop into the Work
+// pane. A share sheet is not one of those doors, so `writeWorkCaptureEnvelope`
+// refuses a recording and the person is told where the door is.
+//
+// Refused WHOLE, like a folder: a screenshot shared together with a voice memo
+// is one thing the person did, and landing half of it is a judgement this appex
+// cannot make. The verdict is asked of the provider before a byte is copied, and
+// again of the annotations after the copy for a source that declared nothing —
+// both through `WorkCaptureEnvelope.isAudioPayload`, so this process and the
+// drainer that claims what it writes cannot disagree about what a recording is.
+// `loadOne` is deliberately untouched: it is shared with Send, and asking it
+// would refuse audio for Chat too.
+//
+// The activation rule stays as it is. Narrowing it would drop this appex out of
+// the share sheet for a recording entirely, which refuses Chat's legitimate
+// forward and does it with no sentence at all.
 
 import UIKit
 import SwiftUI
 import ImageIO
+import CoreFoundation
 import UniformTypeIdentifiers
 import UserNotifications
 import os
@@ -87,6 +109,11 @@ final class ShareViewController: UIViewController {
     /// predicate is still bounded here.
     private static let maxAttachments = 10
 
+    /// One identity for this extension invocation. A Workboard retry cleans and
+    /// rewrites the same intent instead of creating duplicate draft captures.
+    private let workCaptureIntentID = UUID()
+    private let submissionState = ShareSubmissionState()
+
     /// The memoized Safari page-text capture load. Started ONCE in `viewDidLoad`;
     /// its single result is shared by the toggle row (`resolveCapture`), the lead
     /// header synthesis (`resolveLeadHeader`, for a capture-only share), and the
@@ -113,11 +140,16 @@ final class ShareViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        // Load the tiny "Send to" snapshot the main app published (gateways +
-        // recent conversations). Missing / malformed → nil, and `ShareView` shows
-        // the single legacy fallback row (the share never dead-ends). The picker is
-        // always the surface; the manifest's `shouldAutosend` is stamped `true` at
-        // commit time so the picked target always sends (share-and-go).
+        // Load the tiny destination snapshot the main app published (gateways +
+        // recent conversations + the app's default gateway). Missing / malformed
+        // → nil, and `ShareView` keeps the legacy "New conversation" row (the
+        // share never dead-ends). The view's list names conversations only —
+        // every gateway, then the recent chats — and opens with the published
+        // default highlighted, which is a highlight and not a decision. The two
+        // inboxes are the two buttons on its floor: `onSend` is reached only by
+        // Send, `onAddToWorkboard` only by Add to Work, and neither fires without
+        // a tap. The manifest's `shouldAutosend` is stamped `true` at commit
+        // time, so a Send still sends (share-and-go).
         let rootView = ShareView(
             attachmentCount: extractedAttachmentCount(),
             previewItems: buildPreviewItems(),
@@ -127,7 +159,11 @@ final class ShareViewController: UIViewController {
             onSend: { [weak self] caption, target, includePageText in
                 self?.commit(caption: caption, target: target, includePageText: includePageText)
             },
-            onCancel: { [weak self] in self?.cancel() }
+            onAddToWorkboard: { [weak self] note, includePageText in
+                self?.commitToWork(note: note, includePageText: includePageText)
+            },
+            onCancel: { [weak self] in self?.cancel() },
+            submissionState: submissionState
         )
 
         let host = UIHostingController(rootView: rootView)
@@ -416,7 +452,7 @@ final class ShareViewController: UIViewController {
                 // Best-effort cleanup of the partial tmp dir; never publish a
                 // partial envelope (the drainer skips tmp/, so a leftover is
                 // swept by the janitor, but tidy up eagerly anyway).
-                if let tmp = try? self.tmpDir(for: envelopeUUID) {
+                if let tmp = try? await self.tmpDir(for: envelopeUUID) {
                     try? FileManager.default.removeItem(at: tmp)
                 }
             }
@@ -426,6 +462,67 @@ final class ShareViewController: UIViewController {
             // notification; nothing partial is sent.
             await MainActor.run {
                 self.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+            }
+        }
+    }
+
+    /// Publish the same shared bytes into the separate Work capture inbox. Work is
+    /// one desk, so the pick names no card — the drainer resolves it — and there is
+    /// no conversation/gateway route here, so it cannot dispatch: it writes an inert
+    /// envelope, posts a wake hint, and exits.
+    private func commitToWork(
+        note: String,
+        includePageText: Bool
+    ) {
+        let providers = rawProviders
+        let captureTask = capturePayloadTask
+        let captureID = workCaptureIntentID
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            let capture = await captureTask?.value
+            do {
+                try await self.writeWorkCaptureEnvelope(
+                    id: captureID,
+                    note: note,
+                    providers: providers,
+                    capture: capture,
+                    includePageText: includePageText
+                )
+                await self.postWorkCaptureChangeHint()
+                await MainActor.run {
+                    self.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+                }
+            } catch {
+                self.log.error("Work capture write failed: \((error as NSError).domain, privacy: .public) code \((error as NSError).code, privacy: .public)")
+                if let tmp = try? await self.workCaptureTmpDir(for: captureID) {
+                    try? FileManager.default.removeItem(at: tmp)
+                }
+                // Deterministic refusals must not offer a Try Again that replays
+                // the identical failing path; only a transient filesystem fault
+                // can improve unchanged.
+                let failure: WorkboardCommitFailure
+                if let shareError = error as? ShareError {
+                    switch shareError {
+                    case .captureTooLarge:
+                        failure = .tooLarge
+                    case .emptyCapture:
+                        failure = .empty
+                    case .unsupportedItem:
+                        failure = .unsupportedItem
+                    case .audioRefused:
+                        failure = .audioRefused
+                    case .appGroupUnavailable:
+                        failure = .unavailable
+                    }
+                } else if error is WorkCaptureEnvelope.PublicationValidationFailure {
+                    failure = .invalidContent
+                } else {
+                    failure = .unavailable
+                }
+                await MainActor.run {
+                    self.submissionState.failWorkboardCommit(failure)
+                }
             }
         }
     }
@@ -555,6 +652,199 @@ final class ShareViewController: UIViewController {
         // Atomic publish: same-volume rename of tmp/<uuid> → Inbox/<uuid>.
         let published = try inboxDir().appendingPathComponent(uuid.uuidString, isDirectory: true)
         try fm.moveItem(at: tmp, to: published)
+    }
+
+    /// Build an inert Workboard envelope. Provider bytes are copied by the exact
+    /// same memory-bounded loader as Send now, but land under a different App-
+    /// Group root that no dispatch drainer observes. Shared plain text becomes a
+    /// material entry; `note` remains the user's separate instruction.
+    ///
+    /// This is where a recording is refused, and the only place: `loadOne` below
+    /// is shared with Send, so a rule there would refuse audio for Chat too. The
+    /// refusal takes the whole capture and reaches the person as one sentence
+    /// naming the desk's own attachment button.
+    private func writeWorkCaptureEnvelope(
+        id: UUID,
+        note: String,
+        providers: [NSItemProvider],
+        capture: CaptureLoad?,
+        includePageText: Bool
+    ) async throws {
+        // Reject a known-unpublishable note before loading or copying any item
+        // provider. The envelope initializer intentionally preserves the full
+        // value, so this can never look like a successful truncated capture.
+        guard note.count <= WorkCaptureEnvelope.maximumNoteCharacters else {
+            throw ShareError.captureTooLarge
+        }
+
+        let fm = FileManager.default
+        let publisher = try workCapturePublisher()
+        let tmp = try publisher.beginStaging(named: id.uuidString)
+        var didPublish = false
+        defer {
+            // Publication is one atomic rename inside `commit`. Every earlier
+            // failure (including limits discovered after provider loading)
+            // removes the private staging transaction immediately instead of
+            // leaving orphan payload bytes.
+            if !didPublish {
+                publisher.discard(tmp)
+            }
+        }
+
+        var copiedItems: [SharedInboxManifestItem] = []
+        var urls: [String] = []
+        var sharedText = ""
+        var sequence = 0
+        for provider in providers {
+            if let capture, ObjectIdentifier(provider) == capture.providerID { continue }
+            // Asked of the PROVIDER, before its bytes are copied: a recording
+            // refused after the copy has already spent the disk and the memory
+            // the refusal exists to avoid. Chat is unaffected — `loadOne` is
+            // shared with the send lane and asks nothing about audio, so a
+            // recording still forwards to a conversation exactly as before.
+            if provider.hasItemConformingToTypeIdentifier(UTType.audio.identifier) {
+                throw ShareError.audioRefused
+            }
+            try await loadOne(
+                provider: provider,
+                sequence: &sequence,
+                into: tmp,
+                items: &copiedItems,
+                urls: &urls,
+                caption: &sharedText
+            )
+        }
+
+        if let capture, WebPageCapture.shouldAppend(url: capture.url, toExisting: urls) {
+            urls.append(capture.url)
+        }
+        if includePageText, let payload = capture?.payload {
+            let relPath = "att-\(sequence).md"
+            let destination = tmp.appendingPathComponent(relPath)
+            try Data(WebPageCapture.markdown(for: payload).utf8).write(
+                to: destination,
+                options: [.atomic, .completeFileProtection]
+            )
+            copiedItems.append(SharedInboxManifestItem(
+                relPath: relPath,
+                originalName: WebPageCapture.suggestedFilename(title: payload.title),
+                mimeType: "text/markdown",
+                utTypeIdentifier: "net.daringfireball.markdown",
+                sequence: sequence,
+                sourceKind: WebPageCapture.sourceKindWebpage
+            ))
+        }
+
+        var entries: [WorkCaptureEnvelope.Entry] = []
+        var totalBytes: Int64 = 0
+        var nextSequence = 0
+        for item in copiedItems.sorted(by: { $0.sequence < $1.sequence }) {
+            let oldURL = tmp.appendingPathComponent(item.relPath)
+            let safeExtension = WorkCaptureEnvelope.safePathExtension(oldURL.pathExtension)
+            let relativePath = String(format: "payload-%03d.%@", nextSequence, safeExtension)
+            let payloadURL = tmp.appendingPathComponent(relativePath)
+            if oldURL != payloadURL {
+                try fm.moveItem(at: oldURL, to: payloadURL)
+            }
+            let attributes = try fm.attributesOfItem(atPath: payloadURL.path)
+            // Only regular-file bytes are containable. A package document
+            // (`.rtfd`, `.pages`) arrives as a DIRECTORY, whose `.size` is the
+            // node's own tens of bytes rather than the tree's — publishing it
+            // would bypass both byte limits and hand the inbox an envelope it is
+            // required to destroy on claim.
+            guard (attributes[.type] as? FileAttributeType) == .typeRegular else {
+                throw ShareError.unsupportedItem
+            }
+            // The second half of the recording refusal, for a source that
+            // declared nothing the provider check could read. The envelope owns
+            // the rule, so this appex and the drainer that claims what it writes
+            // decide what a recording IS the same way; a second spelling here is
+            // how the two ends drift apart.
+            if WorkCaptureEnvelope.isAudioPayload(
+                mimeType: item.mimeType,
+                typeIdentifier: item.utTypeIdentifier,
+                filename: item.originalName
+            ) {
+                throw ShareError.audioRefused
+            }
+            let byteCount = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            guard byteCount <= WorkCaptureEnvelope.maximumFileBytes else {
+                throw ShareError.captureTooLarge
+            }
+            totalBytes += byteCount
+            guard totalBytes <= WorkCaptureEnvelope.maximumEnvelopeBytes else {
+                throw ShareError.captureTooLarge
+            }
+
+            let isWebPage = item.sourceKind == WebPageCapture.sourceKindWebpage
+            let isImage = item.utTypeIdentifier
+                .flatMap { UTType($0) }?
+                .conforms(to: .image) == true || item.mimeType?.hasPrefix("image/") == true
+            entries.append(WorkCaptureEnvelope.Entry(
+                kind: isWebPage ? .webPage : (isImage ? .image : .file),
+                sequence: nextSequence,
+                relativePath: relativePath,
+                // Names and types are source-app controlled. Sanitize them into
+                // publishable metadata (or nothing) rather than letting a foreign
+                // app's malformed string fail an otherwise valid capture.
+                displayName: WorkCaptureEnvelope.safeOpaqueMetadata(
+                    WorkCaptureEnvelope.safeDisplayName(item.originalName)
+                ),
+                mimeType: WorkCaptureEnvelope.safeOpaqueMetadata(item.mimeType),
+                typeIdentifier: WorkCaptureEnvelope.safeOpaqueMetadata(item.utTypeIdentifier),
+                byteCount: byteCount
+            ))
+            nextSequence += 1
+        }
+
+        let trimmedText = sharedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedText.isEmpty {
+            entries.append(WorkCaptureEnvelope.Entry(
+                kind: .text,
+                sequence: nextSequence,
+                text: trimmedText
+            ))
+            nextSequence += 1
+        }
+        for value in dedupe(urls) {
+            guard value.count <= WorkCaptureEnvelope.maximumURLCharacters else {
+                throw ShareError.captureTooLarge
+            }
+            guard WorkCaptureEnvelope.isAcceptedWebURL(value) else { continue }
+            entries.append(WorkCaptureEnvelope.Entry(
+                kind: .url,
+                sequence: nextSequence,
+                text: value
+            ))
+            nextSequence += 1
+        }
+
+        // Targetless by contract: Work is one desk, so the drainer resolves the
+        // destination. The envelope keeps the field for the mirrored contract.
+        let envelope = WorkCaptureEnvelope(
+            id: id,
+            createdAt: Date(),
+            note: note,
+            source: .shareExtension,
+            targetWorkItemID: nil,
+            entries: entries
+        )
+        // Validation, the manifest write and the publishing rename are ONE
+        // transaction: a refusal removes the staged bytes and publishes nothing.
+        do {
+            try publisher.commit(envelope, staging: tmp)
+        } catch let failure as WorkCaptureEnvelope.PublicationValidationFailure {
+            if failure == .emptyCapture {
+                throw ShareError.emptyCapture
+            }
+            if failure.isSizeViolation {
+                throw ShareError.captureTooLarge
+            }
+            throw failure
+        } catch WorkCaptureDirectoryPublisher.Failure.manifestTooLarge {
+            throw ShareError.captureTooLarge
+        }
+        didPublish = true
     }
 
     /// Dispatch ONE provider to the right loader by its registered type, copying
@@ -762,6 +1052,39 @@ final class ShareViewController: UIViewController {
             .appendingPathComponent(uuid.uuidString, isDirectory: true)
     }
 
+    /// Separate durable queue for inert Workboard captures. The existing
+    /// `SharedInboxDrainer` watches only `Inbox/`, so nothing here can send.
+    private func workCaptureInboxDir() throws -> URL {
+        let inbox = try containerURL()
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("WorkCaptureInbox", isDirectory: true)
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
+        return inbox
+    }
+
+    /// The publisher owns the whole staging → validate → atomic-rename
+    /// transaction, so its failure paths are testable without a device.
+    private func workCapturePublisher() throws -> WorkCaptureDirectoryPublisher {
+        WorkCaptureDirectoryPublisher(inboxURL: try workCaptureInboxDir())
+    }
+
+    private func workCaptureTmpDir(for id: UUID) throws -> URL {
+        try workCapturePublisher().stagingURL(named: id.uuidString)
+    }
+
+    /// Hint only. The durable directory is the source of truth because Darwin
+    /// notifications may coalesce or disappear while the main app is suspended.
+    private func postWorkCaptureChangeHint() {
+        let name = ShareExtensionIdentity.namespace + ".work-capture-inbox.changed"
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName(name as CFString),
+            nil,
+            nil,
+            true
+        )
+    }
+
     /// `Application Support/share-targets.json` — the tiny "Send to" snapshot the
     /// main app writes atomically. We only READ it. Missing file, no App Group,
     /// or a malformed payload all resolve to `nil` (the picker then shows the
@@ -801,5 +1124,16 @@ final class ShareViewController: UIViewController {
 
     enum ShareError: Error {
         case appGroupUnavailable
+        case captureTooLarge
+        case emptyCapture
+        /// A shared item that is not a regular file (a folder or a package
+        /// document). The envelope contract carries file bytes only.
+        case unsupportedItem
+        /// A recording among the shared items. Work keeps an audio file only
+        /// when a person attaches it at the desk itself, so the WHOLE capture is
+        /// refused — a screenshot shared alongside a voice memo is one thing the
+        /// person did, and landing half of it is a judgement this appex cannot
+        /// make. The send lane is untouched: Chat still forwards a recording.
+        case audioRefused
     }
 }

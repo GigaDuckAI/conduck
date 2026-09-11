@@ -221,15 +221,17 @@ struct WatchConversationThreadView: View {
     /// empty when the ref is unknown OR a custom missing from the roster (deleted
     /// / not-yet-synced) → a clean back+clock bar (no generic word).
     ///
-    /// The SHORT form (`shortDisplayName`): this bar shares its row with the back
-    /// chevron and the system clock, so it is the narrowest naming site in the
-    /// app, and a custom name may be up to 40 characters. Truncating here to a
-    /// known budget beats letting the bar decide — the bar's own truncation
-    /// competes with the clock for space and moves with Dynamic Type.
+    /// The SHORT form (`WatchGatewayLabel`): this bar shares its row with the
+    /// back chevron and the system clock, so it is the narrowest naming site in
+    /// the app, and a custom name may be up to 40 characters. Truncating here to
+    /// a known budget beats letting the bar decide — the bar's own truncation
+    /// competes with the clock for space and moves with Dynamic Type. The
+    /// wrist's own label policy rather than the shared shortener, because this
+    /// same string is the capture overlay's destination caption, where two
+    /// gateways that shorten alike would name a destination the person cannot
+    /// check against the row they picked.
     private var threadBackendName: String {
-        guard let id = conversationID,
-              let raw = viewModel.conversations.first(where: { $0.id == id })?.backend,
-              let ref = RemoteAgentRef(rawString: raw) else { return "" }
+        guard let ref = boundBackendRef else { return "" }
         // The BADGE roster: a thread bound to a forgotten custom names it
         // "Forgotten gateway" rather than going blank, matching the colour tag
         // its row already carries in the list.
@@ -238,7 +240,38 @@ struct WatchConversationThreadView: View {
         if case .custom(let id) = ref, !customs.contains(where: { $0.id == id }) {
             return ""
         }
-        return RemoteAgentRefMetadata.shortDisplayName(for: ref, customs: customs)
+        return WatchGatewayLabel.visible(for: ref, customs: customs)
+    }
+
+    /// The bound gateway's name in full, for VoiceOver on the capture overlay's
+    /// destination caption. Empty exactly where `threadBackendName` is empty, so
+    /// the caption and its spoken form appear and disappear together.
+    private var threadBackendSpokenName: String {
+        guard let ref = boundBackendRef else { return "" }
+        let customs = WatchSettingsReader.shared.gatewayBadgeRoster
+        if case .custom(let id) = ref, !customs.contains(where: { $0.id == id }) {
+            return ""
+        }
+        return WatchGatewayLabel.spoken(for: ref, customs: customs)
+    }
+
+    /// The ref this thread routes on. The PERSISTED row comes FIRST and is the
+    /// only answer for an `.existing` thread — nothing may substitute the
+    /// default for a conversation that is bound to something else.
+    ///
+    /// The one fallback is a `.new` draft that has not minted yet: its target
+    /// carries the gateway the Ask chooser picked, and the draft has no row to
+    /// look up. Without it the destination is unreadable for the whole capture
+    /// — the draft's title is empty until the mint and the toolbar is hidden
+    /// while recording — so a mis-tapped row would record with nothing on
+    /// screen naming where it is going.
+    private var boundBackendRef: RemoteAgentRef? {
+        if let id = conversationID,
+           let raw = viewModel.conversations.first(where: { $0.id == id })?.backend {
+            return RemoteAgentRef(rawString: raw)
+        }
+        guard conversationID == nil, case .new(let backendRef) = autoCaptureTarget else { return nil }
+        return RemoteAgentRef(rawString: backendRef)
     }
 
     /// Drives the WhatsApp-style scroll-to-hide composer. Starts visible (a fresh
@@ -541,6 +574,8 @@ struct WatchConversationThreadView: View {
             if isCapturingHere {
                 WatchThreadCaptureOverlay(
                     recordingService: recordingService,
+                    destinationName: threadBackendName,
+                    destinationSpokenName: threadBackendSpokenName,
                     onCancel: popDraftIfNeeded
                 )
                 .transition(.opacity)
@@ -1444,6 +1479,17 @@ struct WatchConversationThreadView: View {
 /// monospaced timer + the `isLuminanceReduced` minimal branch + cancel-X).
 private struct WatchThreadCaptureOverlay: View {
     @Bindable var recordingService: WatchRecordingService
+    /// The picked destination, shown while the mic arms and records. The
+    /// chooser is a per-press pick and a row can be mis-tapped, so the gateway
+    /// the turn is bound to has to be legible BEFORE the person speaks — this
+    /// is the only place it can be, since the draft's title is empty until the
+    /// mint and the toolbar is hidden throughout. Empty when the thread names
+    /// nothing (an unknown or forgotten ref), and the caption disappears with it
+    /// rather than showing a generic word.
+    let destinationName: String
+    /// The same destination in full, for VoiceOver — a caption on a watch face
+    /// has to be cut, a caption read aloud does not.
+    let destinationSpokenName: String
     /// Fired right after the cancel-X's `cancelRecording()` — the parent pops
     /// a discarded draft immediately on the tap itself (deterministic), rather
     /// than waiting for the `captureDiscardCount` echo.
@@ -1476,6 +1522,18 @@ private struct WatchThreadCaptureOverlay: View {
                 }
             } else {
                 VStack(spacing: 10) {
+                    // BEFORE the `isLive` branch on purpose: arming is part of
+                    // the window in which a wrong pick can still be cancelled,
+                    // so the name must not wait for the ring.
+                    if !destinationName.isEmpty {
+                        Text(destinationName)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .accessibilityLabel(
+                                destinationSpokenName.isEmpty ? destinationName : destinationSpokenName
+                            )
+                    }
                     if isLive {
                         ZStack {
                             Circle()

@@ -28,10 +28,18 @@
 //     plus a fire-and-forget wake-ping `sendMessage(["kind":
 //     "apple-speech-relay-wake"])` when reachable so a suspended iPhone
 //     app gets launched to service the queued file.
+//   Both request paths additionally carry ["destination": "work"] when the
+//   capture belongs on the Work desk. ABSENT MEANS CHAT — the older wire, and
+//   the reading an iPhone build predating Work necessarily takes.
 //   iPhone → Watch (sendMessage when reachable AND the request stamped
 //   `replySendMessageOK`; else transferUserInfo):
 //     ["requestID": UUID, "kind": "apple-speech-relay-reply",
-//      "result.text": String]   on success
+//      "result.text": String,
+//      "result.work": Bool]     on success ("result.work" present and true
+//                               ⇒ the iPhone durably published the RECORDING
+//                               to the Work desk; absent ⇒ it did not, which
+//                               is what an old iPhone build says by saying
+//                               nothing)
 //     ["requestID": UUID, "kind": "apple-speech-relay-reply",
 //      "result.errorCode": Int] on failure (AppError.errorCode)
 //
@@ -62,8 +70,22 @@ import WatchConnectivity
 ///     dropping it — the old "unknown request — dropping" path is exactly
 ///     why late replies never converged.
 enum RelayReplyOutcome {
-    case success(String)
+    case success(RelayReply)
     case failure(AppError)
+}
+
+/// A settled SUCCESS reply, typed rather than a bare transcript.
+///
+/// `workSaved` is the iPhone's durability claim for a Work capture: true only
+/// when the phone has already published the RECORDING to the desk, which is
+/// what entitles the wrist to claim its queue entry (a claim deletes the clip).
+/// It is false both when the capture was a Chat ask and when the reply came
+/// from an iPhone build that predates the Work destination — in the second case
+/// the transcript is in hand but the recording is not saved anywhere but here,
+/// so the wrist writes the words itself BEFORE it lets go of the audio.
+struct RelayReply: Equatable, Sendable {
+    let text: String
+    let workSaved: Bool
 }
 
 /// Actor managing per-request continuations for outbound relay requests
@@ -107,6 +129,19 @@ actor AppleSpeechRelayCoordinator {
         /// this key — stale-watch-build safety (an old build that never
         /// filled `didReceiveMessage` keeps getting `transferUserInfo`).
         static let supportsMessageReplyKey = "replySendMessageOK"
+        /// Where this capture lands on the iPhone. ABSENT ⇒ chat, which is
+        /// both the legacy wire and the only reading an iPhone build predating
+        /// Work can take — so a Work stamp can never be misread as a chat ask
+        /// by an old phone, it is simply ignored and answered with a bare
+        /// transcript (the wrist's words-only fallback).
+        static let destinationKey = "destination"
+        /// The one non-default destination value: the private Work desk. No
+        /// gateway, no conversation, no dispatch is reachable from it.
+        static let destinationWork = "work"
+        /// Reply stamp (Bool): the iPhone durably published the RECORDING to
+        /// the Work desk. Written on Work replies only — Chat's success reply
+        /// keeps its three-key shape.
+        static let resultWorkSavedKey = "result.work"
     }
 
     // MARK: - Tuning constants
@@ -136,11 +171,13 @@ actor AppleSpeechRelayCoordinator {
 
     /// Per-request continuation map. Key is the `requestID` UUID string.
     /// On reply or timeout we look up, remove, and resume.
-    private var pending: [String: CheckedContinuation<String, Error>] = [:]
+    private var pending: [String: CheckedContinuation<RelayReply, Error>] = [:]
 
     private init() {}
 
-    /// Relay an audio file to the iPhone for transcription. The iPhone runs
+    /// Relay an audio file to the iPhone for transcription (Chat) or for
+    /// transcription AND a durable Work publication (`destination == .work`).
+    /// The iPhone runs
     /// either its current active provider (nil `providerID`) or — when
     /// `providerID == "custom-openai"` — the user's BYO custom OpenAI-compatible
     /// endpoint, depending on the `providerID` stamped into the relay payload.
@@ -181,7 +218,13 @@ actor AppleSpeechRelayCoordinator {
     ///   - `.sttCustomEndpointNotConfigured`: iPhone responded but no custom
     ///     base URL is configured there (custom path).
     ///   - Other `AppError` cases as mapped from the iPhone-side `errorCode`.
-    func relay(requestID: String, audioFileURL: URL, language: String?, providerID: String? = nil, skipOutstandingCheck: Bool = false) async throws -> String {
+    ///
+    /// `destination` stamps the wire (`.work` only; `.chat` is the absent
+    /// default, so the Chat request bytes are unchanged and an iPhone build
+    /// predating Work sees exactly the payload it always saw). The returned
+    /// `RelayReply` carries the phone's durability claim, which is what decides
+    /// whether the wrist may delete its copy of the recording.
+    func relay(requestID: String, audioFileURL: URL, language: String?, providerID: String? = nil, destination: WatchCaptureDestination = .chat, skipOutstandingCheck: Bool = false) async throws -> RelayReply {
         var metadata: [String: Any] = [
             Wire.requestIDKey: requestID,
             Wire.kindKey: Wire.kindValue,
@@ -199,6 +242,13 @@ actor AppleSpeechRelayCoordinator {
         // is byte-for-byte unchanged.
         if let providerID, !providerID.isEmpty {
             metadata[Wire.providerIDKey] = providerID
+        }
+        // Stamp WORK only. Chat is the absent value on purpose: it keeps the
+        // legacy request byte-identical, so nothing about the Chat lane changes
+        // and an iPhone that has never heard of Work reads the same dictionary
+        // it always did.
+        if destination == .work {
+            metadata[Wire.destinationKey] = Wire.destinationWork
         }
 
         // Per-provider reply budget: local Apple transcription vs the
@@ -226,7 +276,7 @@ actor AppleSpeechRelayCoordinator {
         }
 
         do {
-            let text = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            let reply = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<RelayReply, Error>) in
                 pending[requestID] = continuation
                 // Deliver only AFTER the continuation is registered — the
                 // inline path's reply can be near-instant, and a reply
@@ -240,7 +290,7 @@ actor AppleSpeechRelayCoordinator {
                 )
             }
             timeoutTask.cancel()
-            return text
+            return reply
         } catch {
             timeoutTask.cancel()
             throw error
@@ -270,7 +320,12 @@ actor AppleSpeechRelayCoordinator {
         // wire contract was violated by something on the iPhone side.
         let outcome: RelayReplyOutcome
         if let text = payload[Wire.resultTextKey] as? String {
-            outcome = .success(text)
+            // ABSENT ⇒ false. The stamp is a positive claim about durability,
+            // so only its presence may be read as one — an iPhone build that
+            // predates Work says nothing here, and "nothing" must not be
+            // mistaken for "the recording is safe on the phone".
+            let workSaved = (payload[Wire.resultWorkSavedKey] as? Bool) ?? false
+            outcome = .success(RelayReply(text: text, workSaved: workSaved))
         } else if let code = payload[Wire.resultErrorCodeKey] as? Int {
             // Map code → AppError. Code 18 is `.appleSpeechModelNotInstalled`;
             // unknown codes fall through to `.apiFailure` per the static
@@ -283,8 +338,8 @@ actor AppleSpeechRelayCoordinator {
 
         if let continuation = pending.removeValue(forKey: requestID) {
             switch outcome {
-            case .success(let text):
-                continuation.resume(returning: text)
+            case .success(let reply):
+                continuation.resume(returning: reply)
                 #if DEBUG
                 print("[Watch] Apple relay reply success (id=\(requestID.prefix(8)))")
                 #endif

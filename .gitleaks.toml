@@ -121,3 +121,32 @@ id = "generic-api-key"
   condition = "AND"
   regexes = ['''^diag\.tts\.outcomes\.v1$''']
   paths = ['''Conduck/Conduck/Services/TTS/TTSOutcomeLog\.swift$''']
+
+  [[rules.allowlists]]
+  description = """
+  A fixed UUID used as the Watch capture request identifier to assert that
+  retries derive the same Work card ID. It is hashed locally, not used to
+  authenticate a request.
+  """
+  condition = "AND"
+  regexes = ['''^6F1F2E3D-4C5B-6A79-8899-AABBCCDDEEFF$''']
+  paths = ['''^Conduck/ConduckWatchTests/ConduckWatchSmokeTests\.swift$''']
+
+  [[rules.allowlists]]
+  description = """
+  `abc123__brief.pdf` is a synthetic stored-object filename in an in-memory
+  conversation-store test. It identifies attachment metadata, not a credential.
+  """
+  condition = "AND"
+  regexes = ['''^abc123__brief\.pdf$''']
+  paths = ['''^Conduck/ConduckTests/ConversationStoreReferencedStoredKeysTests\.swift$''']
+
+  [[rules.allowlists]]
+  description = """
+  `sk-or-v1-conduck-test-key` is a synthetic input to the local SHA-256
+  key-settings URL test. Its expected digest is asserted in the same test;
+  the fixture is never issued by a provider or used for authentication.
+  """
+  condition = "AND"
+  regexes = ['''^sk-or-v1-conduck-test-key$''']
+  paths = ['''^Conduck/ConduckTests/OpenRouterOAuthTests\.swift$''']

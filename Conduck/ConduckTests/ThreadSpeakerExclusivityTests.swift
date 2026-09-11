@@ -3,20 +3,21 @@
 // Conduck
 // ThreadSpeakerExclusivityTests.swift
 //
-// macOS-only integration coverage for `ThreadSpeaker`'s wiring onto the
+// Integration coverage for `ThreadSpeaker`'s wiring onto the
 // `SpeechExclusivity` bus: each speaker registers itself in `init`, and
 // starting (or resuming) an utterance claims the bus — silencing every OTHER
 // registered speaker. This is the cross-INSTANCE arbitration the pure
 // `SpeechExclusivityTests` can't see (those use spy parties); here two real
 // `ThreadSpeaker`s built on the same fake-seam `ReplyVoice` rig as
 // `ThreadSpeakerTests` prove that one speaker starting resets the other's
-// bubble state to `.idle`. `#if os(macOS)` because the registration/claim
-// lines inside `ThreadSpeaker` only exist there — and they use the REAL
-// `SpeechExclusivity.shared` (the init hardcodes it), which is safe here:
-// parties are weak (test instances die with the test) and no other live
-// suite holds a playing speaker.
+// bubble state to `.idle`. The gate matches the one on the registration/claim
+// lines inside `ThreadSpeaker` itself (`#if os(macOS) || os(iOS)`); the wrist
+// registers nothing, so there is no bus to arbitrate there. These cases use the
+// REAL `SpeechExclusivity.shared` (the init hardcodes it), which is safe:
+// parties are weak (test instances die with the test) and no other live suite
+// holds a playing speaker.
 
-#if os(macOS)
+#if os(macOS) || os(iOS)
 import XCTest
 @testable import Conduck
 

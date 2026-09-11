@@ -144,6 +144,7 @@ struct ConversationListView: View {
     var onConversationsEmptyChanged: ((Bool) -> Void)? = nil
 
     @State private var viewModel = ConversationListViewModel()
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     /// Drives the quiet "iCloud unavailable" banner (the only sync chrome). Reads
     /// the shared `@Observable` monitor; the banner shows only when iCloud is in a
     /// user-actionable bad state AND not dismissed this episode.
@@ -210,20 +211,21 @@ struct ConversationListView: View {
     }
 
     var body: some View {
+        let groups = filteredTimeGroups
         Group {
             if viewModel.isLoading && viewModel.conversations.isEmpty {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = viewModel.loadError, viewModel.conversations.isEmpty {
                 errorView(error)
-            } else if !trimmedSearchQuery.isEmpty && filteredTimeGroups.isEmpty && !isSearchingContent {
+            } else if !trimmedSearchQuery.isEmpty && groups.isEmpty && !isSearchingContent {
                 noSearchResultsView
             } else if viewModel.conversations.isEmpty {
                 emptyStateView
-            } else if filteredTimeGroups.isEmpty && !isSearchingContent {
+            } else if groups.isEmpty && !isSearchingContent {
                 noSearchResultsView
             } else {
-                conversationsList
+                conversationsList(groups: groups)
             }
         }
         #if os(iOS)
@@ -233,13 +235,20 @@ struct ConversationListView: View {
         // suppresses BOTH: an empty inline title (so no wasted large-title band
         // above the pinned header) and the native search (which iOS forces into
         // the nav-bar area, ABOVE any pinned header).
-        .navigationTitle(externalSearchText == nil ? Text("Conversations") : Text(""))
+        .workbenchNavigationTitle(
+            externalSearchText == nil ? Text("Conversations") : Text(""),
+            isActive: workbenchDestinationIsActive
+        )
         .navigationBarTitleDisplayMode(externalSearchText == nil ? .large : .inline)
         .modifier(NativeSearchableModifier(text: $internalSearch, isEnabled: externalSearchText == nil))
         #else
-        .navigationTitle(Text("Conversations"))
+        .workbenchNavigationTitle(
+            Text("Conversations"),
+            isActive: workbenchDestinationIsActive
+        )
         #endif
         .toolbar {
+            if workbenchDestinationIsActive {
             #if os(iOS)
             if let onOpenSettings, settingsInToolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -304,6 +313,7 @@ struct ConversationListView: View {
             // mid-pair), and `.navigation` leaves the sidebar region entirely,
             // docking at the DETAIL region's leading edge past the tracking
             // separator (screenshot-measured, macOS 26.5, 2026-08-24).
+            }
         }
         .safeAreaInset(edge: .top) {
             if syncMonitor.showsBanner, let reason = syncMonitor.unavailableReason {
@@ -313,7 +323,7 @@ struct ConversationListView: View {
             }
         }
         .safeAreaInset(edge: .bottom) { settingsFooterRow }
-        .alert(Text("Delete all conversations?"), isPresented: externalDeleteAllConfirmation ?? $showDeleteAllConfirmation) {
+        .alert(Text("Delete all conversations?"), isPresented: activeDeleteAllConfirmation) {
             Button(role: .destructive) {
                 Task {
                     if await viewModel.deleteAll() {
@@ -331,7 +341,10 @@ struct ConversationListView: View {
             // deletion that also takes them. A single conversation's deletion
             // leaves its content-free records behind for trends, so a message
             // reused between the two would be false on one of them.
-            Text("This removes every conversation and its usage records from this device and all your other devices. This cannot be undone.")
+            Text("This removes every conversation and its usage records from this device and all your other devices. Your Work desk and everything on it stay untouched. This cannot be undone.")
+        }
+        .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            if !isActive { activeDeleteAllConfirmation.wrappedValue = false }
         }
         .task { await viewModel.reload() }
         .task(id: searchKey) { await runContentSearch() }
@@ -340,6 +353,11 @@ struct ConversationListView: View {
         .onChange(of: viewModel.conversations.isEmpty, initial: true) { _, isEmpty in
             onConversationsEmptyChanged?(isEmpty)
         }
+    }
+
+    private var activeDeleteAllConfirmation: Binding<Bool> {
+        (externalDeleteAllConfirmation ?? $showDeleteAllConfirmation)
+            .gated(by: workbenchDestinationIsActive)
     }
 
     // MARK: - Content search (Tier 2)
@@ -484,14 +502,14 @@ struct ConversationListView: View {
 
     // MARK: - List
 
-    private var conversationsList: some View {
+    private func conversationsList(groups: [TimeGroup]) -> some View {
         // Resolved ONCE per list build, not once per row: the rule scans the
         // whole conversation array, and a single-gateway list is exactly the
         // case where it can't bail early — evaluating it per row would make
         // that scan quadratic in the number of conversations.
         let showsBadge = showsGatewayBadge
         return List {
-            ForEach(filteredTimeGroups) { group in
+            ForEach(groups) { group in
                 Section {
                     ForEach(group.conversations) { convo in
                         Button {
@@ -887,6 +905,19 @@ private struct NativeSearchableModifier: ViewModifier {
 /// filter via the host's `externalSearchText` binding.
 struct SidebarSearchField: View {
     @Binding var text: String
+    let prompt: LocalizedStringResource
+    let accessibilityLabel: LocalizedStringResource
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
+
+    init(
+        text: Binding<String>,
+        prompt: LocalizedStringResource = LocalizedStringResource("Search conversations"),
+        accessibilityLabel: LocalizedStringResource? = nil
+    ) {
+        _text = text
+        self.prompt = prompt
+        self.accessibilityLabel = accessibilityLabel ?? prompt
+    }
 
     /// Drives the macOS click-anywhere-on-the-capsule focus assist below.
     @FocusState private var fieldFocused: Bool
@@ -940,6 +971,10 @@ struct SidebarSearchField: View {
                 .accessibilityHidden(true)
         )
         #endif
+        .disabled(!workbenchDestinationIsActive)
+        .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            if !isActive { fieldFocused = false }
+        }
         .accessibilityIdentifier("sidebar.search")
     }
 
@@ -952,10 +987,10 @@ struct SidebarSearchField: View {
 
     @ViewBuilder
     private var field: some View {
-        let base = TextField(String(localized: "Search conversations"), text: $text)
+        let base = TextField(String(localized: prompt), text: $text)
             .textFieldStyle(.plain)
             .font(.body)
-            .accessibilityLabel(Text("Search conversations"))
+            .accessibilityLabel(Text(accessibilityLabel))
         #if os(iOS)
         base
             .textInputAutocapitalization(.never)

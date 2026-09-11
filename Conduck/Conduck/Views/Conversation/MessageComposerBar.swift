@@ -196,6 +196,7 @@ struct MessageComposerBar: View {
 
     @FocusState private var fieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
     // MARK: - Attachment staging (local — macOS composer owns it directly)
 
@@ -351,7 +352,8 @@ struct MessageComposerBar: View {
     /// indicator covers turns this instance did not dispatch (the share drainer,
     /// a sibling VM), which would otherwise leave Send live beside a running turn.
     private var isSendDisabled: Bool {
-        (viewModel?.isAwaitingReply ?? false)
+        !workbenchDestinationIsActive
+            || (viewModel?.isAwaitingReply ?? false)
             || (viewModel?.showsGatewayWaitIndicator ?? false)
             || attachments.hasLoadingItem
             || attachments.hasUploadingItem   // strict send-gating: a server-file PUT
@@ -377,8 +379,16 @@ struct MessageComposerBar: View {
 
     var body: some View {
         composerStack
+        .appReviewBusy(workbenchDestinationIsActive && (
+            captureActive || hasSendableContent || activeGatewayStages > 0
+                || attachmentDispatchInProgress || showingPhotosPicker
+                || showingFileImporter || showingSetupGuide || !pendingLargeFiles.isEmpty
+        ))
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+        // Keep the mounted hidden Chat composer out of keyboard/menu routing
+        // without invalidating the entire conversation and sidebar trees.
+        .disabled(!workbenchDestinationIsActive)
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: attachments)
         .onAppear {
             fieldFocused = true
@@ -402,11 +412,15 @@ struct MessageComposerBar: View {
         }
         // Photo library — NO maxSelectionCount.
         .photosPicker(
-            isPresented: $showingPhotosPicker,
+            isPresented: activePhotosPickerPresentation,
             selection: $pickerSelection,
             matching: .images
         )
         .onChange(of: pickerSelection) { _, items in
+            guard workbenchDestinationIsActive else {
+                pickerSelection.removeAll()
+                return
+            }
             stagePickerSelection(items)
         }
         // UNIFIED "Choose Files…" importer — accepts ANY file (broad type set so
@@ -414,15 +428,16 @@ struct MessageComposerBar: View {
         // the classifier (image → inline; text → inline/dual; binary → server or
         // a `.needsSetup` tile, with the >100 MB soft-confirm).
         .fileImporter(
-            isPresented: $showingFileImporter,
+            isPresented: activeFileImporterPresentation,
             allowedContentTypes: unifiedContentTypes,
             allowsMultipleSelection: true
         ) { result in
+            guard workbenchDestinationIsActive else { return }
             if case .success(let urls) = result { stageServerFiles(urls) }
         }
         // File-transfer setup guide (sheet) scoped to the bound gateway. On
         // dismiss: refresh + promote any `.needsSetup` tiles to uploads.
-        .sheet(isPresented: $showingSetupGuide, onDismiss: {
+        .sheet(isPresented: activeSetupGuidePresentation, onDismiss: {
             Task {
                 await refreshFileTransfer()
                 await promoteNeedsSetupTiles()
@@ -448,7 +463,9 @@ struct MessageComposerBar: View {
         .alert(
             LocalizedStringResource("fileTransfer.softConfirm.title", defaultValue: "Attach large file?"),
             isPresented: Binding(
-                get: { pendingLargeFiles.first != nil },
+                get: {
+                    workbenchDestinationIsActive && pendingLargeFiles.first != nil
+                },
                 set: { _ in }
             ),
             presenting: pendingLargeFiles.first
@@ -508,6 +525,18 @@ struct MessageComposerBar: View {
         .onChange(of: shouldLockNewChatGateway) { _, locked in
             newChatGatewaySelectionLocked?.wrappedValue = locked
         }
+        .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            guard !isActive else { return }
+            // These are transient system presentations, not the user's staged
+            // chat work. Close them when Chats becomes hidden so they cannot
+            // float over Work or reopen unexpectedly; keep the draft, staged
+            // attachments, and any deliberate large-file decision intact.
+            showingPhotosPicker = false
+            pickerSelection.removeAll()
+            showingFileImporter = false
+            showingSetupGuide = false
+            fieldFocused = false
+        }
         // Teardown: this bar's mount can be SWAPPED OUT wholesale (the VM-less
         // new-chat placeholder ↔ the conversation-bound mount in
         // `MainWindowView`, or the window closing). `@State` dies with the view,
@@ -525,6 +554,18 @@ struct MessageComposerBar: View {
             }
             newChatGatewaySelectionLocked?.wrappedValue = false
         }
+    }
+
+    private var activePhotosPickerPresentation: Binding<Bool> {
+        $showingPhotosPicker.gated(by: workbenchDestinationIsActive)
+    }
+
+    private var activeFileImporterPresentation: Binding<Bool> {
+        $showingFileImporter.gated(by: workbenchDestinationIsActive)
+    }
+
+    private var activeSetupGuidePresentation: Binding<Bool> {
+        $showingSetupGuide.gated(by: workbenchDestinationIsActive)
     }
 
     // MARK: - Composer box (extracted to keep `body` type-checkable)
@@ -640,16 +681,7 @@ struct MessageComposerBar: View {
 
             controlRow
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(AppColors.cardBackgroundElevated)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(AppColors.border, lineWidth: 1)
-                )
-        )
+        .composerCardChrome()
         // The whole card is a focus target — the editable `TextField` is only as
         // tall as its text (a thin strip at the top), so the card's padding, the
         // gap above the control row, and the side margins were dead zones where a
@@ -675,16 +707,19 @@ struct MessageComposerBar: View {
         HStack(spacing: 10) {
             AttachmentMenu(
                 onPickLibrary: {
-                    guard !attachmentDispatchInProgress else { return }
+                    guard workbenchDestinationIsActive,
+                          !attachmentDispatchInProgress else { return }
                     showingPhotosPicker = true
                 },
                 onTakePhoto: { },   // no camera on macOS — item is hidden
                 onPickFiles: {
-                    guard !attachmentDispatchInProgress else { return }
+                    guard workbenchDestinationIsActive,
+                          !attachmentDispatchInProgress else { return }
                     showingFileImporter = true
                 },
                 onSetUpFileTransfer: {
-                    guard !attachmentDispatchInProgress else { return }
+                    guard workbenchDestinationIsActive,
+                          !attachmentDispatchInProgress else { return }
                     showingSetupGuide = true
                 },
                 fileTransferAvailable: fileTransferAvailable,
@@ -694,7 +729,7 @@ struct MessageComposerBar: View {
                 iconPointSize: 20,
                 iconFrame: 32
             )
-            .disabled(attachmentDispatchInProgress)
+            .disabled(!workbenchDestinationIsActive || attachmentDispatchInProgress)
 
             Spacer(minLength: 8)
 
@@ -901,7 +936,10 @@ struct MessageComposerBar: View {
             animatesSymbol: isRecording,
             diameter: 32,
             glyphSize: 14,
-            isDisabled: isProcessing || isPreparingVoice || (viewModel?.isAwaitingReply ?? false),
+            isDisabled: !workbenchDestinationIsActive
+                || isProcessing
+                || isPreparingVoice
+                || (viewModel?.isAwaitingReply ?? false),
             accessibilityLabel: isRecording
                 ? String(localized: LocalizedStringResource("composer.mic.stop", defaultValue: "Stop recording"))
                 : String(localized: LocalizedStringResource("composer.mic.start", defaultValue: "Start recording")),
@@ -924,6 +962,7 @@ struct MessageComposerBar: View {
         // error + start; recording → stop, then hand the STT Result to the host
         // (`onVoiceResult`), which appends the transcript into the shared draft.
         // Processing is a no-op (the stall-Cancel lives elsewhere).
+        guard workbenchDestinationIsActive else { return }
         switch recorder.state {
         case .idle, .error:
             recorder.dismissError()
@@ -1021,7 +1060,8 @@ struct MessageComposerBar: View {
         let text = trimmedDraft
         let submittedDraft = draft
         let dispatchRef = viewModel == nil ? selectedRef : effectiveRef
-        guard hasSendableContent,
+        guard workbenchDestinationIsActive,
+              hasSendableContent,
               !isSendDisabled,
               attachments.serverOwnershipMatches(dispatchRef) else { return }
         attachmentDispatchInProgress = true

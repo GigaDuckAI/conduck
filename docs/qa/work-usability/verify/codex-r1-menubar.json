@@ -1,0 +1,62 @@
+{
+ "slice": "macOS menu bar — Slice D, d1/d2",
+ "verdict": "findings",
+ "findings": [
+  {
+   "id": "S1",
+   "severity": "major",
+   "title": "Save completion consumes the currently selected composition",
+   "file": "Conduck/Conduck/MenuBar/MenuBarCoordinator.swift:2057",
+   "claim": "Switching compositions during a Work save can leave the saved private words in Chat's sending field or clear the wrong draft.",
+   "evidence": "The save snapshots only `let draftAtCommit = compose.activeText` at line 2027, then calls `compose.clearActive(ifStillEqualTo: draftAtCommit)` after two awaits. At lines 2600–2603, that helper compares and clears the CURRENT `activeText`, then sets `target = .chat`.",
+   "scenario": "In text mode, type a private note in Chat and click Add to Work. Before publication/draining finishes, press ⌃⌘W to select the empty Work composition. Completion compares the empty Work text with the saved note and clears nothing. Returning through ⌘⇧1 presents the already-saved private note as a Chat draft; Return sends it to the gateway.",
+   "fix": "Snapshot the composition target alongside its text, and conditionally consume that specific slot after saving. Change the displayed target only if the user is still editing the completed composition.",
+   "refutationAttempt": "The equality check protects edits within one slot, but does not identify the slot. Hotkey navigation remains enabled during saving. The send guard accepts the retained words once navigation returns the target to Chat; existing composition tests never switch targets during a commit."
+  },
+  {
+   "id": "S2",
+   "severity": "minor",
+   "title": "Cancellation during startup can leave an unseen recording",
+   "file": "Conduck/Conduck/MenuBar/MenuBarCoordinator.swift:1956",
+   "claim": "Cancelling while the Work microphone starts does not invalidate the pending start, which can subsequently begin recording behind the closed popover.",
+   "evidence": "`beginWorkVoiceCapture` sets `isStartingWorkVoiceCapture = true` and awaits `workVoiceRecorder.startRecording()` at lines 1918–1919. During this interval the recorder remains `.idle`, for which `cancelWorkVoiceCapture` executes `break` at lines 1964–1965. Neither the start continuation nor the underlying recorder checks cancellation before accepting the recording.",
+   "scenario": "Press ⌃⌘W and dismiss with Esc while microphone permission/startup is pending. Esc closes the popover, but the pending start later succeeds. The microphone runs unseen: MenuBarController.swift:640–659 only reopens for Chat recorder states, while Chat remains idle.",
+   "fix": "Track and invalidate pending Work starts on cancellation, and tear down a microphone that finishes starting after cancellation. Protect the startup interval from implicit dismissal or explicitly cancel it when dismissed.",
+   "refutationAttempt": "The existing `.applicationDefined` pin covers only `.recording`, not startup. `cancelActiveCapture` does call the Work cancellation method, but its idle arm does nothing. Recorder observation updates the icon and behavior without reopening the closed Work HUD."
+  },
+  {
+   "id": "S3",
+   "severity": "minor",
+   "title": "The Work HUD leaves a hidden conversation marked visible",
+   "file": "Conduck/Conduck/MenuBar/MenuBarController.swift:653",
+   "claim": "Replies hidden behind the Work HUD can be acknowledged as read and have their notifications suppressed.",
+   "evidence": "The new condition `if popover.isShown, !coordinator.workCaptureIsActive` skips updating visibility but never clears it. `showPopover` still calls `setPopoverVisibleConversation(...)` whenever Chat is idle at lines 418–419. MenuBarCoordinator.swift:585–588 acknowledges arrivals matching that retained ID, and lines 610–611 suppress their banners.",
+   "scenario": "With a quick Chat turn awaiting its reply, start a Work recording. Opening the popover records the Chat conversation as visible, then Work occupies the content. When the Chat reply arrives during recording, it is acknowledged and receives no banner although its content was never shown.",
+   "fix": "Clear the visible-conversation ID when Work takes over, and prevent `showPopover` from assigning a conversation while the Work HUD owns the surface. Restore visibility when conversation content actually returns.",
+   "refutationAttempt": "The added Work guard prevents a fresh visibility assignment but preserves the previous assignment. The arrival acknowledgement and notification paths consult that retained ID without checking Work visibility."
+  },
+  {
+   "id": "S4",
+   "severity": "minor",
+   "title": "A read-only reply override blocks Work composition",
+   "file": "Conduck/Conduck/MenuBar/DictationPopoverView.swift:524",
+   "claim": "Pressing ⌃⌘W in text mode does not open Work composition when a read-only reply override is already displayed.",
+   "evidence": "`showsComposeSurface` returns false for a non-nil `popoverOverrideViewModel` at line 518, before reaching the new Work-target branch. `openComposeForWorkOnly` at MenuBarCoordinator.swift:1843–1845 only clears feedback and calls `compose.aimAtWork()`; it does not clear the override.",
+   "scenario": "Click the status item to view an unread reply belonging to another conversation, creating the read-only override. While that popover remains open, press ⌃⌘W in text mode. The override still hides the compose surface, so neither Add to Work nor the retained Work words appears.",
+   "fix": "Clear the read-only display override when explicitly opening Work composition, without arming a Chat capture.",
+   "refutationAttempt": "Popover closure clears the override, but this handler shows the already-open popover without closing it. Normal Chat capture clears the override through `armQuickCapture`, which correctly cannot be used for Work."
+  }
+ ],
+ "checkedInvariants": [
+  "Work hotkey registration, single ⌃⌘W default, Settings recorder row and menu action.",
+  "Work handler has no Chat arming, readiness refusal or gateway-send calls.",
+  "Separate retained Work/Chat text slots; Work Return and ⌘Return save; Ask is absent.",
+  "Recorder observation, live-recording popover pin and busy status icon.",
+  "SpeechExclusivity arbitration and existing microphone-busy wording.",
+  "Publication precedes inline draining and acknowledgement; saved feedback opens Work and retains accessibility announcement.",
+  "Work HUD uses existing voice keys and recorder-backed Stop/Retry controls.",
+  "Placeholder WorkContract file is absent.",
+  "Shell and shortcut drift guards inspect comment-stripped implementation text."
+ ],
+ "notes": "Reviewed ec8b27f..692608d and both slice fixnotes. No files modified; no builds or XCTest execution. Read-only source assertions, folder-map, legal-copy and SPDX checks passed. Storage-seam checking encountered sandbox errors and is not counted as passing. Unrelated working-tree changes were excluded."
+}

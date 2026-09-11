@@ -1,0 +1,61 @@
+{
+ "slice": "menubar",
+ "verdict": "findings",
+ "round1": [
+  {
+   "id": "S1",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "MenuBarCoordinator.swift:2069 snapshots the target alongside the text; :2100 passes both to clearCommitted. At :2661, consumption compares and clears the named slot, preserving the other slot even when both contain identical text. Changed text survives, and navigation is preserved. The two navigation regression tests fail under the old active-slot behavior; the production-wiring source assertion also rejects 692608d."
+  },
+  {
+   "id": "S2",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "still-open",
+   "evidence": "Explicit cancellation now invalidates workVoiceStartToken and tears down a late successful start. However, click-away during startup never invalidates it: the popover remains transient and neither close hook cancels the pending start. The new token-order assertion rejects the old implementation but passes with this surviving scenario. See R1."
+  },
+  {
+   "id": "S3",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "still-open",
+   "evidence": "Clearing visibility before the recorder await and guarding subsequent summons closes the scenario once Work capture has begun. The initial Work voice summon still calls showPopover before beginning capture, allowing an unread Chat reply to be acknowledged first. Both new source guards reject 692608d but omit this caller ordering. See R2."
+  },
+  {
+   "id": "S4",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "MenuBarCoordinator.swift:1851 clears the read-only override before aiming at Work. DictationPopoverView.swift:518 therefore passes its override gate and :524 exposes the Work composition in text mode. Neither this transition nor clearPopoverOverride arms Chat. The new source assertion fails against 692608d."
+  },
+  {
+   "id": "S7",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "Cross-cutting dismissal-test finding: MenuBarWorkCaptureStateTests.swift:448 now inspects both production close hooks after stripping comments, with positive controls proving the bodies were extracted. An in-memory insertion of coordinator.discardWorkOnlyCompose() into the controller hook fails the new assertion. The production hooks preserve both compositions."
+  }
+ ],
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "minor",
+   "title": "Click-away during startup still leaves a recording behind a closed popover",
+   "file": "Conduck/Conduck/MenuBar/MenuBarController.swift:732",
+   "claim": "The startup cancellation fix handles explicit cancellation but leaves implicit dismissal unprotected.",
+   "evidence": "workRecordingIsLive at :619 recognizes only .recording, so updatePopoverBehavior leaves startup transient. observeStateChanges at :586 observes recorder.state but not isStartingWorkVoiceCapture. InAppAudioRecorder.swift:453 and :497 suspend before state becomes .recording at :527. MenuBarController.popoverDidClose at :515 and MenuBarCoordinator.popoverDidCloseHook at :1682 neither cancel the pending start nor invalidate its token. Consequently, the token check at MenuBarCoordinator.swift:1951 accepts the late start. Controller.handleStateChange at :645 only reopens for Chat recorder activity.",
+   "scenario": "In voice mode, press ⌃⌘W, click another app while microphone permission or startup is pending, then allow startup to complete. The popover has closed, but the Work microphone starts and continues recording.",
+   "fix": "Invalidate a pending Work start from the actual close callback, preserving retained text compositions. Alternatively, pin the popover through startup and observe the startup flag. Add a regression check covering startup dismissal through the controller.",
+   "refutationAttempt": "Esc reaches cancelActiveCapture and correctly invalidates the token. An outside click reaches different hooks and never invokes that cancellation. The new token-order test and existing live-recording pin test both pass despite this gap."
+  },
+  {
+   "id": "R2",
+   "severity": "minor",
+   "title": "The initial Work voice summon still acknowledges an unread Chat reply",
+   "file": "Conduck/Conduck/MenuBar/MenuBarController.swift:366",
+   "claim": "Opening Work voice capture acknowledges the quick Chat conversation before Work takes ownership of the popover.",
+   "evidence": "handleWorkCapturePress calls showPopover at :366, then schedules beginWorkVoiceCapture in a Task at :372–377. During showPopover, workCaptureIsActive is still false, so the new guard at :423 permits setPopoverVisibleConversation(displayedPopoverConversationID). That method synchronously calls noteConversationSeen and clears delivered notifications at MenuBarCoordinator.swift:676–683. beginWorkVoiceCapture only sets the startup flag and clears visibility later at :1934–1942; clearing the ID cannot reverse the acknowledgement.",
+   "scenario": "Let a quick Chat reply arrive while the popover is closed and leave it unread. Press ⌃⌘W to record a Work note. The unrelated reply's unread marker and delivered banner are retired during the initial summon, before the Work HUD takes over.",
+   "fix": "Establish Work capture ownership before showing the initial voice popover, so its visibility callback cannot acknowledge Chat. Add a regression assertion covering the Work handler's ordering and an initially unread quick conversation.",
+   "refutationAttempt": "The new visibility guard works when reopening an already-active Work capture. It cannot protect the first summon because startup is scheduled afterward. The later nil assignment removes future visibility but does not restore an already-consumed unread marker."
+  }
+ ],
+ "notes": "Reviewed 692608d..5c401df03d16d4712492ebce0f2ea1a11d000438 with whole-wave context. No files modified; no builds or XCTest execution. Regression-source assertions were reproduced in memory against both revisions; dismissal mutations were also confined to memory. Shell guards inspect shipped code, shortcut/default/settings/menu wiring remains present, the placeholder WorkContract file is absent, and scoped git diff --check passed. No additional defect introduced by the fixes was substantiated beyond the surviving scenarios above. The initial system Git launcher emitted Xcode initialization diagnostics; subsequent reads used the Git binary directly. Historical memory was used only for worktree orientation.\n"
+}

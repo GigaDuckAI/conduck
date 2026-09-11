@@ -1,0 +1,1128 @@
+// SPDX-License-Identifier: Apache-2.0
+
+// Conduck
+// WorkCaptureDrainer.swift
+//
+// Imports the Workboard's inert App-Group capture queue into private Workboard
+// persistence. Work is a single desk, so the drainer resolves no destination: a
+// share-sheet capture, a menu-bar capture and a GigaAction voice note all land
+// on `Constants.workboardDeskItemID` through `ConversationStore.upsertDeskMaterial`,
+// and `targetWorkItemID` — which the share extension cannot resolve from its
+// sandbox anyway — is never honoured as a destination: it is carried into the
+// desk write as evidence only, naming the item a build before the single desk
+// could have appended these same rows onto. Envelope and entry UUIDs are reused
+// as database identities, so a crash after any individual write is repaired by
+// replay rather than by making a second material.
+//
+// Two rules protect the bytes, because until a claim is acknowledged the queue
+// holds the only copy of a shared file. A claim is acknowledged only once every
+// material this capture wrote reads back out of the store — the row, and for a
+// card that carries bytes a payload this device can actually READ, which is a
+// complete blob row on the synced lane and a present leaf on the vault lane.
+// And the claim's filesystem lease is renewed for as long as that import takes,
+// so a large or slow capture cannot age past the queue's stale horizon and be
+// reclaimed by another process mid-write. Losing that ownership is terminal: a
+// renewal that proves another acquisition holds the claim cancels the import,
+// which then writes no further material, acknowledges nothing, and releases
+// nothing it no longer owns.
+//
+// A RECORDING IS NEVER A CARD HERE, whatever an envelope declares. Work keeps
+// an audio file only when a person attaches it at the desk itself — the
+// chat-bar attachment button, or a drop into the Work pane — and this queue is
+// neither of those doors: every capture that reaches it was assembled by a
+// process nobody was watching. Both share extensions and the files Shortcut
+// refuse a recording before they write one, so an entry that arrives here
+// carrying one came from a build that did not, and it is refused rather than
+// promoted: no draft, no card, no bytes copied anywhere. The siblings beside it
+// land, the claim is acknowledged the ordinary way, and the recording leaves the
+// device with the queue copy. `refused/` never receives one either — nothing
+// sweeps that directory, so a copy there would be a permanent holder of what a
+// person said, which is the exact thing the refusal exists to prevent. The
+// claimed directory itself is never edited to achieve that: a queue entry short
+// of a payload its manifest declares is malformed, and the next claim would
+// destroy the capture and the siblings a retirement exists to preserve.
+//
+// One persistence failure is not retryable and must not be treated as one. A
+// desk write refuses an id already held by a card of another kind, and that
+// state never clears on its own — releasing the claim would requeue an entry
+// that refuses identically on every drain and stops every capture behind it.
+// So the card is published once more under
+// `WorkMaterialCollisionEscape.materialID(forCapture:)`, and only a refusal of
+// that id too retires the capture: its bytes are copied into `refused/` beside
+// the queue before the entry is acknowledged, and the drain carries on. That
+// copy is staged under a scratch name and renamed into place only once every
+// file it should carry is there at the queue's own byte count, because the
+// existence of the destination proves nothing: a crash or a full disk between
+// two files leaves a directory that exists and is short, and acknowledging
+// against one destroys the only complete copy of what a person shared.
+//
+// This type has no gateway dependency and no dispatch API: opening the app can
+// drain captures, but can never turn one into network work.
+
+#if !os(watchOS)
+
+import Foundation
+
+actor WorkCaptureDrainer {
+    struct Report: Sendable, Equatable {
+        let importedCaptureCount: Int
+        let replayedCaptureCount: Int
+        /// Captures the queue could not turn into cards, and no longer holds:
+        /// a malformed envelope destroyed at claim time, or one the desk
+        /// refused under both its own id and its escape id. Both are terminal,
+        /// and both are the same thing to the person — a shared item that did
+        /// not arrive — which is why one count carries them.
+        let invalidCaptureCount: Int
+        let importedMaterialCount: Int
+        /// Entries inside captures that DID land, which the desk will not hold.
+        /// Today that is one thing: a recording. Counted apart from
+        /// `invalidCaptureCount` because nothing malfunctioned and the person
+        /// reads a different sentence — the rest of their capture is on the
+        /// desk, and the recording is refused on purpose, with a door named.
+        let refusedEntryCount: Int
+
+        static let empty = Report(
+            importedCaptureCount: 0,
+            replayedCaptureCount: 0,
+            invalidCaptureCount: 0,
+            importedMaterialCount: 0,
+            refusedEntryCount: 0
+        )
+    }
+
+    private struct PersistedCapture: Sendable {
+        let wasReplay: Bool
+        /// Every material this capture published, in the order it was written.
+        /// The acknowledgement barrier reads these back before the queue copy
+        /// of the bytes is destroyed.
+        let materialIDs: [UUID]
+        /// The subset whose bytes came out of the claimed directory. Only these
+        /// have to prove a readable payload before acknowledgement: a note, a
+        /// shared text and a link carry their whole content in the row, so a
+        /// payload requirement on them would refuse every valid capture.
+        let payloadBearingIDs: Set<UUID>
+        /// Entries this capture carried that the desk refuses to hold. Their
+        /// bytes are never written anywhere and leave with the claim.
+        let refusedEntryCount: Int
+
+        var materialCount: Int { materialIDs.count }
+    }
+
+    /// What one claim's import did. A refusal is not an error the drain stops
+    /// on: that entry has left the queue, and the captures behind it still have
+    /// to land in the same pass.
+    private enum ImportOutcome: Sendable {
+        case published(PersistedCapture)
+        case refused
+    }
+
+    /// Both ids one card of a capture may be published under are held by cards
+    /// of another kind. Terminal by construction: `WorkMaterialCollisionEscape`
+    /// derives one escape and never a second, so there is nothing further to
+    /// try and the entry may not go back into the queue.
+    private struct TerminalCollision: Error {
+        let materialID: UUID
+        let escapeID: UUID
+
+        /// Written beside the retired bytes. Forensic, never displayed: it is
+        /// the only record of what a person shared and never received.
+        var reason: String {
+            """
+            Refused: \(materialID.uuidString) and its escape id \
+            \(escapeID.uuidString) both name a card of another kind.
+            """
+        }
+    }
+
+    /// A staged copy of a refused capture that does not carry every byte the
+    /// queue still holds. It never becomes the retirement and the claim goes
+    /// back to the queue instead, because the original is at that moment the
+    /// only complete copy of the file in existence.
+    private struct RetirementIncomplete: Error {
+        let directoryURL: URL
+    }
+
+    /// Where a capture goes that can never become cards. A sibling of
+    /// `processing/` inside the inbox root, and deliberately not named for a
+    /// UUID: the inbox counts only UUID-named children of that root as pending
+    /// work and reconciles only `processing/` and `tmp/`, so nothing here is
+    /// ever claimed, requeued or swept.
+    private static let refusedDirectoryName = "refused"
+
+    private static let refusalReasonFilename = "refusal.txt"
+
+    /// Role suffixes for the two kinds of directory in `refused/` that are NOT
+    /// retirements: a copy still being made and verified, and one displaced for
+    /// being incomplete. Only the envelope-named directory beside them is a
+    /// finished retirement, and only a rename ever creates that name.
+    private static let stagedRetirementSuffix = "staging"
+    private static let displacedRetirementSuffix = "incomplete"
+
+    /// How often an active claim's lease is renewed. Deliberately several times
+    /// below `WorkCaptureInbox.staleClaimHorizon` so that consecutive missed
+    /// renewals — a suspended app, a device under load — still leave the claim
+    /// covered, and never so close to it that a single late beat hands a
+    /// directory this drainer is reading to another process.
+    static let defaultLeaseHeartbeatInterval: Duration = .seconds(60)
+
+    private let inbox: WorkCaptureInbox
+    private let store: ConversationStore
+    private let sourceDevice: String
+    private let leaseHeartbeatInterval: Duration
+    /// Timestamp written into each renewed lease. Injectable for the same
+    /// reason `WorkCaptureInbox.claimNext(now:)` and `reconcile(now:)` are: the
+    /// horizon this heartbeat exists to outrun is five minutes long, and no
+    /// test can be made to wait one.
+    private let now: @Sendable () -> Date
+
+    init(
+        inbox: WorkCaptureInbox = .shared,
+        store: ConversationStore = .shared,
+        sourceDevice: String,
+        leaseHeartbeatInterval: Duration = WorkCaptureDrainer.defaultLeaseHeartbeatInterval,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.inbox = inbox
+        self.store = store
+        self.sourceDevice = sourceDevice
+        self.leaseHeartbeatInterval = leaseHeartbeatInterval
+        self.now = now
+    }
+
+    #if CONDUCK_TESTING
+    /// TEST SEAM — hold one import open inside the region its lease covers.
+    ///
+    /// WHY IT HAS TO EXIST. The heartbeat's whole claim is about an import that
+    /// outlives the stale horizon, and nothing else in this type can produce
+    /// one: a bounded envelope persists in milliseconds. Without somewhere to
+    /// hold an import open, ownership could only be observed by racing a
+    /// sampler against a live drain, which measures timing rather than
+    /// ownership — and the payload-disappearance the acknowledgement barrier
+    /// refuses could not be staged at all, because it happens between the write
+    /// and the barrier. Awaited between persistence and the barrier; nil on
+    /// every production path.
+    private var importHoldForTesting: (@Sendable () async -> Void)?
+
+    func _setImportHoldForTesting(_ hold: (@Sendable () async -> Void)?) {
+        importHoldForTesting = hold
+    }
+
+    /// TEST SEAM — hold one import open BETWEEN two of its material writes.
+    ///
+    /// WHY IT HAS TO EXIST. The interval the lease is FOR is the one in which a
+    /// capture's bytes are read and stored, and that interval is inside
+    /// `persist`: by the time the hold above is reached every byte of the
+    /// capture is already written. Nothing else in this type can park an import
+    /// there — a bounded envelope crosses that window in milliseconds — so a
+    /// takeover racing a slow byte import, and the cancellation that must stop
+    /// one, could otherwise only be raced rather than staged. The argument is
+    /// the number of materials already written, so a test can park at exactly
+    /// one write boundary. Nil on every production path.
+    private var materialWriteHoldForTesting: (@Sendable (Int) async -> Void)?
+
+    func _setMaterialWriteHoldForTesting(_ hold: (@Sendable (Int) async -> Void)?) {
+        materialWriteHoldForTesting = hold
+    }
+
+    /// TEST SEAM — reach a retirement's staged copy before it is verified.
+    ///
+    /// WHY IT HAS TO EXIST. What the verification refuses is a copy that landed
+    /// SHORT — a crash, a killed process or a full disk between two of the
+    /// files — and nothing in this type can produce one: `copyItem` either
+    /// completes or throws, and a throw is the other path entirely. Handing the
+    /// staging directory to a test is the only way to stage the state a crash
+    /// leaves behind, which is a directory that exists and is incomplete.
+    /// Called after the copy and before the check that decides whether it may
+    /// be renamed into place; nil on every production path.
+    private var retirementStagingHoldForTesting: (@Sendable (URL) -> Void)?
+
+    func _setRetirementStagingHoldForTesting(_ hold: (@Sendable (URL) -> Void)?) {
+        retirementStagingHoldForTesting = hold
+    }
+    #endif
+
+    /// Reconcile crash-stranded claims, then consume the queue oldest-first.
+    /// Malformed captures have already been removed by `claimNext`; they do not
+    /// prevent a later valid capture from importing. A persistence failure — or
+    /// a capture whose payload does not read back — puts the active claim back
+    /// before surfacing the error, preserving its bytes.
+    func drainAvailableCaptures() async throws -> Report {
+        _ = await inbox.reconcile()
+
+        var importedCaptureCount = 0
+        var replayedCaptureCount = 0
+        var invalidCaptureCount = 0
+        var importedMaterialCount = 0
+        var refusedEntryCount = 0
+
+        while true {
+            // A cancelled drain claims nothing further. The capture it would
+            // take could only be released again, and a queue entry is safest
+            // exactly where its publisher left it.
+            try Task.checkCancellation()
+            let claim: WorkCaptureInbox.Claim?
+            do {
+                claim = try await inbox.claimNext()
+            } catch let error as WorkCaptureInbox.InboxError {
+                if case .invalidEnvelope = error {
+                    invalidCaptureCount += 1
+                    continue
+                }
+                throw error
+            }
+
+            guard let claim else { break }
+            // Everything that touches the claimed directory happens under a
+            // renewed lease — the release included, since it moves the very
+            // files another process would otherwise be entitled to requeue.
+            switch try await importUnderRenewedLease(claim) {
+            case .published(let persisted):
+                if persisted.wasReplay {
+                    replayedCaptureCount += 1
+                } else {
+                    importedCaptureCount += 1
+                }
+                importedMaterialCount += persisted.materialCount
+                refusedEntryCount += persisted.refusedEntryCount
+            case .refused:
+                // The disposition a malformed envelope already gets: the queue
+                // no longer holds it, the person is told one shared item did
+                // not arrive, and the loop goes on to the captures behind it.
+                // Unlike a malformed envelope its bytes still exist — this
+                // drainer copied them out before the acknowledgement.
+                invalidCaptureCount += 1
+            }
+        }
+
+        return Report(
+            importedCaptureCount: importedCaptureCount,
+            replayedCaptureCount: replayedCaptureCount,
+            invalidCaptureCount: invalidCaptureCount,
+            importedMaterialCount: importedMaterialCount,
+            refusedEntryCount: refusedEntryCount
+        )
+    }
+
+    /// Publish one claimed capture onto the desk. Publication order is the
+    /// order the cards appear in: the person's own note first, then the shared
+    /// entries by their captured sequence. Rank itself is decided inside the
+    /// desk write, which is the only place that can count the desk's existing
+    /// cards without racing a concurrent capture.
+    private func persist(
+        _ claim: WorkCaptureInbox.Claim,
+        ownership: ImportOwnership
+    ) async throws -> PersistedCapture {
+        let envelope = claim.envelope
+        // A capture whose deterministic ids are already on the desk is the
+        // replay of an import that was interrupted before its claim could be
+        // acknowledged. The desk's material set answers that in one fetch.
+        let expectedIDs = try Self.materialIDs(for: envelope)
+        let existingIDs = Set(try await deskMaterials().map(\.id))
+        let wasReplay = !existingIDs.isDisjoint(with: expectedIDs)
+
+        var materialIDs: [UUID] = []
+        var payloadBearingIDs: Set<UUID> = []
+        var refusedEntryCount = 0
+
+        // The share-sheet note is source material in its own right, and every
+        // capture carries it onto the desk — including the first one ever made,
+        // which has no earlier card to be read as an annotation of. Its UUID is
+        // deterministic from the envelope, so a replay repairs the same card.
+        let trimmedNote = envelope.note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedNote.isEmpty {
+            try await requireImportMayContinue(ownership, atMaterialBoundary: materialIDs.count)
+            let note = try await upsertEscapingCollision(
+                WorkMaterialDraft(
+                    id: try Self.noteMaterialID(for: envelope),
+                    kind: .note,
+                    title: Self.noteTitle(for: trimmedNote),
+                    textContent: trimmedNote,
+                    storageMode: .metadataOnly,
+                    sourceDevice: sourceDevice,
+                    createdAt: envelope.createdAt
+                ),
+                // Naming what a pre-desk drain of this same envelope could have
+                // written is what licenses the desk write to re-home those
+                // rows; without it a matching id is refused.
+                legacyProvenance: Self.legacyProvenance(of: envelope)
+            )
+            materialIDs.append(note.id)
+        }
+
+        for entry in envelope.entries.sorted(by: Self.entryOrder) {
+            // The draft is decided BEFORE the boundary gate, so an entry that
+            // writes nothing spends no boundary: the numbering the gate reports
+            // stays the count of cards this capture has written, which is what
+            // a caller holding at boundary 2 is asking about.
+            guard let draft = try Self.materialDraft(
+                for: entry,
+                in: claim,
+                sourceDevice: sourceDevice,
+                createdAt: envelope.createdAt
+            ) else {
+                refusedEntryCount += 1
+                continue
+            }
+            try await requireImportMayContinue(ownership, atMaterialBoundary: materialIDs.count)
+            let record: WorkMaterialRecord
+            if let payloadURL = claim.payloadURL(for: entry) {
+                let byteSize: Int64
+                if let capturedByteCount = entry.byteCount {
+                    byteSize = capturedByteCount
+                } else {
+                    byteSize = Int64(
+                        try payloadURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                    )
+                }
+                record = try await upsertEscapingCollision(
+                    draft,
+                    sourceFileURL: payloadURL,
+                    sourceFileByteSize: byteSize,
+                    legacyProvenance: Self.legacyProvenance(of: envelope)
+                )
+                payloadBearingIDs.insert(record.id)
+            } else {
+                record = try await upsertEscapingCollision(
+                    draft,
+                    legacyProvenance: Self.legacyProvenance(of: envelope)
+                )
+            }
+            materialIDs.append(record.id)
+        }
+
+        return PersistedCapture(
+            wasReplay: wasReplay,
+            materialIDs: materialIDs,
+            payloadBearingIDs: payloadBearingIDs,
+            refusedEntryCount: refusedEntryCount
+        )
+    }
+
+    /// Publish one card of a capture, escaping an id collision exactly once.
+    ///
+    /// `invalidMaterialOwner` says this id is not this capture's to use: a card
+    /// of another KIND already stands there, or a foreign owner row holds it
+    /// and the envelope cannot prove the row is its own. Neither state clears
+    /// on its own, so a release-and-retry loops for ever on the same refusal
+    /// and — because the drain stops at the first error — every capture behind
+    /// it never lands either. Republishing under
+    /// `WorkMaterialCollisionEscape.materialID(forCapture:)` is what ends that:
+    /// the id is derived from the colliding one, so this process, the headless
+    /// intent process and any later replay all repair the same card instead of
+    /// adding another.
+    ///
+    /// Nothing is staged before the first refusal — the desk write refuses a
+    /// kind collision ahead of the bytes and rolls back a leaf or blob it
+    /// staged before the transaction refused — so the queue file the escape
+    /// re-reads is still exactly what the person shared.
+    ///
+    /// A refusal of the escape id too is TERMINAL and says so in its own type:
+    /// the caller retires the capture rather than deriving a third id.
+    private func upsertEscapingCollision(
+        _ draft: WorkMaterialDraft,
+        sourceFileURL: URL? = nil,
+        sourceFileByteSize: Int64? = nil,
+        legacyProvenance: WorkMaterialLegacyProvenance
+    ) async throws -> WorkMaterialRecord {
+        do {
+            return try await store.upsertDeskMaterial(
+                draft,
+                sourceFileURL: sourceFileURL,
+                sourceFileByteSize: sourceFileByteSize,
+                legacyProvenance: legacyProvenance
+            )
+        } catch WorkboardStoreError.invalidMaterialOwner {
+            let escaped = Self.escaping(draft)
+            do {
+                return try await store.upsertDeskMaterial(
+                    escaped,
+                    sourceFileURL: sourceFileURL,
+                    sourceFileByteSize: sourceFileByteSize,
+                    legacyProvenance: legacyProvenance
+                )
+            } catch WorkboardStoreError.invalidMaterialOwner {
+                throw TerminalCollision(materialID: draft.id, escapeID: escaped.id)
+            }
+        }
+    }
+
+    /// The same card under its escape id. Every other field is carried across
+    /// verbatim: what collided is the identity, not the content, and a capture
+    /// that arrives under a different name is still the thing the person
+    /// shared.
+    private static func escaping(_ draft: WorkMaterialDraft) -> WorkMaterialDraft {
+        WorkMaterialDraft(
+            id: WorkMaterialCollisionEscape.materialID(forCapture: draft.id),
+            kind: draft.kind,
+            title: draft.title,
+            caption: draft.caption,
+            textContent: draft.textContent,
+            urlString: draft.urlString,
+            filename: draft.filename,
+            mimeType: draft.mimeType,
+            payload: draft.payload,
+            thumbnailData: draft.thumbnailData,
+            width: draft.width,
+            height: draft.height,
+            byteSize: draft.byteSize,
+            sequence: draft.sequence,
+            storageMode: draft.storageMode,
+            sourceDevice: draft.sourceDevice,
+            cardSize: draft.cardSize,
+            createdAt: draft.createdAt
+        )
+    }
+
+    /// The cards the desk currently holds, from ONE fetch. The projection
+    /// unions every physical desk row, so a duplicate row imported from another
+    /// device does not hide a card this drainer already wrote, and each record
+    /// arrives carrying the availability that same pass resolved.
+    private func deskMaterials() async throws -> [WorkMaterialRecord] {
+        let desk = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        return desk?.materials ?? []
+    }
+
+    /// The acknowledgement barrier. `WorkCaptureInbox.acknowledge` is the only
+    /// thing that deletes a capture's bytes, and for a shared file the queue
+    /// holds the only copy — so nothing is acknowledged until everything this
+    /// capture wrote reads back out of the store, and reads back WHOLE.
+    ///
+    /// Presence of the row is not that proof. The two payload lanes commit in
+    /// their own transactions, so a card can exist while its bytes do not: a
+    /// `.syncedPayload` card whose blob row never landed is `.syncedPending`,
+    /// and a `.localVault` card whose leaf is gone is unavailable. Both would
+    /// pass an id check and then lose the only surviving copy of the payload to
+    /// the acknowledgement.
+    ///
+    /// One desk fetch answers both lanes for the whole capture, because
+    /// `WorkMaterialRecord.hasPayload` is decided by the store's single
+    /// availability pass — a complete blob row on the synced lane, a present
+    /// leaf on the vault lane. Completeness is consumed here, never restated.
+    ///
+    /// Anything short of that throws, which releases the claim and leaves the
+    /// bytes in the queue for a later replay to repair.
+    private func confirmDurablyImported(_ capture: PersistedCapture) async throws {
+        guard !capture.materialIDs.isEmpty else { return }
+        let durable = Dictionary(
+            try await deskMaterials().map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        for id in capture.materialIDs {
+            guard let material = durable[id] else {
+                throw WorkboardStoreError.materialNotFound
+            }
+            guard !capture.payloadBearingIDs.contains(id) || material.hasPayload else {
+                throw WorkboardStoreError.materialPayloadUnavailable
+            }
+        }
+    }
+
+    /// The gate every material write and the durability barrier pass. A claim
+    /// proven lost is terminal: another acquisition owns those bytes now, and
+    /// one more card written under it is a second import of the same capture.
+    /// A cancelled drain stops here too, rather than at whichever later `await`
+    /// happens to notice.
+    private func requireImportMayContinue(
+        _ ownership: ImportOwnership,
+        atMaterialBoundary boundary: Int? = nil
+    ) async throws {
+        #if CONDUCK_TESTING
+        if let boundary { await materialWriteHoldForTesting?(boundary) }
+        #endif
+        if await ownership.hasLostClaim { throw WorkCaptureInbox.InboxError.staleClaim }
+        try Task.checkCancellation()
+    }
+
+    /// Persist one claim, prove its bytes read back, and only then consume the
+    /// queue copy. The two operations that end a claim — the acknowledgement
+    /// that deletes it, the release that requeues it — may only run while this
+    /// drainer still owns it, so both are gated on the shared terminal state
+    /// rather than on the import merely having reached them.
+    private func persistAndAcknowledge(
+        _ claim: WorkCaptureInbox.Claim,
+        ownership: ImportOwnership
+    ) async throws -> ImportOutcome {
+        do {
+            let persisted = try await persist(claim, ownership: ownership)
+            #if CONDUCK_TESTING
+            await importHoldForTesting?()
+            #endif
+            try await requireImportMayContinue(ownership)
+            try await confirmDurablyImported(persisted)
+            // The claim ends here: `acknowledge` deletes the directory, so the
+            // marker the heartbeat can no longer read afterwards is this
+            // import's own finished work rather than another process's.
+            guard await ownership.endImport() else {
+                throw WorkCaptureInbox.InboxError.staleClaim
+            }
+            try await inbox.acknowledge(claim)
+            return .published(persisted)
+        } catch let collision as TerminalCollision {
+            // The one persistence failure a replay cannot repair. Requeueing it
+            // would put back an entry that refuses identically on every drain
+            // and blocks every capture behind it, so the entry leaves the queue
+            // — but only after its bytes are somewhere else, because nothing
+            // here proves the person does not still want them.
+            guard await ownership.endImport() else {
+                throw WorkCaptureInbox.InboxError.staleClaim
+            }
+            do {
+                try retireRefusedCapture(
+                    claim,
+                    reason: collision.reason,
+                    excluding: Self.refusedPayloadNames(in: claim.envelope)
+                )
+                try await inbox.acknowledge(claim)
+                return .refused
+            } catch {
+                // The bytes are not yet safe outside the queue, so the queue
+                // keeps them: this drain surfaces the fault and the entry is
+                // claimed again next time.
+                try? await inbox.release(claim)
+                throw error
+            }
+        } catch {
+            // Best effort is deliberately only for the ownership rollback. The
+            // original persistence error remains the useful diagnosis; a release
+            // that cannot land abandons its own claim inside the inbox, so
+            // `reconcile` can recover the directory without waiting for a
+            // relaunch. A claim proven lost is released by nobody: requeueing a
+            // directory another acquisition holds would hand away bytes it is
+            // reading.
+            if await ownership.endImport() {
+                try? await inbox.release(claim)
+            }
+            throw error
+        }
+    }
+
+    /// Copy a refused capture's bytes out of the queue, so the entry that can
+    /// never become cards can be acknowledged without destroying them.
+    ///
+    /// The copy comes BEFORE the acknowledgement for the reason the whole
+    /// durability barrier exists: `acknowledge` deletes the only copy of a
+    /// shared file. What lands in `refused/` is the WHOLE claimed directory —
+    /// manifest and every payload, including entries that did publish —
+    /// because a capture is one unit of a person's intent and splitting it here
+    /// would take a judgement this drainer cannot make. The lease is not
+    /// carried across: it names an acquisition of a queue this directory has
+    /// left.
+    ///
+    /// A copy is never made in place. It is staged under a scratch name beside
+    /// the retirement, checked against the byte counts the claimed directory
+    /// itself carries, and only then renamed onto the envelope-named one — so
+    /// the only step that creates that name is atomic, and a destination that
+    /// exists is a destination something finished. The existence of a directory
+    /// is otherwise proof of nothing: a crash, a killed process or a full disk
+    /// between two files leaves one that exists and is short, and a later
+    /// refusal that believed it would write a reason beside half a file and
+    /// then acknowledge away the queue's complete original. For the same reason
+    /// a destination already in place is verified rather than trusted, and one
+    /// that fails is moved aside under a scratch name instead of deleted: it
+    /// holds bytes nobody else has.
+    ///
+    /// Nothing sweeps `refused/`. It fills only when a UUIDv5-derived escape id
+    /// also lands on a card of another kind, which is not a state a working
+    /// device reaches; leaving the bytes is the cheaper mistake than deleting
+    /// something a person shared.
+    ///
+    /// Idempotent, and the only bytes it removes are those of a staged copy
+    /// that did not become the retirement — which carries nothing the queue is
+    /// not still holding, since nothing is acknowledged until the rename lands.
+    /// The retirement is named for the ENVELOPE rather than for the acquisition
+    /// that took it, so a retirement whose acknowledgement then failed — the
+    /// entry goes back to the queue and refuses again on the next drain —
+    /// writes no second copy of the same bytes. Two captures cannot share that
+    /// name: the queue refuses a publication under an id it already holds.
+    ///
+    /// `excluding` names payload leaves this copy may NOT carry: the recordings
+    /// the desk refused. `refused/` is swept by nothing, so a copy there is a
+    /// permanent holder of what a person said, and the whole point of refusing a
+    /// recording is that this device stops holding it. Those bytes leave with
+    /// the claim instead, at the acknowledgement below. The claimed directory
+    /// itself is never touched — a queue entry missing a payload its manifest
+    /// declares is malformed, and the next claim would destroy the capture and
+    /// the siblings this retirement exists to preserve.
+    private func retireRefusedCapture(
+        _ claim: WorkCaptureInbox.Claim,
+        reason: String,
+        excluding refusedPayloadNames: Set<String> = []
+    ) throws {
+        let fileManager = FileManager.default
+        let refused = claim.directoryURL
+            .deletingLastPathComponent()  // processing/
+            .deletingLastPathComponent()  // the inbox root
+            .appendingPathComponent(Self.refusedDirectoryName, isDirectory: true)
+        try fileManager.createDirectory(at: refused, withIntermediateDirectories: true)
+        let destination = refused.appendingPathComponent(
+            claim.id.uuidString,
+            isDirectory: true
+        )
+        let expected = try Self.retirementContents(
+            of: claim.directoryURL,
+            fileManager: fileManager
+        ).filter { !refusedPayloadNames.contains($0.key) }
+
+        if fileManager.fileExists(atPath: destination.path) {
+            // A directory carrying a refused recording is not a retirement
+            // however complete it otherwise looks: an older build's copy is
+            // displaced and rewritten rather than left holding those bytes.
+            if Self.holdsRetirement(expected, at: destination, fileManager: fileManager),
+               !Self.holdsAny(refusedPayloadNames, at: destination, fileManager: fileManager) {
+                // The retirement already stands. Its reason is rewritten rather
+                // than skipped, so a directory an interrupted attempt left
+                // still says why it is here.
+                try Self.writeRefusalReason(reason, in: destination)
+                return
+            }
+            try fileManager.moveItem(
+                at: destination,
+                to: refused.appendingPathComponent(
+                    Self.retirementScratchName(
+                        envelopeID: claim.id,
+                        role: Self.displacedRetirementSuffix,
+                        at: now()
+                    ),
+                    isDirectory: true
+                )
+            )
+        }
+
+        let staged = refused.appendingPathComponent(
+            Self.retirementScratchName(
+                envelopeID: claim.id,
+                role: Self.stagedRetirementSuffix,
+                at: now()
+            ),
+            isDirectory: true
+        )
+        do {
+            try fileManager.copyItem(at: claim.directoryURL, to: staged)
+            // Removed from the STAGED copy, before the verification that decides
+            // whether it becomes the retirement — so the only directory these
+            // bytes were ever in under `refused/` is a scratch one this method
+            // deletes on its own failure path.
+            for name in refusedPayloadNames.union([WorkCaptureInbox.leaseFilename]) {
+                try? fileManager.removeItem(
+                    at: staged.appendingPathComponent(name, isDirectory: false)
+                )
+            }
+            #if CONDUCK_TESTING
+            retirementStagingHoldForTesting?(staged)
+            #endif
+            guard Self.holdsRetirement(expected, at: staged, fileManager: fileManager) else {
+                throw RetirementIncomplete(directoryURL: staged)
+            }
+            // Written before the rename, so the envelope-named directory is
+            // complete — reason included — the instant it exists.
+            try Self.writeRefusalReason(reason, in: staged)
+            try fileManager.moveItem(at: staged, to: destination)
+        } catch {
+            try? fileManager.removeItem(at: staged)
+            throw error
+        }
+    }
+
+    /// What a claim's bytes look like: every regular file in the claimed
+    /// directory at the byte count it has there, minus the lease, which names an
+    /// acquisition of a queue the copy has left. A claimed directory is flat —
+    /// the inbox refuses a payload path carrying a separator — so nothing here
+    /// recurses. The caller subtracts the leaves a retirement may not carry.
+    private static func retirementContents(
+        of directory: URL,
+        fileManager: FileManager
+    ) throws -> [String: Int64] {
+        var contents: [String: Int64] = [:]
+        for url in try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) {
+            let name = url.lastPathComponent
+            guard name != WorkCaptureInbox.leaseFilename else { continue }
+            let attributes = try fileManager.attributesOfItem(atPath: url.path)
+            guard (attributes[.type] as? FileAttributeType) == .typeRegular,
+                  let size = attributes[.size] as? NSNumber else { continue }
+            contents[name] = size.int64Value
+        }
+        return contents
+    }
+
+    /// Whether `directory` holds any of these leaves. A retirement that does is
+    /// carrying bytes this device refused to keep, which no amount of otherwise
+    /// being complete makes acceptable.
+    private static func holdsAny(
+        _ names: Set<String>,
+        at directory: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        names.contains { name in
+            fileManager.fileExists(
+                atPath: directory.appendingPathComponent(name, isDirectory: false).path
+            )
+        }
+    }
+
+    /// Whether `directory` holds all of them, whole. This is the question a
+    /// retirement turns on — the acknowledgement behind it destroys the queue's
+    /// copy — and neither the destination existing nor a file being present at
+    /// the right name answers it: an interrupted copy leaves both.
+    private static func holdsRetirement(
+        _ contents: [String: Int64],
+        at directory: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        for (name, size) in contents {
+            guard let attributes = try? fileManager.attributesOfItem(
+                atPath: directory.appendingPathComponent(name, isDirectory: false).path
+            ),
+                (attributes[.type] as? FileAttributeType) == .typeRegular,
+                let copied = attributes[.size] as? NSNumber,
+                copied.int64Value == size else { return false }
+        }
+        return true
+    }
+
+    /// A unique name for a directory in `refused/` that is not a retirement.
+    /// It borrows the inbox's claim-directory shape — envelope id, instant,
+    /// one generation UUID — because that is the naming this queue already uses
+    /// for "these bytes, this attempt", and adds a role so that a person
+    /// reading the container can tell a copy in flight from a displaced partial
+    /// and both from the retirement itself. Nothing parses it: the inbox counts
+    /// only UUID-named children of its root, and `refused/` is not one of them.
+    private static func retirementScratchName(
+        envelopeID: UUID,
+        role: String,
+        at instant: Date
+    ) -> String {
+        let name = WorkCaptureInbox.claimDirectoryName(
+            envelopeID: envelopeID,
+            claimedAt: instant,
+            generation: UUID()
+        )
+        return "\(name).\(role)"
+    }
+
+    /// Forensic text beside the retired bytes, never displayed. Atomic because
+    /// a half-written reason beside a whole capture is worse than none.
+    private static func writeRefusalReason(_ reason: String, in directory: URL) throws {
+        try Data(reason.utf8).write(
+            to: directory.appendingPathComponent(
+                Self.refusalReasonFilename,
+                isDirectory: false
+            ),
+            options: .atomic
+        )
+    }
+
+    /// Run one claim's import under a lease this drainer keeps renewing, and
+    /// end that import the moment a renewal proves the claim is no longer its.
+    ///
+    /// `WorkCaptureInbox.staleClaimHorizon` is a filesystem fact other
+    /// processes read: the app and a headless intent process both reconcile the
+    /// same queue, and a claim whose lease has aged past the horizon is fair
+    /// game to requeue. A validated envelope may carry up to
+    /// `WorkCaptureEnvelope.maximumEnvelopeBytes`, so persistence alone can
+    /// outlast the horizon on a slow device, and a suspended app can stretch
+    /// any import arbitrarily. Restating ownership periodically is what keeps a
+    /// second drainer out of a directory this one is still reading and writing
+    /// out of. The renewal covers persistence, the acknowledgement barrier and
+    /// whichever of `acknowledge` or `release` ends the claim.
+    ///
+    /// The renewal is a structured child rather than a detached task because
+    /// the beat and the import have to end together in both directions. A
+    /// cancelled drain must leave no beat restating ownership of a claim nobody
+    /// is importing; and a proven takeover must reach the import, because a
+    /// former owner that keeps writing is the one thing that makes the three
+    /// clocks — renewal, stale horizon, vault grace — stop describing a single
+    /// owner. A renewal is still a hop onto the inbox actor and never waits for
+    /// the executor the import occupies.
+    private func importUnderRenewedLease(
+        _ claim: WorkCaptureInbox.Claim
+    ) async throws -> ImportOutcome {
+        let ownership = ImportOwnership()
+        return try await withThrowingTaskGroup(of: ImportOutcome?.self) { group in
+            group.addTask { [inbox, leaseHeartbeatInterval, now] in
+                while !Task.isCancelled {
+                    do {
+                        try await Task.sleep(for: leaseHeartbeatInterval)
+                    } catch {
+                        return nil
+                    }
+                    guard !Task.isCancelled else { return nil }
+                    do {
+                        try await inbox.refreshLease(claim, now: now())
+                    } catch WorkCaptureInbox.InboxError.staleClaim {
+                        // The one refusal that ends the beat, and it ends the
+                        // import with it. A claim is generation-scoped, so a
+                        // marker this drainer can no longer prove it owns names
+                        // another acquisition — trying again cannot undo that.
+                        await ownership.recordLostClaim()
+                        return nil
+                    } catch {
+                        // A momentarily unreadable or unwritable marker is
+                        // transient, and giving up on it would disarm the
+                        // protection for the rest of a long import.
+                    }
+                }
+                return nil
+            }
+            group.addTask { try await self.persistAndAcknowledge(claim, ownership: ownership) }
+
+            while let outcome = try await group.next() {
+                if let imported = outcome {
+                    group.cancelAll()
+                    return imported
+                }
+                guard await ownership.hasLostClaim else { continue }
+                // Cancel the import and let it unwind before the loss is
+                // surfaced: it must write no further material, and the claim
+                // must be left exactly where its new owner put it.
+                group.cancelAll()
+                _ = try? await group.next()
+                throw WorkCaptureInbox.InboxError.staleClaim
+            }
+            // The import returns a capture or throws, so the group cannot run
+            // dry while it is still the one thing being awaited.
+            throw CancellationError()
+        }
+    }
+
+    // MARK: - Deterministic capture mapping
+
+    /// What a replay of this envelope may re-home. A pre-desk drain had two
+    /// destinations: with no chosen target it minted a Work item of its own and
+    /// recorded the envelope on it, and with one it appended straight onto the
+    /// item the person picked, writing nothing on that owner row. The envelope
+    /// id accounts for the first; only the envelope's own `targetWorkItemID`
+    /// accounts for the second, which is why the target the drainer never
+    /// honours as a destination is still carried here as evidence.
+    private static func legacyProvenance(
+        of envelope: WorkCaptureEnvelope
+    ) -> WorkMaterialLegacyProvenance {
+        .captureEnvelope(envelope.id, legacyTargetWorkItemID: envelope.targetWorkItemID)
+    }
+
+    /// Whether one entry is a recording the desk will not hold.
+    ///
+    /// The envelope owns the rule, so the process that WROTE this entry and the
+    /// process claiming it read a file the same way; a second spelling here is
+    /// how the two ends drift apart. Only a `.file` entry is asked — an `.image`
+    /// is an image and a `.webPage` is this app's own markdown.
+    private static func isRefusedRecording(_ entry: WorkCaptureEnvelope.Entry) -> Bool {
+        entry.kind == .file && WorkCaptureEnvelope.isAudioPayload(
+            mimeType: entry.mimeType,
+            typeIdentifier: entry.typeIdentifier,
+            filename: entry.displayName ?? entry.relativePath
+        )
+    }
+
+    /// The payload leaves of every refused entry, named as the claimed
+    /// directory names them. Pure and derived from the envelope alone, so the
+    /// import that writes no card for these bytes and the retirement that must
+    /// not copy them ask one question one way.
+    private static func refusedPayloadNames(
+        in envelope: WorkCaptureEnvelope
+    ) -> Set<String> {
+        Set(envelope.entries.compactMap { entry in
+            guard Self.isRefusedRecording(entry) else { return nil }
+            return entry.relativePath
+        })
+    }
+
+    private static func entryOrder(
+        _ lhs: WorkCaptureEnvelope.Entry,
+        _ rhs: WorkCaptureEnvelope.Entry
+    ) -> Bool {
+        if lhs.sequence != rhs.sequence { return lhs.sequence < rhs.sequence }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    /// Every database identity this capture will publish. Their presence on the
+    /// desk is what tells a replay from a first import; the note ID is included
+    /// only when a visible note will actually be written. Publication validation
+    /// refuses an envelope with neither a note nor an entry, so this is never
+    /// empty for a claimed capture.
+    ///
+    /// A refused recording's id is listed here too, and harmlessly: this set is
+    /// only ever intersected with the desk's, and an id nothing ever writes is
+    /// an id the desk never holds. Excluding it would buy nothing and would give
+    /// the replay test a second rule to disagree with the import about.
+    private static func materialIDs(for envelope: WorkCaptureEnvelope) throws -> Set<UUID> {
+        var ids = Set(envelope.entries.map(\.id))
+        if !envelope.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ids.insert(try noteMaterialID(for: envelope))
+        }
+        return ids
+    }
+
+    /// What a shared note is CALLED, derived from what was actually shared.
+    ///
+    /// Every share-sheet capture used to land under the one literal, so three
+    /// cards on a desk carried the same identity line while the words that told
+    /// them apart sat underneath. The rule is the composer's own — first
+    /// meaningful line, cut at the same 72 characters — so a note typed into
+    /// Work and a note shared into it are named by ONE rule rather than two.
+    ///
+    /// The localized fallback survives for text with no line to take, which is
+    /// the only case with nothing to derive from. Cards already on the desk
+    /// under the old literal are left exactly as they are and suppressed at
+    /// display by `WorkboardCardFacePolicy`: rewriting them would advance the
+    /// revision of every one of those rows and re-sync the whole desk to say
+    /// nothing new.
+    static func noteTitle(for trimmedNote: String) -> String {
+        let derived = WorkboardWorkspaceCaptureLogic.title(for: trimmedNote)
+        return derived.isEmpty
+            ? String(localized: "workboard.capture.note", defaultValue: "Share note")
+            : derived
+    }
+
+    /// Stable visible-note identity without expanding the cross-process manifest.
+    /// Normally the envelope UUID itself is available. In the pathological case
+    /// an entry already uses it, walk deterministic suffix variants; validation
+    /// caps entries, so one of the first `maximumEntryCount + 1` variants must be
+    /// free.
+    private static func noteMaterialID(for envelope: WorkCaptureEnvelope) throws -> UUID {
+        let entryIDs = Set(envelope.entries.map(\.id))
+        if !entryIDs.contains(envelope.id) { return envelope.id }
+
+        let raw = envelope.id.uuidString.lowercased()
+        let prefix = String(raw.dropLast(2))
+        let suffix = Int(raw.suffix(2), radix: 16) ?? 0
+        for offset in 1...(WorkCaptureEnvelope.maximumEntryCount + 1) {
+            let candidateString = prefix + String(format: "%02x", (suffix + offset) & 0xff)
+            if let candidate = UUID(uuidString: candidateString), !entryIDs.contains(candidate) {
+                return candidate
+            }
+        }
+        // `entries` is bounded below the candidate count, so this is unreachable
+        // for every validated envelope. Fail closed rather than ever letting an
+        // ID collision make the note mask a different source material.
+        throw WorkCaptureInbox.InboxError.invalidEnvelope(envelope.id, .duplicateEntry)
+    }
+
+    /// Map one envelope entry to its card, or to nothing when the desk refuses
+    /// to hold it. `sequence` is deliberately left at the draft default: the
+    /// desk write assigns rank inside its own transaction.
+    ///
+    /// Nil means REFUSED, not failed: the entry writes no card, its siblings
+    /// still do, and the claim is acknowledged the ordinary way — so the bytes
+    /// this drainer declined leave the device with the queue copy, which is the
+    /// point of refusing them here.
+    private static func materialDraft(
+        for entry: WorkCaptureEnvelope.Entry,
+        in claim: WorkCaptureInbox.Claim,
+        sourceDevice: String,
+        createdAt: Date
+    ) throws -> WorkMaterialDraft? {
+        switch entry.kind {
+        case .text:
+            let text = entry.text ?? ""
+            return WorkMaterialDraft(
+                id: entry.id,
+                kind: .note,
+                title: entry.displayName
+                    ?? String(localized: "workboard.capture.sharedText", defaultValue: "Shared text"),
+                textContent: text,
+                storageMode: .metadataOnly,
+                sourceDevice: sourceDevice,
+                createdAt: createdAt
+            )
+
+        case .url:
+            let value = entry.text ?? ""
+            let host = URLComponents(string: value)?.host
+            return WorkMaterialDraft(
+                id: entry.id,
+                kind: .link,
+                title: entry.displayName ?? host ?? value,
+                urlString: value,
+                storageMode: .metadataOnly,
+                sourceDevice: sourceDevice,
+                createdAt: createdAt
+            )
+
+        case .image, .file, .webPage:
+            // The last barrier, and the second one every non-desk lane already
+            // passed: the Shortcut refuses a recording before it publishes and
+            // both share extensions refuse one before they copy a byte. An
+            // envelope that reaches here carrying one was written by a build
+            // that did not, so the card is simply never made.
+            if Self.isRefusedRecording(entry) { return nil }
+            guard let payloadURL = claim.payloadURL(for: entry) else {
+                throw WorkCaptureInbox.InboxError.invalidEnvelope(claim.id, .missingPayload)
+            }
+            let byteSize: Int64
+            if let capturedByteCount = entry.byteCount {
+                byteSize = capturedByteCount
+            } else {
+                byteSize = Int64(
+                    try payloadURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                )
+            }
+            let isImage = entry.kind == .image
+            let isWebPage = entry.kind == .webPage
+            let fallbackTitle: String = {
+                if isImage {
+                    return String(localized: "workboard.capture.image", defaultValue: "Image")
+                }
+                if isWebPage {
+                    return String(localized: "workboard.capture.webPage", defaultValue: "Web page")
+                }
+                return String(localized: "workboard.capture.file", defaultValue: "File")
+            }()
+            let filename = entry.displayName ?? entry.relativePath
+            // Never `.audio`. A playable recording card is made at the desk's
+            // own two doors — the attachment button and a drop into the Work
+            // pane — and this queue is neither of them: a capture that arrives
+            // here was written by a process nobody was watching, so a recording
+            // it carried is refused above rather than promoted.
+            let kind: WorkMaterialKind = isImage ? .image : .file
+            return WorkMaterialDraft(
+                id: entry.id,
+                kind: kind,
+                title: entry.displayName ?? fallbackTitle,
+                // A text extract is still the user's file content, and only the
+                // metadata of a file enters the material row: the bytes are
+                // staged by the storage path the desk write chooses.
+                textContent: nil,
+                filename: filename,
+                mimeType: entry.mimeType,
+                payload: nil,
+                byteSize: byteSize,
+                storageMode: .localVault,
+                sourceDevice: sourceDevice,
+                createdAt: createdAt
+            )
+        }
+    }
+}
+
+/// The terminal state one import shares with the heartbeat renewing its claim.
+/// A proven takeover has to reach the import — nothing else can stop it writing
+/// a further material or acknowledging a claim another process now owns — and
+/// the import has to be able to declare itself over, so that the marker its own
+/// acknowledgement or release removes is never read back as a takeover.
+private actor ImportOwnership {
+    private var claimIsLost = false
+    private var importHasEnded = false
+
+    var hasLostClaim: Bool { claimIsLost }
+
+    /// Record a takeover the heartbeat proved. Ignored once the import has
+    /// ended: from that point the claim is being deleted or requeued by this
+    /// drainer itself, and a refusal describes that rather than another
+    /// acquisition.
+    func recordLostClaim() {
+        guard !importHasEnded else { return }
+        claimIsLost = true
+    }
+
+    /// End the import, reporting whether it still owns its claim. Only an owner
+    /// may acknowledge or release.
+    func endImport() -> Bool {
+        importHasEnded = true
+        return !claimIsLost
+    }
+}
+
+#endif

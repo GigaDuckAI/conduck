@@ -20,6 +20,49 @@
 //      the agent reply + fires the reply notification on success, or a failure
 //      notification on error — all independently of this perform() process.
 //
+// WORK DESTINATION: park → transcribe → words card → release. THE WORDS ARE
+// THE ARTIFACT, and the recording is the raw material they are made from, so
+// nothing about the audio reaches the desk. The order is:
+//
+//   PARK. Compress once, then spend those same bytes two ways — the STT upload
+//   and the preserved retry copy — under ONE capture id. The copy lives in
+//   `PendingRetryStore`: an App-Group file on this device that does not sync,
+//   stamped `.phaseOneFailed` ("the desk holds nothing; these bytes are the
+//   only copy") and exempt from the transcription TTL for exactly as long as
+//   that is true.
+//
+//   TRANSCRIBE. Everything that can fail here — an unreadable key, a provider
+//   outage, an OS kill — costs the words and never the recording, because the
+//   recording is already parked and no verdict below deletes a Work capture's
+//   entry. The desk stays empty meanwhile: a capture with no words yet is not
+//   a half-finished card, it is a Try Again.
+//
+//   WORDS CARD. The transcript is written onto the entry FIRST, so a death
+//   between recognition and the desk costs a store write rather than a second
+//   speech call, and then published as a `.transcript` card at the capture id
+//   through `WorkVoiceCaptureCoordinator.recover` — the one seam every surface
+//   that can land this capture uses, and the one that stamps `.published`. The
+//   screenshot is a card of its own under an id DERIVED from the capture's,
+//   because the capture id names the words.
+//
+//   RELEASE. Only a terminal outcome disarms the guard, and the disarm is what
+//   deletes the parked recording. The audio's whole life is this method plus
+//   whatever retry finishes it.
+//
+// Chat retains no audio: its upload is the Shortcut's own recording, byte for
+// byte, and nothing on that branch touches Workboard persistence.
+//
+// THE PARKED BYTES ARE THE ONLY COPY, and that one fact answers every failure
+// on this lane. It holds from the arm to the release, so there is nothing to
+// observe and nothing to write back: a Work capture's entry says
+// `.phaseOneFailed` from the moment it is written until `recover` stamps
+// `.published`, and no verdict about the KEY or about the BYTES may delete it
+// on the way. The person clears such an entry by discarding it from the retry
+// card, which is a decision rather than a side effect. An arm that could not
+// park at all is the one state that breaks the rule — `guardToken.isDurable`
+// says so — and it leaves this process's memory holding the only copy, which
+// is why it is logged rather than assumed away.
+//
 // Active conversation: resolve via the TTL-aware headless pointer
 // (`SettingsManager.resolveActiveConversationID`); if stale/absent — OR the
 // pointed-at `Conversation` row hasn't imported via CloudKit yet (the pointer
@@ -48,9 +91,10 @@
 //   isn't one (I3). Neither reading spends an STT call. They part company on
 //   the recording, each matching its own `shouldPreserveForRetry`: 75 leaves
 //   the guard armed, because an unlock makes those exact bytes succeed; 23
-//   disarms, because they cannot succeed until a key is entered and
-//   `PendingRetryStore`'s single slot would otherwise be held against a
-//   capture that can.
+//   disarms, because they cannot succeed until a key is entered and the entry
+//   would otherwise go on offering a retry that reaches the same refusal —
+//   unless the destination is Work, where the queued bytes are the only copy of
+//   a recording no card carries and a verdict about the key may not delete it.
 //
 //   THE DESTINATION, asked in the SAME ORDER `SharedInboxRouting.resolveOrMint`
 //   asks it — live quick-capture pointer first, this device's "Default for new
@@ -85,6 +129,32 @@ import os.log
 import UIKit
 #endif
 
+/// Explicit terminal destination for the established voice-first GigaAction.
+/// Chat remains the migration-safe default for every existing shortcut; Work
+/// stores the transcript and optional screenshot as an inert private capture.
+enum GigaActionDestination: String, AppEnum {
+    case chat
+    case work
+
+    static var typeDisplayRepresentation = TypeDisplayRepresentation(
+        name: LocalizedStringResource(
+            "intent.converse.destination.type",
+            defaultValue: "Destination"
+        )
+    )
+
+    static var caseDisplayRepresentations: [GigaActionDestination: DisplayRepresentation] = [
+        .chat: DisplayRepresentation(title: LocalizedStringResource(
+            "intent.converse.destination.chat",
+            defaultValue: "Chat"
+        )),
+        .work: DisplayRepresentation(title: LocalizedStringResource(
+            "intent.converse.destination.work",
+            defaultValue: "Work"
+        )),
+    ]
+}
+
 /// Main capture-and-converse intent — fires from the bundled Shortcut
 /// (Action Button, Lock Screen, Control Center widget). Foreground STTClient
 /// call for the STT hop; `PendingRetryGuard` arms preempt-save so an OS-kill —
@@ -106,7 +176,7 @@ struct ConverseIntent: AppIntent {
     static var description: IntentDescription = IntentDescription(
         LocalizedStringResource(
             "intent.converse.description",
-            defaultValue: "Transcribe recorded audio and send it to your configured AI, returning the reply."
+            defaultValue: "Transcribe recorded audio, then send it to Chat or save it in Work."
         )
     )
 
@@ -135,13 +205,25 @@ struct ConverseIntent: AppIntent {
     )
     var screenshotFile: IntentFile?
 
+    /// Additive and defaulted so installed/bundled shortcuts created before
+    /// Work existed continue sending to Chat byte-for-byte until the person
+    /// explicitly chooses Work in the Shortcuts editor.
+    @Parameter(
+        title: LocalizedStringResource(
+            "intent.converse.destination",
+            defaultValue: "Destination"
+        ),
+        default: .chat
+    )
+    var destination: GigaActionDestination
+
     // MARK: - Parameter Summary
 
     /// REQUIRED so the screenshot field appears as a wireable slot in the
     /// Shortcuts editor (the intent had no summary before; without one the
     /// optional parameter is not surfaced for wiring).
     static var parameterSummary: some ParameterSummary {
-        Summary("Converse using \(\.$audioFile) and \(\.$screenshotFile)")    // xcstrings
+        Summary("Use \(\.$audioFile) and \(\.$screenshotFile) in \(\.$destination)")    // xcstrings
     }
 
     // MARK: - Perform
@@ -154,7 +236,9 @@ struct ConverseIntent: AppIntent {
         // a headless capture (e.g. a shortcut synced from another device, or the
         // Action Button bound without finishing the in-app Setup Guide), so
         // request here too. Idempotent + non-blocking (no-op once determined).
-        await NotificationPermissions.ensureRequested()
+        if destination == .chat {
+            await NotificationPermissions.ensureRequested()
+        }
 
         // ATOMIC snapshot: (presetID, apiKey, provider) in
         // one actor hop so a concurrent preset switch can't produce a
@@ -188,12 +272,34 @@ struct ConverseIntent: AppIntent {
         print("[Conduck] Audio: \(originalAudioData.count) bytes, Language: \(preferredLanguage ?? "auto")")
         #endif
 
+        // ONE set of bytes for the whole capture, and Work is the only
+        // destination that earns the compression pass: it PARKS the recording
+        // on the device until the words land, so the preserved retry copy, the
+        // STT upload and the copy a recovery transcribes must all be the same
+        // payload — bytes a retry re-transcribes that are not the bytes it is
+        // holding are a different recording. Chat retains nothing, so its
+        // upload stays the Shortcut's own recording, byte for byte, and the
+        // extension below stays the `.m4a` the Record Audio action produces.
+        // `AudioCompressor.compress` never throws; it falls back to the input's
+        // untouched bytes and says so through `format`, which is where the
+        // extension comes from rather than a second mapping here.
+        let uploadData: Data
+        let audioFileExtension: String
+        if destination == .work {
+            let compression = await Self.compressForWork(originalAudioData)
+            uploadData = compression.data
+            audioFileExtension = compression.fileExtension
+        } else {
+            uploadData = originalAudioData
+            audioFileExtension = "m4a"
+        }
+
         // Write audio to disk for STTClient (which takes a file URL +
         // `defer`-deletes on exit per the audio-cleanup mandate).
         let audioFileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("conduck-stt-\(UUID().uuidString).m4a")
+            .appendingPathComponent("conduck-stt-\(UUID().uuidString).\(audioFileExtension)")
         do {
-            try originalAudioData.write(to: audioFileURL)
+            try uploadData.write(to: audioFileURL)
         } catch {
             throw AppError.audioMissingData
         }
@@ -205,18 +311,71 @@ struct ConverseIntent: AppIntent {
         // the queued notification persist via App Groups +
         // UNUserNotificationCenter so the user gets a path back into the
         // app to retry.
+        let retryDestination: PendingRetryDestination = destination == .work ? .work : .chat
+        let pendingWorkImageData = destination == .work ? screenshotFile?.data : nil
+        // ONE identity for this capture, minted before anything durable is
+        // written. It names the recording's desk card AND the pending-retry
+        // record, so a retry an app launch later repairs that same card instead
+        // of publishing the recovered words a second time beside it.
+        let captureID = UUID()
+        // The picture this shortcut also carried, named on the WORDS card
+        // before anything is armed. Nothing at all is published until speech
+        // recognition returns, so the link is a promise about IDENTITY rather
+        // than about existence: it says which card the picture belongs beside,
+        // and it says it before either card exists. Set here, ahead of `arm`,
+        // so an OS kill anywhere below leaves a durable record that still knows
+        // the two artifacts came from one press.
+        let workAttachedToMaterialID = pendingWorkImageData == nil
+            ? nil
+            : WorkVoiceScreenshotCoordinator.materialID(forCapture: captureID)
         let pendingMetadata = PendingRetryMetadata(
-            id: UUID(),
+            id: captureID,
             createdAt: Date(),
             audioFileURL: audioFileURL,
             preferredLanguage: preferredLanguage,
             attemptCount: 1,
-            lastErrorCode: nil
+            lastErrorCode: nil,
+            destination: retryDestination,
+            // The state every fresh Work capture is parked in, stated rather
+            // than inferred: the desk holds nothing for this capture, so these
+            // bytes are the only copy of the recording. It changes exactly once
+            // — to `.published`, inside `recover`, when the words are on a card
+            // — which is what keeps the entry exempt from the transcription TTL
+            // for as long as it is the only copy, and what stops a verdict
+            // about the key or the bytes deleting a recording no card carries.
+            publicationState: .phaseOneFailed,
+            workAttachedToMaterialID: workAttachedToMaterialID,
+            // The words are spoken at THIS device, so the card takes the
+            // current one. Stated as nil rather than omitted because the field
+            // exists for the lanes where it is not — a wrist recording relayed
+            // to the phone, a CarPlay note — and a lane that leaves it to a
+            // default is a lane whose card silently changes device the day the
+            // default does.
+            sourceDevice: nil
         )
         let guardToken = await PendingRetryGuard.arm(
-            audio: originalAudioData,
-            metadata: pendingMetadata
+            audio: uploadData,
+            metadata: pendingMetadata,
+            workImageData: pendingWorkImageData,
+            // A Work-only first run does not need reply-notification
+            // permission. Existing authorization is still used for the
+            // deferred recovery notice if the intent is interrupted.
+            requestNotificationAuthorization: destination == .chat
         )
+
+        // THE CAPTURE IS NOW PARKED, and that is the whole of it. No
+        // card is written here and none is written until the words exist: the
+        // recording lives in the device-local retry lane, where it does not
+        // sync, and the desk sees this capture for the first time as the words
+        // it produced. An arm that could not park is the one state to know
+        // about — `guardToken.isDurable` says so — and it makes this process's
+        // memory the only copy for the rest of `perform()`.
+        //
+        // What the entry already says about itself is `.phaseOneFailed`,
+        // written at the arm above rather than decided here, and it stays that
+        // way until `recover` stamps `.published`. So every verdict below reads
+        // one constant fact — a Work capture's parked bytes are the only copy —
+        // instead of a variable this block would have to keep in step.
 
         // Pre-flight the KEY, on the same terms and for the same reason as the
         // destination below: AFTER `arm` and OUTSIDE the `do`, so each verdict is
@@ -253,20 +412,27 @@ struct ConverseIntent: AppIntent {
             // PROVABLE absence — the one verdict on this lane that spends the
             // guard rather than leaving it armed, matching
             // `sttMissingAPIKey.shouldPreserveForRetry == false`. The same bytes
-            // fail identically until a key is entered, and `PendingRetryStore`
-            // is a SINGLE overwriting slot: holding it with a capture that
-            // cannot succeed evicts one that can. The concrete loss — a capture
-            // that failed on preset A with a network error is preserved, the
-            // user switches to keyless preset B and presses the Action Button,
-            // and A's recoverable words are overwritten by these. Disarming also
-            // withdraws the +90 s "Recording Saved" notification, which would
-            // otherwise invite a retry into an empty lane.
-            //
-            // So the temp file goes too: after the disarm nothing holds a copy,
-            // and that is the intended outcome for this reading — not an
+            // fail identically until a key is entered, so the entry would sit in
+            // the queue offering a retry that reaches the same refusal, and the
+            // +90 s "Recording Saved" notification would invite the user into
+            // it. So the temp file goes too: after the disarm nothing holds a
+            // copy, and that is the intended outcome for this reading — not an
             // oversight. The blackout arm below is the opposite case and stays
             // armed.
-            await PendingRetryGuard.disarm(guardToken)
+            //
+            // EXCEPT for Work, where it is never the right act. Work publishes
+            // nothing until the words exist, so a capture bound for it always
+            // reaches this arm with the parked bytes as the only copy of the
+            // recording — and a verdict about the KEY is not a verdict about
+            // the recording: it ends this capture's transcription, it may not
+            // delete what was said. The entry stays queued, exempt from the
+            // transcription TTL for exactly this reason, so the retry that runs
+            // once a key exists still has a recording to make words from. The
+            // person clears it by discarding it, which is a decision rather
+            // than a side effect.
+            if destination != .work {
+                await PendingRetryGuard.disarm(guardToken)
+            }
             try? FileManager.default.removeItem(at: audioFileURL)
             throw AppError.sttMissingAPIKey
         case .unreadable:
@@ -276,12 +442,15 @@ struct ConverseIntent: AppIntent {
             // Group copy the in-app retry re-materialises from — and where that
             // write failed, keeping a temp file nothing knows about would not
             // help either.
-            if !guardToken.audioPreserved {
+            if !guardToken.isDurable {
                 // The one place the promise and the reality can part: a refusal
-                // the user can act on, with nothing left to come back to. The
-                // line carries the FACT only — no key, no transcript (I5) — and
-                // ships in Release, because a save that fails before first
-                // unlock is precisely what a DEBUG-only print never shows.
+                // the user can act on, with nothing left to come back to. Read
+                // through `isDurable` rather than the save alone, because an
+                // entry this process holds no reservation over is one it cannot
+                // come back for either. The line carries the FACT only — no
+                // key, no transcript (I5) — and ships in Release, because a save
+                // that fails before first unlock is precisely what a DEBUG-only
+                // print never shows.
                 Self.log.error("ConverseIntent: STT key blackout refused with no preserved capture")
             }
             try? FileManager.default.removeItem(at: audioFileURL)
@@ -299,6 +468,7 @@ struct ConverseIntent: AppIntent {
         // of `runConverseHop` instead. The guard is still armed there, because
         // it disarms only inside `runConverseHop` once the user turn is stored,
         // so that refusal reaches the same outcome.)
+        if destination == .chat {
         let preflight = await SettingsManager.shared.newChatPickerSnapshot()
         // The pointer arm, asked FIRST and through the router's own helper — the
         // same question `CheckNetworkIntent` asks before the microphone, so a
@@ -347,6 +517,7 @@ struct ConverseIntent: AppIntent {
                 break
             }
         }
+        }
 
         // True from the moment the spoken words exist as text. Until the user
         // turn is stored, the preserved recording is the ONLY copy of what the
@@ -360,6 +531,31 @@ struct ConverseIntent: AppIntent {
         // anything pre-transcript. Each takes its own above instead — 23
         // disarms there, 75 stays armed.
         var transcriptCaptured = false
+
+        // The reservation taken at `arm` lasts one notification window, and the
+        // speech hop below can outlast it: a custom provider request is allowed
+        // 300 s and is attempted three times. Extending it while this process is
+        // alive is what keeps the app's retry card from taking the capture out
+        // from under a transcription that is still running — and the short
+        // horizon is what gives it straight back when the OS kills this process
+        // mid-flight, because a task cannot renew from a process that is gone.
+        // Cancelled on EVERY exit from `perform()`, refusal paths included.
+        let leaseRenewal = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(PendingRetryGuard.leaseRenewalInterval * 1_000_000_000)
+                )
+                guard !Task.isCancelled else { return }
+                // A refused renewal is NOT a reason to stop asking. The store
+                // answers false for a cross-process lock it could not take as
+                // well as for a hold somebody overtook, and stopping on the
+                // first would give away a reservation that is still this
+                // process's. The ownership checks before each hand-off are what
+                // turn a genuine takeover into a refusal.
+                await PendingRetryGuard.renew(guardToken)
+            }
+        }
+        defer { leaseRenewal.cancel() }
 
         do {
             // Foreground multipart upload. STTClient owns the retry loop
@@ -390,8 +586,12 @@ struct ConverseIntent: AppIntent {
                 // renders the misleading "Something glitched on our end" banner —
                 // implies a server fault for what is just silence). Both are
                 // `shouldPreserveForRetry == false` AND both land while
-                // `transcriptCaptured` is still false, so the catch chain below
-                // disarms on either; only the surfaced string changes.
+                // `transcriptCaptured` is still false, so a CHAT capture is
+                // disarmed by the catch chain below on either; only the
+                // surfaced string changes. A Work capture is not: its parked
+                // bytes are the only copy of the recording, and silence is a
+                // reason to offer the person a Try Again, not to delete what
+                // they recorded on their behalf.
                 throw AppError.noSpeechDetected
             }
 
@@ -402,6 +602,95 @@ struct ConverseIntent: AppIntent {
 
             // Completion chime / haptic for the STT hop landing.
             CompletionFeedbackPlayer.play(mode: "sound")
+
+            if destination == .work {
+                // The screenshot is a card of its own, published FIRST because
+                // it is the only artifact still held nowhere but the retry
+                // record: a refusal here has to leave that record standing, and
+                // it does — the throw reaches the catch chain below with
+                // `transcriptCaptured` already true, so the guard stays armed.
+                // Its id is derived from the capture's, never equal to it: the
+                // capture id names the words card, and a picture published
+                // there is answered by that card and dropped.
+                if let pendingWorkImageData {
+                    _ = try await WorkVoiceScreenshotCoordinator.publish(
+                        pendingWorkImageData,
+                        forCapture: captureID,
+                        createdAt: pendingMetadata.createdAt
+                    )
+                }
+
+                // PARK THE WORDS BEFORE THE DESK WRITE, and the order is the
+                // point. The transcript exists only in this process's memory,
+                // and it was PAID FOR: a crash, an OS kill or a store failure
+                // between here and the card would cost a second speech call on
+                // the same bytes, and the entry holding those bytes is the only
+                // copy of the recording either way. Writing the words onto it
+                // first makes the desk write the only thing left to redo.
+                //
+                // The verdict stays `.phaseOneFailed` because it is still true:
+                // the desk holds nothing for this capture until `recover`
+                // stamps `.published` a few lines down.
+                //
+                // NON-FATAL, and read rather than ignored. A false answer means
+                // the reservation was overtaken or nothing was parked, so the
+                // words could not be written onto an entry this process owns —
+                // which is exactly what the ownership gate below refuses on. It
+                // is logged as a FACT, with no transcript in the line, and the
+                // capture proceeds: the words are in memory and the card is
+                // still worth attempting.
+                let parkedWords = await Self.recordRecoveryState(
+                    .phaseOneFailed,
+                    on: guardToken,
+                    transcript: transcript
+                )
+                if !parkedWords {
+                    Self.log.error("ConverseIntent: transcript not parked before the desk write")
+                }
+
+                // The capture must still be THIS process's before its words go
+                // anywhere. A hold that lapsed while the speech hop ran can be
+                // taken by the app's retry card, and that surface transcribes
+                // and finishes the same recording — so continuing here would
+                // write the same card behind it, and the disarm below would be
+                // refused anyway. The recording stays queued for whoever holds
+                // it; nothing is deleted and nothing is lost.
+                guard await PendingRetryGuard.stillOwnsCapture(guardToken) else {
+                    throw AppError.invalidRequest(message: String(
+                        localized: "pendingRetry.card.busy",
+                        defaultValue: "This recording is already being finished. Try again in a moment."
+                    ))
+                }
+
+                // PHASE 2, and the whole desk-side decision behind ONE call.
+                // The words become a card at this capture's own id, idempotently
+                // — a replay from any surface answers the card already there
+                // rather than writing a second one — and `recover` stamps the
+                // entry `.published` the moment that is true.
+                //
+                // A THROW says the store refused the write, so no card holds the
+                // words. It leaves the guard armed — nothing below it runs, and
+                // the words are already parked on the entry above — which is why
+                // the outcome, not the absence of an error, is what licenses the
+                // disarm.
+                let held = Self.heldCapture(
+                    Self.stamped(pendingMetadata, transcript: transcript),
+                    audio: uploadData,
+                    reservation: guardToken
+                )
+                let outcome = try await WorkVoiceCaptureCoordinator.recover(
+                    held,
+                    transcript: transcript,
+                    // From the record, never from the bytes: the picture was
+                    // published a few lines above and this process holds no
+                    // copy of it any more.
+                    attachedTo: held.entry.metadata.workAttachedToMaterialID
+                )
+                if await outcome.isTerminal {
+                    await PendingRetryGuard.disarm(guardToken)
+                }
+                return .result(value: transcript)
+            }
 
             // --- Optional screenshot ---
             // Kept entirely outside the audio retry machinery. Best-effort,
@@ -435,6 +724,18 @@ struct ConverseIntent: AppIntent {
             // background delegate appends the reply + fires the completion
             // notification on success, or a failure notification on error — so
             // delivery is unaffected; only the wait is removed.
+            // Same gate as the Work lane's, and this is the one where it costs
+            // something to be wrong: a Chat capture two surfaces both finish is
+            // two user turns and two gateway effects for one recording. If the
+            // reservation was overtaken while STT ran, the surface holding it is
+            // sending these words — this process must not send them again.
+            guard await PendingRetryGuard.stillOwnsCapture(guardToken) else {
+                throw AppError.invalidRequest(message: String(
+                    localized: "pendingRetry.card.busy",
+                    defaultValue: "This recording is already being finished. Try again in a moment."
+                ))
+            }
+
             try await Self.runConverseHop(
                 userText: transcript,
                 imageDataURIs: screenshotDataURIs,
@@ -466,7 +767,18 @@ struct ConverseIntent: AppIntent {
             // a store failure before the append — and the same recording DOES
             // succeed once the user has fixed what the verdict names. Disarming
             // there would delete the only copy of what they said (I6).
-            if !transcriptCaptured {
+            //
+            // The DESTINATION is the second gate, and it is about the recording
+            // rather than the words. A Work capture publishes nothing until its
+            // words land, so its parked bytes are the only copy of the recording
+            // for the whole of this method: a bad-input verdict about the audio
+            // (silence, a clip the provider cannot read) still ends
+            // transcription for this capture, and it still may not take the
+            // recording with it. The person discards it from the retry card,
+            // which is a decision. Chat is the other case, and there the
+            // transcript IS the artifact — bytes that cannot produce one are
+            // worth nothing on a second attempt.
+            if !transcriptCaptured, destination != .work {
                 await PendingRetryGuard.disarm(guardToken)
             }
             throw error
@@ -477,6 +789,158 @@ struct ConverseIntent: AppIntent {
             // so let the user decide via the in-app retry card).
             throw AppError.unknown(error)
         }
+    }
+
+    // MARK: - Work payload
+
+    /// The one compression pass a Work capture gets, and the container truth
+    /// that comes with it.
+    ///
+    /// The extension is the whole of what a caller needs, because these bytes
+    /// reach a speech provider and a device-local parking file and no card: a
+    /// mime type describes a payload the desk stores, and this lane stores
+    /// none. A recovery reads the container back off the bytes themselves
+    /// (`PendingRetryAudioFile.extension(for:)`) rather than trusting a name
+    /// carried in a record.
+    ///
+    /// `@MainActor` for isolation rather than for the work: `AudioFormat`'s
+    /// `fileExtension` is a main-actor member and `perform()` is nonisolated,
+    /// so reading it there is a concurrency violation waiting for the language
+    /// mode to catch up. Hopping once here also keeps the mapping where
+    /// `AudioCompressor` put it — a `.original` fallback carries the input's
+    /// untouched bytes and says so through `format`, and a second mapping in
+    /// this file could contradict that.
+    @MainActor
+    private static func compressForWork(
+        _ audioData: Data
+    ) async -> (data: Data, fileExtension: String) {
+        let result = await AudioCompressor.compress(audioData)
+        return (result.data, result.format.fileExtension)
+    }
+
+    // MARK: - What a recovery needs that it cannot work out for itself
+
+    /// The same capture record carrying the one thing this process has learned
+    /// that the entry does not already say: the words recognition produced.
+    /// `PendingRetryMetadata` is a value of `let`s, so this restates it rather
+    /// than mutating it, and every other field is carried forward verbatim.
+    ///
+    /// The publication verdict is one of those fields rather than an argument.
+    /// It is `.phaseOneFailed` from the arm onwards — the desk holds nothing
+    /// for a Work capture until its words land — and the single place it
+    /// changes is inside `recover`, which stamps `.published` on the entry
+    /// itself. A caller that restated it here would be restating a constant,
+    /// and could only ever get it wrong.
+    ///
+    /// `nonisolated` because `perform()` is, and this is a pure restatement.
+    nonisolated private static func stamped(
+        _ metadata: PendingRetryMetadata,
+        transcript: String? = nil
+    ) -> PendingRetryMetadata {
+        PendingRetryMetadata(
+            id: metadata.id,
+            createdAt: metadata.createdAt,
+            audioFileURL: metadata.audioFileURL,
+            preferredLanguage: metadata.preferredLanguage,
+            attemptCount: metadata.attemptCount,
+            lastErrorCode: metadata.lastErrorCode,
+            destination: metadata.destination,
+            transcript: transcript ?? metadata.transcript,
+            publicationState: metadata.publicationState,
+            // Carried forward verbatim, like every field this restatement does
+            // not name. It was decided before `arm` and nothing observed since
+            // can change it; dropping it here would hand `recover` a capture
+            // whose words card forgets the picture it came from.
+            workAttachedToMaterialID: metadata.workAttachedToMaterialID,
+            // Carried forward for the same reason. This lane's words are spoken
+            // at the current device, and a restatement that dropped the field
+            // would be stating something about the card rather than repeating
+            // what the entry already says.
+            sourceDevice: metadata.sourceDevice
+        )
+    }
+
+    /// This capture as `recover` takes one, from the process that ARMED it.
+    ///
+    /// `PendingRetryClaim` is the shape a retry SURFACE holds: one capture, plus
+    /// the token of the reservation over it. This process took its reservation
+    /// BY ID at `arm` rather than by selection — it minted the id, wrote the
+    /// entry, and still holds the only in-memory copy of the bytes and of the
+    /// words — so the value handed over pairs that real token with this
+    /// process's own record and payload. Two consequences, both deliberate:
+    ///
+    ///   • Nothing else can be handed this capture by mistake: the ids, the
+    ///     bytes and the words are this process's own, not a queue read, so no
+    ///     recording is materialised a second time in the most memory-
+    ///     constrained process in the app.
+    ///   • Every write `recover` attempts against the entry LANDS, because the
+    ///     token matches the live lease — including the durable `.published`
+    ///     stamp, which is what tells the expiry sweep the entry is no longer
+    ///     the only copy of anything and licenses the disarm that deletes it.
+    ///
+    /// Selection is still refused here, and `claimNext` is the reason: it answers
+    /// "the newest unreserved capture", which is not this capture whenever
+    /// anything armed after it. The hold this lane does take lasts one deferred-
+    /// notification window (`PendingRetryGuard.leaseDuration`), so an intent the
+    /// OS killed hands the capture back by the time its own notice tells the
+    /// person to tap and retry.
+    ///
+    /// `nonisolated` because `perform()` is, and this is a pure restatement.
+    nonisolated private static func heldCapture(
+        _ metadata: PendingRetryMetadata,
+        audio: Data,
+        reservation: PendingRetryGuard.Token
+    ) -> PendingRetryClaim {
+        PendingRetryClaim(
+            entry: PendingRetryEntry(
+                audioData: audio,
+                metadata: metadata,
+                // The screenshot is published on its own derived id above; a
+                // recovery has no business republishing it.
+                workImageData: nil
+            ),
+            // The lease this process holds over the entry it armed. Absent only
+            // when arming preserved nothing, and then there is no entry for any
+            // token to name — the capture's own id stands in, so the value names
+            // no reservation by construction rather than by a random draw, and
+            // every queue write against it is refused exactly as it should be.
+            token: reservation.claim?.token ?? metadata.id
+        )
+    }
+
+    /// Park what this process holds on this capture's queue entry, for the
+    /// recovery that happens in ANOTHER process.
+    ///
+    /// What it carries here is the WORDS. The verdict is `.phaseOneFailed`
+    /// throughout — the desk holds nothing for this capture until `recover`
+    /// stamps `.published` — so the reason to make this write is that the
+    /// transcript was paid for and lives only in memory until it lands
+    /// somewhere durable. The write is metadata-only, keyed by the capture id,
+    /// and takes its ownership check inside the same lock as the write, so it
+    /// can neither rewrite audio nor reach another capture's entry.
+    ///
+    /// ANSWERED, not assumed. `false` means nothing was parked or the
+    /// reservation was overtaken, and the caller's own next step — the
+    /// ownership gate — is what acts on it. It is non-fatal either way: the
+    /// words are still in memory and the card is still worth attempting; the
+    /// cost of a false answer is one more speech call if this process dies
+    /// before the card is written.
+    ///
+    /// It goes through the RESERVATION this lane holds, so it writes only to a
+    /// capture this process still owns. A capture another surface took over
+    /// while this one was suspended in STT belongs to that surface, and words
+    /// written from here would land under its recording rather than this one's.
+    @MainActor
+    private static func recordRecoveryState(
+        _ publicationState: PendingRetryPublicationState,
+        on token: PendingRetryGuard.Token,
+        transcript: String? = nil
+    ) async -> Bool {
+        await PendingRetryGuard.recordPublicationState(
+            token,
+            transcript: transcript,
+            publicationState: publicationState
+        )
     }
 
     // MARK: - Terminal step — agent converse hop

@@ -1,0 +1,49 @@
+{
+ "slice": "shortcuts",
+ "verdict": "findings",
+ "round1": [
+  {
+   "id": "S1",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "still-open",
+   "evidence": "The digest closes the original scenario for unchanged source files. WorkShortcutIntentsTests.swift:383 compares real same-name, same-size files containing different bytes; its inequality assertion fails under the old derivation, confirmed with a read-only reproduction of both hash algorithms. However, captureIdentity hashes the source before publication copies it, allowing different staged bytes to retain the earlier capture identity. See R1."
+  },
+  {
+   "id": "S2",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "still-open",
+   "evidence": "RootView.swift:69 and ConduckApp.swift:288 now reveal Work on appearance without consuming the pending request. WorkboardCaptureCanvas.swift:218–222 still gates consumption on the visible composer. The notification test at WorkShortcutIntentsTests.swift:78 and source guard at :115 detect removal of the fix, but do not exercise creation of a previously absent Mac window. The fully quit Mac residual is explicitly recorded in fix-r1-shortcuts.md:86 and integrate-2.md:119 and remains unhandled. See R2."
+  },
+  {
+   "id": "S3",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "AddFilesToWorkIntent.swift:110 rejects an oversized trimmed note before staging; :245 uses the envelope's character ceiling; :384 explicitly maps the publisher's noteTooLong verdict. The new error key has the matching catalog value. WorkShortcutIntentsTests.swift:307 exercises 16,000 versus 16,001 characters, and :322 would fail if the publication-error mapping reverted to unreadableFile."
+  }
+ ],
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "major",
+   "title": "Hashing the source separately from staging still permits destructive capture collisions",
+   "file": "Conduck/Conduck/Intents/AddFilesToWorkIntent.swift:295",
+   "claim": "The capture ID describes bytes read before publication, while the envelope carries bytes copied later. A source edit between those operations can overwrite an earlier capture despite the new content digest.",
+   "evidence": "captureIdentity reads file.url at :295, and perform passes the same original URLs to publishFileCapture at :184–187. WorkCaptureInbox.swift:1242 separately copies each source; :1213–1230 records its staged size without comparing content against the identity digest. The drainer upserts by the derived entry ID. For synced payloads, ConversationStore+Workboard.swift:694–706 permits repair, :946 deletes superseded blobs, and :991 repoints eligible rows. A newly dated invocation passes the older-row comparison at :855–857.",
+   "scenario": "First capture and drain memo.txt containing 'alpha'. Run the same shortcut again. After its digest reads 'alpha', an editor or file provider replaces the source with 'bravo' before the inbox copies it. Both files are five bytes. Both runs therefore use capture ID 8b98ea1e-f240-5a17-85ef-f488af8b423b and entry ID 650a8de8-8626-58a0-8824-ef42bed28be8, but the second envelope carries 'bravo'. Draining replaces the earlier card's 'alpha' payload.",
+   "fix": "Derive identity from private staged copies and publish those exact copies. Propagate digest failures instead of substituting an identity sentinel. Add a regression that changes the original source between identity calculation and publication and verifies that distinct captured bytes cannot replace an existing card.",
+   "refutationAttempt": "Security-scoped access grants access but does not freeze source contents. The inbox actor serializes its own operations, not an external writer. The claim validator checks byte counts, so this equal-size change passes. Store content hashing names the replacement blob but does not validate capture identity. The new regression tests keep their source files unchanged throughout hashing and never exercise publication."
+  },
+  {
+   "id": "R2",
+   "severity": "minor",
+   "title": "An early voice intent still lacks a Mac window-opening recovery path",
+   "file": "Conduck/Conduck/ConduckApp.swift:288",
+   "claim": "The appearance hook recovers navigation after a window appears, but cannot recover opening that window when the intent's launch notifications were missed.",
+   "evidence": "RecordWorkNoteIntent.swift:69–75 retains the request and posts transient notifications. ConduckApp.swift:305–318 opens main only when those notifications are received; the added pending-route check runs inside the window content's onAppear. AppDelegate.swift:80–89 deliberately suppresses automatic window presentation, and its launch path never checks WorkVoiceCaptureLaunchRoute. The fixer and integrator both explicitly acknowledge this remaining scenario.",
+   "scenario": "With Conduck fully quit on macOS, Record a Note to Work performs before the main scene's notification observers are installed. The pending flag survives, but no window-opening event survives. Recording remains unavailable until the user independently opens the main window.",
+   "fix": "Add launch-level handling that opens and activates main for a pending Work voice request once scene routing is ready. Leave consumption to the visible composer, and cover the early-request/no-window ordering in a regression.",
+   "refutationAttempt": "The delayed reveal handles observer installation during appearance, but still requires appearance to occur first. The Dock reopen handler requires another user action. The existing tests verify notification delivery and source wiring, not the missing window-opening lifecycle. The residual is honestly documented, but S2 is not completely fixed."
+  }
+ ],
+ "notes": "Reviewed 692608d..5c401df03d16d4712492ebce0f2ea1a11d000438 and the scoped ec8b27f..HEAD changes. No files were modified; no builds or Swift tests were run. Initial system Git emitted Xcode tool-discovery diagnostics; subsequent Git calls used the direct binary. Read-only checks confirmed the frozen CaptureWorkboardIntent, all three shipped shortcut entries, mirror triplets, referenced intent catalog keys, clean working tree and diff whitespace. Publication ordering, staged-size validation, staging cleanup and audio playback mapping retain their reviewed paths; no additional Chat or gateway regression was established. The streamed-digest contradiction of b2's Nobody undo rule is explicitly justified. Memory was consulted only for worktree orientation; findings use current repository evidence.\n"
+}

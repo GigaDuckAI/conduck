@@ -507,13 +507,20 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
                 let language = message[RelayWire.languageKey] as? String
                 let providerID = message[RelayWire.providerIDKey] as? String
                 let replyPrefersMessage = message[RelayWire.supportsMessageReplyKey] as? Bool ?? false
+                // Where the words are meant to land. The inline message and
+                // the queued file are the SAME request in two envelopes, so
+                // this key is read on BOTH — a destination visible on only one
+                // channel would route a private wrist note to a gateway
+                // whenever reachability decided which envelope was used.
+                let destination = message[RelayWire.destinationKey] as? String
                 Task { @MainActor in
                     await AppleSpeechRelayCoordinator.shared.processRelayRequest(
                         requestID: requestID,
                         audioURL: tempURL,
                         language: language,
                         providerID: providerID,
-                        replyPrefersMessage: replyPrefersMessage
+                        replyPrefersMessage: replyPrefersMessage,
+                        destination: destination
                     )
                 }
                 return

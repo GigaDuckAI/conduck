@@ -22,6 +22,13 @@ import UIKit
 #endif
 
 struct ConversationLibraryView: View {
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
+    /// The section router, when a shell that HAS one put it here. Presence is
+    /// the whole contract: the wide iPad shell injects the model into both of
+    /// its mounted layers, so this host draws the Chats / Work control; the
+    /// compact shell omits this wide model. iPhone uses its own toolbar chooser
+    /// and compact iPad its tab bar. See `sectionControlHost`.
+    @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
     @Binding var selectedConversationID: UUID?
     var recorder: InAppAudioRecorder
     /// Forward a user turn (typed or spoken, with optional attachments) to the
@@ -232,7 +239,7 @@ struct ConversationLibraryView: View {
                 // search capsule and the list — shares a different one, measured
                 // on the `.safeAreaInset` below.
                 // (Args in declaration order.)
-                showsToolbarActions: true,
+                showsToolbarActions: workbenchDestinationIsActive,
                 externalSearchText: $sidebarSearch,
                 customGateways: customGateways,
                 configuredRefs: configuredRefs,
@@ -326,7 +333,9 @@ struct ConversationLibraryView: View {
             // both halves, and the lever table recording why the collapsed bar
             // cannot be made to match this order.
             .toolbar {
-                LeadingToolbarChrome(column: .sidebar) { startNewConversation() }
+                if workbenchDestinationIsActive {
+                    LeadingToolbarChrome(column: .sidebar) { startNewConversation() }
+                }
             }
             // The view-tree half of `sidebarBarOnScreen`. Reports what is
             // actually mounted, so a sidebar that leaves the screen by a route
@@ -423,6 +432,9 @@ struct ConversationLibraryView: View {
             // current draft; ⌘N starts a new conversation (clears the selection
             // → next turn mints a fresh conversation via the host's send path).
             keyboardShortcuts
+
+            // LAST sibling in this ZStack, and nothing may be added after it.
+            sectionControlHost
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
@@ -470,7 +482,10 @@ struct ConversationLibraryView: View {
         // (`gatewayTitleControl`: picker / clone-tappable title / static title),
         // so the nav title stays empty to avoid double-titling. Clone is folded
         // into that control — no separate trailing button.
-        .navigationTitle(Text(""))
+        .workbenchNavigationTitle(
+            Text(""),
+            isActive: workbenchDestinationIsActive
+        )
         .toolbar {
             // Compose, immediately right of the reveal control that iPadOS pins
             // leading-most in this bar. THIS is the copy that survives ambiguity:
@@ -484,12 +499,48 @@ struct ConversationLibraryView: View {
             // bar's: iPadOS pins its reveal control leading-most and nothing this
             // app declares outranks it. `LeadingToolbarChrome`'s header carries
             // the seven levers measured against that, each with its frames.
-            if !sidebarBarOnScreen {
+            if workbenchDestinationIsActive, !sidebarBarOnScreen {
                 LeadingToolbarChrome(column: .detail) { startNewConversation() }
             }
-            ToolbarItem(placement: .principal) {
-                gatewayTitleControl
+            if workbenchDestinationIsActive {
+                ToolbarItem(placement: .principal) {
+                    gatewayTitleControl
+                }
             }
+        }
+    }
+
+    /// The Chats / Work switch, trailing-most in THIS column's bar.
+    ///
+    /// WHY A ZERO-SIZE HOST DECLARED LAST, rather than one more `ToolbarItem` in
+    /// the `.toolbar` above: toolbar items are collected in view-tree order, and
+    /// a parent's item lands BEFORE anything a descendant declares in the same
+    /// placement. `ConversationThreadView` — a descendant, inside
+    /// `threadContent` — declares "Copy conversation" as a `.primaryAction`
+    /// whenever the open conversation has messages. An item declared on the
+    /// ZStack's own toolbar would therefore sit LEFT of Copy and slide sideways
+    /// by Copy's width every time the user opens an empty thread or sends the
+    /// first turn. Declared here, as the LAST sibling of the ZStack — after
+    /// `threadContent` and after `keyboardShortcuts` — this control is the
+    /// trailing-most item in the bar and nothing the thread does can move it.
+    /// Same measured arrangement as the macOS window shell's section host
+    /// (`MainWindowView.mountedDetailDestinations`). Nothing may declare a
+    /// toolbar after this host.
+    ///
+    /// WHY IT IS ALSO THE PLATFORM GATE: the control renders exactly when a
+    /// shell put a router in the environment. The wide iPad shell injects one
+    /// into both mounted layers; the iPhone `TabView` injects none, so the phone
+    /// draws no wide control; compact navigation is owned by its shell. The
+    /// destination read lives inside `WorkbenchSectionControl`'s own body (the
+    /// binding is rebuilt in `WorkbenchSectionToolbarItem`'s body), which is what
+    /// keeps it observation-tracked — an `@Observable` property read directly in
+    /// a `.toolbar {}` closure is not.
+    @ViewBuilder
+    private var sectionControlHost: some View {
+        if workbenchDestinationIsActive, let model = personalWorkbenchModel {
+            Color.clear
+                .frame(width: 0, height: 0)
+                .toolbar { WorkbenchSectionToolbarItem(model: model) }
         }
     }
 
@@ -644,6 +695,7 @@ struct ConversationLibraryView: View {
             sendCurrentDraft()
         } label: { EmptyView() }
         .keyboardShortcut(.return, modifiers: .command)
+        .disabled(!workbenchDestinationIsActive)
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
@@ -652,6 +704,7 @@ struct ConversationLibraryView: View {
             startNewConversation()
         } label: { EmptyView() }
         .keyboardShortcut("n", modifiers: .command)
+        .disabled(!workbenchDestinationIsActive)
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
@@ -661,6 +714,7 @@ struct ConversationLibraryView: View {
             pasteFromClipboard()
         } label: { EmptyView() }
         .keyboardShortcut("v", modifiers: .command)
+        .disabled(!workbenchDestinationIsActive)
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
@@ -679,7 +733,7 @@ struct ConversationLibraryView: View {
     private func pasteFromClipboard() {
         // No gateway → the composer is the locked CTA, not a live field. Don't let
         // a hardware ⌘V stage attachments into a composer the user can't send from.
-        guard isRemoteAgentConfigured else { return }
+        guard workbenchDestinationIsActive, isRemoteAgentConfigured else { return }
         #if canImport(UIKit)
         let pb = UIPasteboard.general
         if pb.hasImages, let image = pb.image, let data = image.jpegData(compressionQuality: 0.95) {
@@ -706,7 +760,7 @@ struct ConversationLibraryView: View {
         // No gateway → the composer is the locked CTA, not a live field. A
         // hardware ⌘Return must NOT hit the `remoteAgentNotConfigured` send path;
         // the user reaches setup via the locked bar / empty-state CTA instead.
-        guard isRemoteAgentConfigured else { return }
+        guard workbenchDestinationIsActive, isRemoteAgentConfigured else { return }
         let text = composerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         // An attachment-only turn is valid; block only when nothing is staged
         // and there's no text, or a turn/load is in flight. Also block while a
@@ -788,6 +842,7 @@ struct ConversationLibraryView: View {
     /// uses on first send). Reuses the existing minting flow rather than adding
     /// a new store call.
     private func startNewConversation() {
+        guard workbenchDestinationIsActive else { return }
         // Stop any in-flight capture FIRST, mirroring the macOS window's
         // `cancelWindowCapture()`. Without this a mic held in the outgoing
         // thread keeps running, and `handleVoiceResult` lands the OLD thread's
@@ -896,6 +951,7 @@ struct ConversationLibraryView: View {
                 .foregroundStyle(AppColors.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .dismissesKeyboardOnEmptySpaceInteraction()
     }
 }
 #endif

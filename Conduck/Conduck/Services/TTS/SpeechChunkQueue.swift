@@ -46,7 +46,7 @@
 //     under a pause; `resume()` re-arms).
 //   - `cancel()` is a hard stop — kills every fetch and player, fires nothing.
 //   - AUDIO SESSION: never touches category/activation. Chunks play on
-//     whatever session the surface already holds (iOS `ChatPlaybackSession`,
+//     whatever session the surface already holds (iOS `SpokenAudioSession`,
 //     the Watch's one-per-turn activation) — same invariant as `SpeechPlayer`.
 //   - PRIVACY: never logs chunk text, audio bytes, or errors. Audio Data
 //     stays in memory only and is released once its chunk has played.

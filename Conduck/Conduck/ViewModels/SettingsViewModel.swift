@@ -9,10 +9,26 @@
 // (a) `keyStates[presetID]` for in-flight / failure state,
 // (b) `SettingsManager` for stored-key + active-preset truth.
 //
-// Privacy invariant: raw API keys flow through `validateAndSave(key:for:)`
-// and never enter `keyStates` or any other stored property. The View's
-// own SecureField buffer is the only retention surface (per
-// `ProviderRow.pendingKey`).
+// Privacy invariant: a raw API key never enters an OBSERVED stored property and
+// never reaches a View. A pasted key flows through `validateAndSave(key:for:)`
+// straight to the Keychain and is not read back; the View's own SecureField
+// buffer is its only retention surface (per `ProviderRow.pendingKey`).
+//
+// ONE credential has no SecureField to live in — the key that "Sign in with
+// OpenRouter" mints (`SettingsViewModel+OpenRouterOAuth.swift`). It arrives from
+// the PKCE code exchange with no field that could hold it and no Keychain slot
+// yet, because the gateway still needs a model before Connect commits anything.
+// So the view model holds it in `openRouterOAuthState`: an `@ObservationIgnored`
+// store whose two dictionaries are `private` to that extension file, reachable
+// only by opaque handle through the narrow accessors below. Views receive the
+// handle and a four-character tail, never the key.
+//
+// That store is bounded on every axis, which is what keeps it a staging area
+// rather than a second secret store: an entry exists only after a completed
+// exchange, is resolved only inside `resolveStagedToken`, is CONSUMED the moment
+// `saveRemoteAgent`'s Keychain write succeeds, is discarded per-HANDLE (so a
+// stale step's teardown cannot erase a newer sign-in), and is dropped when the
+// step that owns it leaves the screen.
 
 import Foundation
 import Observation
@@ -445,6 +461,20 @@ final class SettingsViewModel {
     /// Test/Save path requires the token re-entered). Mirrors STT
     /// `maskedTails`. Nil-absent = no token stored for that ref.
     var remoteAgentMaskedTails: [RemoteAgentRef: String] = [:]
+
+    /// In-flight OpenRouter sign-ins and the keys they minted, keyed by opaque
+    /// handle. `@ObservationIgnored` because it holds a raw credential: an
+    /// observed property is read by a `body`, and nothing rendering a screen may
+    /// see this. The type's storage is `private` to
+    /// `SettingsViewModel+OpenRouterOAuth.swift`, so even inside this module the
+    /// only way to a key is `issuedKey(for:)` with a handle you already hold —
+    /// there is no enumerate. Lifecycle + bounds: see this file's header.
+    @ObservationIgnored var openRouterOAuthState = OpenRouterOAuthSignInState()
+
+    /// The one network hop the code→key exchange makes. Injected so a suite can
+    /// drive every exchange outcome (and count that it happened exactly once)
+    /// without a server; production is `.live`.
+    @ObservationIgnored var openRouterOAuthTransport: OpenRouterOAuthTransport = .live
 
     /// Editable URL string buffer per ref, for the URL `TextField`.
     /// Persisted via `SettingsManager.setRemoteAgentURL(_:for:)` only on a
@@ -1202,6 +1232,11 @@ final class SettingsViewModel {
     /// resolve here, never in a View). `.reuseVoiceKey` is COPY semantics (see
     /// above): the resolved voice key is persisted into the gateway slot by the
     /// caller; the two Keychain slots stay independent afterward.
+    ///
+    /// `.oauthIssued` resolves out of the sign-in vault instead of the Keychain,
+    /// and FAILS CLOSED: an unknown or already-consumed handle returns nil, which
+    /// every caller turns into `Self.oauthMissingKeyMessage` ("sign in again, or
+    /// paste a key") rather than probing or committing an empty credential.
     private func resolveStagedToken(_ staged: StagedRemoteAgentToken, for ref: RemoteAgentRef) async -> String? {
         switch staged {
         case .typed(let value):
@@ -1210,6 +1245,8 @@ final class SettingsViewModel {
             return await SettingsManager.shared.getRemoteAgentToken(for: ref)
         case .reuseVoiceKey:
             return await SettingsManager.shared.getAPIKey(forPresetID: Self.openRouterVoiceSTTPresetID)
+        case .oauthIssued(let handle):
+            return openRouterOAuthState.issuedKey(for: handle)
         }
     }
 
@@ -2964,8 +3001,11 @@ final class SettingsViewModel {
     /// editor's credential INTENT: `.typed` persists the fresh value, `.stored`
     /// leaves the persisted token untouched (an edit that didn't re-type it),
     /// `.reuseVoiceKey` resolves the OpenRouter voice key here and commits it
-    /// together with the rest of the form — never earlier. Privacy: the resolved
-    /// token flows only to Keychain; never logged or retained.
+    /// together with the rest of the form — never earlier; `.oauthIssued`
+    /// resolves the key a sign-in minted out of the VM's vault and, uniquely
+    /// among the intents, CONSUMES it once the Keychain write succeeds (the
+    /// vault is a staging area, not a second secret store). Privacy: the
+    /// resolved token flows only to Keychain; never logged or retained.
     @discardableResult
     func saveRemoteAgent(ref: RemoteAgentRef, name: String?, stagedToken: StagedRemoteAgentToken) async -> Bool {
         let backendName = displayName(for: ref)
@@ -3115,6 +3155,31 @@ final class SettingsViewModel {
             trimmedToken = voiceKey
         }
 
+        // A key minted by "Sign in with OpenRouter" resolves in exactly the same
+        // place, and for exactly the same reason, as the staged voice key above:
+        // every synchronous buffer read is done, so resolving here cannot open a
+        // window for a reload to race the buffers. Fail closed on a handle the
+        // vault no longer knows (the step was left, or the key was already
+        // consumed by an earlier successful save) — nothing has persisted yet, so
+        // the plain `return false` keeps the "nothing persisted on failure"
+        // contract for free.
+        //
+        // The handle is remembered rather than consumed HERE: the vault entry is
+        // the only copy of a key the user cannot re-type, so it may only be
+        // dropped once the Keychain owns it. Every failure between this line and
+        // that write leaves the entry intact so Retry costs no second sign-in.
+        var oauthHandleToConsume: UUID?
+        if case .oauthIssued(let handle) = stagedToken {
+            let issued = (await resolveStagedToken(stagedToken, for: ref) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !issued.isEmpty else {
+                remoteAgentValidationStates[ref] = .invalid(message: Self.oauthMissingKeyMessage)
+                return false
+            }
+            trimmedToken = issued
+            oauthHandleToConsume = handle
+        }
+
         // `.stored` on a bearer lane: verify a LIVE Keychain token actually
         // exists before committing a config that claims to be usable. Same
         // placement rule as the voice-key resolution above — after every
@@ -3251,6 +3316,15 @@ final class SettingsViewModel {
             do {
                 try await SettingsManager.shared.setRemoteAgentToken(trimmedToken, for: ref)
                 remoteAgentMaskedTails[ref] = maskedTail(trimmedToken)
+                // The Keychain now owns this key, so the sign-in vault's copy has
+                // no remaining job — drop it HERE, at the first instant losing it
+                // costs the user nothing. Consuming any earlier would strand a key
+                // that cannot be re-typed if a later step of this save failed;
+                // consuming any later (or never) would leave a raw credential in
+                // memory for the rest of the session.
+                if let oauthHandleToConsume {
+                    openRouterOAuthState.discard(oauthHandleToConsume)
+                }
             } catch {
                 // Roll back the roster / URL / auth scheme that already persisted
                 // above so the "nothing persisted on failure" contract holds — the
@@ -3459,9 +3533,11 @@ final class SettingsViewModel {
     /// INTENT in-actor and routes to the right probe (validate-only; Save is
     /// the commit point). Keyless (`.none`) probes with no token regardless of
     /// what's staged; `.stored` re-tests the saved config (Keychain read stays
-    /// VM-side); `.typed` / `.reuseVoiceKey` probe the resolved credential.
-    /// A `.reuseVoiceKey` that resolves to nothing fails closed with the same
-    /// field-actionable message as Save — no probe fires.
+    /// VM-side); `.typed` / `.reuseVoiceKey` / `.oauthIssued` probe the resolved
+    /// credential. A `.reuseVoiceKey` or `.oauthIssued` that resolves to nothing
+    /// fails closed with the same field-actionable message as Save — no probe
+    /// fires. A probe NEVER consumes the sign-in vault entry: only a committed
+    /// save may, so a failing probe leaves the key ready for the retry.
     /// URL / fingerprint / auth scheme / model come from the per-ref buffers.
     func testRemoteAgent(ref: RemoteAgentRef, stagedToken: StagedRemoteAgentToken, name: String?) async {
         let url = remoteAgentURLStrings[ref] ?? ""
@@ -3481,11 +3557,19 @@ final class SettingsViewModel {
         switch stagedToken {
         case .stored:
             await retestRemoteAgent(ref: ref, url: url)
-        case .typed, .reuseVoiceKey:
+        case .typed, .reuseVoiceKey, .oauthIssued:
             let token = (await resolveStagedToken(stagedToken, for: ref) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if stagedToken == .reuseVoiceKey, token.isEmpty {
                 remoteAgentValidationStates[ref] = .invalid(message: Self.reuseMissingVoiceKeyMessage)
+                return
+            }
+            // A probe READS the vault and never consumes it: this same key still
+            // has to survive the model pick and the Connect that follows. An
+            // unknown handle fails closed with the sign-in-again message rather
+            // than probing an empty bearer.
+            if case .oauthIssued = stagedToken, token.isEmpty {
+                remoteAgentValidationStates[ref] = .invalid(message: Self.oauthMissingKeyMessage)
                 return
             }
             await validateRemoteAgent(

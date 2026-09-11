@@ -222,6 +222,8 @@ struct ConduckApp: App {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     private let notificationDelegate = NotificationDelegate()
+    /// Keeps the share-extension Darwin bridge alive for the process lifetime.
+    private let workCaptureObserver = WorkCaptureChangeObserver()
 
     init() {
         // Foreground banner delegate stays App-scope (shared with iOS branch
@@ -271,8 +273,19 @@ struct ConduckApp: App {
         // .openConversationsWindow) or a reply-notification tap
         // (.openConversationDeepLink → opens window + selects the thread).
         Window("Conduck", id: "main") {
-            MainWindowView(coordinator: appDelegate.coordinator)
+            PersonalWorkbenchView {
+                MainWindowView(coordinator: appDelegate.coordinator)
+            }
                 .frame(minWidth: 880, minHeight: 600)
+                // The window a quiet Mac opens FOR the Work voice intent has to
+                // open ON Work. The intent performs before this window exists,
+                // so its `.showWorkboard` is delivered to nobody and the window
+                // would come up on Chats with the request still pending — the
+                // composer will not claim a request it cannot present. Reveal
+                // only; the composer still consumes.
+                .onAppear {
+                    WorkVoiceCaptureLaunchRoute.shared.revealWorkIfPending()
+                }
                 .onReceive(NotificationCenter.default.publisher(for: .openOnboardingWindow)) { _ in
                     openWindow(id: "onboarding")
                 }
@@ -281,6 +294,27 @@ struct ConduckApp: App {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .openConversationDeepLink)) { _ in
                     // Foreground the window when a reply-notification is tapped.
+                    openWindow(id: "main")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .openWorkboardDeepLink)) { _ in
+                    // Preserving a Chat turn as Work deep-links to the desk.
+                    // Foreground the singleton main window; PersonalWorkbenchView
+                    // consumes the same event and switches to Work.
+                    openWindow(id: "main")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .showWorkboard)) { _ in
+                    // Menu-bar Work is an explicit capture destination. Open the
+                    // singleton window; PersonalWorkbenchView consumes the same
+                    // event and switches its top-level destination to Work.
+                    openWindow(id: "main")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .showWorkboardVoiceCapture)) { _ in
+                    // A foreground intent asking for Work's recorder posts this
+                    // BEFORE `.showWorkboard` (the route has to be armed before
+                    // anything can mount a desk), so the window has to open for
+                    // either signal — a Mac launched quiet has no window at all,
+                    // and a recorder nobody can see is a recorder nobody can
+                    // stop.
                     openWindow(id: "main")
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
@@ -318,6 +352,19 @@ struct ConduckApp: App {
                     NotificationCenter.default.post(name: .newConversation, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
+            }
+            CommandGroup(after: .newItem) {
+                Button("Work") {
+                    openWindow(id: "main")
+                    NotificationCenter.default.post(name: .showWorkboard, object: nil)
+                }
+                .keyboardShortcut("1", modifiers: .command)
+
+                Button("Chats") {
+                    openWindow(id: "main")
+                    NotificationCenter.default.post(name: .showChats, object: nil)
+                }
+                .keyboardShortcut("2", modifiers: .command)
             }
         }
         // No `.defaultLaunchBehavior(.presented)` — under Option A launch is
@@ -384,6 +431,8 @@ struct ConduckApp: App {
 @main
 struct ConduckApp: App {
     private let notificationDelegate = NotificationDelegate()
+    /// Keeps the share-extension Darwin bridge alive for the process lifetime.
+    private let workCaptureObserver = WorkCaptureChangeObserver()
     /// Owns the share-targets snapshot regeneration observers for the app's
     /// lifetime (gateway/conversation changes → rewrite the appex picker's
     /// `share-targets.json`). Held as a stored property so its `NotificationCenter`

@@ -3,12 +3,19 @@
 // Conduck
 // ComposerDropBatch.swift
 //
-// The value models + session bookkeeping behind the macOS pane-wide drop
-// target. The WINDOW owns the drop; the COMPOSER owns staging. This file is the
-// seam between them, and it is deliberately platform-agnostic (no AppKit, no
-// SwiftUI, no `NSItemProvider`) so the ordering / finish-once / cancellation
-// rules are unit-testable on the iOS-sim destination — the macOS composer's own
-// `View` internals are not.
+// The value models + session bookkeeping behind every pane-wide drop target —
+// the macOS conversation pane and the Work capture canvas both run their drops
+// through `DropSession`. The pane owns the drop; the receiving surface owns
+// staging. This file is the seam between them, and it is deliberately
+// platform-agnostic (no AppKit, no SwiftUI, no `NSItemProvider`) so the
+// ordering / finish-once / cancellation rules are unit-testable on the iOS-sim
+// destination — the composer's own `View` internals are not.
+//
+// The session is generic over its item type: each surface resolves a drop into
+// its OWN item value and tells the session, via `DropSessionItem`, how to read
+// the app-owned artefact out of one. Everything the session itself enforces —
+// slot order, resolve-once, hand-over-once, reclaim-on-reject — is written and
+// tested exactly once.
 //
 // WHY a session at all: `.onDrop` requires every provider's load to BEGIN
 // inside the drop action, but the loads complete later, out of order, and some
@@ -75,22 +82,44 @@ struct PendingDropBatch: Identifiable, Equatable {
     /// Every app-owned file this batch carries — what a discarding receiver
     /// must delete.
     var appOwnedSources: [DroppedFileSource] {
-        items.compactMap {
-            guard case .file(let source) = $0, source.isAppOwned else { return nil }
-            return source
-        }
+        items.compactMap(\.reclaimable)
     }
 }
 
+/// One surface's resolved-drop item, as a session sees it.
+protocol DropSessionItem {
+    /// The artefact a rejecting or cancelling session hands back.
+    associatedtype Reclaimable
+    /// The value the caller stamps on the session when it accepts the drop and
+    /// reads back when it takes the batch — the mount a Chat drop belongs to,
+    /// the up-front refusals a Work drop must still report.
+    associatedtype Context
+
+    /// The app-owned artefact this item carries, or nil when it owns nothing
+    /// the app must clean up (raw bytes, a user-owned URL, a failure).
+    var reclaimable: Reclaimable? { get }
+}
+
 /// What happened when a load result was offered to a session.
-enum DropSessionResolution: Equatable {
+enum DropSessionResolution<Reclaimable> {
     /// Stored in its slot.
     case accepted
     /// The session was already finished or cancelled, the slot was already
     /// resolved, or the index is out of range. When `reclaim` is non-nil the
     /// caller MUST delete it — the session did not take ownership and nothing
     /// else knows the file exists.
-    case rejected(reclaim: DroppedFileSource?)
+    case rejected(reclaim: Reclaimable?)
+}
+
+extension DropSessionResolution: Equatable where Reclaimable: Equatable {}
+
+extension ResolvedDropItem: DropSessionItem {
+    typealias Context = ComposerMountIdentity
+
+    var reclaimable: DroppedFileSource? {
+        guard case .file(let source) = self, source.isAppOwned else { return nil }
+        return source
+    }
 }
 
 /// Which way a single dropped provider should be read.
@@ -109,18 +138,21 @@ enum DropProviderRoute: Equatable {
 /// Not thread-safe by design — every mutation happens on the main actor, where
 /// both the drop callback and the provider completions are hopped.
 @MainActor
-final class DropSession {
+final class DropSession<Item: DropSessionItem> {
     let id = UUID()
-    let destination: ComposerMountIdentity
+    /// Stamped when the drop was accepted, never re-read from live state. For
+    /// Chat this is what keeps a drop made on conversation A out of
+    /// conversation B.
+    let context: Item.Context
 
-    private var slots: [ResolvedDropItem?]
+    private var slots: [Item?]
     private var isDead = false
 
     /// `count` is the number of providers whose loads the caller is about to
     /// start. A zero-provider drop is not a session.
-    init(destination: ComposerMountIdentity, count: Int) {
+    init(context: Item.Context, count: Int) {
         precondition(count > 0, "a drop session needs at least one provider")
-        self.destination = destination
+        self.context = context
         self.slots = Array(repeating: nil, count: count)
     }
 
@@ -137,11 +169,8 @@ final class DropSession {
     /// Offer a load result for `index`. Idempotent per slot: the first result
     /// wins and every later one is rejected, so a completion racing its own
     /// timeout cannot double-store or leak a temp file.
-    func resolve(index: Int, with item: ResolvedDropItem) -> DropSessionResolution {
-        let reclaim: DroppedFileSource? = {
-            guard case .file(let source) = item, source.isAppOwned else { return nil }
-            return source
-        }()
+    func resolve(index: Int, with item: Item) -> DropSessionResolution<Item.Reclaimable> {
+        let reclaim = item.reclaimable
         guard !isDead, slots.indices.contains(index), slots[index] == nil else {
             return .rejected(reclaim: reclaim)
         }
@@ -149,26 +178,39 @@ final class DropSession {
         return .accepted
     }
 
-    /// Take the finished batch exactly once, closing the session. Returns nil
+    /// Take the finished slots exactly once, closing the session. Returns nil
     /// while any slot is outstanding, so a caller can poll after every resolve.
-    func takeBatch() -> PendingDropBatch? {
+    /// Each surface shapes these into its own batch value.
+    func takeItems() -> [Item]? {
         guard isComplete else { return nil }
         let items = slots.compactMap { $0 }
         isDead = true
-        return PendingDropBatch(id: id, destination: destination, items: items)
+        return items
     }
 
-    /// Abandon the session. Returns the app-owned files already stored in slots
-    /// so the caller can delete them; loads still in flight hand their own
-    /// files back through `resolve`'s `.rejected(reclaim:)`.
+    /// Abandon the session. Returns the app-owned artefacts already stored in
+    /// slots so the caller can delete them; loads still in flight hand their own
+    /// back through `resolve`'s `.rejected(reclaim:)`.
     @discardableResult
-    func cancel() -> [DroppedFileSource] {
+    func cancel() -> [Item.Reclaimable] {
         guard !isDead else { return [] }
         isDead = true
-        return slots.compactMap { slot in
-            guard case .file(let source) = slot, source.isAppOwned else { return nil }
-            return source
-        }
+        return slots.compactMap { slot -> Item.Reclaimable? in slot?.reclaimable }
+    }
+}
+
+extension DropSession where Item == ResolvedDropItem {
+    /// The mount this drop is allowed to land on.
+    var destination: ComposerMountIdentity { context }
+
+    convenience init(destination: ComposerMountIdentity, count: Int) {
+        self.init(context: destination, count: count)
+    }
+
+    /// Take the finished batch exactly once, closing the session.
+    func takeBatch() -> PendingDropBatch? {
+        guard let items = takeItems() else { return nil }
+        return PendingDropBatch(id: id, destination: destination, items: items)
     }
 }
 

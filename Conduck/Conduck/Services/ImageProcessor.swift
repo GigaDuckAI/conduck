@@ -21,6 +21,17 @@
 // (1568, the de-facto vision-tile sweet spot) — no user knob; the file-transfer
 // route uploads the untouched original instead (path-level fidelity contract).
 //
+// WORK: the desk is the second consumer. `WorkMaterialImagePolicy` runs every
+// image card through the same `process` (to `Constants.workboardImageMaxPixel`)
+// at the one desk write, and asks `inspect` first so a picture that is already
+// this shape — a voice-lane screenshot, a chat capture — is stored byte-for-byte
+// instead of being encoded twice. `process(fileAt:)` exists for that lane's
+// file-backed captures: the share inbox and the Shortcut hand over files, and a
+// 100 MB screenshot must not be mapped whole just to be shrunk.
+//
+// ALPHA (measured): ImageIO's JPEG sink renders a fully transparent pixel white,
+// not black, so a window screenshot with its shadow needs no compositing pass.
+//
 // WATCH: this file is deliberately NOT in the Watch compile set (it is not in
 // the pbxproj Watch membership exception list). The `#if !os(watchOS)` guard is
 // belt-and-suspenders so an accidental membership add still compiles to an
@@ -48,6 +59,39 @@ struct ProcessedImage: Sendable {
     let height: Int
     /// `jpegData.count` — convenience for the stored `byteSize`.
     let byteSize: Int
+}
+
+/// What a source says about itself before a single pixel is decoded — read
+/// from `CGImageSourceCopyPropertiesAtIndex`, so answering costs a header
+/// parse, never a bitmap. Work's image policy asks this to decide whether a
+/// picture is already the shape the desk keeps.
+nonisolated struct ImageSourceFacts: Sendable {
+    /// ImageIO's type identifier for the container, nil when it has none.
+    let typeIdentifier: String?
+    /// The longer stored pixel dimension, orientation-invariant; nil when the
+    /// header names no size.
+    let longEdge: Int?
+    /// Frames in the container. Anything above one is an animation.
+    let frameCount: Int
+    /// Whether the header carries anything beyond what every JPEG written
+    /// through `encodeJPEG` carries. Measured: our own sink emits exactly three
+    /// metadata tags — `exif:PixelXDimension`, `exif:PixelYDimension`,
+    /// `exif:ColorSpace` — and no GPS, TIFF or IPTC block. Any other tag (a
+    /// camera's Make and DateTimeOriginal, an XMP creator or rights URL, a
+    /// location) or any of those blocks makes the source identifying. Read
+    /// through `CGImageMetadataCopyTags`, which sees XMP as well as EXIF, so a
+    /// metadata block the property dictionaries do not surface cannot slip by.
+    let carriesIdentifyingMetadata: Bool
+
+    var isJPEG: Bool {
+        typeIdentifier.flatMap(UTType.init)?.conforms(to: .jpeg) == true
+    }
+
+    /// GIF by type as well as by count: a single-frame GIF still promises a
+    /// palette and a loop the JPEG sink cannot keep.
+    var isAnimated: Bool {
+        frameCount > 1 || typeIdentifier.flatMap(UTType.init)?.conforms(to: .gif) == true
+    }
 }
 
 /// Image normalisation failures. Both non-recoverable for the given bytes
@@ -114,6 +158,21 @@ actor ImageProcessor {
         return jpeg
     }
 
+    /// Downsample a file-backed image directly through ImageIO. Unlike the
+    /// `Data` overload, this does not first map or copy an arbitrarily large
+    /// source file into memory, so Work can show a small device-local preview
+    /// for a 100+ MB screenshot or RAW capture without weakening the vault's
+    /// metadata-only CloudKit boundary.
+    nonisolated static func thumbnailOnly(fromFileAt url: URL) -> Data? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let thumb = try? downsizedCGImage(from: source, maxPixel: thumbnailMaxPixel),
+              let jpeg = try? encodeJPEG(thumb) else {
+            return nil
+        }
+        guard jpeg.count <= thumbnailPreviewByteCeiling else { return nil }
+        return jpeg
+    }
+
     /// Normalise raw image bytes into a `ProcessedImage`.
     ///
     /// - Parameters:
@@ -126,7 +185,66 @@ actor ImageProcessor {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw ImageProcessorError.decodeFailed
         }
+        return try Self.process(source: source, maxPixel: maxPixel)
+    }
 
+    /// `process(_:maxPixel:)` for a file on disk. `CGImageSourceCreateWithURL`
+    /// lets ImageIO read the header and stream the decode-and-downsize itself,
+    /// so the source file is never mapped or copied whole into this process —
+    /// the same reason `thumbnailOnly(fromFileAt:)` exists. Work's file-backed
+    /// captures (share inbox, Shortcut) take this overload.
+    func process(fileAt url: URL, maxPixel: Int = ImageProcessor.defaultMaxPixel) throws -> ProcessedImage {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            throw ImageProcessorError.decodeFailed
+        }
+        return try Self.process(source: source, maxPixel: maxPixel)
+    }
+
+    /// The facts a caller can know about a source WITHOUT decoding it. Static
+    /// and `nonisolated` for the same reason as `displayCGImage`: it touches no
+    /// actor state, and queueing a header read behind a staging `process` call
+    /// would make a pass-through decision wait on an encode it exists to skip.
+    nonisolated static func inspect(_ source: CGImageSource) -> ImageSourceFacts {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let width = properties?[kCGImagePropertyPixelWidth] as? Int
+        let height = properties?[kCGImagePropertyPixelHeight] as? Int
+        let longEdge: Int?
+        if let width, let height {
+            longEdge = max(1, max(width, height))
+        } else {
+            longEdge = nil
+        }
+        let tags = CGImageSourceCopyMetadataAtIndex(source, 0, nil)
+            .flatMap { CGImageMetadataCopyTags($0) as? [CGImageMetadataTag] } ?? []
+        let foreignTag = tags.contains { tag in
+            let prefix = CGImageMetadataTagCopyPrefix(tag) as String? ?? ""
+            let name = CGImageMetadataTagCopyName(tag) as String? ?? ""
+            return !Self.benignMetadataTags.contains("\(prefix):\(name)")
+        }
+        let identifying = properties?[kCGImagePropertyGPSDictionary] != nil
+            || properties?[kCGImagePropertyTIFFDictionary] != nil
+            || properties?[kCGImagePropertyIPTCDictionary] != nil
+            || foreignTag
+        return ImageSourceFacts(
+            typeIdentifier: CGImageSourceGetType(source) as String?,
+            longEdge: longEdge,
+            frameCount: CGImageSourceGetCount(source),
+            carriesIdentifyingMetadata: identifying
+        )
+    }
+
+    /// The metadata tags ImageIO writes into every JPEG `encodeJPEG` produces
+    /// (measured) — dimensions and colour space, nothing that identifies a
+    /// device, a time, a person or a place. Their presence therefore says
+    /// nothing about the source; any other tag does.
+    private static let benignMetadataTags: Set<String> = [
+        "exif:PixelXDimension",
+        "exif:PixelYDimension",
+        "exif:ColorSpace",
+    ]
+
+    /// The shared body of both `process` overloads.
+    private static func process(source: CGImageSource, maxPixel: Int) throws -> ProcessedImage {
         let main = try Self.downsizedCGImage(from: source, maxPixel: max(1, maxPixel))
         let jpegData = try Self.encodeJPEG(main)
 

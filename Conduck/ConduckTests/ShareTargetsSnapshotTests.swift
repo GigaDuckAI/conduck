@@ -6,7 +6,9 @@
 // Share-Extension "Send to" picker contract `ShareTargetsSnapshot` (main-app writer
 // ↔ appex reader): a full encode/decode round-trip, the TOLERANT decode (an empty /
 // minimal snapshot default-fills + a malformed one → nil), the PINNED cross-process
-// wire shape (ISO-8601 dates · frozen field names · `.sortedKeys` ordering), and a
+// wire shape (ISO-8601 dates · frozen field names · `.sortedKeys` ordering), the
+// additive `defaultGatewayRef` pointer (round-trips, and absent or null reads as
+// `nil` so a file written by an older build still decodes), and a
 // byte-identical-mirror guard that reads BOTH source files off disk and asserts the
 // appex copy is identical to the canonical below their header blocks.
 //
@@ -22,10 +24,12 @@ final class ShareTargetsSnapshotTests: XCTestCase {
 
     func testEncodeDecodeRoundTripPreservesEveryField() throws {
         let convoID = UUID()
+        let workID = UUID()
         let generated = Date(timeIntervalSince1970: 1_700_000_000)
         let lastActivity = Date(timeIntervalSince1970: 1_700_000_500)
+        let workModified = Date(timeIntervalSince1970: 1_700_000_750)
         let original = ShareTargetsSnapshot(
-            schemaVersion: 1,
+            schemaVersion: 2,
             generatedAt: generated,
             gateways: [
                 ShareTargetsSnapshot.Gateway(
@@ -50,13 +54,21 @@ final class ShareTargetsSnapshotTests: XCTestCase {
                     backendRef: "hermes",
                     lastActivityAt: lastActivity
                 )
-            ]
+            ],
+            recentWorkItems: [
+                ShareTargetsSnapshot.RecentWorkItem(
+                    id: workID,
+                    title: "Launch brief",
+                    modifiedAt: workModified
+                )
+            ],
+            defaultGatewayRef: "openclaw"
         )
 
         let data = try original.encoded()
         let decoded = try XCTUnwrap(ShareTargetsSnapshot.decode(data))
 
-        XCTAssertEqual(decoded.schemaVersion, 1)
+        XCTAssertEqual(decoded.schemaVersion, 2)
         XCTAssertEqual(decoded.generatedAt.timeIntervalSince1970, generated.timeIntervalSince1970, accuracy: 0.001)
 
         XCTAssertEqual(decoded.gateways.count, 2)
@@ -75,6 +87,15 @@ final class ShareTargetsSnapshotTests: XCTestCase {
         XCTAssertEqual(r0.label, "Trip planning")
         XCTAssertEqual(r0.backendRef, "hermes")
         XCTAssertEqual(r0.lastActivityAt.timeIntervalSince1970, lastActivity.timeIntervalSince1970, accuracy: 0.001)
+
+        XCTAssertEqual(decoded.recentWorkItems.count, 1)
+        let w0 = decoded.recentWorkItems[0]
+        XCTAssertEqual(w0.id, workID)
+        XCTAssertEqual(w0.title, "Launch brief")
+        XCTAssertEqual(w0.modifiedAt.timeIntervalSince1970, workModified.timeIntervalSince1970, accuracy: 0.001)
+
+        XCTAssertEqual(decoded.defaultGatewayRef, "openclaw",
+                       "the published default pointer must survive the pinned round-trip")
     }
 
     // MARK: - Tolerant decode (forward-compat)
@@ -87,6 +108,26 @@ final class ShareTargetsSnapshotTests: XCTestCase {
         XCTAssertEqual(decoded.schemaVersion, 1, "missing schemaVersion defaults to 1")
         XCTAssertEqual(decoded.gateways, [], "missing gateways defaults to empty")
         XCTAssertEqual(decoded.recentConversations, [], "missing recents defaults to empty")
+        XCTAssertEqual(decoded.recentWorkItems, [], "an older snapshot defaults Work targets to empty")
+        XCTAssertNil(decoded.defaultGatewayRef,
+                     "no published default; the picker applies its configured-gateway fallback")
+    }
+
+    func testTolerantDecodeOfTheDefaultPointerReadsAbsentAndNullAsNil() throws {
+        // The pointer is ADDITIVE: a snapshot written before it existed carries no
+        // key at all, and one written by a build with no publishable default may
+        // carry an explicit null. Both are the same state — no published default,
+        // so the picker applies its configured-gateway fallback — and neither may
+        // throw.
+        let missing = try XCTUnwrap(ShareTargetsSnapshot.decode(
+            Data("{\"schemaVersion\":2,\"gateways\":[]}".utf8)
+        ))
+        XCTAssertNil(missing.defaultGatewayRef, "a missing key reads as no published default")
+
+        let explicitNull = try XCTUnwrap(ShareTargetsSnapshot.decode(
+            Data("{\"schemaVersion\":2,\"defaultGatewayRef\":null,\"gateways\":[]}".utf8)
+        ))
+        XCTAssertNil(explicitNull.defaultGatewayRef, "an explicit null reads as no published default")
     }
 
     func testTolerantGatewayDecodeDefaultsRenderFields() throws {
@@ -109,6 +150,18 @@ final class ShareTargetsSnapshotTests: XCTestCase {
         XCTAssertEqual(decoded.id, id)
         XCTAssertEqual(decoded.label, "")
         XCTAssertEqual(decoded.backendRef, "")
+    }
+
+    func testTolerantRecentWorkDecodeDefaultsRenderFields() throws {
+        let id = UUID()
+        let json = "{\"id\":\"\(id.uuidString)\"}"
+        let decoded = try JSONDecoder().decode(
+            ShareTargetsSnapshot.RecentWorkItem.self,
+            from: Data(json.utf8)
+        )
+        XCTAssertEqual(decoded.id, id)
+        XCTAssertEqual(decoded.title, "")
+        XCTAssertEqual(decoded.modifiedAt, Date(timeIntervalSince1970: 0))
     }
 
     func testMalformedSnapshotDecodesToNil() {
@@ -139,7 +192,7 @@ final class ShareTargetsSnapshotTests: XCTestCase {
     // / `decode(_:)` — NOT a bare coder like the round-trip tests above.
     func testPinnedWireContractFreezesDateStrategyAndFieldNames() throws {
         let snapshot = ShareTargetsSnapshot(
-            schemaVersion: 1,
+            schemaVersion: 2,
             generatedAt: Date(timeIntervalSince1970: 1_700_000_000),
             gateways: [
                 ShareTargetsSnapshot.Gateway(
@@ -153,7 +206,15 @@ final class ShareTargetsSnapshotTests: XCTestCase {
                     label: "Trip planning", backendRef: "hermes",
                     lastActivityAt: Date(timeIntervalSince1970: 1_700_000_500)
                 )
-            ]
+            ],
+            recentWorkItems: [
+                ShareTargetsSnapshot.RecentWorkItem(
+                    id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
+                    title: "Launch brief",
+                    modifiedAt: Date(timeIntervalSince1970: 1_700_000_750)
+                )
+            ],
+            defaultGatewayRef: "openclaw"
         )
         let wire = String(decoding: try snapshot.encoded(), as: UTF8.self)
 
@@ -169,20 +230,28 @@ final class ShareTargetsSnapshotTests: XCTestCase {
                       "lastActivityAt must serialize ISO-8601 via the pinned coder — wire: \(wire)")
 
         // 2. Every field name is frozen — a rename on either mirror breaks decode.
-        for key in ["\"schemaVersion\"", "\"generatedAt\"", "\"gateways\"", "\"recentConversations\"",
+        for key in ["\"schemaVersion\"", "\"generatedAt\"", "\"gateways\"", "\"recentConversations\"", "\"recentWorkItems\"",
+                    "\"defaultGatewayRef\"",
                     "\"ref\"", "\"displayName\"", "\"colorHex\"", "\"monogram\"", "\"configured\"",
-                    "\"id\"", "\"label\"", "\"backendRef\"", "\"lastActivityAt\""] {
+                    "\"id\"", "\"label\"", "\"backendRef\"", "\"lastActivityAt\"", "\"title\"", "\"modifiedAt\""] {
             XCTAssertTrue(wire.contains(key), "wire contract missing key \(key) — wire: \(wire)")
         }
 
-        // 3. `.sortedKeys` → deterministic bytes. Top-level `gateways` precedes
-        //    `recentConversations` precedes `schemaVersion` (alphabetical).
+        // 3. `.sortedKeys` → deterministic bytes. Top-level `defaultGatewayRef`
+        //    precedes `gateways` precedes `recentConversations` precedes
+        //    `recentWorkItems` precedes `schemaVersion` (alphabetical).
+        let defaultRefAt = try XCTUnwrap(wire.range(of: "\"defaultGatewayRef\""))
         let gatewaysAt = try XCTUnwrap(wire.range(of: "\"gateways\""))
         let recentsAt = try XCTUnwrap(wire.range(of: "\"recentConversations\""))
+        let workAt = try XCTUnwrap(wire.range(of: "\"recentWorkItems\""))
         let schemaAt = try XCTUnwrap(wire.range(of: "\"schemaVersion\""))
+        XCTAssertTrue(defaultRefAt.lowerBound < gatewaysAt.lowerBound,
+                      "top-level keys must be sorted (.sortedKeys) for deterministic wire bytes")
         XCTAssertTrue(gatewaysAt.lowerBound < recentsAt.lowerBound,
                       "top-level keys must be sorted (.sortedKeys) for deterministic wire bytes")
-        XCTAssertTrue(recentsAt.lowerBound < schemaAt.lowerBound,
+        XCTAssertTrue(recentsAt.lowerBound < workAt.lowerBound,
+                      "top-level keys must be sorted (.sortedKeys) for deterministic wire bytes")
+        XCTAssertTrue(workAt.lowerBound < schemaAt.lowerBound,
                       "top-level keys must be sorted (.sortedKeys) for deterministic wire bytes")
         // Nested gateway keys are sorted too: `colorHex` precedes `ref`.
         let colorHexAt = try XCTUnwrap(wire.range(of: "\"colorHex\""))
@@ -192,12 +261,14 @@ final class ShareTargetsSnapshotTests: XCTestCase {
 
         // 4. Full loop through the PINNED coders preserves every field.
         let back = try XCTUnwrap(ShareTargetsSnapshot.decode(try snapshot.encoded()))
-        XCTAssertEqual(back.schemaVersion, 1)
+        XCTAssertEqual(back.schemaVersion, 2)
         XCTAssertEqual(back.generatedAt.timeIntervalSince1970, snapshot.generatedAt.timeIntervalSince1970, accuracy: 0.001)
         XCTAssertEqual(back.gateways.first?.ref, "openclaw")
         XCTAssertEqual(back.gateways.first?.colorHex, "#3A86FF")
         XCTAssertEqual(back.recentConversations.first?.backendRef, "hermes")
         XCTAssertEqual(back.recentConversations.first?.label, "Trip planning")
+        XCTAssertEqual(back.recentWorkItems.first?.title, "Launch brief")
+        XCTAssertEqual(back.defaultGatewayRef, "openclaw")
     }
 
     // MARK: - Byte-identical mirror guard
@@ -256,5 +327,16 @@ extension ShareTargetsSnapshot.RecentConversation: Equatable {
             && lhs.label == rhs.label
             && lhs.backendRef == rhs.backendRef
             && lhs.lastActivityAt == rhs.lastActivityAt
+    }
+}
+
+extension ShareTargetsSnapshot.RecentWorkItem: Equatable {
+    public static func == (
+        lhs: ShareTargetsSnapshot.RecentWorkItem,
+        rhs: ShareTargetsSnapshot.RecentWorkItem
+    ) -> Bool {
+        lhs.id == rhs.id
+            && lhs.title == rhs.title
+            && lhs.modifiedAt == rhs.modifiedAt
     }
 }

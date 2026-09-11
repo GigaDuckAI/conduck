@@ -289,19 +289,63 @@ final class CarPlayVoiceTimingContractTests: XCTestCase {
 
     func testACommitNeverLandsOnADeadSession() throws {
         let body = try functionBody("private func startListening(isFollowUp: Bool) async", in: recordingServiceSource())
+
+        // THE HELPER ITSELF, pinned whole and first. Every assertion below
+        // searches for `isCurrentListen(`, so removing the generation
+        // comparison INSIDE it leaves the guard text, the ordering and the
+        // cleanup untouched while the question becomes "is SOME session live" —
+        // which is yes for the session that replaced this startup, and is
+        // exactly the commit this test exists to stop.
+        let lineage = try functionBody(
+            "private func isCurrentListen(_ attemptID: UInt64) -> Bool", in: recordingServiceSource()
+        )
+        XCTAssertEqual(
+            lineage.split(whereSeparator: { $0.isWhitespace }).joined(separator: " "),
+            "sessionActive && listenAttemptID == attemptID",
+            "the lineage question no longer asks whose listen this is; the stale-commit guard below now passes for a replacement session"
+        )
+
         // Everything from the engine-start call onward: the suspension the
         // stale-commit guard exists for.
         let retryCall = try XCTUnwrap(body.range(of: "startCaptureEngineWithRetry("))
         let afterRetry = String(body[retryCall.upperBound...])
+        // ASKED OF THE STARTUP GENERATION, not of the bare session flag. A
+        // session that REPLACED this one is live too, so `sessionActive` would
+        // commit this engine and this detector onto it — and the detector's
+        // callbacks carry the invalidated attempt id, so the driver could speak
+        // into a running microphone that never endpoints.
         let staleGuard = try XCTUnwrap(
-            afterRetry.range(of: "guard sessionActive else {"),
+            afterRetry.range(of: "guard isCurrentListen(attemptID) else {"),
             "a session ended mid-engine-start must not be committed — a running engine nothing stops is the persistent-'nope' wedge"
+        )
+        XCTAssertNil(
+            afterRetry.range(of: "guard sessionActive else {"),
+            "the commit guard is back to the bare session flag, which answers yes for the session that replaced this startup"
         )
         let commit = try XCTUnwrap(afterRetry.range(of: "state = .recording"))
         XCTAssertTrue(staleGuard.lowerBound < commit.lowerBound)
-        let between = String(afterRetry[staleGuard.upperBound..<commit.lowerBound])
-        for cleanup in ["removeTap(onBus: 0)", "engine.stop()", "detector.stop()"] {
-            XCTAssertTrue(between.contains(cleanup), "the discarded engine must actually be stopped: missing \(cleanup)")
+
+        // EACH ARM ON ITS OWN, brace-matched. A scan of everything between the
+        // guard and the commit finds the mute arm's identical three lines, so
+        // deleting the stale arm's cleanup leaves a RUNNING engine and a live
+        // input tap on the HFP route — the persistent-'nope' wedge that survives
+        // until a reboot — with every token the scan looks for still present.
+        let code = Self.normalisedCode(afterRetry)
+        for (opening, extra, why) in [
+            ("guard isCurrentListen(attemptID) else {",
+             ["removeItem(at: url)", "handOnArmingSlotAfterAbandonedStartup()"],
+             "a startup superseded during the engine start"),
+            ("guard !isMicMuted else {",
+             ["removeItem(at: url)", "state = .muted"],
+             "a Mute that landed while this listen was spinning up")
+        ] {
+            let arm = try armBody(openedBy: opening, in: code)
+            for cleanup in ["removeTap(onBus: 0)", "engine.stop()", "detector.stop()"] + extra {
+                XCTAssertTrue(
+                    arm.contains(cleanup),
+                    "\(why) discards its engine without \(cleanup) — a running capture nothing will ever stop"
+                )
+            }
         }
         let muteGuard = try XCTUnwrap(afterRetry.range(of: "guard !isMicMuted else {"))
         XCTAssertTrue(
@@ -351,12 +395,43 @@ final class CarPlayVoiceTimingContractTests: XCTestCase {
     func testAReconnectTearsDownTheStaleService() throws {
         let source = sceneDelegateSource()
         let connect = try functionBody("didConnect interfaceController: CPInterfaceController", in: source)
+        // The SHARED teardown, not a subset of it: a hard drop that skipped both
+        // disconnect callbacks would otherwise hand this connection the previous
+        // one's start claim, refresh latch, session override and observers.
         let teardown = try XCTUnwrap(
-            connect.range(of: "stale.teardown()"),
+            connect.range(of: "disconnectCleanup()"),
             "a hard drop can skip didDisconnect; the next connect must not build on a live stale service"
         )
         let fresh = try XCTUnwrap(connect.range(of: "CarPlayRecordingService()"))
         XCTAssertTrue(teardown.lowerBound < fresh.lowerBound, "teardown of the old before construction of the new")
+        let cleanup = try functionBody("private func disconnectCleanup()", in: source)
+        XCTAssertTrue(
+            cleanup.contains("recordingService?.teardown()"),
+            "the shared cleanup is what actually tears the stale service down"
+        )
+        // UNCONDITIONALLY, and pinned by its neighbours. Present-but-unreachable
+        // is the mutation this closes: `if false { recordingService?.teardown() }`
+        // keeps both references above and leaves a stale engine, a stale tap and
+        // a stale audio activation alive behind the new connection.
+        XCTAssertTrue(
+            Self.normalisedCode(cleanup).contains(
+                "CarPlaySpeechService.shared.cancel() recordingService?.teardown() self.interfaceController = nil"
+            ),
+            "the teardown is no longer an unconditional statement of the shared cleanup — a branch around it leaves the previous connection's audio machinery running"
+        )
+        // THE CALLER'S CONDITION, whole. Inverting it to `recordingService ==
+        // nil` keeps the call textually before the construction below and keeps
+        // every ordering assertion above green, while the one case it exists for
+        // — a hard drop that skipped both disconnect callbacks — is the one case
+        // it now skips.
+        XCTAssertTrue(
+            Self.normalisedCode(connect).contains(
+                "if recordingService != nil { "
+                + "Self.log.info(\"didConnect found a stale recordingService — tearing it down first\") "
+                + "disconnectCleanup() }"
+            ),
+            "the stale-service teardown is asked on the wrong condition — a hard drop hands this connection the previous one's engine, tap and audio activation"
+        )
         let didDisconnect = try functionBody("func sceneDidDisconnect(", in: source)
         XCTAssertTrue(
             didDisconnect.contains("disconnectCleanup()"),
@@ -366,11 +441,51 @@ final class CarPlayVoiceTimingContractTests: XCTestCase {
 
     func testStartFailureHintIsOneShot() throws {
         let source = sceneDelegateSource()
-        let start = try functionBody("private func startSession(service: CarPlayRecordingService, conversationID: UUID?)", in: source)
+        // Consumed in the shared claim both starters take, so the Work row
+        // consumes it on exactly the same terms the AI row does.
+        let claim = try functionBody("private func claimStart(", in: source)
         XCTAssertTrue(
-            start.contains("oneShotStartFailureHint = false"),
+            claim.contains("oneShotStartFailureHint = false"),
             "the hint is consumed the moment the driver acts again"
         )
+        // CONSUMED, not merely written. Re-setting the flag to `true` on the way
+        // out satisfies the assertion above and leaves the hint on the picker
+        // over the row the driver just tapped, so the false write is pinned as
+        // the LAST thing the claim does.
+        XCTAssertTrue(
+            Self.normalisedCode(claim).contains("oneShotStartFailureHint = false return startClaimSerial"),
+            "something writes the hint again after the claim consumed it — the one-shot is no longer one-shot"
+        )
+        // THE CALLBACK, whole. It carries BOTH halves of a silent start-failure
+        // end — the flag the refresh renders and the dismiss-then-refresh
+        // itself — because that end never leaves `.idle` and so reaches no state
+        // observation. Wrapping its two lines in `if !service.isSceneActive`
+        // keeps the single `= true` write the count below asks for, and leaves
+        // every foreground failure on a Listening modal over a dead session with
+        // no hint and no dismiss: the exact end this wiring exists to finish.
+        XCTAssertTrue(
+            Self.normalisedCode(source).contains(
+                "service.onCaptureStartFailed = { [weak self, weak service] in "
+                + "guard let self, let service else { return } "
+                + "self.oneShotStartFailureHint = true "
+                + "self.applyState(service.state, service: service) }"
+            ),
+            "the start-failure callback no longer unconditionally raises the hint and runs the end's own transition — a silent failure leaves the driver on a Listening screen that ends nothing"
+        )
+
+        // And exactly one place raises it: the capture-start failure the row is
+        // feedback for.
+        XCTAssertEqual(
+            source.components(separatedBy: "oneShotStartFailureHint = true").count - 1, 1,
+            "a second writer raises the mic-couldn't-start hint; the picker now accuses the microphone of something else"
+        )
+        for starter in ["private func startSession(", "private func startWorkNote("] {
+            let body = try functionBody(starter, in: source)
+            XCTAssertTrue(
+                body.contains("claimStart("),
+                "\(starter) does not go through the claim, so it neither consumes the hint nor holds the one-start rule"
+            )
+        }
         let picker = try functionBody("private func refreshPicker()", in: source)
         XCTAssertTrue(
             picker.contains("oneShotStartFailureHint"),
@@ -385,6 +500,31 @@ final class CarPlayVoiceTimingContractTests: XCTestCase {
             "the one-shot picker row is the only feedback a silent start failure gets"
         )
         XCTAssertNotNil(catalog["carplay.hint.captureStartFailed.detail"])
+
+        // THE VALUES, not just the keys. The whole reason there are two detail
+        // strings is that each names the row that failed, and the ternary
+        // choosing between them is pinned elsewhere by KEY — so editing the Work
+        // row's English to "Tap New voice chat to try again." leaves every guard
+        // in this bundle green while a driver whose private note failed is told,
+        // out loud on the picker, to send it to an AI instead.
+        for (key, english) in [
+            ("carplay.hint.captureStartFailed.title", "Mic couldn't start"),
+            ("carplay.hint.captureStartFailed.detail", "Tap New voice chat to try again."),
+            ("carplay.hint.captureStartFailed.detail.work", "Tap Add to Work to try again.")
+        ] {
+            XCTAssertEqual(
+                try englishValue(of: key, in: catalog), english,
+                "the hint row no longer says what it means: this one names the row the driver has to tap next, and naming the wrong one routes a private thought to an AI"
+            )
+        }
+        // …and the two details are DIFFERENT sentences. Equal values satisfy
+        // every assertion above pairwise while the distinction the ternary
+        // exists for is gone.
+        XCTAssertNotEqual(
+            try englishValue(of: "carplay.hint.captureStartFailed.detail", in: catalog),
+            try englishValue(of: "carplay.hint.captureStartFailed.detail.work", in: catalog),
+            "both hint details now read the same, so the failed row can no longer be named"
+        )
     }
 
     // MARK: - Source access
@@ -408,6 +548,16 @@ final class CarPlayVoiceTimingContractTests: XCTestCase {
         return text
     }
 
+    /// Comment-stripped and whitespace-normalised, for the guards that pin what
+    /// STANDS NEXT TO what: a wrapped call, a one-line call and a re-flowed
+    /// comment have to read identically, or these assertions fail on formatting
+    /// rather than on the mutation they exist to catch.
+    static func normalisedCode(_ text: String) -> String {
+        RefusalLaneSource.stripComments(text)
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+
     private func recordingServiceSource() -> String {
         source("Conduck/CarPlay/CarPlayRecordingService.swift")
     }
@@ -420,11 +570,44 @@ final class CarPlayVoiceTimingContractTests: XCTestCase {
         source("Conduck/CarPlay/CarPlaySceneDelegate.swift")
     }
 
+    /// The English `stringUnit` value for `key`, or a failure naming the shape
+    /// that broke. Values, not keys, are what the driver hears read back.
+    private func englishValue(of key: String, in catalog: [String: Any]) throws -> String {
+        let entry = try XCTUnwrap(catalog[key] as? [String: Any], "\(key) is not in the catalog")
+        let localizations = try XCTUnwrap(entry["localizations"] as? [String: Any], "\(key) has no localizations")
+        let english = try XCTUnwrap(localizations["en"] as? [String: Any], "\(key) has no English")
+        let unit = try XCTUnwrap(english["stringUnit"] as? [String: Any], "\(key) has no English stringUnit")
+        return try XCTUnwrap(unit["value"] as? String, "\(key) has no English value")
+    }
+
     private func stringCatalog() throws -> [String: Any] {
         let url = projectContainerURL().appendingPathComponent("Conduck/Localizable.xcstrings")
         let data = try Data(contentsOf: url)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         return try XCTUnwrap(json?["strings"] as? [String: Any])
+    }
+
+    /// The brace-matched arm opened by `opening` (which must end in its `{`).
+    ///
+    /// Needed wherever two arms of the same function run the same cleanup: a
+    /// scan of the span that contains both is satisfied by either, so deleting
+    /// one is invisible. Scoping the assertion to ONE arm is what makes it an
+    /// assertion about that arm.
+    private func armBody(openedBy opening: String, in code: String) throws -> String {
+        let start = try XCTUnwrap(
+            code.range(of: opening),
+            "`\(opening)` is gone — this guard needs updating alongside whatever replaced it"
+        )
+        var index = start.upperBound
+        var depth = 1
+        while index < code.endIndex, depth > 0 {
+            if code[index] == "{" { depth += 1 }
+            if code[index] == "}" { depth -= 1 }
+            if depth == 0 { return String(code[start.upperBound..<index]) }
+            index = code.index(after: index)
+        }
+        XCTFail("Unbalanced braces after \(opening)")
+        return ""
     }
 
     /// The body of a function, brace-matched from its signature. Returns the

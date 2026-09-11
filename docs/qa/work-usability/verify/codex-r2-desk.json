@@ -1,0 +1,44 @@
+{
+ "slice": "desk",
+ "verdict": "findings",
+ "round1": [
+  {
+   "id": "S1",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "ConversationStore+Workboard.swift:2729–2745 now loads only the candidate's ID/hash/size-paired synced blob; it cannot resolve through a newer vault row. Missing paired bytes return unavailable. The transaction at :2763–2774 rechecks each physical destination row's synced storage mode, hash, size and missing thumbnail. WorkboardThumbnailTests.swift:317 constructs different candidate and canonical payloads, clears only the candidate's thumbnail, and asserts distinguishable expected thumbnail lengths. Restoring the old canonical loader would select the peer payload and fail the assertions at :377–383."
+  },
+  {
+   "id": "S2",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "PersonalWorkbenchView.swift:405–420 reads the desk once, resolves the current same-ID card and gates its availability before presenting. The image branch reuses that desk array at :452. A present syncPending card therefore cannot reach the standalone fallback; an absent readable card still can. WorkboardOpenPathTests.swift:232 exercises the stale-readable/current-syncPending router scenario. Restoring the tapped snapshot would present a gallery and fail its nil-presentation assertion. The adjacent absent-card positive control prevents a refuse-everything implementation from passing."
+  },
+  {
+   "id": "S3",
+   "fixerVerdict": "open",
+   "yourVerdict": "recorded",
+   "evidence": "fix-r1-desk.md:83–104 explicitly acknowledges the lost vault-image export path and leaves it unresolved. Confirmed against ec8b27f: vault images previously reached the file sheet's ShareLink. Current PersonalWorkbenchView.swift:448 routes every image into the gallery, which offers dismissal and Retry without sharing; the card menu supplies no replacement."
+  },
+  {
+   "id": "S4",
+   "fixerVerdict": "fixed",
+   "yourVerdict": "closed",
+   "evidence": "AttachmentFullScreenView.swift:195–199 consumes macOS pressure events and permanently sets residencyRadius to zero. The source subscribes to warning and critical pressure at :246–251; neighboring pages release fullImage at :391–397. The new source guard passes against HEAD and fails against 692608d. It checks source wiring, not live event delivery. The suspected observer-retention variant is refuted by AsyncStream's separate context deinitialization cancelling its storage, which invokes termination cleanup: [Swift implementation](https://raw.githubusercontent.com/swiftlang/swift/swift-6.2-RELEASE/stdlib/public/Concurrency/AsyncStream.swift)."
+  }
+ ],
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "minor",
+   "title": "Vault-image sharing remains unavailable",
+   "file": "Conduck/Conduck/Views/Workboard/PersonalWorkbenchView.swift:448",
+   "claim": "The acknowledged round-1 S3 regression remains: readable vault images have lost their previous Share action.",
+   "evidence": "Every image presents imageGallery. WorkboardMaterialPreviewView at :1254 renders AttachmentFullScreenView, whose controls provide dismissal and Retry. WorkboardCaptureCanvas.swift:1708 provides Open, reattachment and arrangement/removal actions, with no sharing replacement. At ec8b27f, vault images reached the file preview containing ShareLink(item: url).",
+   "scenario": "Open an oversized image stored in the local vault and attempt to export its original. Neither its gallery nor its card menu offers sharing.",
+   "fix": "Restore a Work-specific image share action backed by a disposable original-file copy, preserving the availability gate and appropriate copy lifetime.",
+   "refutationAttempt": "Quick Look retains sharing for files and recordings, but images cannot reach it. The fixnote's narrower interpretation of the plan does not restore the previously available action; it correctly records the regression as open."
+  }
+ ],
+ "notes": "Reviewed 692608d..5c401df03d16d4712492ebce0f2ea1a11d000438 and relevant ec8b27f baseline paths. No additional defect introduced by the fixes survived review. Thumbnail lane gates, off-context decoding, timestamp-free repair, bounded decode concurrency, duplicate-row revalidation, gallery ordering, strict Work decoding, Retry, Quick Look claims and platform reclaim rules remain intact. Chat's convenience initializer and byte loader are byte-identical to 692608d; card layouts and shared preview coordinator are unchanged by the fixes. Read-only checks found exactly one workboardViewModel.load(), no missing or orphaned keys among 158 scoped catalog keys, and no unreferenced added catalog keys across the wave. Diff whitespace checks passed and the worktree is clean. No files were modified; no builds or XCTest suites were run. R1 carries forward the explicitly open S3 finding."
+}

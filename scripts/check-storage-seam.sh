@@ -101,6 +101,12 @@ CONTAINER_PATTERN='containerURL\s*\(\s*forSecurityApplicationGroupIdentifier'
 CONTAINER_ALLOWLIST=(
   "Conduck/Conduck/Services/PendingRetryStore.swift"
   "Conduck/Conduck/Services/SharedInboxDrainer.swift"
+  # Production Workboard capture ingress resolves the App Group here; tests use
+  # its injected `init(baseURL:fileManager:)` and never touch the live container.
+  "Conduck/Conduck/Services/WorkCaptureInbox.swift"
+  # Production Workboard payload storage resolves the App Group here; app and
+  # persistence tests inject an isolated temporary vault instead.
+  "Conduck/Conduck/Services/Workboard/WorkAssetVault.swift"
   "Conduck/Conduck/Services/ShareTargetsSnapshotWriter.swift"
   "Conduck/Conduck/Services/ConversationStore.swift"
   "Conduck/Conduck/MenuBar/DictationService.swift"

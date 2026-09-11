@@ -112,6 +112,13 @@ enum DiagnosticStatus: Sendable, Equatable {
     /// An explicit paid/mutating test the user hasn't tapped yet, or a
     /// permission the user has not requested yet (neutral, with an Allow action).
     case notRun
+
+    var needsAttention: Bool {
+        switch self {
+        case .failed, .warning: return true
+        default: return false
+        }
+    }
 }
 
 /// Role marker — orders the focused gateway first and tags rows in the
@@ -279,14 +286,12 @@ struct FileLaneState: Identifiable, Equatable, Sendable {
 
     /// Whether this lane registers in the Diagnostics summary's attention count.
     ///
-    /// `.configuredNotTested` COUNTS. It looks like a resting state and is not — it
-    /// means a file server is set up and Conduck will not send a byte to it, which
-    /// is the silent outage this whole row exists to surface. Leaving it neutral let
-    /// the summary mint a green "Checks passed" directly above "Uploads disabled —
-    /// test required", so the one line a user reads first contradicted the one line
-    /// that mattered. `.notSetUp` stays neutral: no server, nothing broken.
+    /// A saved server awaiting a test is optional setup, not a failed check.
+    /// The summary counts it as untested and cannot certify that setup as passed.
+    /// The row still states that uploads are off and offers Test and Settings.
+    /// A missing server has no expectation of file transfer and stays neutral.
     var needsAttention: Bool {
-        badge == .failed || badge == .unconfirmed || badge == .configuredNotTested
+        badge == .failed || badge == .unconfirmed
     }
 }
 

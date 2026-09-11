@@ -241,7 +241,7 @@ final class SpeechPlayer: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDe
     /// when nothing is currently playing. NEVER touches the audio-session
     /// category/activation (same invariant as the rest of this type — session
     /// moves belong to the session-owning caller; `ThreadSpeaker` releases the
-    /// iOS chat session around a pause, see `ChatPlaybackSession`). The chat tap
+    /// iOS spoken-audio session around a pause, see `SpokenAudioSession`). The chat tap
     /// path is the only caller; CarPlay / Settings preview never pause (they
     /// `cancel()` / `stop()`).
     func pause() {

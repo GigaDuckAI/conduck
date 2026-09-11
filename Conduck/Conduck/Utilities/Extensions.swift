@@ -170,6 +170,37 @@ extension Image {
         return nil
         #endif
     }
+
+    /// STRICT bounded decode: ImageIO only, bounded to `maxPixel`, `nil` when
+    /// the bytes do not decode. The sibling of `decoded(from:maxPixel:)` for
+    /// callers that need the BOUND to be a guarantee.
+    ///
+    /// `decoded`'s `platformImage` fallback is UNBOUNDED, which is a correctness
+    /// net there and a hazard here: the full-screen gallery decodes ORIGINALS a
+    /// user stored, and a payload ImageIO declines would inflate to its whole
+    /// bitmap on a surface that keeps several pages resident at once. A page
+    /// that cannot be decoded within the bound must say so — an explicit failure
+    /// with Retry is cheaper than a memory spike the user cannot see coming.
+    ///
+    /// No decode logic of its own: `ImageProcessor.displayCGImage` already owns
+    /// the ImageIO options (immediate caching, EXIF transform, the max-pixel
+    /// bound) and already reports failure by returning nil.
+    @concurrent
+    nonisolated static func decodedStrictlyBounded(from data: Data, maxPixel: Int) async -> Image? {
+        guard let cgImage = ImageProcessor.displayCGImage(from: data, maxPixel: maxPixel) else {
+            return nil
+        }
+        #if os(iOS)
+        return Image(uiImage: UIImage(cgImage: cgImage))
+        #elseif os(macOS)
+        return Image(nsImage: NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: cgImage.width, height: cgImage.height)
+        ))
+        #else
+        return nil
+        #endif
+    }
 }
 
 /// A staged composer attachment's image tile: decodes ONCE per stable tile
@@ -188,6 +219,10 @@ struct StagedImageTile<Placeholder: View>: View {
     let data: Data
     /// Long-edge decode bound, or nil for full resolution.
     let maxPixel: Int?
+    /// Optional content revision for durable records whose bytes can be replaced
+    /// under the same stable UUID and byte count. Staged Chat tiles are immutable
+    /// and use the default zero version.
+    let cacheVersion: Int64
     @ViewBuilder let placeholder: () -> Placeholder
 
     @State private var image: Image?
@@ -196,11 +231,13 @@ struct StagedImageTile<Placeholder: View>: View {
         id: UUID,
         data: Data,
         maxPixel: Int?,
+        cacheVersion: Int64 = 0,
         @ViewBuilder placeholder: @escaping () -> Placeholder
     ) {
         self.id = id
         self.data = data
         self.maxPixel = maxPixel
+        self.cacheVersion = cacheVersion
         self.placeholder = placeholder
         // Seeded from the cache SYNCHRONOUSLY, before the first render. `.task`
         // cannot do this job: it runs after the view has already been laid out,
@@ -208,7 +245,12 @@ struct StagedImageTile<Placeholder: View>: View {
         // In a message bubble that frame is the whole problem — see the cache's
         // own note on lazy recycling.
         _image = State(initialValue: DecodedImageCache.shared[
-            DecodeKey(id: id, byteCount: data.count, maxPixel: maxPixel)
+            DecodeKey(
+                id: id,
+                byteCount: data.count,
+                maxPixel: maxPixel,
+                cacheVersion: cacheVersion
+            )
         ])
     }
 
@@ -220,13 +262,25 @@ struct StagedImageTile<Placeholder: View>: View {
                 placeholder()
             }
         }
-        // Keyed on identity + payload SIZE, never on the bytes: a `Data` id would
+        // Keyed on identity + payload SIZE + optional VERSION, never on the bytes:
+        // a `Data` id would
         // hash the whole payload on every body pass, reintroducing the per-render
         // cost in a different shape. The id is stable for a tile's lifetime and
         // the size moves if its payload is ever replaced, which together is
-        // enough — a tile's resolved payload is written once at staging.
-        .task(id: DecodeKey(id: id, byteCount: data.count, maxPixel: maxPixel)) {
-            let key = DecodeKey(id: id, byteCount: data.count, maxPixel: maxPixel)
+        // enough for immutable staged tiles. Durable Work materials additionally
+        // pass their revision because reattachment may replace same-sized bytes.
+        .task(id: DecodeKey(
+            id: id,
+            byteCount: data.count,
+            maxPixel: maxPixel,
+            cacheVersion: cacheVersion
+        )) {
+            let key = DecodeKey(
+                id: id,
+                byteCount: data.count,
+                maxPixel: maxPixel,
+                cacheVersion: cacheVersion
+            )
             if let cached = DecodedImageCache.shared[key] {
                 image = cached
                 return
@@ -254,9 +308,10 @@ private struct DecodeKey: Hashable {
     let id: UUID
     let byteCount: Int
     let maxPixel: Int?
+    let cacheVersion: Int64
 
     var cacheKey: NSString {
-        "\(id.uuidString)|\(byteCount)|\(maxPixel.map(String.init) ?? "full")" as NSString
+        "\(id.uuidString)|\(byteCount)|\(maxPixel.map(String.init) ?? "full")|\(cacheVersion)" as NSString
     }
 }
 

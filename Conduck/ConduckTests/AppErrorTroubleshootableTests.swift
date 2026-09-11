@@ -23,12 +23,17 @@ final class AppErrorTroubleshootableTests: XCTestCase {
     /// of these is a failure Diagnostics can't help with: local audio problems
     /// (invalid / missing / too-large / processing-failed / mic-busy), self-evident
     /// content/usage errors (no speech, image too large, chat too long, blocked
-    /// text), or a settings-load fault.
+    /// text), a turn the person stopped themselves, or a local storage fault
+    /// (settings load, Work desk write) about which the screen would report a
+    /// healthy network for a request that never left the device.
     func testDenyListCasesAreNotTroubleshootable() {
         let denyList: [(name: String, error: AppError)] = [
             ("audioInvalid",                .audioInvalid),
             ("audioMissingData",            .audioMissingData),
             ("settingsLoadFailed",          .settingsLoadFailed),
+            ("turnStoppedBeforeSend",       .turnStoppedBeforeSend),
+            ("workDeskWriteFailed",         .workDeskWriteFailed),
+            ("workScreenshotWriteFailed",   .workScreenshotWriteFailed),
             ("noSpeechDetected",            .noSpeechDetected),
             ("audioTooLarge",               .audioTooLarge),
             ("audioProcessingFailed",       .audioProcessingFailed),

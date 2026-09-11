@@ -272,6 +272,14 @@ nonisolated enum TempScratchSweeper {
         "conduck-share-upload-",            // share-extension file, same path
         "diagnostics-stt-probe-",           // copy of a bundled probe clip (not user audio)
         "conduck-ftupload-",                // throwaway copy staged for the background driver
+        "conduck-workboard-",               // immutable per-dispatch file snapshots
+        // ONE DIRECTORY PER COPY (`WorkMaterialExportSnapshot.containerPrefix`
+        // appends a UUID). A single shared parent would be aged by its OWN
+        // creation date, so a copy made a second ago inside a day-old parent
+        // would be deleted out from under whatever still holds it — and a
+        // shared file has no dismissal signal saying otherwise.
+        "Conduck-Workboard-Preview",        // per-copy Work material export
+        "conduck-workasset-tests-",         // isolated Debug-Testing vault root
     ]
 
     /// Launch entry point — the only one callers should use.

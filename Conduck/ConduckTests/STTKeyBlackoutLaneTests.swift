@@ -151,6 +151,13 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         /// The function whose body is scoped — an unscoped `contains` over a
         /// 1,500-line file is satisfied by any unrelated statement in it.
         let function: String
+        /// Set when the lane's ENTRY function no longer holds the key verdict
+        /// itself but hands the reserved capture to one helper that does. The
+        /// arms are then asserted over the HELPER's body, and the entry's body
+        /// must be shown to call it — so the chain is pinned end to end rather
+        /// than one half of it being asserted about a function that no longer
+        /// decides anything.
+        let delegatesTo: String?
         /// The typed read this lane resolves its verdict through.
         let typedRead: String
         /// The provable-absence arm. Its copy is true, so it keeps code 23.
@@ -162,6 +169,24 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         let preservation: String?
         /// Why this lane is on the list.
         let note: String
+
+        init(path: String,
+             function: String,
+             delegatesTo: String? = nil,
+             typedRead: String,
+             absenceArm: String,
+             blackoutArm: String,
+             preservation: String?,
+             note: String) {
+            self.path = path
+            self.function = function
+            self.delegatesTo = delegatesTo
+            self.typedRead = typedRead
+            self.absenceArm = absenceArm
+            self.blackoutArm = blackoutArm
+            self.preservation = preservation
+            self.note = note
+        }
     }
 
     private static let lanes: [Lane] = [
@@ -186,7 +211,11 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
              preservation: nil,
              note: "wrist background STT"),
         // iPhone side of a wrist relay, custom-endpoint arm. The words were
-        // spoken on the WATCH; the refusal travels back as a bare code.
+        // spoken on the WATCH, and the phone PARKED the clip before it ever
+        // reached this verdict — so what travels back is an acknowledgement
+        // that the phone is holding the recording, and the phone's own retry
+        // card owns the capture from there. `preservation` is nil because the
+        // park happens in the relay's phase one, above this function.
         Lane(path: "Conduck/Services/AppleSpeechRelayCoordinator.swift",
              function: "transcribeViaCustomEndpoint",
              typedRead: "STTKeyReadiness.resolve",
@@ -206,6 +235,13 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         // the bytes to `PendingRetryStore`.
         Lane(path: "Conduck/Services/InAppAudioRecorder.swift",
              function: "finishAndUpload",
+             // Same split, same reason as the two retry lanes above.
+             // `finishAndUpload` is now a two-statement wrapper: the pipeline
+             // that reads the key runs in `runCaptureToCompletion`, and the
+             // Work screenshot debt is settled ABOVE it, so a capture that ends
+             // anywhere in that pipeline still answers for the picture it is
+             // holding. The key verdict moved with the pipeline.
+             delegatesTo: "runCaptureToCompletion",
              typedRead: "STTKeyReadiness.resolve",
              absenceArm: ".sttMissingAPIKey",
              blackoutArm: ".sttKeyUnreadable",
@@ -224,6 +260,12 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         // keeping the retry affordance alive is.
         Lane(path: "Conduck/MenuBar/DictationService.swift",
              function: "retryLast",
+             // `retryLast` reserves ONE capture out of the queue and hands it
+             // to `attemptRetry`, which is where the key verdict now lives.
+             // The reservation is why the split exists: releasing it has to be
+             // one statement in the caller rather than a duty every early
+             // return in the verdict remembers.
+             delegatesTo: "attemptRetry",
              typedRead: "STTKeyReadiness.resolve",
              absenceArm: ".sttMissingAPIKey",
              blackoutArm: ".sttKeyUnreadable",
@@ -233,20 +275,22 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         // and the card's sentence is the whole surface.
         Lane(path: "Conduck/ContentView.swift",
              function: "runPendingRetry",
+             // Same split, same reason as the menu bar's.
+             delegatesTo: "attemptPendingRetry",
              typedRead: "STTKeyReadiness.resolve",
              absenceArm: "No STT API key set",
              blackoutArm: ".sttKeyUnreadable",
              preservation: nil,
              note: "iOS retry card"),
-        // CarPlay, and the one lane with NO retry mechanism of any kind. The
-        // refusal is SPOKEN and it lands after the microphone: the on-disk
-        // recording is deleted at the top of `processRecording`, the compressed
-        // bytes live only in memory, and this surface has no `PendingRetryStore`
-        // write and no queue to hand them to. `preservation` is therefore nil
-        // because there is nothing to hand them TO, not because the lane refuses
-        // before the mic — a known architectural gap, recorded here rather than
-        // papered over. What this row pins is the half that is fixable: which
-        // fact the refusal claims, and that the driver hears something true.
+        // CarPlay, whose two destinations answer this differently. A CHAT
+        // capture still has nowhere to go: its container file is deleted at the
+        // top of `processRecording`, the compressed bytes live only in memory,
+        // and a spoken refusal is the whole of what the driver gets. A WORK
+        // capture is parked in `PendingRetryStore` BEFORE the key is ever read,
+        // which is why `preservation` names the call that does it — the driver
+        // hears that the recording is kept on the phone, and the phone's retry
+        // card is where it is finished. `testTheCarPlayWorkLaneParksTheRecording`
+        // below pins what that park actually is.
         //
         // It also reaches its verdict LIVE rather than from `CarPlaySettings`'s
         // process-lifetime cache, which is what stops a nil cached at launch —
@@ -256,12 +300,15 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
              function: "processRecording",
              typedRead: "STTKeyReadiness.resolve",
              absenceArm: "Add your STT key",
+             // See `testTheCarPlayWorkLaneParksTheRecordingBeforeTheKeyVerdict`
+             // for what `secureWorkNote` does: arm the queue with the compressed
+             // bytes, stamped "carplay", before any of this runs.
              // The spoken blackout line HEDGES the unlock ("if your iPhone just
              // restarted"), because a locked Keychain is only the most likely
              // `.unreadable` — the token is the remedy clause that survives that
              // hedge, not the whole sentence.
              blackoutArm: "unlock it and try again",
-             preservation: nil,
+             preservation: "secureWorkNote(",
              note: "CarPlay in-car capture"),
     ]
 
@@ -272,7 +319,21 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         for lane in Self.lanes {
             let label = "\(lane.path) → \(lane.function) (\(lane.note))"
             let source = try RefusalLaneSource.source(at: lane.path)
-            let body = try RefusalLaneSource.body(ofFunction: lane.function, in: source, path: lane.path)
+            let entry = try RefusalLaneSource.body(ofFunction: lane.function, in: source, path: lane.path)
+
+            // A lane that delegates must be shown to REACH its helper, or the
+            // arms below would be asserted about a function nothing calls.
+            let body: String
+            if let helper = lane.delegatesTo {
+                XCTAssertNotNil(
+                    entry.range(of: "\(helper)("),
+                    "\(label) no longer calls `\(helper)(`. The key verdict lives there, so an entry "
+                    + "that stopped reaching it refuses without ever reading the slot — and this guard "
+                    + "would go on asserting about dead code.")
+                body = try RefusalLaneSource.body(ofFunction: helper, in: source, path: lane.path)
+            } else {
+                body = entry
+            }
 
             let readAt = try XCTUnwrap(
                 body.range(of: lane.typedRead)?.lowerBound,
@@ -301,6 +362,54 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
             }
         }
         XCTAssertEqual(Self.lanes.count, 9, "Nine registered lanes; the loop must have walked all of them.")
+    }
+
+    /// What the CarPlay row's `preservation` token actually buys: the Work
+    /// lane's recording is in the device-local queue BEFORE the key verdict is
+    /// reached, stamped with the surface it was spoken at.
+    ///
+    /// The row alone would pass on a `secureWorkNote` that had stopped parking
+    /// anything, and the ordering is the whole claim — a park that happens after
+    /// a blackout refusal is a park that never happens, because the refusal
+    /// speaks and ends the session. The driver is told the recording is kept on
+    /// their iPhone, and that sentence has to be true when it is spoken.
+    func testTheCarPlayWorkLaneParksTheRecordingBeforeTheKeyVerdict() throws {
+        let path = "Conduck/CarPlay/CarPlayRecordingService.swift"
+        let source = try RefusalLaneSource.source(at: path)
+
+        let entry = try RefusalLaneSource.body(
+            ofFunction: "processRecording", in: source, path: path
+        )
+        let parkAt = try XCTUnwrap(
+            entry.range(of: "secureWorkNote(")?.lowerBound,
+            "`processRecording` no longer reaches `secureWorkNote(`, so a Work capture refused on "
+            + "the key verdict below has nothing sheltering its bytes and the spoken line "
+            + "promising the iPhone holds it is false."
+        )
+        let verdictAt = try XCTUnwrap(
+            entry.range(of: "STTKeyReadiness.resolve")?.lowerBound,
+            "`processRecording` no longer reads the key through the typed helper."
+        )
+        XCTAssertLessThan(
+            parkAt, verdictAt,
+            "The park must PRECEDE the key verdict. A refusal speaks and ends the session, so a "
+            + "park written below it never runs for the one capture that needs it most."
+        )
+
+        let secure = try RefusalLaneSource.body(
+            ofFunction: "secureWorkNote", in: source, path: path
+        )
+        XCTAssertNotNil(
+            secure.range(of: "PendingRetryGuard.arm("),
+            "`secureWorkNote` no longer arms the retry queue. Nothing else in the car writes one, "
+            + "so the compressed bytes would live in a scene process the OS can kill at any "
+            + "moment — and the desk holds nothing for this capture until the words land."
+        )
+        XCTAssertNotNil(
+            secure.range(of: "sourceDevice: \"carplay\""),
+            "The parked record no longer says where the words were SPOKEN, so the note the phone "
+            + "eventually publishes is filed under whatever device happened to write it."
+        )
     }
 
     /// The wrist relay leg is the one lane whose words live in a DURABLE QUEUE
@@ -347,10 +456,26 @@ final class STTKeyBlackoutLaneTests: XCTestCase {
         XCTAssertFalse(blackoutArm.contains("terminalSTTMessage"),
                        "`terminalSTTMessage` serves the UPLOAD leg, where the unreadable slot is this "
                        + "watch's own. On the relay leg its 'this device' names the wrong device.")
-        XCTAssertEqual(body.components(separatedBy: "lastErrorIsRelayDeferral = true").count - 1, 2,
-                       "Exactly two deferral arms: the reply-wait timeout and the blackout. A blackout that "
-                       + "stopped setting the flag has taken the claim shape instead — or its toast will "
+        XCTAssertTrue(blackoutArm.contains("deferred: true"),
+                      "The blackout arm no longer declares itself a deferral, so its toast outlives the "
+                      + "transcript that eventually lands.")
+
+        // The flag itself is written by `surfaceRelayVerdict`, which every arm of
+        // `runRelay` funnels through — so the count that matters is the number of
+        // arms that ASK for the deferral shape, and the helper is what proves the
+        // ask still reaches the flag. Counting the assignment inside `runRelay`
+        // would now measure the funnel, not the arms.
+        XCTAssertEqual(body.components(separatedBy: "deferred: true").count - 1, 3,
+                       "Exactly three deferral arms: the reply-wait timeout, the blackout, and "
+                       + "`.destinationContradicted` — the reply-side disagreement that claimed nothing, so "
+                       + "the entry and the recording are both still queued. A blackout that stopped asking "
+                       + "for the deferral shape has taken the claim shape instead — or its toast will "
                        + "outlive the transcript that eventually lands.")
+        let verdict = try RefusalLaneSource.body(ofFunction: "surfaceRelayVerdict", in: source, path: path)
+        XCTAssertTrue(verdict.contains("lastErrorIsRelayDeferral = true"),
+                      "`surfaceRelayVerdict` is where a deferral arm's `deferred: true` becomes the "
+                      + "provenance flag the drain reads. Without that write the two deferral arms above "
+                      + "assert nothing.")
     }
 
     /// CarPlay's blackout line is SPOKEN, and the driver cannot re-read it — so

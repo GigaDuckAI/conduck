@@ -491,6 +491,8 @@ private struct AboutDetailView: View {
                 }
                 .buttonStyle(.plain)
 
+                AppReviewLink()
+
                 Link(destination: URL(string: Constants.websiteURL)!) {
                     aboutRow("Visit conduck.com", systemImage: "globe") // xcstrings
                 }

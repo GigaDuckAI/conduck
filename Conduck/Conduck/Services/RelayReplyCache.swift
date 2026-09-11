@@ -25,6 +25,13 @@
 // re-fire re-attempts the transcription instead of replaying a transient
 // outage. See `AppleSpeechRelayCoordinator.shouldCacheVerdict(for:)`.
 //
+// A work verdict carries one more field than a chat one: `workSaved`, the
+// stamp saying the relayed recording reached the Work desk. It is cached
+// WITH the verdict rather than re-derived on replay, because the fact it
+// records is a write that happened once — a replay that dropped it would
+// tell the wrist its recording was never kept and provoke a second copy of
+// the words.
+//
 // The cached value is a tiny `text`/`errorCode` struct rather than the raw
 // `[String: Any]` payload: Codable-free, plist-type-erasure-free, hence
 // directly assertable in unit tests
@@ -51,6 +58,23 @@ final class RelayReplyCache {
     struct CachedReply {
         let text: String?
         let errorCode: Int?
+        /// `true` when this verdict also put the recording on the Work desk.
+        ///
+        /// ADDITIVE and OPTIONAL, and it stays that way: nil means "this was
+        /// not a work request", which is what every chat verdict — and every
+        /// verdict stored before this field existed — reads as. A replayed
+        /// work reply must carry the stamp for the same reason the fresh one
+        /// does: without it the wrist concludes the iPhone kept no recording
+        /// and writes the words a second time as a note.
+        let workSaved: Bool?
+
+        /// `workSaved` is defaulted so the chat call sites — which are the
+        /// frozen three-key shape — keep spelling the verdict in two fields.
+        init(text: String?, errorCode: Int?, workSaved: Bool? = nil) {
+            self.text = text
+            self.errorCode = errorCode
+            self.workSaved = workSaved
+        }
     }
 
     private let capacity: Int
@@ -119,6 +143,12 @@ extension RelayReplyCache.CachedReply {
         }
         if let errorCode {
             payload[Wire.resultErrorCodeKey] = errorCode
+        }
+        // Written only for a TRUE stamp. A false or absent value is never put
+        // on the wire, because chat's success reply is a frozen three-key
+        // shape a shipped wrist build parses by count as well as by key.
+        if workSaved == true {
+            payload[Wire.resultWorkSavedKey] = true
         }
         return payload
     }

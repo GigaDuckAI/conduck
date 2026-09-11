@@ -18,6 +18,18 @@
 // from the retired `ConversationsWindowView` — the VM-binding invariant below is
 // copied VERBATIM and is load-bearing.
 //
+// WORK / CHATS: one persistent split view owns the window, and the two
+// sections swap pixels inside its columns rather than swapping the split
+// itself. Chats is the shell described above. In Work the native Chat sidebar
+// collapses (`splitColumnVisibility`) and the desk's project rail owns its own
+// visibility. The sidebar-region toolbar then controls that project rail and
+// hides Chat's compose action; switching back restores the native Chat toggle
+// and its remembered visibility. Both sections retain a zero-area principal
+// item whose flexible spaces are the only thing pinning the
+// Work/Chats section control to the trailing edge (see
+// `gatewayToolbarContent`), and that control declared LAST on the detail side
+// so nothing Chat draws can move it.
+//
 // FILE DROP (window-owned): the drop target spans the whole configured
 // conversation pane — transcript included — because that is the target users
 // actually aim at. It lives here rather than on the composer for a hard
@@ -54,6 +66,10 @@ import UniformTypeIdentifiers
 
 struct MainWindowView: View {
     let coordinator: MenuBarCoordinator
+
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
+    @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var selectedConversationID: UUID?
     /// Session-local gateway-picker selection for the NEXT new macOS
@@ -98,6 +114,14 @@ struct MainWindowView: View {
     /// `.onAppear`, which SwiftUI re-fires) so it stays stable across re-render.
     @State private var hostMascot = MascotShuffleBag.next()
 
+    /// The sidebar footer's Retina app icon, resolved once at `@State` creation.
+    /// `highResAppIcon` copies an `NSImage` and resizes the copy on every call,
+    /// and this view's body is the WHOLE window: it re-runs on every sidebar
+    /// collapse/expand frame-starting state write, every search keystroke and
+    /// every section switch. `NSApp.applicationIconImage` is never reassigned at
+    /// runtime, so there is nothing to invalidate the cached copy.
+    @State private var footerAppIcon = highResAppIcon(size: 32)
+
     /// Whether this window is the active one. macOS has no `scenePhase`
     /// transition for "the window came forward", so this is what the presence
     /// dot's foreground arm rides — the Mac twin of the iOS
@@ -121,13 +145,38 @@ struct MainWindowView: View {
     /// applies, needed up here because the trash is a column-level item.
     @State private var sidebarHasConversations = false
 
-    /// Split-view column visibility, bound so the toolbar can OBSERVE the
-    /// sidebar state: a column-level item survives collapse on macOS (that is
-    /// why compose lives at column level), so hiding the Delete-All trash in
+    /// CHAT's split-view column visibility, bound so the toolbar can OBSERVE
+    /// the sidebar state: a column-level item survives collapse on macOS (that
+    /// is why compose lives at column level), so hiding the Delete-All trash in
     /// the collapsed bar needs an explicit gate, not the platform's unmount.
-    /// `.automatic` start = the system's own default (sidebar shown), same as
-    /// the unbound initializer this window used before.
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    /// `.automatic` = the system's own default, sidebar shown.
+    ///
+    /// Chat's alone: Work's project rail lives inside its own workspace.
+    /// `splitColumnVisibility` forces the native column collapsed the whole time
+    /// Work is active, and this holds what Chat is restored to on the way back,
+    /// so a column the user collapsed BY HAND survives a round trip through Work.
+    @State private var chatColumnVisibility: NavigationSplitViewVisibility = .automatic
+
+    /// Keeps Work's columns mounted for the tail of the dissolve after Work is
+    /// hidden, so the crossfade still has a layer to fade out. Set by the
+    /// `.task(id:)` on the split view below, never written directly.
+    @State private var keepsWorkLayerMounted = false
+    /// Turns the ENTER dissolve on, one update after Work's columns mount.
+    ///
+    /// Work's layer is conditionally mounted, and a view inserted with no
+    /// transition renders at its FINAL value — so a layer inserted in the same
+    /// update that activates it appears fully opaque and cuts over Chat's
+    /// fade-out. Mounting still reads the destination directly, so the layer is
+    /// present at opacity 0 for one update; flipping this in the `.task(id:)`
+    /// below then makes activation an animatable 0 -> 1 change, which is the
+    /// only thing `WorkbenchDestinationLayerModifier` can dissolve. Set by that
+    /// task, never written directly.
+    ///
+    /// It is a permission, not the answer: `workLayerIsShowing` re-gates it on
+    /// the live destination, so a hold this task never got to clear cannot show
+    /// Work over Chat.
+    @State private var workLayerIsVisible = false
+    private static let workLayerIdentity = "workbench.destination.work"
 
     /// The Settings modal. Triggered by the footer menu, ⌘,, the
     /// `.openSettingsWindow` bus, and the menu-bar "Settings…" item (via the
@@ -214,7 +263,7 @@ struct MainWindowView: View {
 
     /// Loads still in flight for the current drop. Object identity is the
     /// generation guard: cancelling it makes every late callback a no-op.
-    @State private var dropSession: DropSession?
+    @State private var dropSession: DropSession<ResolvedDropItem>?
     /// Retained so a still-running load can be cancelled on teardown.
     @State private var dropLoadProgresses: [Progress] = []
     /// Watchdogs that fail a slot whose provider never calls back.
@@ -280,8 +329,30 @@ struct MainWindowView: View {
 
     /// The two-column shell, split from `body`'s event-modifier chain so the
     /// column builders type-check independently (keeps SourceKit within budget).
+    @ViewBuilder
     private var splitView: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        if let personalWorkbenchModel {
+            persistentSplitView
+                .modifier(workboardExperience(for: personalWorkbenchModel).presentationModifier)
+        } else {
+            persistentSplitView
+        }
+    }
+
+    /// One native split-view instance owns the window for its entire lifetime.
+    /// Work and Chat swap pixels inside its two columns, never the split view,
+    /// so the divider, system sidebar toggle, and measured Chat toolbar slots do
+    /// not acquire a new AppKit identity when the section picker changes.
+    private var persistentSplitView: some View {
+        // Keep the visibility on the native binding with no app-supplied
+        // animation transaction — including the Work collapse, which is just
+        // another value this binding reports. AppKit owns the divider's
+        // velocity, clipping, toolbar tracking separator and Reduce Motion
+        // behavior; driving the width ourselves would double-animate the system
+        // split and can move the measured toolbar controls. Work / Chats motion
+        // is scoped to layer opacity below, so it cannot leak into this native
+        // sidebar transition.
+        NavigationSplitView(columnVisibility: splitColumnVisibility) {
             // WHY a width floor on the column CONTENT as well as the column
             // width: each `NavigationSplitView` column is hosted in its OWN
             // `NSHostingView`, which measures the column's minimum size by
@@ -310,7 +381,7 @@ struct MainWindowView: View {
             // under that frame rather than in a column — never sees this, and
             // `MacSettingsView` needs no floor of its own (a plain `HStack`,
             // every detail category scroll-contained).
-            sidebar
+            mountedSidebarDestinations
                 .frame(minWidth: Self.columnMinWidth)
                 .navigationSplitViewColumnWidth(
                     min: Self.columnMinWidth,
@@ -332,48 +403,65 @@ struct MainWindowView: View {
                 // all, each correct only where it stands; moving any of them
                 // breaks the surface it serves. The measurements are in that
                 // file's header.
+                .toolbar(removing: workDestinationIsActive ? .sidebarToggle : nil)
                 .toolbar {
-                    // Delete-All ahead of compose: within the sidebar region a
-                    // column-level item renders in declaration order, so this
-                    // is the one attachment that puts the destructive control
-                    // LEFT of the compose→toggle pair (a content-declared item
-                    // lands between them, and `.navigation` leaves the region
-                    // entirely for the detail side — both screenshot-measured,
-                    // macOS 26.5, 2026-08-24). The flexible spacer pushes
-                    // compose+toggle back against the divider and opens the gap
-                    // that keeps trash from reading as one cluster with them —
-                    // the iPad sidebar bar's leading-trash arrangement. The
-                    // trigger and the empty-gate state both live in
-                    // `ConversationListView` (it owns the list view model), fed
-                    // through `externalDeleteAllConfirmation` /
-                    // `onConversationsEmptyChanged` at the `sidebar` call site.
-                    //
-                    // The visibility gate is EXPLICIT because a column-level
-                    // item outlives the collapsed column on macOS (compose
-                    // relies on exactly that): founder-decided, the collapsed
-                    // bar shows no Delete-All at all — a destructive bulk
-                    // action stays with the list it destroys, like the iPad
-                    // sidebar bar, while compose+toggle keep their two
-                    // collapsed capsules.
-                    if sidebarHasConversations && columnVisibility != .detailOnly {
+                    if workDestinationIsActive, let personalWorkbenchModel {
                         ToolbarItem(placement: .primaryAction) {
-                            Button(role: .destructive) {
-                                showDeleteAllConfirmation = true
-                            } label: {
-                                Label(String(localized: "Delete All"), systemImage: "trash")
-                            }
-                            .help(String(localized: LocalizedStringResource(
-                                "conversations.deleteAll.help",
-                                defaultValue: "Delete all conversations"
-                            )))
-                            .accessibilityIdentifier("toolbar.deleteAll")  // stable QA target (non-localized)
+                            WorkDeskSidebarToolbarButton(
+                                workspace: personalWorkbenchModel.workboardViewModel.deskWorkspace,
+                                isActive: workDestinationIsActive
+                            )
                         }
-                        ToolbarSpacer(.flexible, placement: .primaryAction)
                     }
-                    LeadingToolbarChrome(column: .sidebar) { startNewConversation() }
+                    if chatDestinationIsActive {
+                        // Delete-All ahead of compose: within the sidebar region a
+                        // column-level item renders in declaration order, so this
+                        // is the one attachment that puts the destructive control
+                        // LEFT of the compose→toggle pair (a content-declared item
+                        // lands between them, and `.navigation` leaves the region
+                        // entirely for the detail side — both screenshot-measured,
+                        // macOS 26.5, 2026-08-24). The flexible spacer pushes
+                        // compose+toggle back against the divider and opens the gap
+                        // that keeps trash from reading as one cluster with them —
+                        // the iPad sidebar bar's leading-trash arrangement. The
+                        // trigger and the empty-gate state both live in
+                        // `ConversationListView` (it owns the list view model), fed
+                        // through `externalDeleteAllConfirmation` /
+                        // `onConversationsEmptyChanged` at the `sidebar` call site.
+                        //
+                        // The visibility gate is EXPLICIT because a column-level
+                        // item outlives the collapsed column on macOS (compose
+                        // relies on exactly that): founder-decided, the collapsed
+                        // bar shows no Delete-All at all — a destructive bulk
+                        // action stays with the list it destroys, like the iPad
+                        // sidebar bar, while compose+toggle keep their two
+                        // collapsed capsules. Work collapses the column, so the
+                        // same rule hides the trash there: the list it would
+                        // destroy is not on screen to stand beside it.
+                        if sidebarHasConversations && effectiveColumnVisibility != .detailOnly {
+                            ToolbarItem(placement: .primaryAction) {
+                                Button(role: .destructive) {
+                                    guard chatDestinationIsActive else { return }
+                                    showDeleteAllConfirmation = true
+                                } label: {
+                                    Label(String(localized: "Delete All"), systemImage: "trash")
+                                }
+                                .help(String(localized: LocalizedStringResource(
+                                    "conversations.deleteAll.help",
+                                    defaultValue: "Delete all conversations"
+                                )))
+                                .accessibilityIdentifier("toolbar.deleteAll")  // stable QA target (non-localized)
+                            }
+                            ToolbarSpacer(.flexible, placement: .primaryAction)
+                        }
+                        LeadingToolbarChrome(column: .sidebar) {
+                            guard chatDestinationIsActive else { return }
+                            startNewConversation()
+                        }
+                    }
                 }
         } detail: {
-            detailColumn
+            mountedDetailDestinations
                 .frame(minWidth: Self.columnMinWidth)
         }
         .toolbar {
@@ -390,9 +478,206 @@ struct MainWindowView: View {
             // isn't double-wrapped.
             .sharedBackgroundVisibility(.hidden)
         }
+        // Hold Work's detail layer for the tail of the dissolve after Work is
+        // hidden, then drop it. `.task(id:)` cancels a pending unmount if Work
+        // comes back first, so a fast Work → Chats → Work round trip never
+        // unmounts, and a cancelled hold cannot wedge: the id is the destination
+        // itself, so whichever value it settles on re-runs this to completion.
+        // It also runs AFTER the update that mounted that layer, which is what
+        // gives the enter dissolve a frame at opacity 0 to fade up from.
+        //
+        // The hold comes from the layer modifier so it always outlasts the fade.
+        .task(id: workDestinationIsActive) {
+            if workDestinationIsActive {
+                keepsWorkLayerMounted = true
+                workLayerIsVisible = true
+                return
+            }
+            workLayerIsVisible = false
+            try? await Task.sleep(
+                for: WorkbenchDestinationLayerModifier.mountHold(reduceMotion: reduceMotion)
+            )
+            guard !Task.isCancelled else { return }
+            keepsWorkLayerMounted = false
+        }
     }
 
-    var body: some View {
+    private func workbenchSectionPicker(
+        for model: PersonalWorkbenchModel
+    ) -> some View {
+        WorkbenchSectionControl(
+            selection: Binding(
+                get: { model.router.destination },
+                set: { model.router.destination = $0 }
+            )
+        )
+    }
+
+    private var workDestinationIsActive: Bool {
+        personalWorkbenchModel?.router.destination == .work
+    }
+
+    /// The visibility the window is REALLY in, Work's forced collapse included.
+    /// Every sidebar-region toolbar gate reads this rather than the stored
+    /// value, so a control that must not appear over a collapsed column is
+    /// hidden in Work for the same reason it is hidden when the user collapses
+    /// the column by hand.
+    private var effectiveColumnVisibility: NavigationSplitViewVisibility {
+        workDestinationIsActive ? .detailOnly : chatColumnVisibility
+    }
+
+    /// What the split view is driven with. Work is ONE desk with no list beside
+    /// it, so its column collapses and the desk gets the whole window; switching
+    /// to Chats hands the column back in the state Chat was left in.
+    ///
+    /// Writes are accepted only from Chat. Work replaces the native toolbar
+    /// toggle with its own project-navigation action; keeping this getter
+    /// constant also stops a write-back AppKit performs on its OWN
+    /// initiative (it revises this binding when the window is resized past the
+    /// two-column floor, and when it restores a saved frame) from rewriting
+    /// Chat's remembered state out of a section that has no sidebar to describe.
+    private var splitColumnVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { effectiveColumnVisibility },
+            set: { newValue in
+                guard !workDestinationIsActive else { return }
+                chatColumnVisibility = newValue
+            }
+        )
+    }
+
+    /// What the Work layer's PIXELS follow, as distinct from
+    /// `workDestinationIsActive`, which hit testing, accessibility and draw
+    /// order follow immediately. Entering trails the destination by one update
+    /// (see `workLayerIsVisible`) so the fade has something to fade from;
+    /// leaving falls on the destination change itself, because Work is already
+    /// mounted and needs no lead-in.
+    ///
+    /// The `workDestinationIsActive` conjunct is the safety half: a Settings
+    /// mode swap can unmount this split mid-transition and cancel the task that
+    /// would have cleared `workLayerIsVisible`, and on the way back Work would
+    /// otherwise mount fully opaque over Chat for a frame.
+    private var workLayerIsShowing: Bool {
+        workDestinationIsActive && workLayerIsVisible
+    }
+
+    /// The exact complement, so both layers change opacity in the SAME update
+    /// and the dissolve is symmetric entering and leaving. Deriving Chat's
+    /// pixels from the destination instead would start its fade one update
+    /// ahead of Work's on the way in.
+    private var chatLayerIsShowing: Bool {
+        !workLayerIsShowing
+    }
+
+    private var chatDestinationIsActive: Bool {
+        !workDestinationIsActive
+    }
+
+    /// Chat stays mounted for its whole session — it owns a selected thread, an
+    /// unsent composer, a live recorder and a parked drop batch. Work owns none
+    /// of that inside its layer: composer text and every sheet live on the view
+    /// model or on the persistent split view above, and deactivating Work
+    /// already discards its transient capture UI. So Work's desk is mounted only
+    /// while it is on screen (plus the dissolve's tail), and hidden Chat never
+    /// pays to lay out a second full column tree.
+    private var mountsWorkLayer: Bool {
+        workDestinationIsActive || keepsWorkLayerMounted
+    }
+
+    private func workboardExperience(
+        for model: PersonalWorkbenchModel
+    ) -> WorkboardExperience {
+        WorkboardExperience(
+            viewModel: model.workboardViewModel,
+            isActive: workDestinationIsActive,
+            reduceMotion: reduceMotion
+        )
+    }
+
+    /// The sidebar column is CHAT's alone — Work is one desk and mounts nothing
+    /// here. Chat's list still stays mounted while Work is active (it owns a
+    /// selection, a search string and a scroll position), hidden by the same
+    /// layer contract the detail side uses, so the column the user comes back to
+    /// is the one they left rather than a rebuilt one.
+    @ViewBuilder
+    private var mountedSidebarDestinations: some View {
+        ZStack {
+            sidebar
+                .environment(\.workbenchDestinationIsActive, chatDestinationIsActive)
+                .workbenchDestinationLayer(
+                    isActive: chatDestinationIsActive,
+                    isVisible: chatLayerIsShowing,
+                    reduceMotion: reduceMotion
+                )
+        }
+    }
+
+    @ViewBuilder
+    private var mountedDetailDestinations: some View {
+        ZStack {
+            detailColumn
+                .environment(\.workbenchDestinationIsActive, chatDestinationIsActive)
+                .workbenchDestinationLayer(
+                    isActive: chatDestinationIsActive,
+                    isVisible: chatLayerIsShowing,
+                    reduceMotion: reduceMotion
+                )
+
+            if let personalWorkbenchModel {
+                if mountsWorkLayer {
+                    workboardExperience(for: personalWorkbenchModel).detailColumn
+                        .environment(\.workDeskConversationResolver, WorkDeskConversationResolver(resolve: { coordinator.viewModel(for: $0) }))
+                        .environment(\.workDeskSidebarIsHosted, true)
+                        .environment(\.workbenchDestinationIsActive, workDestinationIsActive)
+                        .workbenchDestinationLayer(
+                            isActive: workDestinationIsActive,
+                            isVisible: workLayerIsShowing,
+                            reduceMotion: reduceMotion
+                        )
+                        .id(Self.workLayerIdentity)
+                }
+
+                // The section switch belongs to this persistent split rather
+                // than the outer workbench host: it stays mounted in exactly one
+                // detail-side slot while Work / Chats change, and disappears
+                // with the split when full-window Settings replaces it.
+                //
+                // WHY a zero-size host declared LAST rather than a
+                // `ToolbarItem` on the split view itself: toolbar items are
+                // collected in view-tree order, and an item declared on the
+                // split view lands BEFORE anything Chat's own tree declares —
+                // which puts Chat's conditional Copy-conversation button to the
+                // RIGHT of this control and drags it 45pt sideways every time
+                // that button comes or goes. Declared here, after the Chat
+                // layer, this is the trailing-most item in the content region
+                // and nothing Chat does can move it. Measured, macOS 26.5,
+                // 900pt window: x 732–892 in BOTH sections, one item identity
+                // across the switch.
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            workbenchSectionPicker(for: personalWorkbenchModel)
+                        }
+                        // The control draws one continuous filled container
+                        // itself. Suppress AppKit's extra glass capsule around
+                        // that container.
+                        .sharedBackgroundVisibility(.hidden)
+                    }
+            }
+        }
+    }
+
+    /// Explicit conversation requests (deep links and the app's New command)
+    /// reveal Chats. Work's toolbar has no conversation action of its own.
+    private func activateChatsForToolbarAction() {
+        personalWorkbenchModel?.router.destination = .chats
+    }
+
+    /// The window's visual and lifecycle stack is intentionally separated from
+    /// its notification routing. Keeping both in one modifier expression pushes
+    /// Swift's type checker past its practical limit as routing surfaces grow.
+    private var windowLifecycleContent: some View {
         Group {
             if showingSettings {
                 // Full-window mode swap: Settings REPLACES the conversation split
@@ -418,9 +703,9 @@ struct MainWindowView: View {
                 splitView
             }
         }
-        // Drop the "Conduck" window title in BOTH modes (was scoped to splitView,
-        // which is absent in settings mode → title would otherwise reappear).
-        // Window menu name stays. macOS 15+.
+        // Drop the "Conduck" window title in BOTH modes: Settings REPLACES the
+        // split view, so a removal scoped to the split view would let the title
+        // reappear there. Window menu name stays. macOS 15+.
         .toolbar(removing: .title)
         .background {
             LinearGradient(
@@ -508,6 +793,7 @@ struct MainWindowView: View {
         // the iOS twin.
         .onChange(of: showingSettings) { _, shown in
             if shown {
+                cancelWindowCapture()
                 windowRecorder.dismissError()
                 voiceRecovery = nil
                 // Settings REPLACES the split view without unmounting this root,
@@ -525,6 +811,17 @@ struct MainWindowView: View {
         // The destination a drop was stamped for has gone away. Discard it —
         // never redirect, or a file dropped on one thread surfaces in another.
         .onChange(of: currentMountIdentity) { _, _ in
+            cancelDropWork()
+        }
+        .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            guard !isActive else { return }
+            // Work replaces the visible pixels without unmounting this Chat
+            // root. Stop only transient work that could complete into a hidden
+            // composer; the draft and already-staged attachments deliberately
+            // remain intact for the return to Chats.
+            cancelWindowCapture()
+            windowRecorder.dismissError()
+            voiceRecovery = nil
             cancelDropWork()
         }
         // Presence dot lifecycle. On the host body, NOT inside the `ToolbarItem`
@@ -563,9 +860,17 @@ struct MainWindowView: View {
             cancelWindowCapture()
             cancelDropWork()
         }
+    }
+
+    var body: some View {
+        windowLifecycleContent
+        .appReviewBusy(showingSettings || guidedHost.presentation != nil
+            || showDeleteAllConfirmation || !sidebarSearch.isEmpty
+            || coordinator.dictationService.state == .recording
+            || coordinator.dictationService.state == .processing)
         .onReceive(NotificationCenter.default.publisher(for: .openConversationDeepLink)) { note in
-            leaveSettingsForConversationAction()
-            handleDeepLink(note)
+            activateChatsForToolbarAction()
+            consumeConversationDeepLink(note)
         }
         // The landing half of the headless one-tap fix. `ConduckApp` opens this
         // window when the route arrives while it is closed, and by contract it
@@ -576,19 +881,11 @@ struct MainWindowView: View {
             consumeGatewayFixRoute()
         }
         .onReceive(NotificationCenter.default.publisher(for: .openSettingsWindow)) { _ in
-            // Clear the deferred-present flag too: it's otherwise only consumed in
-            // `onAppear` (the window-was-closed case), so an already-open window
-            // would leave it stale. Consume any deep-link category at the same time.
-            settingsInitialCategory = coordinator.pendingSettingsCategory
-            settingsInitialFocus = coordinator.pendingDiagnosticsFocus
-            coordinator.pendingSettingsCategory = nil
-            coordinator.pendingDiagnosticsFocus = nil
-            coordinator.pendingShowSettings = false
-            showingSettings = true
+            presentRequestedSettings()
         }
         .onReceive(NotificationCenter.default.publisher(for: .newConversation)) { _ in
-            leaveSettingsForConversationAction()
-            startNewConversation()
+            activateChatsForToolbarAction()
+            beginRequestedConversation()
         }
         .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
             Task { await refreshConfiguredBackends() }
@@ -615,6 +912,28 @@ struct MainWindowView: View {
             settingsInitialCategory = nil
             settingsInitialFocus = nil
         }
+    }
+
+    private func consumeConversationDeepLink(_ note: Notification) {
+        leaveSettingsForConversationAction()
+        handleDeepLink(note)
+    }
+
+    private func presentRequestedSettings() {
+        // Clear the deferred-present flag too: it is otherwise consumed only in
+        // `onAppear` (the window-was-closed case). The public notification or
+        // the Workbench-private relay owns this one-shot category exactly once.
+        settingsInitialCategory = coordinator.pendingSettingsCategory
+        settingsInitialFocus = coordinator.pendingDiagnosticsFocus
+        coordinator.pendingSettingsCategory = nil
+        coordinator.pendingDiagnosticsFocus = nil
+        coordinator.pendingShowSettings = false
+        showingSettings = true
+    }
+
+    private func beginRequestedConversation() {
+        leaveSettingsForConversationAction()
+        startNewConversation()
     }
 
     // MARK: - Sidebar
@@ -676,6 +995,7 @@ struct MainWindowView: View {
             ForEach(selfHostedRefs, id: \.self) { ref in
                 let name = RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
                 Button {
+                    activateChatsForToolbarAction()
                     selectedRef = ref
                     userPickedRefForNewChat = true
                     coordinator.pendingNewConversationRef = ref
@@ -695,6 +1015,7 @@ struct MainWindowView: View {
                     ForEach(hostedRefs, id: \.self) { ref in
                         let name = RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
                         Button {
+                            activateChatsForToolbarAction()
                             selectedRef = ref
                             userPickedRefForNewChat = true
                             coordinator.pendingNewConversationRef = ref
@@ -768,20 +1089,35 @@ struct MainWindowView: View {
     /// picker below seeds itself to a gateway that can actually send, so the
     /// stored default not being one of them is no reason to blank the title bar.
     ///
-    /// The presence dot sits BESIDE the control, not inside its label — the
-    /// opposite of the iPhone/iPad hosts. `Why:` there are three controls here
-    /// (picker / clone pill / read-only label) and only one of them is a pill
-    /// the dot could live inside on every path; parked outside, it holds the
-    /// SAME position no matter which branch renders, so switching threads never
-    /// makes it hop. It also keeps the dot out of a control's label, where
-    /// SwiftUI would fold it into that one element and the control's own
-    /// `.accessibilityLabel` would silently replace what it said. So the dot is
-    /// its own accessibility element here (standalone mode) and no control
-    /// carries a `gatewayPresenceAccessibilityValue` — one speaker, no
-    /// double-speak.
+    /// Chat's alone: the desk sends nothing to a gateway, so a title-bar pill
+    /// there would name a gateway Work never uses.
+    /// The gate is on the CONTENT rather than on the `ToolbarItem` in
+    /// `persistentSplitView` — declaring and undeclaring the principal item
+    /// re-lays out the bar, and this window's whole arrangement rests on the
+    /// toolbar keeping one identity across the section switch.
+    ///
+    /// WHY the content must never resolve to `EmptyView`: a principal item whose
+    /// content is empty produces no `NSToolbarItem` at all, and the pair of
+    /// flexible spaces AppKit puts around a principal item is the ONLY thing
+    /// holding the `.primaryAction` group — the Chats/Work control — against the
+    /// window's trailing edge. Drop the item and that group falls back to the
+    /// leading edge of the content region, so the section control jumps to the
+    /// left of the divider the moment Work is shown or no gateway is configured.
+    /// The zero-area placeholder keeps the item, the spaces and the arrangement
+    /// identical in both sections.
+    ///
+    /// The presence dot sits BESIDE the control, not inside its label: only
+    /// one of the three controls is a pill it could live inside, so parked
+    /// outside it holds the SAME position whichever branch renders, and it
+    /// stays its own accessibility element instead of being folded into a
+    /// control's label where that control's own label would replace it.
     @ViewBuilder
     private var gatewayToolbarContent: some View {
-        if coordinator.hasAnyConfiguredGateway {
+        if !chatDestinationIsActive || !coordinator.hasAnyConfiguredGateway {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityHidden(true)
+        } else {
             HStack(spacing: 6) {
                 GatewayPresenceDot(ref: presenceRef, diameter: 6)
                 gatewayControl
@@ -804,7 +1140,10 @@ struct MainWindowView: View {
                 // no messages for a beat after a sidebar switch, which popped
                 // the chevron affordance in a frame late.
                 if vm.canSwitchGateway, vm.hasTurns, vm.boundGatewayAvailable {
-                    Button { vm.showingGatewaySheet = true } label: {
+                    Button {
+                        activateChatsForToolbarAction()
+                        vm.showingGatewaySheet = true
+                    } label: {
                         gatewayPillBackground(
                             HStack(spacing: 4) {
                                 Text(vm.backendDisplayName)
@@ -883,7 +1222,7 @@ struct MainWindowView: View {
                 showingSettings = true
             } label: {
                 HStack(spacing: 10) {
-                    Image(nsImage: highResAppIcon(size: 32))
+                    Image(nsImage: footerAppIcon)
                         .resizable()
                         .interpolation(.high)
                         .frame(width: 32, height: 32)
@@ -1137,9 +1476,8 @@ struct MainWindowView: View {
     /// composer's `onVoiceResult`) AND the duration-cap auto-stop path (via
     /// `windowRecorder.onAutoStopResult`). On success the transcript POPULATES the
     /// shared `composerDraft` for review-then-send (mirrors iOS
-    /// `handleTranscriptionResult`), and a successful capture clears any stale
-    /// pending-retry slot — parity with the old `DictationService` window path,
-    /// scoped here to macOS so iOS behavior is unchanged. On failure the recorder's
+    /// `handleTranscriptionResult`). It does not clear the global retry slot: a
+    /// concurrent Action-Button capture may own it. On failure the recorder's
     /// own `.error` state drives the composer's banner, so there's nothing to do.
     private func handleWindowVoiceResult(_ result: Result<String, AppError>) async {
         switch result {
@@ -1150,7 +1488,6 @@ struct MainWindowView: View {
                 "voice.announce.transcriptAdded",
                 defaultValue: "Transcript added"
             ))
-            await PendingRetryStore.shared.clear()
         case .failure(let error):
             // Voice hard failure (Workstream A): the missing-model case self-heals
             // upstream in `InAppAudioRecorder`; what remains is a GENUINE hard
@@ -1362,7 +1699,10 @@ struct MainWindowView: View {
         }
         guard !routed.isEmpty else { return false }
 
-        let session = DropSession(destination: currentMountIdentity, count: routed.count)
+        let session = DropSession<ResolvedDropItem>(
+            destination: currentMountIdentity,
+            count: routed.count
+        )
         dropSession = session
         for (index, entry) in routed.enumerated() {
             startDropLoad(entry.0, route: entry.1, index: index, session: session)
@@ -1374,7 +1714,7 @@ struct MainWindowView: View {
     private func startDropLoad(_ provider: NSItemProvider,
                                route: DropProviderRoute,
                                index: Int,
-                               session: DropSession) {
+                               session: DropSession<ResolvedDropItem>) {
         let typeIdentifier = route == .fileURL
             ? UTType.fileURL.identifier
             : UTType.image.identifier
@@ -1427,7 +1767,7 @@ struct MainWindowView: View {
     @MainActor
     private func finishDropSlot(_ index: Int,
                                 with item: ResolvedDropItem,
-                                session: DropSession) {
+                                session: DropSession<ResolvedDropItem>) {
         // A result for a session that is no longer ours (navigation cancelled
         // it, or it already completed) owns a temp nothing else knows about.
         guard dropSession === session else {
@@ -1500,7 +1840,7 @@ struct MainWindowView: View {
             voiceRecoveryRow
                 .frame(maxWidth: Constants.Layout.chatContentWidth)
                 .frame(maxWidth: .infinity)
-            // Composer caps itself to the same readable column, centered.
+            // Composer sits on the same readable column as the thread, centered.
             MessageComposerBar(
                 viewModel: vm,
                 onSendText: sendTypedText,
@@ -1528,8 +1868,10 @@ struct MainWindowView: View {
             // conversation its own mount so A → B runs A's onDisappear/deferred
             // teardown instead of carrying A's tiles into B.
             .id(ComposerMountIdentity.conversation(vm.conversationID))
-            .frame(maxWidth: Constants.Layout.chatContentWidth)
-            .frame(maxWidth: .infinity)
+            // The cap wraps the WHOLE bar, so the bar's own 16/12 inset is spent
+            // inside the column and the card lands one bar-inset narrower than it.
+            // Work's pinned bar reproduces this chain position exactly.
+            .composerReadableWidth()
         }
     }
 
@@ -1692,36 +2034,45 @@ struct MainWindowView: View {
 /// Feeds `MenuBarCoordinator.windowVisibleConversationID` — the "user is
 /// looking at this thread in the main window" pin that suppresses AND clears
 /// the menu-bar dots (yellow unread / red failure) for the visible thread.
-/// `\.appearsActive` gates every report: a thread mounted in a
-/// backgrounded/miniaturized window reports nothing, so a reply landing there
-/// still raises the dot — the cue exists precisely for replies the user isn't
-/// watching. Deactivation drops the pin (guarded `ifCurrent:`); re-activation
-/// re-reports, which clears any dot that arrival raised while the user was
-/// away (they're now looking at the reply).
+/// Both `\.appearsActive` and the selected Workbench destination gate every
+/// report: a thread mounted behind Work or in a backgrounded/miniaturized window
+/// reports nothing, so a reply landing there still raises the dot. Becoming the
+/// visible Chat again re-reports and clears any cue the person can now see.
 private struct WindowThreadVisibilityReporter: ViewModifier {
     let coordinator: MenuBarCoordinator
     let conversationID: UUID
     @Environment(\.appearsActive) private var appearsActive
+    @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
+
+    private var isVisible: Bool {
+        appearsActive && workbenchDestinationIsActive
+    }
 
     func body(content: Content) -> some View {
         content
             .onAppear {
                 // Inactive at mount → no-op (never report nil here: the OLD
                 // thread's guarded `.onDisappear` clear owns that hand-off).
-                if appearsActive {
-                    coordinator.setWindowVisibleConversation(conversationID)
-                }
+                updateVisibility(isVisible)
             }
-            .onChange(of: appearsActive) { _, isActive in
-                if isActive {
-                    coordinator.setWindowVisibleConversation(conversationID)
-                } else {
-                    coordinator.clearWindowVisibleConversation(ifCurrent: conversationID)
-                }
+            .onChange(of: appearsActive) { _, _ in
+                updateVisibility(isVisible)
+            }
+            .onChange(of: workbenchDestinationIsActive) { _, _ in
+                updateVisibility(isVisible)
             }
             .onDisappear {
                 coordinator.clearWindowVisibleConversation(ifCurrent: conversationID)
             }
     }
+
+    private func updateVisibility(_ visible: Bool) {
+        if visible {
+            coordinator.setWindowVisibleConversation(conversationID)
+        } else {
+            coordinator.clearWindowVisibleConversation(ifCurrent: conversationID)
+        }
+    }
 }
+
 #endif

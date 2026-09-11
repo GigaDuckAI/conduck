@@ -144,6 +144,10 @@ final class AppleSpeechTester {
             switch error {
             case .permissionDenied: state = .failed(message: Self.micDeniedMessage)
             case .recordingFailed:  state = .failed(message: Self.micFailureMessage)
+            // iOS only, and the one holder no lease can see: a live CarPlay
+            // voice session, discovered on the far side of the permission
+            // prompt. Same sentence the macOS lease refusal above uses.
+            case .microphoneBusy:   state = .failed(message: Self.micBusyMessage)
             }
             return
         } catch {

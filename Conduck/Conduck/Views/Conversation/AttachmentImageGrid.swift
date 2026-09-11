@@ -159,6 +159,11 @@ extension View {
     /// Present a full-screen gallery from an `Int?` start index —
     /// `.fullScreenCover` on iOS, `.sheet` on macOS (no full-screen cover in
     /// the menu-bar window).
+    ///
+    /// The macOS sheet states no size of its own: the gallery carries ONE ideal
+    /// desktop frame for every surface that presents it, and a wrapper adding a
+    /// second set of numbers is how the same component came to open at two
+    /// sizes depending on who opened it.
     @ViewBuilder
     func fullScreenCoverCompat<Content: View>(
         item: Binding<Int?>,
@@ -175,7 +180,6 @@ extension View {
         #else
         self.sheet(item: bound) { wrapper in
             content(wrapper.value)
-                .frame(minWidth: 600, minHeight: 500)
         }
         #endif
     }

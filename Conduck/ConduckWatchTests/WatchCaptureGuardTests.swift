@@ -44,6 +44,14 @@
 //    four-row table both sides answer is locked in
 //    `testTheWristAnswersThePhonesLiveCaptureTable`, whose phone-side twin is
 //    `GigaActionPreflightTests.testTheLiveCaptureTableAnswersFourWays`.
+// 5. The Ask DESTINATION chooser's service half. Ask offers every configured
+//    gateway and then Add to Work on every press, so the two lanes sit one tap
+//    apart on one sheet: an explicit gateway row must bind to the ref the
+//    person picked even where a headless press would be refused outright, a
+//    pick of either lane must inherit nothing from an abandoned pick of the
+//    other, and a full relay queue must refuse the Work row BEFORE the
+//    microphone arms without disturbing a single recording already waiting on
+//    the iPhone.
 
 import XCTest
 @testable import ConduckWatch_Watch_App
@@ -247,10 +255,10 @@ final class WatchCaptureGuardTests: XCTestCase {
         let gate = AsyncStream<Void> { continuation in
             release = { continuation.finish() }
         }
-        service.relayTranscribe = { _, audioFileURL, _, _ in
+        service.relayTranscribe = { _, audioFileURL, _, _, _ in
             queued.url = audioFileURL
             for await _ in gate {}
-            return "resurrected transcript"
+            return RelayReply(text: "resurrected transcript", workSaved: false)
         }
 
         let audioURL = FileManager.default.temporaryDirectory
@@ -288,7 +296,7 @@ final class WatchCaptureGuardTests: XCTestCase {
         let store = ConversationStore(inMemory: true)
         let service = WatchRecordingService()
         service.store = store
-        service.relayTranscribe = { _, _, _, _ in "hello from the wrist" }
+        service.relayTranscribe = { _, _, _, _, _ in RelayReply(text: "hello from the wrist", workSaved: false) }
 
         let baselineEntries = AppleRelayPendingQueue.shared.entryCount
         let capturedRef = "custom_\(UUID().uuidString)"
@@ -679,6 +687,558 @@ final class WatchCaptureGuardTests: XCTestCase {
         }
         XCTAssertTrue(message.contains("OpenClaw"),
                       "The mint arm carries the same named sentence the pre-record gate would have shown.")
+    }
+
+    // MARK: - Ask destination chooser (gateway rows vs the Work row)
+    //
+    // The chooser opens on EVERY Ask press and offers the desk beside the
+    // gateways, so the two lanes are now one tap apart on the same sheet. The
+    // view wiring is founder-QA territory; what is pinned here is the SERVICE
+    // behaviour those rows depend on — an explicit gateway pick binds to the ref
+    // the person picked no matter what the headless default gate says, and a
+    // pick of either lane inherits nothing from an abandoned pick of the other.
+
+    /// Poll until `condition` holds (or the timeout elapses), sleeping so the
+    /// arm Task can make progress between checks.
+    private func settle(timeout: TimeInterval = 5.0, until condition: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    /// A row in the chooser is an EXPLICIT choice, and it is written as the Ask
+    /// hint regardless of the headless default gate: `hasChosenDefaultBackend`
+    /// is false here, which refuses a headless press outright, and must not
+    /// touch a capture the person routed by hand.
+    func testAnExplicitGatewayPickWritesItsHintWithNoChosenDefault() {
+        stageGateways([(ref: "hermes", name: nil)], default: "hermes", chosen: false)
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        // Nothing arms: the permission denial is the cheapest way to keep a
+        // microphone out of a unit-test host, and every assertion below is
+        // written synchronously by `startCapture` before the arm Task runs.
+        service.recordPermissionRequest = { false }
+
+        let outcome = service.startCapture(boundTo: .new(backendRef: "hermes"), requestID: UUID())
+
+        XCTAssertEqual(outcome, .started)
+        XCTAssertEqual(WatchSettingsReader.shared.consumePendingInAppNewConversationBackend(), "hermes",
+                       "An explicit gateway row must stamp its own ref, not defer to the default gate.")
+        XCTAssertEqual(service.captureDestination, .chat,
+                       "A gateway row is a chat ask — the Work stamp belongs to `startWorkCapture` alone.")
+        service.cancelRecording()
+    }
+
+    /// The other half of that contract, one hop later: the mint binds to the
+    /// CAPTURED ref even though the iPhone has chosen no default at all. The
+    /// captured ref is a never-configured custom, so the hop stops at the
+    /// config gate AFTER the mint — the mint mechanics run with zero network.
+    func testAHintDrivenMintBypassesTheDefaultGate() async throws {
+        stageGateways([(ref: "hermes", name: nil)], default: "hermes", chosen: false)
+        let store = ConversationStore(inMemory: true)
+        let service = WatchRecordingService()
+        service.store = store
+        let capturedRef = RemoteAgentRef.custom(UUID()).rawString
+        WatchSettingsReader.shared.setPendingInAppNewConversationBackend(capturedRef)
+
+        await service.startConverseHop(transcript: "hello wrist")
+
+        let conversations = try await store.fetchConversations()
+        XCTAssertEqual(conversations.count, 1,
+                       "The hint arm mints exactly one conversation, unchosen default or not.")
+        XCTAssertEqual(conversations.first?.backend, capturedRef,
+                       "The mint must bind to the ref the chooser row carried.")
+        guard case .error = service.state else {
+            return XCTFail("An unconfigured captured ref must surface the not-configured error (control: no network was reached).")
+        }
+    }
+
+    /// The chooser's two lanes share one machine, so the dangerous direction is
+    /// a gateway pick abandoned mid-flight followed by a Work pick: the desk
+    /// must inherit NOTHING from it. Preconditioned on `.idle` — entering Work
+    /// from `.error` runs `dismissError()`, which clears the hint by itself and
+    /// would make this vacuous — and the stale hint is seeded IMMEDIATELY
+    /// before the start, because a cancel already clears it.
+    ///
+    /// SCOPE: this case owns the stale HINT and the "Work mints nothing"
+    /// floor, both genuine from an idle machine. The conversation PIN is a
+    /// different fixture — an idle machine has no pin to inherit — so the two
+    /// cases below establish a real one first and assert the precondition
+    /// before starting Work. Deliberately NO pin assertion here: it would start
+    /// nil and end nil, staying green with `startWorkCapture`'s own pin clears
+    /// deleted, which is exactly the tautology those two cases exist to remove.
+    func testAWorkPickAfterAnAbandonedGatewayDraftInheritsNothing() async throws {
+        let store = ConversationStore(inMemory: true)
+        let service = WatchRecordingService()
+        service.store = store
+        service.recordPermissionRequest = { false }
+        XCTAssertEqual(service.state, .idle,
+                       "Precondition: from `.error` the Work start would clear the hint through `dismissError()`.")
+        let mintsBefore = service.captureMintCount
+        let rowsBefore = try await store.fetchConversations().count
+
+        WatchSettingsReader.shared.setPendingInAppNewConversationBackend(RemoteAgentRef.custom(UUID()).rawString)
+        let outcome = service.startWorkCapture(requestID: UUID())
+
+        XCTAssertEqual(outcome, .started)
+        XCTAssertNil(WatchSettingsReader.shared.consumePendingInAppNewConversationBackend(),
+                     "A Work capture must clear the Ask hint — an unconsumed one would give it a conversation.")
+        XCTAssertEqual(service.captureDestination, .work)
+        XCTAssertEqual(service.captureMintCount, mintsBefore)
+        let rowsAfter = try await store.fetchConversations().count
+        XCTAssertEqual(rowsAfter, rowsBefore,
+                       "A Work start mints nothing in the synced store.")
+        service.cancelRecording()
+    }
+
+    /// The pin half, with a pin that genuinely exists: an in-thread capture
+    /// bound to a conversation, abandoned when the microphone was refused. The
+    /// machine still names that conversation when the Work row is picked, and
+    /// the desk must not adopt it — a Work capture that kept a chat pin would
+    /// settle a private recording through a conversation-bound path.
+    ///
+    /// The machine is walked back to `.idle` with the pin still on it before
+    /// Work starts, and that is the whole point of the fixture: entering Work
+    /// from `.error` runs `dismissError()`, whose own clears would answer the
+    /// assertion below no matter what `startWorkCapture` did. From `.idle` the
+    /// only clears left are `startWorkCapture`'s, so deleting one turns this
+    /// case red. The state is reachable in production the same way — an older
+    /// turn's reply landing against a newer turn's marker returns the machine to
+    /// `.idle` without touching the pins.
+    func testAWorkPickAfterADeniedBoundCaptureInheritsNoConversationPin() async {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        service.recordPermissionRequest = { false }
+        let bound = UUID()
+
+        service.startCapture(boundTo: .existing(bound), requestID: UUID())
+        await settle { if case .error = service.state { return true } else { return false } }
+        guard case .error = service.state else {
+            return XCTFail("A denied capture must surface the microphone error, or the pin below is not abandoned.")
+        }
+        XCTAssertEqual(service.inFlightConversationID, bound,
+                       "Precondition: the machine genuinely holds the abandoned turn's conversation pin.")
+        service.state = .idle
+        XCTAssertEqual(service.inFlightConversationID, bound,
+                       "Precondition: the walk back to idle leaves the pin standing — otherwise Work clears nothing.")
+
+        let outcome = service.startWorkCapture(requestID: UUID())
+
+        XCTAssertEqual(outcome, .started)
+        XCTAssertNil(service.inFlightConversationID,
+                     "Work has no conversation — it must not carry the abandoned thread's pin into the desk lane.")
+        XCTAssertEqual(service.captureDestination, .work)
+        service.cancelRecording()
+    }
+
+    /// The same guarantee for the OTHER pin: a draft that reached the mint and
+    /// then died at the gateway gate leaves a minted conversation on the
+    /// machine. The Work row must leave that conversation exactly where it is
+    /// — neither adopted, nor added to, nor minted over.
+    func testAWorkPickAfterAMintedDraftInheritsNoConversationPin() async throws {
+        stageGateways([(ref: "hermes", name: nil)], default: "hermes", chosen: false)
+        let store = ConversationStore(inMemory: true)
+        let service = WatchRecordingService()
+        service.store = store
+        service.recordPermissionRequest = { false }
+        // A never-configured custom: the mint runs, the hop then stops at the
+        // config gate, and zero network is reached.
+        WatchSettingsReader.shared.setPendingInAppNewConversationBackend(RemoteAgentRef.custom(UUID()).rawString)
+
+        await service.startConverseHop(transcript: "hello wrist")
+
+        guard case .error = service.state else {
+            return XCTFail("Precondition: the unconfigured ref must surface the not-configured error.")
+        }
+        let minted = try XCTUnwrap(service.inFlightConversationID,
+                                   "Precondition: the hint arm mints and PINS a conversation — without it this asserts nothing.")
+        XCTAssertEqual(service.captureMintCount, 1)
+        let rowsBefore = try await store.fetchConversations()
+        XCTAssertEqual(rowsBefore.count, 1)
+        // Idle WITH the mint still pinned — the state `startWorkCapture`'s own
+        // clears are the only answer to. From `.error` the entry's
+        // `dismissError()` would clear it first and the assertion below would
+        // hold with those clears deleted.
+        service.state = .idle
+        XCTAssertEqual(service.inFlightConversationID, minted,
+                       "Precondition: the walk back to idle leaves the minted pin standing.")
+
+        let outcome = service.startWorkCapture(requestID: UUID())
+
+        XCTAssertEqual(outcome, .started)
+        XCTAssertNil(service.inFlightConversationID,
+                     "A Work capture must not adopt the conversation an abandoned draft minted.")
+        XCTAssertEqual(service.captureDestination, .work)
+        XCTAssertEqual(service.captureMintCount, 1, "Work mints nothing of its own.")
+        let rowsAfter = try await store.fetchConversations()
+        XCTAssertEqual(rowsAfter.count, 1, "…and adds nothing to the synced store.")
+        XCTAssertEqual(rowsAfter.first?.id, minted,
+                       "The abandoned draft's conversation is left exactly as it was.")
+        service.cancelRecording()
+    }
+
+    /// The reverse direction, and the one a cancel would fake: a DENIED Work
+    /// capture leaves the lane stamped `.work`, and the next gateway row must
+    /// re-stamp it `.chat` rather than force the relay and settle a chat ask
+    /// onto the desk.
+    func testAGatewayPickAfterADeniedWorkCaptureIsChat() async {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        service.recordPermissionRequest = { false }
+
+        service.startWorkCapture(requestID: UUID())
+        // The denial is async — assert the state it actually leaves behind, or
+        // the gateway start below would be superseding nothing.
+        await settle { if case .error = service.state { return true } else { return false } }
+        guard case .error = service.state else {
+            return XCTFail("A denied Work capture must surface the microphone error.")
+        }
+        XCTAssertEqual(service.captureDestination, .work,
+                       "Control: the lane is genuinely stamped Work before the gateway pick.")
+
+        service.startCapture(boundTo: .new(backendRef: "hermes"), requestID: UUID())
+
+        XCTAssertEqual(service.captureDestination, .chat,
+                       "A gateway row must never inherit Work's lane.")
+        service.cancelRecording()
+    }
+
+    /// The deferral the chooser makes routine: a gateway row picked, the iPhone
+    /// out of range, and the settlement landing minutes later in a process that
+    /// never saw the pick. The pick lives on the QUEUE ENTRY because nowhere
+    /// else can hold it — a `.new` draft has no conversation to pin, and the
+    /// one-shot Ask hint belongs to the live hop and is deliberately not
+    /// consumable here — so the deferred mint binds to THAT gateway rather than
+    /// to whichever one happens to be default by the time the phone comes back.
+    func testADeferredAskMintsAgainstTheGatewayItWasAddressedTo() async throws {
+        stageGateways([(ref: "hermes", name: nil)], default: "hermes")
+        let store = ConversationStore(inMemory: true)
+        let service = WatchRecordingService()
+        service.store = store
+        let picked = RemoteAgentRef.custom(UUID()).rawString
+        XCTAssertNotEqual(picked, WatchSettingsReader.shared.defaultBackendRef,
+                          "Control: the pick must differ from the default, or the fall-through arm would pass this vacuously.")
+
+        await service.startDeferredConverseHop(
+            transcript: "an older ask",
+            boundTo: nil,
+            addressedTo: picked
+        )
+
+        let rows = try await store.fetchConversations()
+        XCTAssertEqual(rows.count, 1, "One deferred turn, one conversation.")
+        XCTAssertEqual(rows.first?.backend, picked,
+                       "Words addressed to one gateway must never be delivered to another.")
+    }
+
+    /// A private save owns the machine for its whole relay leg, and no gateway
+    /// reply can ever be its completion. An older Chat turn's reply landing
+    /// there must not release it: the next capture would take a machine whose
+    /// Work pipeline is still running, and that pipeline's own
+    /// `recordingFileURL = nil` would null the replacement's handle — the
+    /// person's Stop then finds no recording.
+    func testAnOlderChatReplyDoesNotReleaseALiveWorkSave() {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        service.recordPermissionRequest = { false }
+
+        XCTAssertEqual(service.startWorkCapture(requestID: UUID()), .started)
+        XCTAssertEqual(service.captureDestination, .work,
+                       "Control: the machine really is running the Work lane.")
+        // The relay leg. `processRecording` enters `.uploading` the moment the
+        // recorder stops and stays there for the whole publish/transcribe round
+        // trip; this is that window, without a microphone.
+        service.state = .uploading
+
+        service.handleBackgroundReply(
+            "an answer to something else",
+            conversationID: UUID(),
+            messageID: UUID()
+        )
+
+        XCTAssertEqual(service.state, .uploading,
+                       "The save still owns the machine — a reply that belongs to no capture on it may not hand it over.")
+        XCTAssertEqual(service.captureDestination, .work)
+        service.cancelRecording()
+    }
+
+    /// The same reply, against the OTHER machine a pin cannot describe: an Ask
+    /// that has not minted yet. Relaunch with an older turn outstanding, press
+    /// Ask before the restore's fetch resolves, pick a gateway — the draft is
+    /// uploading with `pendingConversationID` and `mintedConversationID` both
+    /// nil, so a pin-only guard reads the older turn's reply as this capture's
+    /// completion. The pick lives ONLY in the one-shot Ask hint until the hop
+    /// consumes it, so releasing the machine here both strips the capture of
+    /// the gateway the person chose (it would resolve through the default) and
+    /// admits a second capture on top of a live upload.
+    func testAnOlderChatReplyDoesNotStripANewUnmintedAskOfItsGateway() {
+        let appGroup = TestStores.defaults
+        defer {
+            appGroup.removeObject(forKey: "watch.inFlight.conversationID")
+            appGroup.removeObject(forKey: "watch.inFlight.startedAt")
+            appGroup.removeObject(forKey: "watch.inFlight.turnID")
+        }
+        // Relaunch state: an older gateway turn's marker is still persisted and
+        // its reply has not landed yet.
+        let older = UUID()
+        appGroup.set(older.uuidString, forKey: "watch.inFlight.conversationID")
+        appGroup.set(Date().timeIntervalSinceReferenceDate, forKey: "watch.inFlight.startedAt")
+
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        service.recordPermissionRequest = { false }
+        let picked = RemoteAgentRef.custom(UUID()).rawString
+
+        XCTAssertEqual(service.startCapture(boundTo: .new(backendRef: picked), requestID: UUID()), .started)
+        XCTAssertNil(service.inFlightConversationID,
+                     "Control: a `.new` draft pins nothing until the hop mints — the state this case is about.")
+        // The relay leg: `.uploading` from the moment the recorder stops until
+        // the transcript comes back, without a microphone.
+        service.state = .uploading
+
+        service.handleBackgroundReply(
+            "an answer to the older turn",
+            conversationID: older,
+            messageID: UUID()
+        )
+
+        XCTAssertEqual(service.state, .uploading,
+                       "An older turn's reply may not release a capture that is still uploading.")
+        XCTAssertEqual(WatchSettingsReader.shared.peekPendingInAppNewConversationBackend(), picked,
+                       "The pick lives only in the hint until the hop consumes it — clearing it re-routes the "
+                       + "person's words to whichever gateway happens to be default.")
+        XCTAssertNil(appGroup.string(forKey: "watch.inFlight.conversationID"),
+                     "The dead turn's persisted marker still goes — it is the live capture's state that must not.")
+        service.cancelRecording()
+    }
+
+    /// The failure counterpart of `testAnOlderChatReplyDoesNotReleaseALiveWorkSave`,
+    /// and the same defect through the other door: an older Chat turn FAILING
+    /// while a private save owns the machine. Work has no conversation to pin,
+    /// so a pin-only guard permits `state = .error` — which returns the wrist to
+    /// a screen that admits another capture while Work's pipeline is still
+    /// running, and that pipeline's `recordingFileURL = nil` then erases the
+    /// replacement recording's handle.
+    func testAnOlderChatFailureDoesNotReleaseALiveWorkSave() {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        service.recordPermissionRequest = { false }
+
+        XCTAssertEqual(service.startWorkCapture(requestID: UUID()), .started)
+        XCTAssertEqual(service.captureDestination, .work,
+                       "Control: the machine really is running the Work lane.")
+        service.state = .uploading
+
+        service.handleBackgroundFailure("an older turn failed", conversationID: UUID())
+
+        XCTAssertEqual(service.state, .uploading,
+                       "The save still owns the machine — a failure that belongs to no capture on it may not "
+                       + "hand it over.")
+        XCTAssertEqual(service.captureDestination, .work)
+        service.cancelRecording()
+    }
+
+    /// And the unminted Ask, failing side. Same machine as the reply case
+    /// above: a live draft with no pin yet, and an older turn's failure that a
+    /// pin-only guard reads as its own.
+    func testAnOlderChatFailureDoesNotReleaseANewUnmintedAsk() {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        service.recordPermissionRequest = { false }
+        let picked = RemoteAgentRef.custom(UUID()).rawString
+
+        XCTAssertEqual(service.startCapture(boundTo: .new(backendRef: picked), requestID: UUID()), .started)
+        XCTAssertNil(service.inFlightConversationID,
+                     "Control: nothing is pinned yet, which is why the pin alone cannot answer this.")
+        service.state = .uploading
+
+        service.handleBackgroundFailure("an older turn failed", conversationID: UUID())
+
+        XCTAssertEqual(service.state, .uploading,
+                       "An older turn's failure must not surface as this capture's, nor free the machine under it.")
+        XCTAssertEqual(WatchSettingsReader.shared.peekPendingInAppNewConversationBackend(), picked,
+                       "…and it must not take the pick with it.")
+        service.cancelRecording()
+    }
+
+    /// The upgrade case the queue cannot ask anybody about: an entry written by
+    /// a build that predates `Entry.backendRef`, so it carries neither a pin nor
+    /// an addressed gateway. What it DOES tell us is that the capture was
+    /// always-new — every capture that continues a thread pins it — so the
+    /// replay mints its own conversation. Continuing whichever thread the
+    /// pointer happens to hold minutes later would put words the person spoke
+    /// into a new chat inside an existing one.
+    func testALegacyUnboundDeferredAskMintsInsteadOfContinuingTheActiveThread() async throws {
+        // Nothing configured, so the hop mints and then stops at the
+        // not-configured gate — the mint is the whole measurement, and no
+        // network is reachable.
+        let store = ConversationStore(inMemory: true)
+        let service = WatchRecordingService()
+        service.store = store
+        let reader = WatchSettingsReader.shared
+        let pointed = try await store.createConversation(backend: reader.defaultBackendRef)
+        reader.recordActiveConversation(pointed.id)
+        XCTAssertEqual(reader.resolveActiveConversationID(), pointed.id,
+                       "Control: the pointer is fresh and resolvable, or the arm this case removes is never reached.")
+        XCTAssertEqual(pointed.backend, reader.defaultBackendRef,
+                       "Control: the pointed thread is bound to the CURRENT default, which is what the pointer arm "
+                       + "requires before it continues one.")
+
+        await service.startDeferredConverseHop(transcript: "an older ask", boundTo: nil)
+
+        let rows = try await store.fetchConversations()
+        XCTAssertEqual(rows.count, 2,
+                       "A replayed always-new capture mints its own conversation: \(rows.map(\.backend))")
+        XCTAssertEqual(service.captureMintCount, 1)
+        XCTAssertNotEqual(service.inFlightConversationID, pointed.id,
+                          "The deferred turn must not be resolved into the thread the pointer happens to name.")
+    }
+
+    /// A dismissed Work error leaves the lane stamped `.work`, and the deferred
+    /// drain takes the machine over without passing `startCapture` — the one
+    /// entry point that stamps. So the deferred hop stamps it itself: a real
+    /// gateway turn running under the launchpad's "Saving to Work…" caption is
+    /// the one sentence this lane must never show.
+    func testADeferredChatTurnClearsAStaleWorkStamp() async {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        service.recordPermissionRequest = { false }
+
+        service.startWorkCapture(requestID: UUID())
+        await settle { if case .error = service.state { return true } else { return false } }
+        XCTAssertEqual(service.captureDestination, .work,
+                       "Control: the lane is genuinely stamped Work before the deferred turn.")
+        service.dismissError()
+        XCTAssertEqual(service.captureDestination, .work,
+                       "Control: dismissing the error does not un-stamp the lane — that is why the hop must.")
+
+        await service.startDeferredConverseHop(transcript: "an older ask", boundTo: nil)
+
+        XCTAssertEqual(service.captureDestination, .chat,
+                       "A gateway turn must never be described to the person as a save to Work.")
+    }
+
+    /// The capacity hand-off the chooser now reaches one tap sooner. Work
+    /// entries are eviction-exempt, so a full queue refuses the pick BEFORE the
+    /// microphone arms — and, far more importantly, without disturbing a single
+    /// recording already waiting on the iPhone.
+    func testAFullQueueRefusesTheWorkPickBeforeArmingAndKeepsEveryQueuedRecording() throws {
+        let queue = AppleRelayPendingQueue.shared
+        XCTAssertLessThan(queue.entryCount, AppleRelayPendingQueue.maxEntryCount,
+                          "Control: a sibling left the relay queue at capacity, so this case would seed nothing.")
+
+        var seeded: [(id: String, bytes: Data)] = []
+        defer {
+            // Only the entries this case created — `StorageTestSupport`
+            // isolates defaults and secrets, not the queue's audio directory.
+            for entry in seeded { _ = queue.claimEntry(requestID: entry.id) }
+        }
+        var filler: UInt8 = 0x10
+        while queue.entryCount < AppleRelayPendingQueue.maxEntryCount {
+            let id = "work-capacity-\(UUID().uuidString)"
+            let bytes = Data(repeating: filler, count: 2048)
+            filler &+= 1
+            let source = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(id).m4a")
+            try bytes.write(to: source)
+            queue.enqueue(requestID: id, audioFileURL: source, language: nil, destination: .work)
+            seeded.append((id: id, bytes: bytes))
+        }
+        XCTAssertFalse(seeded.isEmpty, "Control: the queue must have been filled by THIS case.")
+
+        final class CallBox: @unchecked Sendable {
+            var permission = 0
+            var activation = 0
+        }
+        let calls = CallBox()
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        service.recordPermissionRequest = { calls.permission += 1; return false }
+        service.recordSessionActivator = { calls.activation += 1 }
+
+        let request = UUID()
+        let outcome = service.startWorkCapture(requestID: request)
+
+        XCTAssertEqual(outcome, .refusedBusy)
+        XCTAssertEqual(calls.permission, 0, "The refusal must come BEFORE the microphone is asked for.")
+        XCTAssertEqual(calls.activation, 0, "…and before the audio session is activated.")
+        XCTAssertEqual(service.state, .idle, "Nothing was armed, so the machine stays idle.")
+        XCTAssertEqual(service.workCaptureID, request,
+                       "The refusal belongs to the screen this start was pushed for.")
+        XCTAssertEqual(service.workCaptureOutcome,
+                       .refused(reason: WatchWorkCaptureRefusal.queueFull.message))
+        XCTAssertEqual(service.captureDestination, .chat,
+                       "The lane stamp is written only on an ACCEPTED start.")
+
+        for entry in seeded {
+            let queued = try XCTUnwrap(queue.peekEntry(requestID: entry.id),
+                                       "A refused Work pick must evict nothing — entry \(entry.id.prefix(8)) is gone.")
+            let bytes = try Data(contentsOf: URL(fileURLWithPath: queued.audioFilePath))
+            XCTAssertEqual(bytes, entry.bytes,
+                           "A queued recording exists nowhere else; its bytes must survive the refusal intact.")
+        }
+    }
+
+    /// A deferred dispatch is UNPINNED for its whole first suspension — it
+    /// occupies the machine synchronously and only creates its conversation
+    /// several awaits later — and an unowned `.waiting` is exactly the shape
+    /// `liveTurnOwns` reads as a RESTORED wait. So an older Chat reply landing
+    /// in that window used to take the machine back to `.idle`, which admits a
+    /// Work capture; the hop then resumed, wrote `.waiting` over the live
+    /// recording, and `stopRecording()` refused to save it because the state was
+    /// no longer `.recording`. The person's words reached nothing at all.
+    ///
+    /// Reproduced at the boundary that matters — the machine's state during the
+    /// hop's unminted window — rather than by racing a real await.
+    func testAnOlderChatReplyCannotReleaseTheMachineUnderADeferredDispatch() async {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        // No gateway is configured, so the hop mints nothing and lands on the
+        // not-configured error — the mint is not what this case measures.
+        let older = UUID()
+
+        // The synchronous half of `startDeferredConverseHop`, which is the whole
+        // of the window: `.waiting`, no pin, and nothing minted yet.
+        let hop = Task { await service.startDeferredConverseHop(transcript: "an older ask", boundTo: nil) }
+        await Task.yield()
+        XCTAssertNil(service.inFlightConversationID,
+                     "Control: the hop holds no pin yet, which is why the pin alone cannot answer this.")
+
+        service.handleBackgroundReply("an answer to something else",
+                                      conversationID: older,
+                                      messageID: UUID())
+
+        if case .idle = service.state {
+            XCTFail("An older turn's reply released the machine under a live deferred dispatch. "
+                    + "A Work capture starts on that idle machine and the resumed hop writes `.waiting` "
+                    + "over its live recording — Stop then saves nothing.")
+        }
+        await hop.value
+        service.dismissError()
+    }
+
+    /// The `.work` lane guard in `handleBackgroundFailure`, ISOLATED. Every
+    /// other Work fixture also fails the ownership guard beside it, so deleting
+    /// the lane guard leaves them green. A nil `conversationID` — the STT
+    /// funnel's and the upload watchdog's shape — skips the ownership guard by
+    /// design, so it is the only fixture the lane guard alone answers.
+    func testAnUnmatchableFailureCannotReleaseALiveWorkSave() {
+        let service = WatchRecordingService()
+        service.store = ConversationStore(inMemory: true)
+        service.recordPermissionRequest = { false }
+
+        XCTAssertEqual(service.startWorkCapture(requestID: UUID()), .started)
+        service.state = .uploading
+
+        service.handleBackgroundFailure("an unmatchable turn failed", conversationID: nil)
+
+        XCTAssertEqual(service.state, .uploading,
+                       "A nil-conversation failure keeps its takeover for CHAT only — on Work it releases a save "
+                       + "whose relay is still running, and that relay's `recordingFileURL = nil` then erases the "
+                       + "next capture's handle.")
+        XCTAssertEqual(service.captureDestination, .work)
+        service.cancelRecording()
     }
 }
 

@@ -315,25 +315,24 @@ final class DiagnosticsRunner {
             || voicePreview == .preparing || voicePreview == .playing
     }
 
-    /// Everything amber-or-red the screen currently shows, in one number — the
-    /// summary's source of truth. Counts failed/warning check rows PLUS the
-    /// states held OUTSIDE `checks`: the Active-setup provider warnings, each
-    /// file lane's failure/unconfirmed badge, and the Watch health block's
-    /// denied-permission lines (only while the live Watch row renders them) — so
-    /// a green "Checks passed" can never sit above a visible amber line.
+    /// Count actionable problems, rather than repeated symptoms of one problem.
+    /// A missing shared voice key can affect setup, auth, transcription and
+    /// playback at once. It remains one repair. Hidden sections and optional
+    /// notification limitations never create an unexplained summary warning.
     var attentionCount: Int {
-        var count = 0
-        for check in checks {
+        var problems: Set<String> = []
+        for check in checks where checkIsVisible(check) {
+            guard check.id != "connection.notifications" else { continue }
             switch check.status {
-            case .failed, .warning: count += 1
+            case .failed, .warning: problems.insert(attentionKey(for: check))
             default: break
             }
         }
-        if let setup = activeVoiceSetup {
-            if setup.sttStatus == .warning { count += 1 }
-            if setup.ttsStatus == .warning { count += 1 }
+        if showsVoiceSection, let setup = activeVoiceSetup {
+            if setup.sttStatus == .warning { problems.insert("voice.key.\(activeSTTCredentialID)") }
+            if setup.ttsStatus == .warning { problems.insert("voice.key.\(activeTTSCredentialID)") }
         }
-        count += fileLanes.filter(\.needsAttention).count
+        var count = problems.count + fileLanes.filter(\.needsAttention).count
         // Watch amber lines render only under the LIVE row form with the same
         // state the view shows (fresh reply, or the preserved last-good facts).
         if checks.first(where: { $0.id == Self.watchCheckID })?.status == .passed,
@@ -342,17 +341,73 @@ final class DiagnosticsRunner {
                 if case .reply(let state) = outcome { return state }
                 return watchHealth
             }()
-            count += rendered?.attentionCount ?? 0
+            // Watch notifications are optional just like this device's. A
+            // microphone refusal prevents a capture and remains actionable.
+            if rendered?.micPermission == "denied" { count += 1 }
         }
         return count
     }
 
-    /// Gate for the green "Checks passed" verdict: the real sweep has run at
-    /// least once, nothing is in flight, and no row is still settling. Config
-    /// reads alone must never mint a green verdict — an untested setup isn't a
-    /// passing one.
+    /// A completed run is evidence about the setup it tested. Editing, adding or
+    /// removing a lane invalidates that scope, even if all local reads look good.
     var checksSettledGreen: Bool {
-        connectionChecksHaveRun && !isBusy && !checks.contains { $0.status == .running }
+        connectionChecksHaveRun && completedSetupIdentity == currentSetupIdentity
+            && !isBusy && untestedCheckCount == 0
+            && !checks.contains { checkIsVisible($0) && $0.status == .running }
+    }
+
+    /// Checks included in the main run that still have no result for this setup.
+    /// Playback is deliberately separate because its test speaks aloud.
+    var untestedCheckCount: Int {
+        checks.filter {
+            checkIsVisible($0)
+                && ($0.tier != .autoRead || $0.id == "voice.mic.permission" || $0.id == "voice.speech.permission")
+                && $0.id != "voice.tts.preview"
+                && ($0.status == .notRun || $0.status == .running)
+        }.count + fileLanes.filter {
+            $0.configured && ($0.reachAuth == .notRun || $0.reachAuth == .running)
+        }.count
+    }
+
+    var voicePreviewNeedsTest: Bool {
+        showsVoiceSection && checks.first { $0.id == "voice.tts.preview" }?.status == .notRun
+    }
+
+    /// The bundled clip does not need microphone access. Apple's transcription
+    /// does need Speech permission; show its existing Allow/Settings row before
+    /// attempting a test, rather than manufacture a provider failure.
+    var transcriptionTestPrerequisite: DiagnosticPermission? {
+        showsVoiceSection && factSpeechApplicable && speechRecognitionPermissionState != .allowed
+            ? .speechRecognition : nil
+    }
+
+    private func checkIsVisible(_ check: DiagnosticCheck) -> Bool {
+        switch check.category {
+        case .voice: return showsVoiceSection
+        case .sync: return showsSyncSection
+        default: return true
+        }
+    }
+
+    private func attentionKey(for check: DiagnosticCheck) -> String {
+        if check.id == "voice.stt.auth" || check.id == "voice.stt.test" {
+            if activeVoiceSetup?.sttStatus == .warning { return "voice.key.\(activeSTTCredentialID)" }
+            if case .failed(let code) = check.status {
+                if code == AppError.speechPermissionDenied.errorCode { return "voice.speech.permission" }
+                if code == AppError.sttAuthFailed.errorCode || code == AppError.sttMissingAPIKey.errorCode
+                    || code == AppError.sttKeyUnreadable.errorCode {
+                    return "voice.key.\(activeSTTCredentialID)"
+                }
+                return "voice.stt.error.\(code.map(String.init) ?? "unknown")"
+            }
+        }
+        if check.id == "voice.tts.preview" {
+            if activeVoiceSetup?.ttsStatus == .warning { return "voice.key.\(activeTTSCredentialID)" }
+            if case .failed(let code) = check.status, code == AppError.ttsUnauthorized.errorCode {
+                return "voice.key.\(activeTTSCredentialID)"
+            }
+        }
+        return check.id
     }
 
     /// The gateway the failing conversation is bound to (banner deep-link source).
@@ -459,6 +514,31 @@ final class DiagnosticsRunner {
     /// gateway's config changed mid-probe.
     private var gatewaySignatures: [RemoteAgentRef: String] = [:]
 
+    private struct SetupIdentity: Equatable {
+        let gateways: [RemoteAgentRef: String]
+        let files: [RemoteAgentRef: String]
+        let stt: String?
+        let tts: String?
+    }
+    private var currentSetupIdentity: SetupIdentity {
+        SetupIdentity(gateways: gatewaySignatures, files: fileLaneSignatures,
+                      stt: showsVoiceSection ? activeSTTSignature : nil,
+                      tts: showsVoiceSection ? activeTTSSignature : nil)
+    }
+    private var completedSetupIdentity: SetupIdentity?
+    private var activeSTTCredentialID = "apple-on-device"
+    private var activeTTSCredentialID = "apple-tts"
+
+    /// Narrow operation seams keep orchestration tests on the production path
+    /// without contacting providers, playing audio, or asking for permissions.
+    private let gatewayProbe: (@Sendable (GatewayProbeInput) async -> DiagnosticStatus)?
+    private let transcriptionProbe: (@Sendable () async throws -> String)?
+    private let fileTransferProbe: (@Sendable (SettingsManager.FileTransferSnapshot) async -> FileTransferTestResult)?
+    private let voicePermissions: (@Sendable () -> (microphone: DiagnosticPermissionState, speech: DiagnosticPermissionState))?
+    /// Lets a regression hold the stale-result cleanup at its suspension point;
+    /// production immediately continues into the local configuration refresh.
+    private let fileTransferCleanupWillRefresh: (@Sendable () async -> Void)?
+
     /// Single latch around BOTH the initial `runAutoReads` phase-2 connectivity
     /// probe AND `reprobeConnectivity`, so a foreground re-derive can't race a
     /// second probe against the first one still landing (Codex catch 4).
@@ -492,7 +572,9 @@ final class DiagnosticsRunner {
     private var factCamera = "n/a"
     private var factShareInboxStuck = 0
     private var factShareTargetsHealthy = "n/a"
-    private var factPendingRetry = "none"
+    // Populated only by the explicit report action; never a setup check.
+    private var factPendingRetry = "not-read"
+    private let pendingRetrySnapshot: @Sendable () async -> PendingRetryDiagnosticSnapshot?
     private var factStorage = "unknown"
     /// Chunk-2 capability facts (platform-scoped; `"n/a"` where inapplicable).
     private var factBackgroundRefresh = "n/a"
@@ -561,10 +643,22 @@ final class DiagnosticsRunner {
     init(
         focusedRef: RemoteAgentRef? = nil,
         focusedErrorCode: Int? = nil,
-        watchHealthTransport: (any WatchHealthTransport)? = nil
+        watchHealthTransport: (any WatchHealthTransport)? = nil,
+        gatewayProbe: (@Sendable (GatewayProbeInput) async -> DiagnosticStatus)? = nil,
+        transcriptionProbe: (@Sendable () async throws -> String)? = nil,
+        fileTransferProbe: (@Sendable (SettingsManager.FileTransferSnapshot) async -> FileTransferTestResult)? = nil,
+        voicePermissions: (@Sendable () -> (microphone: DiagnosticPermissionState, speech: DiagnosticPermissionState))? = nil,
+        fileTransferCleanupWillRefresh: (@Sendable () async -> Void)? = nil,
+        pendingRetrySnapshot: (@Sendable () async -> PendingRetryDiagnosticSnapshot?)? = nil
     ) {
         self.focusedRef = focusedRef
         self.focusedErrorCode = focusedErrorCode
+        self.gatewayProbe = gatewayProbe
+        self.transcriptionProbe = transcriptionProbe
+        self.fileTransferProbe = fileTransferProbe
+        self.voicePermissions = voicePermissions
+        self.fileTransferCleanupWillRefresh = fileTransferCleanupWillRefresh
+        self.pendingRetrySnapshot = pendingRetrySnapshot ?? { await PendingRetryStore.shared.diagnosticSnapshot() }
         #if os(iOS)
         self.watchHealthTransport = watchHealthTransport ?? WCSessionWatchHealthTransport()
         #else
@@ -679,7 +773,8 @@ final class DiagnosticsRunner {
         // demotion gate and the red/amber colour gate can never disagree.
         let pickerSnap = await manager.newChatPickerSnapshot()
         let defaultRef = pickerSnap.defaultRef
-        let sttSnapshot = await manager.activeSTTSnapshot()
+        let sttConfiguration = await manager.diagnosticSTTConfiguration()
+        let sttSnapshot = sttConfiguration.snapshot
         let ttsSnapshot = await manager.activeTTSSnapshot()
         let storedKeys = await manager.presetIDsWithStoredKey()
         let roster = await manager.customVoiceEndpoints()
@@ -748,7 +843,6 @@ final class DiagnosticsRunner {
         // metadata decode / volume capacity), no network, no prompt.
         let stuckShareCount = await SharedInboxDrainer.shared.diagnosticStuckCount()
         let shareTargetsHealthy = Self.shareTargetsSnapshotHealthy(hasGateways: !refs.isEmpty)
-        let pendingRetry = await PendingRetryStore.shared.diagnosticSnapshot()
         let storageFreeBytes = Self.appGroupFreeBytes()
         // Recent FAILED sends — the same singleton-diagnostic-accessor idiom as
         // the two reads above, and deliberately on THIS tier: a local Core Data
@@ -833,7 +927,8 @@ final class DiagnosticsRunner {
         // --- Permission STATUS reads (no prompt) -------------------------------
         let micStatus = AVAudioApplication.shared.recordPermission
         let micName = Self.recordPermissionName(micStatus)
-        let micPermissionState = Self.recordPermissionState(micStatus)
+        let injectedPermissions = voicePermissions?()
+        let micPermissionState = injectedPermissions?.microphone ?? Self.recordPermissionState(micStatus)
         let micCheckStatus = micPermissionState.diagnosticStatus(failureCode: nil)
 
         var speechName = "unavailable"
@@ -843,7 +938,7 @@ final class DiagnosticsRunner {
         #if !os(watchOS)
         let speechStatus = AppleSpeechRunner.currentAuthorizationStatus()
         speechName = Self.speechStatusName(speechStatus)
-        speechPermissionState = Self.speechPermissionState(speechStatus)
+        speechPermissionState = injectedPermissions?.speech ?? Self.speechPermissionState(speechStatus)
         // The Speech-Recognition permission only matters when the active STT
         // provider is Apple on-device (in-process); otherwise it is N/A.
         speechApplicable = (sttSnapshot.provider.transport == .inProcess)
@@ -981,8 +1076,8 @@ final class DiagnosticsRunner {
         }
 
         // Apple Watch link (iOS/iPadOS) — is the watch talking to the phone? INFO,
-        // not red: hide if not paired; WARN only when Conduck is missing from the
-        // wrist; a paired-but-unreachable watch is merely asleep (settings queue
+        // not red: hide if not paired; an uninstalled optional app is neutral;
+        // a paired-but-unreachable watch is merely asleep (settings queue
         // via `transferUserInfo`), so it stays informational. The master switch is
         // checked FIRST — a user who turned Watch sync off deliberately gets a
         // neutral "turned off" row (Diagnostics can now explain it), never a
@@ -1117,13 +1212,14 @@ final class DiagnosticsRunner {
 
         // Signatures that gate result carry-over on a live re-derive. They capture
         // the probe INPUTS (provider id + key + model + the resolved BYO-endpoint
-        // config + TTS voice), not just presence — so FIXING a typo'd key OR a
+        // config + Apple engine + TTS voice), not just presence — so FIXING a typo'd key OR a
         // custom endpoint's URL/auth/pin (each posts `.settingsDidChangeRemotely`)
         // changes the signature and RESETS the stale result instead of carrying it.
         // Hashed so no secret is stored in a comparable field.
         let newSTTSignature = Self.voiceSignature(
             id: sttSnapshot.presetID, apiKey: sttSnapshot.apiKey, model: sttSnapshot.customModel,
-            endpoint: sttSnapshot.customConfig.map { Self.endpointComponent(url: $0.url, model: $0.model, auth: $0.auth, pin: $0.certFingerprint) }
+            endpoint: sttSnapshot.customConfig.map { Self.endpointComponent(url: $0.url, model: $0.model, auth: $0.auth, pin: $0.certFingerprint) },
+            engine: sttConfiguration.appleEngine?.rawValue
         )
         let newTTSSignature = Self.voiceSignature(
             id: ttsSnapshot.providerID, apiKey: ttsSnapshot.apiKey, model: ttsSnapshot.customModel,
@@ -1138,7 +1234,7 @@ final class DiagnosticsRunner {
         // the red mic row. `.undetermined` stays hidden (no nagging a user who
         // never asked). `speechCheckStatus` is `.failed` only when Apple on-device
         // STT is active AND speech is denied/restricted.
-        let micDenied = (micStatus == .denied)
+        let micDenied = (micPermissionState == .denied)
         var speechDenied = false
         #if !os(watchOS)
         if case .failed = speechCheckStatus { speechDenied = true }
@@ -1147,10 +1243,9 @@ final class DiagnosticsRunner {
             hasStoredKeys: !storedKeys.isEmpty,
             sttInProcess: sttSnapshot.provider.transport == .inProcess,
             ttsIsApple: ttsSnapshot.providerID == TTSProvider.appleTTS.id,
-            micGranted: micStatus == .granted,
+            micGranted: micPermissionState == .allowed,
             micDenied: micDenied,
-            speechDeniedOrRestricted: speechDenied,
-            hasPendingRetry: pendingRetry != nil
+            speechDeniedOrRestricted: speechDenied
         )
         // Sync section shows for iCloud OR a paired Watch. Don't drop a
         // phase-2-widened sync section on a live re-derive.
@@ -1362,39 +1457,8 @@ final class DiagnosticsRunner {
             ))
         }
 
-        // Parked failed-transcription retry (hidden when none) — a recording is
-        // waiting in the single retry slot with a 10-minute TTL; the row names
-        // the REMAINING time (not the full TTL) and the platform's recovery
-        // surface. A missing audio file (metadata orphan) is called out — the
-        // row must not promise a retry that would immediately fail. Presence
-        // FORCE-SHOWS the Voice section (`hasPendingRetry` above).
-        if let pendingRetry {
-            let remaining = Self.pendingRetryRemainingMinutes(createdAt: pendingRetry.createdAt)
-            factPendingRetry = pendingRetry.audioFileExists
-                ? "parked(code \(pendingRetry.lastErrorCode.map(String.init) ?? "none"), \(remaining)m left)"
-                : "orphaned"
-            let retryDetail: String
-            if !pendingRetry.audioFileExists {
-                retryDetail = String(localized: "diagnostics.voice.pendingRetry.orphaned", defaultValue: "A failed transcription left a retry behind, but its recording file is missing — record again.")
-            } else {
-                #if os(macOS)
-                retryDetail = String(localized: "diagnostics.voice.pendingRetry.mac", defaultValue: "A recording from a failed transcription is waiting — retry it from the menu-bar voice window within the next \(remaining) min.")
-                #else
-                retryDetail = String(localized: "diagnostics.voice.pendingRetry.ios", defaultValue: "A recording from a failed transcription is waiting — retry it from the composer within the next \(remaining) min.")
-                #endif
-            }
-            built.append(DiagnosticCheck(
-                id: "voice.pendingRetry",
-                title: String(localized: "diagnostics.voice.pendingRetry", defaultValue: "Recording waiting to retry"),
-                category: .voice,
-                tier: .autoRead,
-                status: .warning,
-                detail: retryDetail,
-                role: nil, reportLabel: nil
-            ))
-        } else {
-            factPendingRetry = "none"
-        }
+        // Individual captures belong to their recovery surfaces. Diagnostics
+        // checks setup; queue counts are read only for the requested support report.
 
         // Files. The per-gateway file lanes live OUTSIDE `checks` (in `fileLanes`)
         // so a custom gateway NAME can't reach `copyBlock()` — no `files.*` row is
@@ -1433,11 +1497,9 @@ final class DiagnosticsRunner {
             detail: iCloudDetail,
             role: nil, reportLabel: nil
         ))
-        // Status/detail derived by the shared `syncEventsRowState` helper: a single
-        // historical FAIL that CloudKit already retried past is normal cold-start
-        // noise, so the row only warns when sync looks CURRENTLY stuck (an unbroken
-        // failure tail); recovered errors stay green so a healthy setup never cries
-        // wolf. The raw error count still travels in `copyBlock()` for support.
+        // Historical events are evidence about those attempts only. An import
+        // success does not prove a failed export recovered, and an undated tail
+        // cannot establish a current outage. Live iCloud status owns that warning.
         let syncEventsState = Self.syncEventsRowState(syncLines)
         built.append(DiagnosticCheck(
             id: "sync.events",
@@ -1509,6 +1571,8 @@ final class DiagnosticsRunner {
         gatewaySignatures = newGatewaySignatures
         activeSTTSignature = newSTTSignature
         activeTTSSignature = newTTSSignature
+        activeSTTCredentialID = sttSnapshot.presetID
+        activeTTSCredentialID = TTSProvider.lookup(id: ttsSnapshot.providerID).sharedKeySTTPresetID ?? ttsSnapshot.providerID
         microphonePermissionState = micPermissionState
         speechRecognitionPermissionState = speechPermissionState
         notificationPermissionState = notifPermissionState
@@ -1523,6 +1587,11 @@ final class DiagnosticsRunner {
             )
             : nil
         showsVoiceSection = voiceConfigured
+        if let completedSetupIdentity, completedSetupIdentity != currentSetupIdentity {
+            connectionChecksHaveRun = false
+            lastChecked = nil
+            self.completedSetupIdentity = nil
+        }
         showsSyncSection = newShowsSync
         // Category-driven: Capabilities shows whenever any `.capability` row exists
         // (Notifications always does on iOS/macOS; the macOS Screen-Recording row
@@ -1706,12 +1775,9 @@ final class DiagnosticsRunner {
     /// one tap. Deliberately does NOT call `runVoicePreview()`: voice PLAYBACK is a
     /// physical-world side effect (the device speaks aloud) and stays its own tap.
     ///
-    /// No preflight gate: each callee is SELF-STAGING — the write test re-checks
-    /// reachability→auth→write→read from scratch (fails fast on a down server, no
-    /// wasted mutation) and the transcription makes the real call whose own error
-    /// IS the diagnostic. A "skip unless the sweep's reachAuth passed" gate would be
-    /// redundant AND wrong (it would skip a keyless custom STT, and a `.warning`
-    /// file lane — the exact ambiguous lane the write test exists to resolve).
+    /// File tests stage their own checks. Transcription runs only for relevant
+    /// voice setup whose local prerequisites exist; an unused default voice or
+    /// a missing permission must not produce a hidden failure or an OS prompt.
     func runAllTests() async {
         // Block if ANY test (full or a manual per-row action) is already running,
         // so the sweep can't race an in-flight row test on the same lane's state.
@@ -1736,7 +1802,9 @@ final class DiagnosticsRunner {
             for ref in writeRefs {
                 group.addTask { await self.runFileTransferTest(for: ref) }
             }
-            group.addTask { await self.runTranscriptionTest() }
+            if showsVoiceSection {
+                group.addTask { await self.runTranscriptionTest() }
+            }
             #if os(iOS)
             group.addTask { await self.sweepWatchHealthLeg() }
             #endif
@@ -1744,7 +1812,8 @@ final class DiagnosticsRunner {
 
         // Re-stamp AFTER the fan-out (the sweep stamped it at its own, earlier end)
         // so "Last checked" reflects when the whole run finished.
-        lastChecked = Date()
+        await refreshConfig()
+        if connectionChecksHaveRun { lastChecked = Date() }
     }
 
     // MARK: - Tier 2: explicit connection sweep (network / auth probes)
@@ -1771,6 +1840,7 @@ final class DiagnosticsRunner {
         // + permissions first, so "Refresh" updates the notification/permission
         // rows and the "Active setup" block, not just the network probes.
         if !didAutoRead { await runAutoReads() } else { await refreshConfig() }
+        let setupAtDispatch = currentSetupIdentity
 
         let manager = SettingsManager.shared
         let refs = await manager.configuredRemoteAgentRefs()
@@ -1817,7 +1887,7 @@ final class DiagnosticsRunner {
         // slots, never a hardcoded bearer, never an unpinned session.
         let sttSnapshot = await manager.activeSTTSnapshot()
         var sttInput: STTProbeInput?
-        if sttSnapshot.provider.transport != .inProcess {
+        if showsVoiceSection, sttSnapshot.provider.transport != .inProcess {
             sttInput = STTProbeInput(
                 checkID: "voice.stt.auth",
                 apiKey: sttSnapshot.apiKey ?? "",
@@ -1834,7 +1904,7 @@ final class DiagnosticsRunner {
         // Run every probe concurrently, off the main actor; collect Sendable results.
         let results: [ConnectionProbeResult] = await withTaskGroup(of: ConnectionProbeResult.self) { group in
             for input in gatewayInputs {
-                group.addTask { .gatewayOrSTT(await Self.probeGateway(input), isLocalHost: input.isLocalHost) }
+                group.addTask { .gatewayOrSTT(await self.performGatewayProbe(input), isLocalHost: input.isLocalHost) }
             }
             if let sttInput {
                 group.addTask { .gatewayOrSTT(await Self.probeSTT(sttInput), isLocalHost: false) }
@@ -1885,8 +1955,10 @@ final class DiagnosticsRunner {
                 setFileLaneReachAuth(ref: ref, status, detail: detail)
             }
         }
-        lastChecked = Date()
-        connectionChecksHaveRun = true
+        await refreshConfig()
+        connectionChecksHaveRun = setupAtDispatch == currentSetupIdentity
+        completedSetupIdentity = connectionChecksHaveRun ? setupAtDispatch : nil
+        lastChecked = connectionChecksHaveRun ? Date() : nil
         // A full sweep re-probed every gateway, so the single-gateway stamp is
         // now redundant noise beside a fresher whole-run stamp.
         lastScopedGatewayCheck = nil
@@ -1992,7 +2064,7 @@ final class DiagnosticsRunner {
         let sweepGenerationAtDispatch = connectionSweepGeneration
 
         setStatus(input.checkID, .running)
-        let outcome = await Self.probeGateway(input)
+        let outcome = await performGatewayProbe(input)
 
         // Yield to a sweep that started while this probe was in flight: it re-ran
         // every row from scratch, so its verdict is at least as fresh as this one
@@ -2204,6 +2276,16 @@ final class DiagnosticsRunner {
         // is true only inside the sweep — the run's own post-sweep fan-out calls
         // this with the flag already cleared, so it is NOT blocked.)
         guard !isTestingConnections else { return }
+        if !didAutoRead { await runAutoReads() }
+        guard showsVoiceSection else { return }
+        guard transcriptionTestPrerequisite == nil else {
+            setStatus("voice.stt.test", .notRun,
+                      detail: Self.speechPermissionDetail(speechRecognitionPermissionState))
+            return
+        }
+        // The setup row already owns the missing/unreadable key repair. Do not
+        // bill or mint another failed row for a call that cannot authenticate.
+        guard activeVoiceSetup?.sttStatus != .warning else { return }
         // Non-re-entrant: guard on its own in-flight flag; reset unconditionally.
         guard !isTranscribing else { return }
         isTranscribing = true
@@ -2217,25 +2299,22 @@ final class DiagnosticsRunner {
         setStatus("voice.stt.test", .running)
 
         let snapshot = await SettingsManager.shared.activeSTTSnapshot()
-        guard let clipURL = Self.copyBundledProbeClip() else {
-            let code = AppError.invalidResponse.errorCode
-            setStatus("voice.stt.test", .failed(code: code), detail: DiagnosticsExplainer.explain(code: code).fix)
-            return
-        }
-
         do {
-            // `transcribe` deletes `audioFileURL` on every exit path — we pass a
-            // throwaway copy, never the read-only bundle resource.
-            let response = try await STTClient.shared.transcribe(
-                audioFileURL: clipURL,
-                apiKey: snapshot.apiKey ?? "",
-                language: nil,
-                provider: snapshot.provider,
-                customModel: snapshot.customModel,
-                customConfig: snapshot.customConfig
-            )
+            let text: String
+            if let transcriptionProbe {
+                text = try await transcriptionProbe()
+            } else {
+                guard let clipURL = Self.copyBundledProbeClip() else { throw AppError.invalidResponse }
+                // The client deletes its throwaway clip on every exit path.
+                let response = try await STTClient.shared.transcribe(
+                    audioFileURL: clipURL, apiKey: snapshot.apiKey ?? "", language: nil,
+                    provider: snapshot.provider, customModel: snapshot.customModel,
+                    customConfig: snapshot.customConfig
+                )
+                text = response.text
+            }
             guard activeSTTSignature == sigAtStart else { return }
-            let heard = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let heard = text.trimmingCharacters(in: .whitespacesAndNewlines)
             setStatus(
                 "voice.stt.test",
                 .passed,
@@ -2373,33 +2452,22 @@ final class DiagnosticsRunner {
         setFileLaneWriteRunning(ref: ref)
 
         guard let snapshot = await SettingsManager.shared.fileTransferSnapshot(for: ref) else {
-            let result = FileTransferTestResult(
-                reachedStage: .reachability,
-                success: false,
-                failure: .fileTransferNotConfigured
-            )
-            fileTransferResults[ref] = result
-            // Through the same commit as every other outcome of this test: a
-            // not-configured result concludes only that the lane is not ready,
-            // and routing it here keeps this screen with exactly ONE way of
-            // writing what a staged test learned.
-            await SettingsManager.shared.commitStagedFileTransferResult(result, for: ref)
-            let code = AppError.fileTransferNotConfigured.errorCode
-            updateFileLaneAfterWrite(ref: ref, success: false, code: code)
+            // A stale button can outlive Forget. Absence is not a failed test,
+            // and must not recreate verdict slots for a lane the user removed.
+            await discardStaleFileTestResult(for: ref)
             return
         }
 
-        let signatureAtDispatch = Self.fileLaneSignature(snapshot)
-        let result = await FileServerClient.runConnectionTest(snapshot: snapshot, session: session)
+        let result: FileTransferTestResult
+        if let fileTransferProbe {
+            result = await fileTransferProbe(snapshot)
+        } else {
+            result = await FileServerClient.runConnectionTest(snapshot: snapshot, session: session)
+        }
 
-        // Drop the outcome if the lane's config changed while the test ran —
-        // otherwise the OLD server's verdict gets persisted onto the NEW config
-        // (incl. `fileTransferAvailable`, which gates real transfers app-wide).
-        // Compared against the LIVE persisted config, not the runner's rebuild
-        // state, because persistence is what's at stake.
-        let liveSnapshot = await SettingsManager.shared.fileTransferSnapshot(for: ref)
-        guard Self.fileLaneSignature(liveSnapshot) == signatureAtDispatch else { return }
-
+        // Publish before the commit's settings notification can rebuild the
+        // same-config lane, retaining its staged detail. A stale commit refusal
+        // retires this display immediately through the shared cleanup below.
         fileTransferResults[ref] = result
         // THE SAME DURABLE COMMIT the Settings-side test makes, through the same
         // actor hop rather than through a second spelling of it. This screen runs
@@ -2410,14 +2478,48 @@ final class DiagnosticsRunner {
         // so a user who tested a listing-less server from Diagnostics got a
         // proven upload-only lane that kept a green badge everywhere while
         // dispatch silently stopped naming output folders.
-        await SettingsManager.shared.commitStagedFileTransferResult(result, for: ref)
+        // Identity comparison and persistence share one actor turn. A separate
+        // live read would leave an await in which Edit/Forget could move the lane
+        // before the old result enables it.
+        guard await Self.commitFileTestResultIfCurrent(result, for: ref, expected: snapshot) else {
+            await discardStaleFileTestResult(for: ref)
+            return
+        }
         await refreshFileLaneReturnCapability(for: ref)
+        // A settings observer can replace the visible lane during the commit's
+        // notification or the capability read. Never paint the old result onto it.
+        guard fileLaneSignatures[ref] == Self.fileLaneSignature(snapshot) else {
+            await discardStaleFileTestResult(for: ref)
+            return
+        }
         if result.success {
             updateFileLaneAfterWrite(ref: ref, success: true, code: nil)
         } else {
             let code = result.failure?.errorCode ?? AppError.fileTransferUploadFailed.errorCode
             updateFileLaneAfterWrite(ref: ref, success: false, code: code)
         }
+    }
+
+    /// The production commit boundary, callable with an isolated in-memory
+    /// manager by regression tests. All comparison and writes remain inside
+    /// the manager's single synchronous actor turn.
+    static func commitFileTestResultIfCurrent(
+        _ result: FileTransferTestResult,
+        for ref: RemoteAgentRef,
+        expected: SettingsManager.FileTransferSnapshot,
+        manager: SettingsManager = .shared
+    ) async -> Bool {
+        await manager.commitDiagnosticFileTestResultIfCurrent(result, for: ref, expected: expected)
+    }
+
+    /// Retire the old display immediately, but keep the caller's in-flight guard
+    /// until its defer runs. Releasing it before this await lets a replacement
+    /// test start, then the old defer would remove the replacement's guard.
+    private func discardStaleFileTestResult(for ref: RemoteAgentRef) async {
+        fileTransferResults[ref] = nil
+        setFileLaneReachAuth(ref: ref, .notRun, detail: nil)
+        await fileTransferCleanupWillRefresh?()
+        await refreshConfig()
     }
 
     /// Re-read `ref`'s PERSISTED listing verdict into the published mirror the
@@ -2569,6 +2671,15 @@ final class DiagnosticsRunner {
     }
 
     // MARK: - Copyable report (allowlist enforced by construction)
+
+    /// Queue context is useful to support, but is never part of setup health.
+    /// Fetch its reduced facts only when the user requests the report. Copying
+    /// again refreshes them without watching or polling individual recordings.
+    func prepareCopyBlock() async -> String {
+        let snapshot = await pendingRetrySnapshot()
+        factPendingRetry = snapshot?.reportFact ?? "none"
+        return copyBlock()
+    }
 
     /// A privacy-safe, support-shareable summary. Composes ONLY from the
     /// allowlisted facts captured during local reads + the per-check pass/fail
@@ -3107,8 +3218,8 @@ final class DiagnosticsRunner {
     /// prior lane's OLD readiness against the newly-committed one, concludes the
     /// evidence is stale, and deletes `fileTransferResults[ref]` — the very stage
     /// checklist the user just watched succeed, plus the `listingUnverified` signal
-    /// that `fileLaneReturnCaveat` says exists nowhere else. A lane testing right now
-    /// is about to publish its own authoritative answer, so nothing else may clear it.
+    /// that `fileLaneReturnCaveat` says exists nowhere else. A test against the
+    /// SAME identity owns that answer; a changed server must retire its spinner.
     static func mayCarryLaneEvidence(
         prior: FileLaneState,
         priorSignature: String?,
@@ -3116,8 +3227,8 @@ final class DiagnosticsRunner {
         available: Bool,
         testInFlight: Bool
     ) -> Bool {
-        if testInFlight { return true }
-        return priorSignature == signature && prior.writeVerified == available
+        guard priorSignature == signature else { return false }
+        return testInFlight || prior.writeVerified == available
     }
 
     private static func connectionCheckID(for ref: RemoteAgentRef) -> String {
@@ -3318,6 +3429,14 @@ final class DiagnosticsRunner {
         #endif
     }
 
+    private func performGatewayProbe(_ input: GatewayProbeInput) async -> ProbeOutcome {
+        if let gatewayProbe {
+            let status = await gatewayProbe(input)
+            return ProbeOutcome(checkID: input.checkID, status: status, detail: nil)
+        }
+        return await Self.probeGateway(input)
+    }
+
     private static func probeGateway(_ input: GatewayProbeInput) async -> ProbeOutcome {
         do {
             let outcome = try await RemoteAgentClient.shared.testConnection(
@@ -3499,19 +3618,14 @@ final class DiagnosticsRunner {
         ttsIsApple: Bool,
         micGranted: Bool,
         micDenied: Bool,
-        speechDeniedOrRestricted: Bool,
-        hasPendingRetry: Bool = false
+        speechDeniedOrRestricted: Bool
     ) -> Bool {
-        // `hasPendingRetry` force-shows the section: the parked-retry row lives
-        // in Voice, and a recording waiting to expire must never hide behind
-        // the section's configured/permission heuristics.
         hasStoredKeys
             || !sttInProcess
             || !ttsIsApple
             || micGranted
             || micDenied
             || speechDeniedOrRestricted
-            || hasPendingRetry
     }
 
     /// Compact relative age (`s`/`m`/`h`/`d`) for a ring event in the copy block —
@@ -3570,7 +3684,7 @@ final class DiagnosticsRunner {
     /// user stopped wearing is not a fault. Static + non-private for tests.
     static func watchRowState(installed: Bool, reachable: Bool, lastTurn: Date?) -> (status: DiagnosticStatus, detail: String) {
         if !installed {
-            return (.warning, String(localized: "diagnostics.sync.watch.notInstalled", defaultValue: "Conduck isn't installed on your Apple Watch — install it from the Watch app to use it on the wrist."))
+            return (.notApplicable, String(localized: "diagnostics.sync.watch.notInstalled", defaultValue: "Conduck isn't installed on your Apple Watch — install it from the Watch app to use it on the wrist."))
         }
         let base = reachable
             ? String(localized: "diagnostics.sync.watch.reachable", defaultValue: "Apple Watch is connected.")
@@ -3622,13 +3736,14 @@ final class DiagnosticsRunner {
     /// comparable field; the `#<hash>` still flips when the key/model is edited on the
     /// active provider, so a stale probe result is reset rather than carried. Stable
     /// within one process (the only scope a runner compares across).
-    private static func voiceSignature(id: String, apiKey: String?, model: String?, endpoint: String? = nil, voice: String? = nil) -> String {
+    private static func voiceSignature(id: String, apiKey: String?, model: String?, endpoint: String? = nil, voice: String? = nil, engine: String? = nil) -> String {
         var hasher = Hasher()
         hasher.combine(id)
         hasher.combine(apiKey)
         hasher.combine(model)
         hasher.combine(endpoint)
         hasher.combine(voice)
+        hasher.combine(engine)
         return "\(id)#\(hasher.finalize())"
     }
 
@@ -3759,11 +3874,9 @@ final class DiagnosticsRunner {
     }
 
     private static func notificationCheckStatus(_ s: UNNotificationSettings) -> DiagnosticStatus {
-        // The row exists to catch cases where a headless reply arrives with NO
-        // visible alert: an outright denial, OR authorized-but-alerts-off (which
-        // still delivers silently — a false-green if we checked auth alone).
-        // Not-determined is neutral with an explicit Allow action: it is neither
-        // a failure nor permission to claim that notifications work.
+        // Explain optional alert behavior without declaring the app broken.
+        // Disabled alerts remain neutral with an explicit Settings action;
+        // unrequested permission remains neutral with an Allow action.
         notificationDiagnosticStatus(
             permissionState: notificationPermissionState(s),
             alertsSuppressed: notificationAlertsSuppressed(s)
@@ -3778,8 +3891,8 @@ final class DiagnosticsRunner {
     ) -> DiagnosticStatus {
         switch permissionState {
         case .notRequested: return .notRun
-        case .denied, .restricted, .unknown: return .warning
-        case .allowed: return alertsSuppressed ? .warning : .passed
+        case .denied, .restricted, .unknown: return .notApplicable
+        case .allowed: return alertsSuppressed ? .notApplicable : .passed
         }
     }
 
@@ -3794,12 +3907,12 @@ final class DiagnosticsRunner {
     private static func notificationDetail(_ s: UNNotificationSettings) -> String {
         switch s.authorizationStatus {
         case .denied:
-            return String(localized: "diagnostics.notifications.denied", defaultValue: "Turn on notifications in system Settings — otherwise Shortcut and background replies arrive silently.")
+            return String(localized: "diagnostics.notifications.disabled.info", defaultValue: "Notifications are off. Shortcut and background replies arrive silently; enable notifications if you want alerts.")
         case .notDetermined:
             return String(localized: "diagnostics.permission.notRequested", defaultValue: "Not requested yet.")
         case .authorized, .provisional, .ephemeral:
             if notificationAlertsSuppressed(s) {
-                return String(localized: "diagnostics.notifications.alertsOff", defaultValue: "Notifications are allowed but alerts are off — Shortcut and background replies won't show. Turn on alerts in system Settings.")
+                return String(localized: "diagnostics.notifications.alertsOff.info", defaultValue: "Alerts are off. Shortcut and background replies arrive silently; enable alerts if you want them.")
             }
             return String(localized: "diagnostics.notifications.ok", defaultValue: "Shortcut and background replies can notify you.")
         @unknown default:
@@ -3844,13 +3957,6 @@ final class DiagnosticsRunner {
         return "ok"
     }
 
-    /// Whole minutes left before a parked retry's 10-minute TTL expires
-    /// (rounded up; floor 0). Pure — unit-tested at the TTL boundary.
-    static func pendingRetryRemainingMinutes(createdAt: Date, now: Date = Date()) -> Int {
-        let remaining = 600 - now.timeIntervalSince(createdAt)
-        return max(0, Int((remaining / 60).rounded(.up)))
-    }
-
     /// Share-sheet picker snapshot health: nil = no gateways configured (no
     /// expectation the file exists), true = exists + decodes, false = missing
     /// or undecodable while ≥1 gateway is configured (the appex would render
@@ -3867,31 +3973,20 @@ final class DiagnosticsRunner {
         return ShareTargetsSnapshot.decode(data) != nil
     }
 
-    /// (status, detail) for the `sync.events` row from the newest-last event log —
-    /// shared by every `performLocalReadsAndRebuild` pass. Warns ONLY when the
-    /// tail is an unbroken failure run ("currently stuck"); a recovered error stays
-    /// green so a healthy setup never cries wolf.
-    private static func syncEventsRowState(_ syncLines: [String]) -> (status: DiagnosticStatus, detail: String) {
+    /// Summarize recorded attempts without inferring recovery across event kinds
+    /// or turning an old failure into a standing warning.
+    static func syncEventsRowState(_ syncLines: [String]) -> (status: DiagnosticStatus, detail: String) {
         let errorCount = syncLines.filter { $0.contains("FAIL") }.count
-        // "Stuck" = the (up to 3-event) tail is an unbroken failure run. A log
-        // shorter than the window still counts — two failures and no success
-        // EVER is a current streak, not "recovered".
-        let recentTail = syncLines.suffix(3)
-        let stuck = !recentTail.isEmpty && recentTail.allSatisfy { $0.contains("FAIL") }
         let lastFailed = syncLines.last?.contains("FAIL") == true
         let detail: String
-        if stuck {
-            detail = String(localized: "diagnostics.sync.events.stuck", defaultValue: "Recent sync attempts are failing — check iCloud and your connection.")
-        } else if lastFailed {
-            // A trailing failure that hasn't reached streak length yet — say so;
-            // "recovered" is only true when the newest event succeeded.
-            detail = String(localized: "diagnostics.sync.events.latestFailed", defaultValue: "\(syncLines.count) recent sync events; the most recent attempt failed.")
+        if lastFailed {
+            detail = String(localized: "diagnostics.sync.events.history.latestFailed", defaultValue: "\(syncLines.count) recorded sync events; the last recorded attempt failed. This history does not establish current sync health.")
         } else if errorCount > 0 {
-            detail = String(localized: "diagnostics.sync.events.recovered", defaultValue: "\(syncLines.count) recent sync events; \(errorCount) earlier errors recovered.")
+            detail = String(localized: "diagnostics.sync.events.history.mixed", defaultValue: "\(syncLines.count) recorded sync events, including \(errorCount) failures. The last recorded attempt succeeded; earlier failures may concern a different sync operation.")
         } else {
             detail = String(localized: "diagnostics.sync.events.ok", defaultValue: "\(syncLines.count) recent sync events.")
         }
-        return (stuck ? .warning : .passed, detail)
+        return (.notApplicable, detail)
     }
 
     private static func iCloudReasonName(_ reason: CloudSyncMonitor.Reason) -> String {
@@ -3933,5 +4028,35 @@ final class DiagnosticsRunner {
         } catch {
             return nil
         }
+    }
+}
+
+private extension SettingsManager {
+    /// No suspension between identifying the server and recording its verdict.
+    /// Reuse the normal commit so every readiness/capability field and its one
+    /// settings notification stay identical to the existing test behavior.
+    func commitDiagnosticFileTestResultIfCurrent(
+        _ result: FileTransferTestResult,
+        for ref: RemoteAgentRef,
+        expected: FileTransferSnapshot
+    ) -> Bool {
+        guard let current = fileTransferSnapshot(for: ref),
+              current.identitySignature == expected.identitySignature else { return false }
+        commitStagedFileTransferResult(result, for: ref)
+        return true
+    }
+
+    /// Snapshot the resolved engine preference beside its provider in one actor
+    /// turn. A separate read could pair a changed provider with the old engine.
+    /// Keep the selected mode even if a device falls back to Dictation: changing
+    /// the user's choice should require new evidence, never retain an old pass.
+    func diagnosticSTTConfiguration() -> (
+        snapshot: (presetID: String, apiKey: String?, provider: STTProvider,
+                   customModel: String?, customConfig: CustomSTTConfig?),
+        appleEngine: AppleOnDeviceEngineMode?
+    ) {
+        let snapshot = activeSTTSnapshot()
+        let engine = snapshot.provider.transport == .inProcess ? getAppleOnDeviceEngineMode() : nil
+        return (snapshot, engine)
     }
 }

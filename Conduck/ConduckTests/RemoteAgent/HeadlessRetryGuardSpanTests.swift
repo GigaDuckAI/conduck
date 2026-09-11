@@ -49,12 +49,21 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // WHAT THIS GUARD CHECKS (on comment-stripped source)
 //
-//   Rule 1 — `perform()` never disarms unconditionally. It holds exactly TWO:
+//   Rule 1 — `perform()` never disarms before a durable terminal boundary. It
+//     holds exactly THREE:
 //     the provable-absence refusal's own, taken inline in that arm because code
-//     23 preserves nothing and the store's single slot is better spent on a
-//     capture that can succeed; and the catch chain's, gated on the words NOT
-//     yet existing as text. The blackout arm sitting beside the first one
-//     disarms nothing — an unlock makes those exact bytes send.
+//     23 preserves nothing and the entry would otherwise go on offering a retry
+//     that reaches the same refusal; and the catch chain's, gated on the words
+//     NOT yet existing as text. The third is Work's, taken on a TERMINAL outcome
+//     from the shared recovery — the one entry point every surface makes its
+//     desk decision through — where the transcript has become durable without
+//     any gateway. The blackout arm sitting beside the first one disarms
+//     nothing — an unlock makes those exact bytes recover.
+//     BOTH pre-transcript disarms carry a second gate, on the DESTINATION:
+//     Work publishes nothing until its words land, so a Work capture's parked
+//     bytes are the only copy of the recording for the whole of `perform()`, and
+//     a verdict about the key or the audio may end the transcription without
+//     deleting what was said.
 //
 //   Rule 2 — the disarm that does run sits BELOW the destination resolve and
 //     BELOW the store append, so every refusal on the way is still armed.
@@ -85,29 +94,34 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
     /// it has to be the gate on the catch chain's disarm rather than a comment
     /// about one.
     ///
-    /// `perform()` holds exactly TWO disarms, and they are not interchangeable:
+    /// `perform()` holds exactly THREE disarms, and they are not interchangeable:
     ///
     ///   1. the PROVABLE-ABSENCE refusal (code 23), taken INLINE in its own arm
     ///      above the `do`. Code-specific and deliberate:
-    ///      `sttMissingAPIKey.shouldPreserveForRetry` is false, and
-    ///      `PendingRetryStore` is a single overwriting slot, so a capture that
-    ///      cannot succeed until a key is entered may not hold it against one
-    ///      that can. Its twin, the blackout arm, must NOT disarm — those bytes
-    ///      succeed the moment the device is unlocked.
+    ///      `sttMissingAPIKey.shouldPreserveForRetry` is false, so a capture
+    ///      that cannot succeed until a key is entered would otherwise sit in
+    ///      the queue offering a retry that reaches the same refusal. Its twin,
+    ///      the blackout arm, must NOT disarm — those bytes succeed the moment
+    ///      the device is unlocked. And it is itself gated on the DESTINATION:
+    ///      a key that is absent says nothing about a Work recording no card
+    ///      carries.
     ///
-    ///   2. the CATCH CHAIN's, gated on the words not yet existing as text.
+    ///   2. the WORK boundary, taken on a TERMINAL outcome from the shared
+    ///      recovery — the words are on a card, so nothing is left to protect.
     ///
-    /// A THIRD is how the unconditional post-STT disarm arrived, and it deleted
-    /// the user's recording on every destination refusal.
+    ///   3. the CATCH CHAIN's, gated on the words not yet existing as text.
+    ///
+    /// An extra disarm outside these three boundaries is how the unconditional
+    /// post-STT cleanup arrived, deleting the recording on destination refusal.
     func testPerformDisarmsOnProvableAbsenceAndOtherwiseOnlyBeforeTheWordsExist() throws {
         let source = try RefusalLaneSource.source(at: Self.intentPath)
         let body = try RefusalLaneSource.body(ofFunction: "perform", in: source, path: Self.intentPath)
 
         let disarms = body.components(separatedBy: "PendingRetryGuard.disarm").count - 1
-        XCTAssertEqual(disarms, 2,
-                       "`perform()` must hold exactly TWO disarms — the provable-absence refusal's and "
-                       + "the catch chain's. A third is how the unconditional post-STT disarm arrived, "
-                       + "and it deleted the user's recording on every destination refusal.")
+        XCTAssertEqual(disarms, 3,
+                       "`perform()` must hold exactly THREE disarms — provable absence, the durable "
+                       + "Work terminal boundary, and the gated catch chain. Any other placement can "
+                       + "delete audio before either terminal destination owns the words.")
 
         XCTAssertEqual(
             Self.armSpendsTheGuard(arm: "case .notConfigured:",
@@ -128,20 +142,54 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
         )
 
         let gateAt = try XCTUnwrap(
-            body.range(of: "if !transcriptCaptured {")?.lowerBound,
+            body.range(of: "if !transcriptCaptured")?.lowerBound,
             "`perform()`'s catch-chain disarm is no longer gated on the transcript not existing yet. "
             + "Ungated, every destination verdict — code 12 included — clears the retry lane and the "
             + "spoken words are gone (I6)."
         )
-        let firstDisarm = try XCTUnwrap(body.range(of: "PendingRetryGuard.disarm"))
-        let secondDisarm = try XCTUnwrap(
-            body.range(of: "PendingRetryGuard.disarm", range: firstDisarm.upperBound..<body.endIndex),
-            "Only one disarm found where the count above says two; the matcher and the count disagree."
+        XCTAssertTrue(
+            body.contains("if !transcriptCaptured, destination != .work"),
+            "The catch chain's disarm is no longer gated on the DESTINATION as well as the "
+            + "transcript. Work publishes nothing until its words land, so a Work capture's parked "
+            + "bytes are the only copy of the recording for the whole of `perform()` — and a "
+            + "bad-input verdict about the AUDIO (silence, a clip the provider cannot read) lands "
+            + "here with `transcriptCaptured` still false and deletes exactly that."
         )
+        XCTAssertTrue(
+            Self.armGuardsOnTheWorkDestination(arm: "case .notConfigured:",
+                                               throwToken: "throw AppError.sttMissingAPIKey",
+                                               in: body),
+            "The provable-absence arm disarms unconditionally again. Code 23 is a verdict about the "
+            + "KEY: it may end this capture's transcription, and it may not delete a recording no "
+            + "card carries."
+        )
+        let firstDisarm = try XCTUnwrap(body.range(of: "PendingRetryGuard.disarm"))
+        let workDisarm = try XCTUnwrap(
+            body.range(of: "PendingRetryGuard.disarm", range: firstDisarm.upperBound..<body.endIndex),
+            "The Work terminal boundary no longer clears its completed retry."
+        )
+        let catchDisarm = try XCTUnwrap(
+            body.range(of: "PendingRetryGuard.disarm", range: workDisarm.upperBound..<body.endIndex),
+            "The catch-chain disarm is missing."
+        )
+        let workPublish = try XCTUnwrap(
+            body.range(of: "WorkVoiceCaptureCoordinator.recover(")?.lowerBound,
+            "The Work lane no longer makes its desk decision through the shared recovery. Each "
+            + "surface deciding for itself is how one of them started resurrecting cards a person "
+            + "deleted while another dropped the words entirely."
+        )
+        let transcriptRaised = try XCTUnwrap(body.range(of: "transcriptCaptured = true")?.lowerBound)
         XCTAssertLessThan(firstDisarm.lowerBound, gateAt,
                           "The absence arm's disarm belongs ABOVE the `do`, in the refusal it is about — "
                           + "below the gate it would be the catch chain's, which cannot tell 23 from 75.")
-        XCTAssertLessThan(gateAt, secondDisarm.lowerBound,
+        XCTAssertLessThan(transcriptRaised, workPublish,
+                          "Work may reach the desk only after STT produced a non-empty transcript.")
+        XCTAssertLessThan(workPublish, workDisarm.lowerBound,
+                          "The Work retry may clear only after the recovery answers that the words are "
+                          + "on a card.")
+        XCTAssertLessThan(workDisarm.lowerBound, gateAt,
+                          "The Work terminal boundary should remain inside the successful `do`, not in the catch.")
+        XCTAssertLessThan(gateAt, catchDisarm.lowerBound,
                           "The gate has to precede the catch chain's disarm, or it gates nothing.")
 
         // …and the flag must actually be raised, or the gate is always open.
@@ -199,6 +247,38 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
         XCTAssertEqual(Self.armSpendsTheGuard(arm: "case .unreadable:",
                                               throwToken: "throw AppError.sttKeyUnreadable",
                                               in: compliant), false)
+
+        // The second gate the absence arm carries, on the same pair of shapes:
+        // it may spend the guard only when the capture is NOT bound for Work.
+        let ungatedAbsence = """
+        case .notConfigured:
+            await PendingRetryGuard.disarm(guardToken)
+            throw AppError.sttMissingAPIKey
+        """
+        let gatedAbsence = """
+        case .notConfigured:
+            if destination != .work {
+                await PendingRetryGuard.disarm(guardToken)
+            }
+            throw AppError.sttMissingAPIKey
+        """
+        XCTAssertFalse(Self.armGuardsOnTheWorkDestination(
+            arm: "case .notConfigured:",
+            throwToken: "throw AppError.sttMissingAPIKey",
+            in: ungatedAbsence),
+                       "Control: the unconditional shape really does delete a recording no card "
+                       + "carries, so the check must fail on it.")
+        XCTAssertTrue(Self.armGuardsOnTheWorkDestination(
+            arm: "case .notConfigured:",
+            throwToken: "throw AppError.sttMissingAPIKey",
+            in: gatedAbsence),
+                      "Control: the gated shape must pass, or the check is unsatisfiable.")
+        XCTAssertFalse(Self.armGuardsOnTheWorkDestination(
+            arm: "case .notConfigured:",
+            throwToken: "throw AppError.sttMissingAPIKey",
+            in: "case .unreadable: throw AppError.sttKeyUnreadable"),
+                       "Control: a missing arm reads as ungated, never as quietly satisfied.")
+
         XCTAssertNil(Self.armSpendsTheGuard(arm: "case .notConfigured:",
                                             throwToken: "throw AppError.sttMissingAPIKey",
                                             in: "case .unreadable: throw AppError.sttKeyUnreadable"),
@@ -221,6 +301,132 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
         XCTAssertLessThan(silenceAt, raisedAt,
                           "Raising the flag before the silence check would preserve a recording of nothing "
                           + "and hand the user a Retry that reaches the same emptiness.")
+    }
+
+    /// The recovery is handed the capture this process ARMED, never one it
+    /// selected out of the queue.
+    ///
+    /// `recover` takes a reservation because a retry SURFACE holds one. This
+    /// process holds one too — but it took it BY ID at `arm`, over the entry it
+    /// minted and wrote, and it still holds the only in-memory copy of the bytes
+    /// and of the words. Reaching for the store's SELECTION primitive
+    /// here would be wrong twice over. It answers "the newest UNRESERVED
+    /// capture", which is not this capture whenever anything armed after it — so
+    /// an intent could put a hold on a recording it will never finish, and
+    /// materialise a stranger's bytes in the most memory-constrained process in
+    /// the app to do it.
+    ///
+    /// The hold this lane DOES take lasts one deferred-notification window
+    /// (`PendingRetryGuard.leaseDuration`), not the store's ten minutes, so an
+    /// intent the OS killed hands the capture back by the time its own notice
+    /// tells the user to tap and retry.
+    ///
+    /// A source guard for the same reason as everything else in this file: the
+    /// Shortcuts lane cannot be driven here, and this is a matter of WHICH value
+    /// a call is given.
+    func testTheIntentHandsTheRecoveryTheCaptureItArmedRatherThanOneItSelected() throws {
+        let source = try RefusalLaneSource.source(at: Self.intentPath)
+        let body = try RefusalLaneSource.body(ofFunction: "perform", in: source, path: Self.intentPath)
+
+        XCTAssertFalse(
+            source.contains("claimNext("),
+            "The Shortcuts lane now SELECTS a capture out of the queue. `claimNext` answers the "
+            + "newest unreserved one, which is not the capture this process armed whenever anything "
+            + "armed after it — so the intent would hold, and read into memory, a recording it is "
+            + "never going to finish. This lane addresses its own entry by id."
+        )
+        let heldAt = try XCTUnwrap(
+            body.range(of: "Self.heldCapture(")?.lowerBound,
+            "`perform()` no longer builds the capture it hands the recovery from its OWN record and "
+            + "bytes. Whatever it passes instead was read from somewhere, and this process is the "
+            + "one place that does not need to read it."
+        )
+        let recoverAt = try XCTUnwrap(
+            body.range(of: "WorkVoiceCaptureCoordinator.recover(")?.lowerBound,
+            "The Work lane no longer makes its desk decision through the shared recovery."
+        )
+        XCTAssertLessThan(heldAt, recoverAt)
+
+        // The WORDS this lane parks are its own, written through the
+        // reservation it took at `arm` — the half of the bookkeeping the
+        // recovery cannot do for it, because until this write the transcript
+        // exists only in this process's memory.
+        XCTAssertTrue(
+            body.contains("Self.recordRecoveryState("),
+            "`perform()` stopped parking the recognised words on the queue entry, so a death "
+            + "between the speech hop and the desk write costs a second speech call on bytes that "
+            + "are already parked."
+        )
+
+        // …and the value it hands over carries the REAL reservation. A claim
+        // built with `token: UUID()` looks exactly like one the store issued and
+        // is refused by every write the recovery attempts, silently: that is how
+        // the durable `.published` verdict went unwritten on this lane for a
+        // whole round.
+        XCTAssertTrue(
+            body.contains("reservation: guardToken"),
+            "`perform()` hands the recovery a capture that names no reservation. Every verdict the "
+            + "recovery records against the entry is then refused by the store's token check, and "
+            + "nothing says so."
+        )
+        XCTAssertFalse(
+            source.contains("token: UUID()"),
+            "The Shortcuts lane mints a claim token no store issued. It is indistinguishable from a "
+            + "real reservation at the call site and worthless at the store."
+        )
+    }
+
+    /// Before the words go anywhere — the desk, a conversation, a gateway — this
+    /// process has to still OWN the capture it armed.
+    ///
+    /// The hold lasts one deferred-notification window, and the speech hop can
+    /// outlast it (a custom provider request is allowed 300 s and attempted
+    /// three times). A lapsed hold can be taken by the app's retry card, which
+    /// then transcribes and finishes the same recording — so continuing here is
+    /// a second desk write behind that surface's, and on the Chat lane two user
+    /// turns and two gateway effects for one thing said once.
+    ///
+    /// A source guard for this file's standing reason: `perform()` takes an
+    /// `IntentFile` from the Shortcuts runtime and drives a live provider, so
+    /// WHERE the check sits is the only thing that can be asserted here.
+    func testTheIntentConfirmsItStillOwnsTheCaptureBeforeEitherHandoff() throws {
+        let source = try RefusalLaneSource.source(at: Self.intentPath)
+        let body = try RefusalLaneSource.body(ofFunction: "perform", in: source, path: Self.intentPath)
+
+        XCTAssertEqual(
+            body.components(separatedBy: "PendingRetryGuard.stillOwnsCapture(guardToken)").count - 1, 2,
+            "`perform()` must confirm ownership exactly twice — once per destination, each "
+            + "immediately before that destination's hand-off. One check covering both would sit far "
+            + "above the Chat send, and the window it leaves open is the one that duplicates a turn."
+        )
+
+        let recoverAt = try XCTUnwrap(
+            body.range(of: "WorkVoiceCaptureCoordinator.recover(")?.lowerBound,
+            "The Work lane no longer makes its desk decision through the shared recovery."
+        )
+        let hopAt = try XCTUnwrap(
+            body.range(of: "Self.runConverseHop(")?.lowerBound,
+            "`perform()` no longer reaches the converse hop; update this guard."
+        )
+        let workConfirm = try XCTUnwrap(
+            body.range(of: "PendingRetryGuard.stillOwnsCapture(guardToken)")?.lowerBound,
+            "The Work hand-off is no longer gated on this process still owning the capture."
+        )
+        let chatConfirm = try XCTUnwrap(
+            body.range(of: "PendingRetryGuard.stillOwnsCapture(guardToken)",
+                       range: body.index(after: workConfirm)..<body.endIndex)?.lowerBound,
+            "The Chat hand-off is no longer gated on this process still owning the capture. It is "
+            + "the lane where being wrong costs a duplicate turn AND a duplicate gateway call."
+        )
+        XCTAssertLessThan(workConfirm, recoverAt,
+                          "The desk decision must be taken only by the process that still holds the "
+                          + "capture; after it, the check gates nothing.")
+        XCTAssertLessThan(recoverAt, chatConfirm,
+                          "Control on the ordering: the two checks are distinct sites, one per lane, "
+                          + "not one site counted twice.")
+        XCTAssertLessThan(chatConfirm, hopAt,
+                          "The Chat check has to precede the hop that stores the user turn and "
+                          + "dispatches it.")
     }
 
     // MARK: - Rule 2 — the span reaches past the destination
@@ -515,6 +721,23 @@ final class HeadlessRetryGuardSpanTests: XCTestCase {
             return nil
         }
         return body[start..<end].contains("PendingRetryGuard.disarm")
+    }
+
+    /// Whether the disarm inside that arm spares a WORK capture. A verdict
+    /// about the key or the bytes may end a capture's transcription; it may not
+    /// delete a recording the desk never took, whose only copy is the queued
+    /// audio — and for Work that is every capture, from the arm until the words
+    /// land. Scoped to the arm for the same reason `armSpendsTheGuard` is.
+    private static func armGuardsOnTheWorkDestination(
+        arm: String,
+        throwToken: String,
+        in body: String
+    ) -> Bool {
+        guard let start = body.range(of: arm)?.upperBound,
+              let end = body.range(of: throwToken, range: start..<body.endIndex)?.lowerBound else {
+            return false
+        }
+        return body[start..<end].contains("destination != .work")
     }
 
     /// The `do` block that ENCLOSES `anchor`, brace-matched from the nearest

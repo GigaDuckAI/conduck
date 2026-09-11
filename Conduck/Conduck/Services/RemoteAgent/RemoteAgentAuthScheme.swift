@@ -14,6 +14,16 @@
 // from a nil token would let a transient read failure silently strip auth and,
 // via the Watch broadcast, delete the Watch's stored token. The default is
 // therefore `.bearer` — any legacy / missing / undecodable value FAILS CLOSED.
+//
+// THE SINGLE HEADER SITE: every gateway request builder on every surface routes
+// through `apply(to:token:)`, so it is also where OpenRouter's app-attribution
+// headers are stamped (`OpenRouterAttribution`). They ride here rather than in
+// each builder because OpenRouter creates the app's public page and its
+// rankings entry ONLY from those headers — a builder that forgot them would
+// silently un-attribute its whole lane. Attribution is HOST-GATED, and
+// deliberately independent of the scheme: it is a property of the DESTINATION,
+// so a keyless (`.none`) gateway pointed at OpenRouter still carries it, while
+// the user's own server never does.
 
 import Foundation
 
@@ -50,12 +60,19 @@ enum RemoteAgentAuthScheme: String, Sendable, Equatable, Codable {
     /// Apply the scheme to an outbound request in place. `.bearer` sets the
     /// header — the caller guarantees a non-empty `token` via the configured
     /// gate; `.none` omits it entirely. Never logs / echoes the token.
+    ///
+    /// Then stamps OpenRouter's app-attribution headers, which are applied for
+    /// EVERY case including `.none` — a keyless request to OpenRouter is still
+    /// a request to OpenRouter. `OpenRouterAttribution` is itself host-gated,
+    /// so this call is a no-op for every other destination.
     func apply(to request: inout URLRequest, token: String) {
         switch self {
         case .bearer:
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         case .none:
-            return
+            break
         }
+
+        OpenRouterAttribution.apply(to: &request)
     }
 }

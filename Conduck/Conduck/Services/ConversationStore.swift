@@ -55,7 +55,10 @@
 // any native macOS build whose process lacks the entitlement (see
 // `Constants.hasICloudContainerEntitlement`, which probes macOS only). The in-memory/on-disk test seam
 // is local-only by definition. History tracking + remote-change posting stay
-// ON in all configurations.
+// ON in all configurations. The two mirrored stores name DIFFERENT containers
+// — Core Data refuses two stores on one — so the payload store carries its own
+// entitlement, and a build holding the conversations container without the
+// payload one mounts `Blobs` local-only instead of dying.
 //
 // App Group store location is load-bearing: the headless Shortcut / App
 // Intent runs in a separate process and must read+write the SAME sqlite as
@@ -1077,6 +1080,100 @@ actor ConversationStore {
     /// headless intent process and the foreground app share one sqlite.
     static let shared = ConversationStore()
 
+    #if !os(watchOS)
+    /// Device-local Workboard payload storage paired with this store instance.
+    /// Production uses the App Group vault; every test store gets a unique
+    /// temporary vault so an in-memory Core Data test can never read, reclaim,
+    /// or remove the person's real Workboard files. Internal so the sibling
+    /// `+Workboard` extension — and the board's preview pass, which resolves a
+    /// whole wave of leaves at once — reach exactly this store's vault.
+    let workAssetVault: WorkAssetVault
+
+    // Project/placement transactions share a FIFO across windows. Awaiting a
+    // background context re-enters this actor; without a claim, two first
+    // gestures could both insert the same logical placement before either saves.
+    var workDeskMutationInProgress = false
+    var workDeskMutationWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Message ids currently being copied into Work. Core Data's CloudKit-
+    /// compatible model cannot use a unique constraint, and actor methods can
+    /// re-enter while awaiting background contexts. This claim closes that
+    /// same-process window so two windows cannot create duplicate Work cards
+    /// for one chat turn.
+    var workMessageCaptureClaims: Set<UUID> = []
+
+    /// Work item ids whose first material is currently being staged. The actor
+    /// can re-enter while the vault or Core Data context is awaited, so this
+    /// closes the same-process window in which two panes could both conclude
+    /// that one provisional Work id has no durable owner yet.
+    var workInitialMaterialClaims: Set<UUID> = []
+
+    /// Material ids whose PAYLOAD is being published or replaced right now.
+    ///
+    /// A payload and the material row naming it commit in separate
+    /// transactions, so between them a second writer can find the first
+    /// writer's blob already complete, adopt it without inserting a row of its
+    /// own, and commit a card that names bytes it did not write — which the
+    /// first writer's rollback then takes away. Every path that can insert or
+    /// adopt a payload for one material holds that material's claim for its
+    /// WHOLE publication (staging, blob save, row save, confirmation), so
+    /// within a process "the row I inserted is the only row I may delete" is
+    /// true by construction. Keyed by material rather than by owner because
+    /// Work is one desk: an owner-wide claim would queue every capture behind
+    /// a several-hundred-megabyte reattach.
+    var workMaterialPublicationClaims: Set<UUID> = []
+
+    /// The same exclusion ACROSS processes, which the claim set above cannot
+    /// reach.
+    ///
+    /// The app and the headless intent process share one App Group sqlite and
+    /// Work's capture ids are deterministic, so both can publish one material at
+    /// the same instant: the second finds the first's blob complete, adopts it
+    /// without inserting a row, and commits a card the first's rollback then
+    /// deletes. Every publication of a material's payload therefore takes this
+    /// advisory file lock before it stages or looks a blob up, and holds it
+    /// through the material save, the confirmation and every rollback — so a
+    /// successor's publication of the same deterministic id cannot observe or
+    /// adopt a blob a predecessor is still able to take back.
+    ///
+    /// Lazily built rather than made in the initializer: the directory is
+    /// derived from the store's own Core file, so it is whatever that store was
+    /// pointed at, and a store nothing else can open needs no cross-process
+    /// lock at all.
+    private var workMaterialPublicationLockStorage: WorkMaterialPublicationLock?
+
+    /// Nil for an in-memory store — no other process can open one, so there is
+    /// nothing to exclude and the in-process claim above is the whole answer.
+    var workMaterialPublicationLock: WorkMaterialPublicationLock? {
+        if let workMaterialPublicationLockStorage { return workMaterialPublicationLockStorage }
+        guard let directory = Self.publicationLockDirectory(
+            besideCore: container.persistentStoreDescriptions.first?.url
+        ) else { return nil }
+        let lock = WorkMaterialPublicationLock(directoryURL: directory)
+        workMaterialPublicationLockStorage = lock
+        return lock
+    }
+
+    /// The lock directory for a store at `coreURL`: a sibling directory named
+    /// after the Core file. In production that is inside the App Group
+    /// container, which is what puts the app and the headless intent process on
+    /// the same lock — and it is derived rather than looked up, so no second
+    /// App Group query appears (`scripts/check-storage-seam.sh` allowlists those
+    /// by file).
+    ///
+    /// Nil for the in-memory placeholder `/dev/null`, which names no directory a
+    /// lock file could live in and no store a second process could open.
+    private static func publicationLockDirectory(besideCore coreURL: URL?) -> URL? {
+        guard let coreURL, coreURL.isFileURL, coreURL.path != "/dev/null" else { return nil }
+        return coreURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "\(coreURL.deletingPathExtension().lastPathComponent)-Locks",
+                isDirectory: true
+            )
+    }
+    #endif
+
     /// In-process retry claims close the actor-reentrancy window around
     /// `context.perform`. An actor method can accept another call while awaiting
     /// Core Data, so the persistent failed→sending predicate alone is not a
@@ -1146,6 +1243,25 @@ actor ConversationStore {
         case attemptAlreadyTerminal
     }
 
+    /// The persistent stores did not mount in the topology this build asked
+    /// for. Deliberately NOT a `StoreError`: those are verdicts about rows,
+    /// reached long after a successful load and switched over exhaustively by
+    /// the turn-landing path. This one aborts the load itself.
+    ///
+    /// WHY IT HAS TO EXIST. A mis-pointed `configuration` does not error. Core
+    /// Data validates only the entities the named configuration lists, so
+    /// opening the conversations file as `Blobs` succeeds silently and presents
+    /// an empty payload table — after which every payload row is written into
+    /// the wrong sqlite, and no reader downstream is in a position to notice.
+    /// The load is the only place that can catch a forked topology.
+    struct StoreTopologyMismatch: Error, CustomStringConvertible {
+        let expected: [String]
+        let mounted: [String]
+        var description: String {
+            "persistent store topology mismatch — expected \(expected), mounted \(mounted)"
+        }
+    }
+
     /// One output-detector result to reconcile transactionally.
     /// `expectedLaneID` is a mandatory compare-and-set guard: attachments and
     /// the conclusive marker may be written only while the persisted reply
@@ -1191,6 +1307,41 @@ actor ConversationStore {
     // method is lost.
     private let container: NSPersistentContainer
 
+    /// The shipped sqlite. NEVER rename it: every row an existing account owns
+    /// lives in this file, and a new name opens an empty store beside it.
+    private static let coreStoreFilename = "Conversations.sqlite"
+
+    /// The payload store — a sibling file in the same directory as the Core
+    /// store. Its external binaries land in `.ConversationBlobs_SUPPORT/`
+    /// beside it rather than in the Core store's `_SUPPORT` directory, so
+    /// anything that copies, backs up or wipes the store handles TWO of them.
+    private static let blobStoreFilename = "ConversationBlobs.sqlite"
+
+    /// Model configuration names (`Conversations 16`). `Core` carries exactly
+    /// the entities the shipped default-configuration store already held —
+    /// their version hashes are unchanged, so it opens migration-free — and
+    /// `Blobs` carries `WorkMaterialBlob` alone.
+    private static let coreConfigurationName = "Core"
+    private static let blobsConfigurationName = "Blobs"
+
+    #if CONDUCK_TESTING
+    /// True only for the `init(inMemory:storeURL:)` seam. The `ForTesting`
+    /// entry points at the end of this file refuse a store this flag does not
+    /// cover, so a signed suite run can never read or write the founder's real
+    /// App Group data.
+    private let isIsolatedTestStore: Bool
+
+    #if !os(watchOS)
+    /// The vault directory an ISOLATED store minted for itself, so a test can
+    /// remove it again. Every `init(inMemory:storeURL:)` gets a unique
+    /// temporary vault and nothing owns its lifetime, so a suite that stores
+    /// ceiling-sized payloads leaves tens of megabytes per case behind until
+    /// the simulator is wiped. nil on the production store, whose vault is the
+    /// person's own and must never be removable from a test.
+    private let isolatedVaultBaseURL: URL?
+    #endif
+    #endif
+
     /// One-shot store-load task. Created by the first `ensureLoaded()` caller;
     /// every concurrent / later caller awaits this SAME task (single-flight).
     /// A failed task is sticky — its error rethrows to every subsequent
@@ -1227,6 +1378,15 @@ actor ConversationStore {
 
     /// Production init — App Group on-disk store.
     private init() {
+        #if CONDUCK_TESTING
+        self.isIsolatedTestStore = false
+        #if !os(watchOS)
+        self.isolatedVaultBaseURL = nil
+        #endif
+        #endif
+        #if !os(watchOS)
+        self.workAssetVault = .shared
+        #endif
         #if DEBUG && !os(watchOS)
         // Screenshot mode (`-ConduckQAScreenshotMode`) must NEVER open the real
         // App Group store. On a signed real machine (the founder's Mac) that
@@ -1239,10 +1399,18 @@ actor ConversationStore {
         // persistence-sensitive QA flows still behave like the shipping app.
         if QAMode.isScreenshotMode {
             let container = NSPersistentContainer(name: "Conversations")
-            if let description = container.persistentStoreDescriptions.first {
-                description.type = NSInMemoryStoreType
-                description.url = URL(fileURLWithPath: "/dev/null")
-                ConversationStore.configureSyncOptions(on: description, cloudKit: false)
+            if let core = container.persistentStoreDescriptions.first {
+                core.type = NSInMemoryStoreType
+                core.url = URL(fileURLWithPath: "/dev/null")
+                // Same two-store topology as production, in memory: a seeded
+                // card whose bytes ride the payload store has somewhere to put
+                // them, and a marketing capture exercises the shape the app
+                // actually ships rather than a single-store simplification.
+                container.persistentStoreDescriptions = ConversationStore.storeDescriptions(
+                    core: core,
+                    blobStoreURL: ConversationStore.siblingBlobStoreURL(besideCore: core.url),
+                    cloudKit: false
+                )
             }
             self.container = container
             return
@@ -1272,18 +1440,24 @@ actor ConversationStore {
             ? NSPersistentCloudKitContainer(name: "Conversations")
             : NSPersistentContainer(name: "Conversations")
 
-        if let description = container.persistentStoreDescriptions.first {
+        if let core = container.persistentStoreDescriptions.first {
             // App Group store location (CRITICAL — see file header). The
             // headless Shortcut / App Intent runs in its own process and must
             // write this same sqlite. Fall back to the default location only
             // if the container URL is nil (mis-provisioned App Group); we log
             // and continue rather than crash so a dev build still runs.
+            let blobStoreURL: URL?
             if let groupURL = FileManager.default.containerURL(
                 forSecurityApplicationGroupIdentifier: Constants.appGroupID
             ) {
-                description.url = groupURL.appendingPathComponent("Conversations.sqlite")
+                core.url = groupURL.appendingPathComponent(ConversationStore.coreStoreFilename)
+                // Both files come off THIS ONE lookup. `scripts/check-storage-seam.sh`
+                // allowlists App Group container queries by file, so a second
+                // query — even to the same directory — is a seam change.
+                blobStoreURL = groupURL.appendingPathComponent(ConversationStore.blobStoreFilename)
             } else {
                 NSLog("[ConversationStore] App Group container URL is nil for \(Constants.appGroupID); falling back to default store location.")
+                blobStoreURL = ConversationStore.siblingBlobStoreURL(besideCore: core.url)
             }
 
             // CloudKit mirroring fatal-asserts (EXC_BREAKPOINT in
@@ -1292,7 +1466,11 @@ actor ConversationStore {
             // the Simulator nor an unsigned build is where CloudKit sync is
             // verified — that's a signed, real-device founder gate — so both run
             // local-only, matching the test seam.
-            ConversationStore.configureSyncOptions(on: description, cloudKit: cloudKitUsable)
+            container.persistentStoreDescriptions = ConversationStore.storeDescriptions(
+                core: core,
+                blobStoreURL: blobStoreURL,
+                cloudKit: cloudKitUsable
+            )
             if !cloudKitUsable {
                 NSLog("[ConversationStore] CloudKit mirroring off (Simulator, or a build without the iCloud container entitlement) — conversations stay local to this device.")
             }
@@ -1319,17 +1497,41 @@ actor ConversationStore {
     /// on-disk variant. The store is driven only through base-class API, so no
     /// CloudKit method is lost; tests are local-only by definition.
     init(inMemory: Bool = false, storeURL: URL? = nil) {
+        #if CONDUCK_TESTING
+        self.isIsolatedTestStore = true
+        #endif
+        #if !os(watchOS)
+        // Unique per store so an in-memory Core Data test can never read,
+        // reclaim or remove the person's real Workboard files. The directory is
+        // remembered under CONDUCK_TESTING so a suite can hand its bytes back —
+        // see `_removeIsolatedVaultDirectoryForTesting()`.
+        let isolatedVault = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "conduck-workasset-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        self.workAssetVault = WorkAssetVault(baseURL: isolatedVault)
+        #if CONDUCK_TESTING
+        self.isolatedVaultBaseURL = isolatedVault
+        #endif
+        #endif
         let container = NSPersistentContainer(name: "Conversations")
 
-        if let description = container.persistentStoreDescriptions.first {
+        if let core = container.persistentStoreDescriptions.first {
             if inMemory {
-                description.type = NSInMemoryStoreType
-                description.url = URL(fileURLWithPath: "/dev/null")
+                core.type = NSInMemoryStoreType
+                core.url = URL(fileURLWithPath: "/dev/null")
             } else if let storeURL {
-                description.url = storeURL
+                core.url = storeURL
             }
             // Tests are local-only by definition — never attach CloudKit (cloudKit: false).
-            ConversationStore.configureSyncOptions(on: description, cloudKit: false)
+            // The payload store is mounted here too: a seam that mounted one
+            // store would exercise a topology the app never runs, and a blob
+            // insert would fail on a store nothing had loaded.
+            container.persistentStoreDescriptions = ConversationStore.storeDescriptions(
+                core: core,
+                blobStoreURL: ConversationStore.siblingBlobStoreURL(besideCore: core.url),
+                cloudKit: false
+            )
         }
 
         self.container = container
@@ -1341,13 +1543,23 @@ actor ConversationStore {
     /// the CloudKit mirror to the user's own private iCloud database — ON for the
     /// production App Group store, OFF for the in-memory/on-disk test seam (tests
     /// stay local-only by definition).
-    private static func configureSyncOptions(on description: NSPersistentStoreDescription, cloudKit: Bool) {
+    ///
+    /// `containerIdentifier` is a parameter rather than a constant because each
+    /// mirrored store needs a container of its OWN: two descriptions carrying
+    /// the same identifier make `NSPersistentCloudKitContainer` raise "Cannot
+    /// assign the same iCloud Container Identifier to multiple stores" as the
+    /// descriptions are assigned, before a single store loads.
+    private static func configureSyncOptions(
+        on description: NSPersistentStoreDescription,
+        cloudKit: Bool,
+        containerIdentifier: String
+    ) {
         if cloudKit {
             // Mirrors the local store into the user's private CloudKit database;
             // existing local conversations export on first launch, and turns from
             // the user's other devices import. Developer-blind (no backend).
             description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(
-                containerIdentifier: Constants.iCloudCloudKitContainerID
+                containerIdentifier: containerIdentifier
             )
         }
 
@@ -1356,6 +1568,126 @@ actor ConversationStore {
             true as NSNumber,
             forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey
         )
+    }
+
+    /// Every description this container mounts, built in ONE place so the
+    /// production store, the screenshot store and the test seam cannot drift
+    /// apart. `Core` keeps the shipped sqlite; `Blobs` is a sibling file
+    /// carrying `WorkMaterialBlob` alone. Both run through
+    /// `configureSyncOptions` with history tracking on — a mirrored store
+    /// without it exports nothing, so an asymmetry there would sync metadata
+    /// and silently strand the bytes.
+    ///
+    /// **The two mirrors carry DIFFERENT CloudKit containers**
+    /// (`Constants.iCloudCloudKitContainerID` for `Core`,
+    /// `Constants.iCloudCloudKitBlobsContainerID` for `Blobs`), because Core
+    /// Data raises "Cannot assign the same iCloud Container Identifier to
+    /// multiple stores" the moment two descriptions naming one container are
+    /// assigned. Each container is still the user's own private iCloud
+    /// database; there is no backend behind either.
+    ///
+    /// `blobsEntitled` is what keeps a container that has not been provisioned
+    /// yet from being fatal: a build entitled for the conversations container
+    /// but not the payload one mounts `Blobs` LOCAL-ONLY and says so, rather
+    /// than constructing a `CKContainer` the process may not have. Payloads
+    /// then stay on the device that captured them and peers read the cards as
+    /// waiting.
+    ///
+    /// **The Watch never mounts `Blobs`, and that omission IS the payload
+    /// exclusion.** The wrist compiles this same file, has no `WorkAssetVault`
+    /// (`#if !os(watchOS)`) to fall back on and no eviction path for bytes it
+    /// cannot use, so a payload store it never loads is a payload store
+    /// CloudKit never fills — and its entitlements name no payload container
+    /// either. Materials still mirror; their bytes read as pending there.
+    private static func storeDescriptions(
+        core: NSPersistentStoreDescription,
+        blobStoreURL: URL?,
+        cloudKit: Bool,
+        blobsEntitled: Bool = Constants.hasICloudBlobsContainerEntitlement
+    ) -> [NSPersistentStoreDescription] {
+        core.configuration = coreConfigurationName
+        configureSyncOptions(
+            on: core,
+            cloudKit: cloudKit,
+            containerIdentifier: Constants.iCloudCloudKitContainerID
+        )
+        #if os(watchOS)
+        return [core]
+        #else
+        guard let blobStoreURL else { return [core] }
+        let blobs = NSPersistentStoreDescription(url: blobStoreURL)
+        // The payload store follows the Core store's type, so an in-memory
+        // seam stays entirely in memory: a SQLite sibling beside an in-memory
+        // Core would outlive the process that owns it.
+        blobs.type = core.type
+        blobs.configuration = blobsConfigurationName
+        let blobsCloudKit = cloudKit && blobsEntitled
+        if cloudKit && !blobsEntitled {
+            NSLog("[ConversationStore] Blobs container entitlement missing — payloads stay on this device; cards on other devices read as waiting")
+        }
+        configureSyncOptions(
+            on: blobs,
+            cloudKit: blobsCloudKit,
+            containerIdentifier: Constants.iCloudCloudKitBlobsContainerID
+        )
+        return [core, blobs]
+        #endif
+    }
+
+    #if CONDUCK_TESTING
+    /// TEST SEAM — the descriptions `storeDescriptions` builds, for a caller
+    /// that needs to read the CloudKit options off them.
+    ///
+    /// WHY IT HAS TO EXIST. `cloudKitContainerOptions` is only observable
+    /// BEFORE the stores load, and no production path attaches it on a host a
+    /// suite may run on: the Simulator forces `cloudKit: false` and the test
+    /// seam is local-only by definition, so the one arrangement that crashed
+    /// the signed app — two mirrored descriptions naming one container — is
+    /// unreachable through any other entry point. `blobsEntitled` is a
+    /// parameter here for the same reason: the production value is a probe of
+    /// the running process's own entitlements, which a test cannot change.
+    static func _storeDescriptionsForTesting(
+        core: NSPersistentStoreDescription,
+        blobStoreURL: URL?,
+        cloudKit: Bool,
+        blobsEntitled: Bool
+    ) -> [NSPersistentStoreDescription] {
+        storeDescriptions(
+            core: core,
+            blobStoreURL: blobStoreURL,
+            cloudKit: cloudKit,
+            blobsEntitled: blobsEntitled
+        )
+    }
+    #endif
+
+    /// The payload store's file for a store whose directory is not the App
+    /// Group container: the Core file's own name with `-Blobs` appended,
+    /// beside it. Derived from the Core URL rather than looked up, so no
+    /// second App Group query appears (`scripts/check-storage-seam.sh`
+    /// allowlists those by file). The in-memory placeholder `/dev/null` yields
+    /// `/dev/null-Blobs` — inert for a store that never touches disk, and
+    /// distinct, which is what lets the coordinator tell the two apart.
+    private static func siblingBlobStoreURL(besideCore coreURL: URL?) -> URL? {
+        guard let coreURL else { return nil }
+        let sibling = coreURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("\(coreURL.deletingPathExtension().lastPathComponent)-Blobs")
+        let pathExtension = coreURL.pathExtension
+        return pathExtension.isEmpty ? sibling : sibling.appendingPathExtension(pathExtension)
+    }
+
+    /// `configuration@file` — the pairing a topology assertion compares. File
+    /// NAME only: Core Data can hand back a resolved path (`/private/var/…`)
+    /// for a URL handed in unresolved (`/var/…`), so comparing whole URLs
+    /// would fail on a temp directory rather than on a real mismatch.
+    private static func storeIdentity(of description: NSPersistentStoreDescription) -> String {
+        let configuration = description.configuration ?? "PF_DEFAULT_CONFIGURATION_NAME"
+        return "\(configuration)@\(description.url?.lastPathComponent ?? "-")"
+    }
+
+    private static func storeIdentity(of store: NSPersistentStore) -> String {
+        "\(store.configurationName)@\(store.url?.lastPathComponent ?? "-")"
     }
 
     // MARK: - Lifecycle
@@ -1432,6 +1764,22 @@ actor ConversationStore {
             }
         }
 
+        // Every description landed without error — which is NOT the same as
+        // landing where it was pointed. Core Data validates only the entities
+        // a named configuration lists, so a Blobs description aimed at the
+        // conversations file opens it silently and presents an empty payload
+        // table; every payload row would then be written into the wrong sqlite
+        // with nothing downstream in a position to notice. Compare what
+        // mounted against what was asked for, and fail the load on a
+        // mismatch — a store this build cannot describe is not one it may use.
+        let expectedStores = descriptions.map(Self.storeIdentity(of:)).sorted()
+        let mountedStores = container.persistentStoreCoordinator.persistentStores
+            .map(Self.storeIdentity(of:))
+            .sorted()
+        guard expectedStores == mountedStores else {
+            throw StoreTopologyMismatch(expected: expectedStores, mounted: mountedStores)
+        }
+
         // One-time milestone: what the first-touch store load (sqlite open +
         // CloudKit metadata on device) actually cost the first caller.
         // Duration only.
@@ -1499,7 +1847,7 @@ actor ConversationStore {
         do { try await ensureLoaded() } catch { return [] }
         guard container is NSPersistentCloudKitContainer else { return [] }
         let context = container.newBackgroundContext()
-        return await context.perform { [context] in
+        return try await context.perform { [context] in
             let request = NSPersistentCloudKitContainerEventRequest.fetchEvents(after: .distantPast)
             request.resultType = .events
             guard
@@ -2206,6 +2554,14 @@ actor ConversationStore {
         try await ensureLoaded()
         let context = newWriteContext()
         try await context.perform { [context] in
+            let removedAt = Date()
+            let dispatchRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkDispatch")
+            dispatchRequest.predicate = NSPredicate(format: "conversationID == %@", id as CVarArg)
+            for dispatch in try context.fetch(dispatchRequest) {
+                if dispatch.value(forKey: "conversationRemovedAt") as? Date == nil {
+                    dispatch.setValue(removedAt, forKey: "conversationRemovedAt")
+                }
+            }
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
             let matches = try context.fetch(request)
@@ -2225,9 +2581,12 @@ actor ConversationStore {
         #endif
     }
 
-    /// Delete every conversation (and, via cascade, every message), and every
-    /// gateway-attempt row with them. The one place the ledger is erased without
-    /// the user naming it separately — erase-everything means everything.
+    /// Delete every conversation (and, via cascade, every message) and every
+    /// gateway-attempt row with them. Workboard briefs and their private materials
+    /// are deliberately preserved: the user invoked "Delete all conversations",
+    /// not a separate Workboard erase. Their run records receive the same
+    /// conversation-removed tombstone as an individual chat deletion so no card
+    /// can remain stuck in Waiting forever.
     ///
     /// THE SYNCED CLEAR CUTOFF IS ADVANCED FIRST, before anything is deleted.
     /// Deletion alone is not enough: a device that was offline through the wipe
@@ -2253,6 +2612,16 @@ actor ConversationStore {
         #endif
         let context = newWriteContext()
         try await context.perform { [context] in
+            let dispatchRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkDispatch")
+            dispatchRequest.predicate = NSPredicate(format: "conversationID != nil")
+            for dispatch in try context.fetch(dispatchRequest) {
+                // A run tombstoned by an earlier single-chat delete keeps its
+                // first stamp: the removal date is shown on the immutable run and
+                // sorts it, so rewriting it would backdate history to this wipe.
+                if dispatch.value(forKey: "conversationRemovedAt") as? Date == nil {
+                    dispatch.setValue(cutoff, forKey: "conversationRemovedAt")
+                }
+            }
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             let matches = try context.fetch(request)
             for object in matches {
@@ -3122,7 +3491,9 @@ actor ConversationStore {
     /// entirely on the row that is already corrupt: its future-dated message
     /// keeps sorting after the new one, which is an inconsistency that row
     /// already carries and this cannot repair.
-    private static func appendStamp(
+    /// Internal so the Workboard's sibling-file atomic prepare transaction can
+    /// stamp its initial turn with the exact same ordering invariant.
+    static func appendStamp(
         proposed: Date,
         appendingTo conversation: NSManagedObject
     ) -> Date {
@@ -3152,7 +3523,9 @@ actor ConversationStore {
     /// Insert one `Attachment` row for `draft`, linked to `message`, into
     /// `context`. Shared by every write path (`appendMessage` /
     /// `completeAgentTurn`) so the blob-write mapping lives in one place.
-    private static func insertAttachment(
+    /// Internal so the Workboard's sibling-file atomic prepare transaction uses
+    /// the one canonical AttachmentDraft-to-row mapping.
+    static func insertAttachment(
         _ draft: AttachmentDraft,
         on message: NSManagedObject,
         into context: NSManagedObjectContext,
@@ -4238,6 +4611,288 @@ actor ConversationStore {
             try? context.save()
         }
     }
+
+    /// One mounted persistent store, reduced to the facts a topology assertion
+    /// needs.
+    struct MountedStoreForTesting: Sendable, Hashable {
+        let configuration: String
+        let url: URL?
+    }
+
+    /// TEST SEAM — the stores the coordinator actually mounted, in load order.
+    ///
+    /// WHY IT HAS TO EXIST. `performLoad` refuses a mismatched topology, but a
+    /// test that only asserts "the load did not throw" cannot tell a two-store
+    /// mount from a one-store mount — and that split IS the Watch's payload
+    /// exclusion. The container is private by design (every read and write in
+    /// the app goes through this actor), so the pairing is otherwise
+    /// unobservable.
+    ///
+    /// Gated on the isolated test store for the same reason every seam here is:
+    /// nothing may reach the founder's real App Group data from a signed run.
+    func _mountedStoresForTesting() async throws -> [MountedStoreForTesting] {
+        guard isIsolatedTestStore else { return [] }
+        try await ensureLoaded()
+        return container.persistentStoreCoordinator.persistentStores.map {
+            MountedStoreForTesting(configuration: $0.configurationName, url: $0.url)
+        }
+    }
+
+    // The seams below reach `WorkMaterialBlob`, and the wrist mounts no `Blobs`
+    // store (`storeDescriptions` returns `[core]` there) — that omission IS the
+    // payload exclusion. A blob insert on watchOS has no store to land in and a
+    // blob fetch can only come back empty, so the payload seams must not exist
+    // in the watch build at all: an unusable seam is one a watch test can call
+    // and draw a false conclusion from. `_mountedStoresForTesting` stays outside
+    // this guard — asserting the wrist mounts Core ALONE is the whole point of
+    // it there.
+    #if !os(watchOS)
+    /// Which physical file each row of one cross-store write landed in.
+    struct MaterialBlobStoresForTesting: Sendable {
+        let materialStoreURL: URL?
+        let blobStoreURL: URL?
+    }
+
+    /// TEST SEAM — insert one `WorkMaterial` and one `WorkMaterialBlob` in a
+    /// SINGLE `context.save()`, with NO `context.assign(_:to:)`, and report the
+    /// file each row landed in.
+    ///
+    /// WHY IT HAS TO EXIST. Automatic routing by configuration membership is
+    /// the property the two-store design rests on: if it did not hold, every
+    /// write would need an explicit store assignment and one missed call would
+    /// put payload bytes into the conversations file — silently, per the
+    /// hazard `StoreTopologyMismatch` documents. `objectID.persistentStore` is
+    /// the only proof of where a row physically landed, and it is unreachable
+    /// from outside this actor.
+    func _writeMaterialAndBlobForTesting(
+        materialID: UUID,
+        title: String,
+        payload: Data
+    ) async throws -> MaterialBlobStoresForTesting {
+        guard isIsolatedTestStore else {
+            return MaterialBlobStoresForTesting(materialStoreURL: nil, blobStoreURL: nil)
+        }
+        try await ensureLoaded()
+        let context = newWriteContext()
+        return try await context.perform { [context] in
+            let now = Date()
+            let material = NSEntityDescription.insertNewObject(
+                forEntityName: "WorkMaterial", into: context
+            )
+            material.setValue(materialID, forKey: "id")
+            material.setValue(title, forKey: "title")
+            material.setValue("file", forKey: "kind")
+            material.setValue("syncedPayload", forKey: "storageMode")
+            material.setValue(NSNumber(value: Int64(payload.count)), forKey: "byteSize")
+            material.setValue(now, forKey: "createdAt")
+            material.setValue(now, forKey: "updatedAt")
+
+            let blob = NSEntityDescription.insertNewObject(
+                forEntityName: "WorkMaterialBlob", into: context
+            )
+            blob.setValue(materialID, forKey: "materialID")
+            blob.setValue(payload, forKey: "payload")
+            blob.setValue(NSNumber(value: Int64(payload.count)), forKey: "byteSize")
+            blob.setValue("test-fixture-hash", forKey: "contentHash")
+            blob.setValue(now, forKey: "createdAt")
+            blob.setValue(now, forKey: "updatedAt")
+
+            // ONE save, NO assignment — Core Data routes each row by the
+            // configuration its entity belongs to.
+            try context.save()
+            return MaterialBlobStoresForTesting(
+                materialStoreURL: material.objectID.persistentStore?.url,
+                blobStoreURL: blob.objectID.persistentStore?.url
+            )
+        }
+    }
+
+    /// What the two stores hold for one material id.
+    struct MaterialBlobSnapshotForTesting: Sendable {
+        let materialTitle: String?
+        let materialStorageMode: String?
+        let blobRowCount: Int
+        let blobByteSize: Int64?
+        let blobContentHash: String?
+        /// Nil unless the caller asked for it — a ceiling-sized payload has no
+        /// business crossing the actor boundary merely to be counted.
+        let blobPayload: Data?
+    }
+
+    /// TEST SEAM — read back what each store holds for one material, so a
+    /// close/reopen or a deleted payload file can be asserted from outside.
+    ///
+    /// WHY IT HAS TO EXIST. Losing the payload sqlite is SURVIVABLE but
+    /// silent: the Core row keeps `storageMode == "syncedPayload"` with no blob
+    /// behind it, which is exactly the state the availability projection must
+    /// render as pending rather than crash on. Proving Core survived while
+    /// Blobs came back empty needs both halves read through one store instance.
+    func _materialAndBlobForTesting(
+        materialID: UUID,
+        includingPayload: Bool = true
+    ) async throws -> MaterialBlobSnapshotForTesting {
+        guard isIsolatedTestStore else {
+            return MaterialBlobSnapshotForTesting(
+                materialTitle: nil,
+                materialStorageMode: nil,
+                blobRowCount: 0,
+                blobByteSize: nil,
+                blobContentHash: nil,
+                blobPayload: nil
+            )
+        }
+        try await ensureLoaded()
+        let context = newReadContext()
+        return try await context.perform { [context] in
+            let materialRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
+            materialRequest.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
+            materialRequest.fetchLimit = 1
+            let material = try context.fetch(materialRequest).first
+
+            let blobRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterialBlob")
+            blobRequest.predicate = NSPredicate(format: "materialID == %@", materialID as CVarArg)
+            let blobs = try context.fetch(blobRequest)
+            let blob = blobs.first
+
+            return MaterialBlobSnapshotForTesting(
+                materialTitle: material?.value(forKey: "title") as? String,
+                materialStorageMode: material?.value(forKey: "storageMode") as? String,
+                blobRowCount: blobs.count,
+                blobByteSize: (blob?.value(forKey: "byteSize") as? NSNumber)?.int64Value,
+                blobContentHash: blob?.value(forKey: "contentHash") as? String,
+                blobPayload: includingPayload ? blob?.value(forKey: "payload") as? Data : nil
+            )
+        }
+    }
+
+    /// TEST SEAM — stand between a committed row and the vault confirmation
+    /// that proves its leaf, and optionally answer for that confirmation.
+    ///
+    /// WHY IT HAS TO EXIST. The three `confirmPublication` refusal branches run
+    /// AFTER Core Data has committed, so what they do is caller-visible and
+    /// non-transactional: an already-published card, a preserved (or discarded)
+    /// set of previous bytes, a change notification, and whether a replay can
+    /// still repair the card. A crash cannot stand in for them — it runs no
+    /// code — and the vault will not refuse a leaf it just wrote, so nothing
+    /// short of a hook between the save and the proof can reach them. The
+    /// closure is awaited at exactly that point: returning nil runs the real
+    /// confirmation over whatever the closure did to the leaf, and returning a
+    /// Bool forces the answer without touching the disk.
+    ///
+    /// Gated on the isolated test store as well as the flag, so a signed suite
+    /// run can never hold up a publication into the founder's real data.
+    var publicationConfirmationHookForTesting: (
+        @Sendable (WorkPublicationSite, UUID, String, Int64) async -> Bool?
+    )?
+
+    func _setPublicationConfirmationHookForTesting(
+        _ hook: (@Sendable (WorkPublicationSite, UUID, String, Int64) async -> Bool?)?
+    ) {
+        guard isIsolatedTestStore else { return }
+        publicationConfirmationHookForTesting = hook
+    }
+
+    /// TEST SEAM — hold a desk publication open INSIDE the cross-process
+    /// publication lock, after its payload is durable and before any material
+    /// row names it.
+    ///
+    /// WHY IT HAS TO EXIST. `WorkMaterialPublicationLock` is what stops a
+    /// successor process adopting a blob its predecessor can still take back,
+    /// and the only observable difference it makes is WHEN the successor's
+    /// publication runs. That window is a few microseconds wide in the real
+    /// protocol — the blob save and the material save are consecutive
+    /// statements — so nothing short of stopping the predecessor inside it can
+    /// put a second store instance in the position the defect needs. The
+    /// closure is awaited at exactly that point, so a second store publishing
+    /// the same id is provably blocked on the lock rather than merely slower.
+    ///
+    /// Gated on the isolated test store as well as the flag, so a signed suite
+    /// run can never hold a publication open over the founder's real data.
+    var workMaterialPublicationLockHoldForTesting: (@Sendable (UUID) async -> Void)?
+
+    func _setWorkMaterialPublicationLockHoldForTesting(
+        _ hold: (@Sendable (UUID) async -> Void)?
+    ) {
+        guard isIsolatedTestStore else { return }
+        workMaterialPublicationLockHoldForTesting = hold
+    }
+
+    /// How many times the board projection resolved its two batch questions.
+    struct ProjectionBatchCountsForTesting: Sendable, Hashable {
+        let vaultReadability: Int
+        let blobCompleteness: Int
+    }
+
+    /// TEST SEAM — count the batch resolutions one projection pass performs.
+    ///
+    /// WHY IT HAS TO EXIST. "Availability is resolved once per fetch, not once
+    /// per card" is a claim about how many times the projection hops onto the
+    /// vault actor and into the payload store, and the RESULT of a per-card
+    /// loop is identical to the result of a batch — a board of ten cards reads
+    /// the same either way. Nothing observable to a caller distinguishes them,
+    /// so the counts have to be observable instead.
+    var projectionVaultReadabilityCallsForTesting = 0
+    var projectionBlobCompletenessCallsForTesting = 0
+
+    func _resetProjectionBatchCountsForTesting() {
+        guard isIsolatedTestStore else { return }
+        projectionVaultReadabilityCallsForTesting = 0
+        projectionBlobCompletenessCallsForTesting = 0
+    }
+
+    func _projectionBatchCountsForTesting() -> ProjectionBatchCountsForTesting {
+        ProjectionBatchCountsForTesting(
+            vaultReadability: projectionVaultReadabilityCallsForTesting,
+            blobCompleteness: projectionBlobCompletenessCallsForTesting
+        )
+    }
+
+    /// TEST SEAM — remove the directories an isolated store minted for itself:
+    /// the vault's payload leaves and staging markers, and the publication lock
+    /// files beside its Core file.
+    ///
+    /// WHY IT HAS TO EXIST. Nothing owns those directories' lifetimes: the
+    /// store creates the vault in `init(inMemory:storeURL:)`, the lock
+    /// directory appears beside whatever file that store was pointed at, and
+    /// neither actor removes either — so a suite whose cases each publish a
+    /// ceiling-sized payload leaves tens of megabytes per case in the
+    /// simulator's temporary directory until the device is wiped. A test cannot
+    /// clean them up itself either: one path is generated inside the
+    /// initializer and never handed out, and the other is derived from a store
+    /// description a test does not read.
+    ///
+    /// Refuses anything but an isolated store, so the person's own vault and the
+    /// App Group's live locks are unreachable from here even in a signed run.
+    func _removeIsolatedVaultDirectoryForTesting() {
+        guard isIsolatedTestStore else { return }
+        if let isolatedVaultBaseURL {
+            try? FileManager.default.removeItem(at: isolatedVaultBaseURL)
+        }
+        if let lockDirectory = Self.publicationLockDirectory(
+            besideCore: container.persistentStoreDescriptions.first?.url
+        ) {
+            try? FileManager.default.removeItem(at: lockDirectory)
+        }
+    }
+    #endif
+
+    /// TEST SEAM — detach every mounted store, closing the sqlite files.
+    ///
+    /// WHY IT HAS TO EXIST. Close/reopen, and "the payload file was deleted
+    /// while the app was not running", are two states the two-store topology
+    /// has to survive; both need the files genuinely closed first, and waiting
+    /// for the actor to deallocate is not deterministic enough to delete a
+    /// sqlite under. The instance is spent afterwards — its load task still
+    /// reads as done with nothing mounted — so a caller reopens through a
+    /// fresh store.
+    func _unloadForTesting() async throws {
+        guard isIsolatedTestStore else { return }
+        try await ensureLoaded()
+        let coordinator = container.persistentStoreCoordinator
+        for store in coordinator.persistentStores {
+            try coordinator.remove(store)
+        }
+    }
     #endif
 
     /// The one conversation row for `id`, or nil. Every marker write starts here,
@@ -4770,6 +5425,56 @@ actor ConversationStore {
         }
     }
 
+    /// Full local attachment bytes keyed by persisted attachment identity. Unlike
+    /// `loadAttachmentData`, this includes inline text/code files as well as
+    /// images, while still excluding server references whose bytes live only on
+    /// the user's gateway. Work capture uses this to preserve every local source
+    /// without guessing that a thumbnail or extracted preview is the real file.
+    func loadLocalAttachmentPayloads(for messageID: UUID) async throws -> [UUID: Data] {
+        try await ensureLoaded()
+        let context = container.newBackgroundContext()
+        return try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Attachment")
+            request.predicate = NSPredicate(format: "message.id == %@", messageID as CVarArg)
+            request.sortDescriptors = [
+                NSSortDescriptor(key: "sequence", ascending: true),
+                NSSortDescriptor(key: "createdAt", ascending: true)
+            ]
+            let objects = try context.fetch(request)
+            var payloads: [UUID: Data] = [:]
+            for object in objects {
+                guard (object.value(forKey: "isServerReference") as? NSNumber)?.boolValue != true,
+                      let id = object.value(forKey: "id") as? UUID,
+                      payloads[id] == nil,
+                      let data = object.value(forKey: "data") as? Data else { continue }
+                let mimeType = object.value(forKey: "mimeType") as? String ?? ""
+                // Empty image bytes cannot render or dispatch. An empty local
+                // text/binary file is still a valid source and must not become
+                // a misleading "reattach" note when captured into Work.
+                guard !data.isEmpty || !mimeType.hasPrefix("image/") else { continue }
+                payloads[id] = data
+            }
+            return payloads
+        }
+    }
+
+    /// Return candidate file-lane keys referenced by any persisted attachment.
+    /// Cleanup consults this before DELETE so even an astronomically unlikely
+    /// client-minted key collision cannot erase a file an older conversation
+    /// still owns.
+    func referencedStoredKeys(_ candidates: Set<String>) async throws -> Set<String> {
+        guard !candidates.isEmpty else { return [] }
+        try await ensureLoaded()
+        let context = container.newBackgroundContext()
+        return try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Attachment")
+            request.predicate = NSPredicate(format: "storedKey IN %@", Array(candidates))
+            return Set(try context.fetch(request).compactMap {
+                $0.value(forKey: "storedKey") as? String
+            })
+        }
+    }
+
     // MARK: - Test Support
 
     /// Insert bare (attribute-less) `Conversation` + `Message` managed objects
@@ -4903,6 +5608,64 @@ actor ConversationStore {
         }
         Self.logFetchIfSlow("fetch.messages", start: start, rows: records.count)
         return records
+    }
+
+    /// Fetch one authoritative persisted turn and prove it belongs to the
+    /// conversation the caller named. Attachment row UUIDs are assigned by the
+    /// store, so a consumer preserving source identity must read them back
+    /// rather than trust the lightweight snapshot returned by an append.
+    func fetchMessage(id: UUID, in conversationID: UUID) async throws -> MessageRecord? {
+        try await ensureLoaded()
+        let context = container.newBackgroundContext()
+        return try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSPredicate(
+                format: "id == %@ AND conversation.id == %@",
+                id as CVarArg,
+                conversationID as CVarArg
+            )
+            request.fetchLimit = 1
+            return try context.fetch(request).first.map { MessageRecord(managedObject: $0) }
+        }
+    }
+
+    /// The batched sibling of `fetchMessage(id:in:)`, keyed message id ->
+    /// conversation id. ONE background context and ONE fetch for the whole set:
+    /// the Work board resolves every run's displayed turn on each debounced
+    /// refresh, and calling the single-id method per run would open a private
+    /// queue context per message, all contending on one store coordinator.
+    ///
+    /// The per-conversation OR keeps the single-id method's ownership proof —
+    /// a turn is returned only for the conversation the caller paired it with —
+    /// while doing it in SQL, so no `conversation` relationship is ever faulted.
+    /// `attachments` IS prefetched, because `MessageRecord` maps that to-many
+    /// eagerly and would otherwise fault once per returned row.
+    func fetchMessages(
+        conversationIDsByMessageID: [UUID: UUID]
+    ) async throws -> [UUID: MessageRecord] {
+        guard !conversationIDsByMessageID.isEmpty else { return [:] }
+        try await ensureLoaded()
+        let context = container.newBackgroundContext()
+        let wanted = conversationIDsByMessageID
+        return try await context.perform { [context] in
+            let clauses = Dictionary(grouping: wanted, by: \.value).map { conversationID, pairs in
+                NSPredicate(
+                    format: "conversation.id == %@ AND id IN %@",
+                    conversationID as CVarArg,
+                    pairs.map(\.key)
+                )
+            }
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
+            request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: clauses)
+            request.relationshipKeyPathsForPrefetching = ["attachments"]
+            var found: [UUID: MessageRecord] = [:]
+            found.reserveCapacity(wanted.count)
+            for object in try context.fetch(request) {
+                let record = MessageRecord(managedObject: object)
+                found[record.id] = record
+            }
+            return found
+        }
     }
 
     /// The newest message of one conversation, reduced to what a LIST row needs.

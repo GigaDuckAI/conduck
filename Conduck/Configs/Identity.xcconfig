@@ -5,8 +5,15 @@ CONDUCK_BUNDLE_ID_BASE = com.example.Conduck
 CONDUCK_IDENTITY_NAMESPACE = com.example.conduck
 CONDUCK_GROUP_ID = group.com.example.conduck
 CONDUCK_ICLOUD_CONTAINER_ID = iCloud.com.example.conduck
+CONDUCK_ICLOUD_BLOBS_CONTAINER_ID = iCloud.com.example.conduck.blobs
+// OAuth callback scheme (RFC 8252 private-use URL scheme) — derived from the
+// namespace so an override sets it implicitly and no two builds claim the same
+// scheme; must stay a legal scheme: letter first, then letters/digits/./-/+.
+CONDUCK_OAUTH_SCHEME = $(CONDUCK_IDENTITY_NAMESPACE)
 CONDUCK_DISPLAY_NAME = Conduck Community
 CONDUCK_ENTITLEMENTS_VARIANT = Community
+// Empty in source builds; official distribution supplies its numeric listing ID.
+CONDUCK_APP_STORE_ID =
 CONDUCK_DEVELOPMENT_TEAM =
 
 DEVELOPMENT_TEAM = $(CONDUCK_DEVELOPMENT_TEAM)

@@ -299,8 +299,8 @@ final class WatchSettingsReader {
     /// All refs currently configured ON THIS WATCH (cached URL + Keychain token
     /// present), built-ins first (`RemoteAgentBackend.allCases` order) then
     /// customs (roster order). Parity with the iOS
-    /// `SettingsManager.configuredRemoteAgentRefs()`. Drives the in-app "Ask"
-    /// gateway chooser: ≥2 → present a picker; 1 → straight to record.
+    /// `SettingsManager.configuredRemoteAgentRefs()`. Supplies the gateway rows
+    /// of the Ask destination chooser, shown on every press.
     func configuredBackendRefs() -> [String] {
         var refs: [String] = RemoteAgentBackend.allCases
             .map(\.rawValue)
@@ -344,6 +344,15 @@ final class WatchSettingsReader {
         }
         appGroupDefaults.removeObject(forKey: Constants.remoteAgentPendingInAppNewConversationBackendKey)
         return raw
+    }
+
+    /// Read the pending hint WITHOUT consuming it. The relay queue persists the
+    /// picked gateway beside the capture so a settlement that lands minutes
+    /// later — in a process that never saw the pick — still mints against the
+    /// gateway the person chose; reading it there must not steal the one-shot
+    /// consumption from the LIVE hop that is still running.
+    func peekPendingInAppNewConversationBackend() -> String? {
+        appGroupDefaults.string(forKey: Constants.remoteAgentPendingInAppNewConversationBackendKey)
     }
 
     /// Clear the pending hint without consuming its value. Called on every

@@ -52,6 +52,8 @@ The official app is free for individual use. Conduck-authored application code i
 | **Apple Watch** | Quick voice or text capture, conversations, and replies from your wrist |
 | **CarPlay** | Hands-free, multi-turn voice conversations on the road |
 
+**Work is your personal desk.** Collect thoughts, screenshots and files from the app, share sheet, Shortcuts, Mac menu bar, Watch or CarPlay. Arrange cards freely, pin important ideas, and bring related materials into projects. When you are ready, shape a project brief, review the included files and choose which configured AI should receive it. Only your explicit confirmation starts that conversation. Captures stay on the desk; grouping never copies or deletes their files. Voice notes keep their words, while transcription uses the speech provider you chose. Cards and project organization sync through your own private iCloud; very large files stay on the device that captured them.
+
 Conversation history follows you through your private iCloud. CarPlay runs through the iPhone app. Conduck requires iOS, iPadOS, macOS, and watchOS 26.5 or later; the Mac app requires Apple silicon (M1 or later).
 
 ## How it works

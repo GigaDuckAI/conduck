@@ -20,6 +20,20 @@ struct WatchAppShortcuts: AppShortcutsProvider {
             shortTitle: "GigaAction",
             systemImageName: "note.text"
         )
+
+        // Text-only preparation is intentionally its own action: unlike
+        // GigaAction it opens no microphone and starts no AI turn. The phrases
+        // name the wrist so this provider cannot collide in Siri with the
+        // iPhone provider's identical action on a paired pair of devices.
+        AppShortcut(
+            intent: CaptureWorkboardIntent(),
+            phrases: [
+                "Add a thought to Work on my watch in \(.applicationName)",
+                "Prepare work on my watch in \(.applicationName)"
+            ],
+            shortTitle: "Add to Work",
+            systemImageName: "tray.and.arrow.down.fill"
+        )
     }
 
     static var shortcutTileColor: ShortcutTileColor {

@@ -4046,6 +4046,10 @@ final class ConversationDetailViewModel {
         // only while the current configuration still identifies the exact lane
         // that accepted the upload.
         expectedFileLaneID: String? = nil,
+        // A reviewed handoff additionally seals the configured destination:
+        // the same built-in/custom ref can be edited while persistence awaits.
+        // Generic composer sends omit this and retain their existing behavior.
+        expectedGatewaySnapshot: SettingsManager.RemoteAgentSnapshot? = nil,
         // Called exactly once when supplied: true only after the user turn and
         // all attachment drafts have been durably appended; false on any
         // pre-acceptance rejection/write failure. This lets the composer retain
@@ -4125,6 +4129,18 @@ final class ConversationDetailViewModel {
                   routeRef == expectedRef,
                   let dispatchFileLane,
                   dispatchFileLane.durableLaneID == expectedFileLaneID else {
+                #if os(macOS)
+                isAwaitingReply = false
+                #endif
+                reportComposerDispatchRejection()
+                onLocalAcceptance?(false)
+                return
+            }
+        }
+
+        if let expectedGatewaySnapshot {
+            let current = await SettingsManager.shared.remoteAgentSnapshot(forConversationBackend: rawBackend ?? "")
+            guard let current, expectedGatewaySnapshot.hasSameDispatchDestination(as: current) else {
                 #if os(macOS)
                 isAwaitingReply = false
                 #endif
@@ -4261,7 +4277,8 @@ final class ConversationDetailViewModel {
         let resolvedSnapshot = await SettingsManager.shared.remoteAgentSnapshot(forConversationBackend: rawBackend ?? "")
         let resolvedToken = resolvedSnapshot?.token ?? ""
         guard let snapshot = resolvedSnapshot,
-              !(snapshot.authScheme.requiresToken && resolvedToken.isEmpty) else {
+              !(snapshot.authScheme.requiresToken && resolvedToken.isEmpty),
+              expectedGatewaySnapshot.map({ $0.hasSameDispatchDestination(as: snapshot) }) ?? true else {
             #if os(macOS)
             isAwaitingReply = false   // release the synchronous claim on early return
             #endif
@@ -4617,7 +4634,8 @@ final class ConversationDetailViewModel {
         modality: TurnModality = .text,
         attachments: [PendingAttachment],
         expectedRef: RemoteAgentRef,
-        expectedFileLaneID: String?
+        expectedFileLaneID: String?,
+        expectedGatewaySnapshot: SettingsManager.RemoteAgentSnapshot? = nil
     ) async -> Bool {
         await withCheckedContinuation { continuation in
             Task { @MainActor [weak self] in
@@ -4631,6 +4649,7 @@ final class ConversationDetailViewModel {
                     attachments: attachments,
                     expectedRef: expectedRef,
                     expectedFileLaneID: expectedFileLaneID,
+                    expectedGatewaySnapshot: expectedGatewaySnapshot,
                     onLocalAcceptance: { accepted in
                         continuation.resume(returning: accepted)
                     }
@@ -4897,6 +4916,8 @@ final class ConversationDetailViewModel {
         localURL: URL,
         storedKey: String,
         snapshot: SettingsManager.FileTransferSnapshot,
+        recoveryID: UUID? = nil,
+        recoverySequence: Int? = nil,
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws {
         try Task.checkCancellation()
@@ -4918,6 +4939,8 @@ final class ConversationDetailViewModel {
                 localURL: tmp,
                 snapshot: snapshot,
                 storedKey: storedKey,
+                shareEnvelopeID: recoveryID,
+                sequence: recoverySequence,
                 onProgress: onProgress
             )
         } catch {

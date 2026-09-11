@@ -140,6 +140,15 @@ final class AppErrorCodeContractTests: XCTestCase {
         // arriving as `remoteAgentUnreachable`, which sends the user to check a
         // server the request never reached.
         ("insecureConnectionBlocked",     .insecureConnectionBlocked,        77),
+        // 78 carries nothing, so it round-trips to itself exactly. It exists so a
+        // refused Work desk write reaches the retry surfaces as its own case
+        // instead of riding `.unknown`, whose copy names no action.
+        ("workDeskWriteFailed",           .workDeskWriteFailed,              78),
+        // 79 carries nothing either, and it exists because 78's sentence is
+        // about the RECORDING: a Work capture whose recording and words landed
+        // and whose picture did not needs a code whose copy names the artifact
+        // that is actually missing.
+        ("workScreenshotWriteFailed",     .workScreenshotWriteFailed,        79),
         ("unknown",                       .unknown(NSError(domain: "test", code: 0)), 99),
     ]
 
@@ -214,30 +223,30 @@ final class AppErrorCodeContractTests: XCTestCase {
     // MARK: - Completeness guard
 
     func testForwardTableIsExhaustiveOverEmittedCodes() {
-        // The getter emits codes 1...77 with 27 omitted (reserved gap), plus
-        // the catch-all 99 — that is 76 + 1 = 77 distinct codes. If a NEW case
+        // The getter emits codes 1...79 with 27 omitted (reserved gap), plus
+        // the catch-all 99 — that is 78 + 1 = 79 distinct codes. If a NEW case
         // is added to AppError without a row in `forwardTable`, this count
         // diverges and forces a test update. (Computed independently of the
         // table to avoid the table validating itself.)
         //
-        // The range grew to 74 because `.remoteAgentDefaultNeedsSetup` claimed
-        // that slot, to 75 because `.sttKeyUnreadable` claimed the next one, to
-        // 76 because `.turnStoppedBeforeSend` claimed the one after that, and to
-        // 77 because `.insecureConnectionBlocked` claimed the next. This guard is
-        // written for exactly that event — a new case landing with no wire row —
-        // so it did its job each time: the fix is to RECORD the new code here,
-        // never to loosen the assertion.
-        let expectedDistinctCodes = Set((1...77).filter { $0 != 27 }).union([99])
-        XCTAssertEqual(expectedDistinctCodes.count, 77,
-                       "Sanity: 1...77 minus the 27 gap plus 99 = 77 distinct codes.")
+        // The range grows by one every time a case claims the next free slot:
+        // `.remoteAgentDefaultNeedsSetup` took 74, `.sttKeyUnreadable` 75,
+        // `.turnStoppedBeforeSend` 76, `.insecureConnectionBlocked` 77,
+        // `.workDeskWriteFailed` 78 and `.workScreenshotWriteFailed` 79. This
+        // guard is written for exactly that
+        // event — a new case landing with no wire row — so the fix is to RECORD
+        // the new code here, never to loosen the assertion.
+        let expectedDistinctCodes = Set((1...79).filter { $0 != 27 }).union([99])
+        XCTAssertEqual(expectedDistinctCodes.count, 79,
+                       "Sanity: 1...79 minus the 27 gap plus 99 = 79 distinct codes.")
 
         let tableCodes = Self.forwardTable.map(\.code)
         XCTAssertEqual(Set(tableCodes).count, tableCodes.count,
                        "Forward table must have no duplicate codes (each case owns a unique slot).")
         XCTAssertEqual(Set(tableCodes), expectedDistinctCodes,
-                       "Forward table must cover EXACTLY the codes the getter emits (1...77 except 27, plus 99). A diff here means a new/renamed/removed case is untested.")
-        XCTAssertEqual(Self.forwardTable.count, 77,
-                       "Forward table must enumerate all 77 emittable codes — a new AppError case without a row here is a wire-contract gap.")
+                       "Forward table must cover EXACTLY the codes the getter emits (1...79 except 27, plus 99). A diff here means a new/renamed/removed case is untested.")
+        XCTAssertEqual(Self.forwardTable.count, 79,
+                       "Forward table must enumerate all 79 emittable codes — a new AppError case without a row here is a wire-contract gap.")
     }
 
     // MARK: - Locked isRetryable flags (load-bearing)

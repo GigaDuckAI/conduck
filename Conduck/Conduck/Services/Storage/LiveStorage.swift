@@ -61,6 +61,9 @@ final class LiveDefaultsStore: DefaultsStore, @unchecked Sendable {
     func set(_ value: Int, forKey key: String) { defaults.set(value, forKey: key) }
     func removeObject(forKey key: String) { defaults.removeObject(forKey: key) }
 
+    @discardableResult
+    func synchronize() -> Bool { defaults.synchronize() }
+
     func dictionaryRepresentation() -> [String: Any] { defaults.dictionaryRepresentation() }
 }
 

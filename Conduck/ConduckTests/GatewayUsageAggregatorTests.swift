@@ -124,6 +124,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
     /// clock sits relative to a transition.
     private func summarize(
         _ attempts: [GatewayAttemptRecord],
+        prior: [GatewayAttemptRecord] = [],
         live: Set<UUID> = [],
         range: ClosedRange<Date>? = nil,
         calendar: Calendar? = nil,
@@ -131,6 +132,7 @@ final class GatewayUsageAggregatorTests: XCTestCase {
     ) -> GatewayUsageSummary {
         GatewayUsageAggregator.summarize(
             attempts: attempts,
+            priorAttempts: prior,
             liveAttemptIDs: live,
             now: now ?? self.now,
             activityRange: range,
@@ -920,6 +922,13 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         XCTAssertEqual(
             day.tokenMeasuredAttempts, 2,
             "the attempt that reported nothing is not coverage for the two that did")
+        XCTAssertEqual(
+            summary.usableTokenTotal, 1_500,
+            "The Activity tile and chart must use the same per-attempt volume.")
+        XCTAssertEqual(summary.tokenMeasuredAttempts, 2)
+        XCTAssertEqual(
+            summary.tokens.reportedTotal.sum, 1_000,
+            "The provider-reported detail remains separate from calculated components.")
     }
 
     /// ONE COMPONENT IS NOT A FIGURE. An attempt reporting input but no output
@@ -942,6 +951,21 @@ final class GatewayUsageAggregatorTests: XCTestCase {
         XCTAssertEqual(
             day.tokenMeasuredAttempts, 0,
             "zero tokens over zero measuring attempts is 'nobody said', not 'it was free'")
+        XCTAssertNil(
+            summary.usableTokenTotal,
+            "Separate attempts' incomplete components cannot create a usable total.")
+        XCTAssertEqual(summary.tokens.calculatedKnownComponents, 450)
+    }
+
+    func testUsableTokenVolumeDistinguishesReportedZeroFromNoUsableEvidence() {
+        XCTAssertNil(summarize([]).usableTokenTotal)
+        XCTAssertNil(summarize([attempt(outcome: .inFlight, total: 100)]).usableTokenTotal)
+        XCTAssertEqual(summarize([attempt(total: 0)]).usableTokenTotal, 0)
+        XCTAssertEqual(summarize([attempt(input: 0, output: 0)]).usableTokenTotal, 0)
+        XCTAssertEqual(
+            summarize([attempt(total: Int64.max), attempt(input: 1, output: 1)]).usableTokenTotal,
+            Int64.max,
+            "The new Activity volume shares the existing saturating token arithmetic.")
     }
 
     /// A day whose gateways reported no usage at all reads zero over zero
@@ -1541,6 +1565,112 @@ final class GatewayUsageAggregatorTests: XCTestCase {
     }
 
     // MARK: - 9. Turn reliability
+
+    /// A range can begin between a failed dispatch and its retry. Earlier
+    /// evidence establishes that the success was recovered without importing
+    /// the earlier day's activity, failures or token volume into this range.
+    func testRetryAcrossRangeBoundaryKeepsItsHistoryWithoutCountingPriorActivity() {
+        let turn = UUID()
+        let conversation = UUID()
+        let today = calendar.startOfDay(for: now)
+        let failed = attempt(
+            conversation: conversation, turn: turn,
+            startedAt: today.addingTimeInterval(-60), outcome: .failed, total: 700)
+        let recovered = attempt(
+            conversation: conversation, turn: turn,
+            startedAt: today.addingTimeInterval(60), outcome: .succeeded, total: 200)
+        let unrelated = attempt(startedAt: today.addingTimeInterval(-120), total: 900)
+
+        let summary = summarize([recovered], prior: [failed, unrelated], range: today...now)
+
+        XCTAssertEqual(summary.recordedAttempts, 1)
+        XCTAssertEqual(summary.attemptedTurns, 1)
+        XCTAssertEqual(summary.completedTurns, 1)
+        XCTAssertEqual(summary.threadsWithUsage, 1)
+        XCTAssertEqual(summary.retriedTurns, 1)
+        XCTAssertEqual(summary.retryRate, 1)
+        XCTAssertEqual(summary.firstAttemptDeliveredTurns, 0)
+        XCTAssertEqual(summary.resolvedTurns, 1)
+        XCTAssertEqual(summary.resolvedRetriedTurns, 1)
+        XCTAssertEqual(summary.retriedTurnsRecovered, 1)
+        XCTAssertEqual(summary.attemptsPerCompletedTurn, 2)
+        XCTAssertEqual(summary.outcomeMix.failed, 0)
+        XCTAssertEqual(summary.resolvedAttemptSuccessRate, 1)
+        XCTAssertEqual(summary.usableTokenTotal, 200)
+        XCTAssertEqual(summary.tokens.reportedTotal.sum, 200)
+        XCTAssertEqual(summary.activity.buckets.reduce(0) { $0 + $1.attempts }, 1)
+        XCTAssertEqual(summary.activity.buckets.reduce(0) { $0 + $1.reportedTokens }, 200)
+    }
+
+    /// Device drill-downs pass the unsliced range as context. Its duplicate of
+    /// the selected record counts once, and later work on another device does
+    /// not change what happened on the selected device.
+    func testCrossDeviceRetryUsesEarlierContextAndIgnoresDuplicatesAndLaterAttempts() {
+        let turn = UUID()
+        let conversation = UUID()
+        let first = attempt(
+            conversation: conversation, turn: turn, startedAt: now.addingTimeInterval(-180),
+            outcome: .failed, total: 100, deviceClass: "mac")
+        let recovered = attempt(
+            conversation: conversation, turn: turn, startedAt: now.addingTimeInterval(-120),
+            outcome: .succeeded, total: 200, deviceClass: "iphone")
+        let later = attempt(
+            conversation: conversation, turn: turn, startedAt: now.addingTimeInterval(-60),
+            outcome: .inFlight, deviceClass: "mac")
+
+        let summary = summarize(
+            [recovered], prior: [first, recovered, first, later], live: [later.id])
+
+        XCTAssertEqual(summary.recordedAttempts, 1)
+        XCTAssertEqual(summary.retriedTurns, 1)
+        XCTAssertEqual(summary.firstAttemptDeliveredTurns, 0)
+        XCTAssertEqual(summary.resolvedTurns, 1)
+        XCTAssertEqual(summary.retriedTurnsRecovered, 1)
+        XCTAssertEqual(summary.attemptsPerCompletedTurn, 2)
+        XCTAssertEqual(summary.outcomeMix.inFlight, 0)
+        XCTAssertEqual(summary.usableTokenTotal, 200)
+        XCTAssertEqual(summary.deviceGroups.map(\.key), ["iphone"])
+    }
+
+    func testLaterOtherDeviceRecoveryCannotRewriteTheSelectedDevicesFailure() {
+        let turn = UUID()
+        let failed = attempt(
+            turn: turn, startedAt: now.addingTimeInterval(-120),
+            outcome: .failed, deviceClass: "mac")
+        let recovered = attempt(
+            turn: turn, startedAt: now.addingTimeInterval(-60),
+            outcome: .succeeded, deviceClass: "iphone")
+
+        let summary = summarize([failed], prior: [failed, recovered])
+
+        XCTAssertEqual(summary.attemptedTurns, 1)
+        XCTAssertEqual(summary.completedTurns, 0)
+        XCTAssertEqual(summary.retriedTurns, 0)
+        XCTAssertEqual(summary.resolvedTurns, 1)
+        XCTAssertEqual(summary.firstAttemptDeliveredTurns, 0)
+        XCTAssertEqual(summary.retriedTurnsRecovered, 0)
+        XCTAssertNil(summary.attemptsPerCompletedTurn)
+        XCTAssertEqual(summary.outcomeMix.failed, 1)
+    }
+
+    func testPriorFailureDoesNotResolveARetryStillRunningInTheSelectedRange() {
+        let turn = UUID()
+        let failed = attempt(
+            turn: turn, startedAt: now.addingTimeInterval(-120), outcome: .failed)
+        let retry = attempt(
+            turn: turn, startedAt: now.addingTimeInterval(-60), outcome: .inFlight)
+
+        let summary = summarize([retry], prior: [failed], live: [retry.id])
+
+        XCTAssertEqual(summary.retriedTurns, 1)
+        XCTAssertEqual(summary.resolvedTurns, 0)
+        XCTAssertEqual(summary.resolvedRetriedTurns, 0)
+        XCTAssertEqual(summary.retriedTurnsRecovered, 0)
+        XCTAssertEqual(summary.completedTurns, 0)
+        XCTAssertNil(summary.resolvedAttemptSuccessRate)
+        XCTAssertEqual(summary.outcomeMix.inFlight, 1)
+        XCTAssertEqual(summary.outcomeMix.failed, 0)
+    }
 
     /// Four turns, one of each shape, over the same seven attempts — every
     /// figure below is a different slice, and a formula that reached for the

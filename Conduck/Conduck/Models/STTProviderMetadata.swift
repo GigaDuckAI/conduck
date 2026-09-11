@@ -163,7 +163,7 @@ enum STTProviderRegistry {
     static let openRouter = STTProviderMetadata(
         id: "openrouter-stt",
         displayName: "OpenRouter",
-        consoleURL: URL(string: "https://openrouter.ai/keys")!,
+        consoleURL: URL(string: Constants.openRouterKeysConsoleURLString)!,
         keyPlaceholder: LocalizedStringResource(
             "settings.stt.provider.openRouter.placeholder",
             defaultValue: "sk-or-…"

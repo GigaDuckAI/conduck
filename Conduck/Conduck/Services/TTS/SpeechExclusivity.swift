@@ -3,19 +3,29 @@
 // Conduck
 // SpeechExclusivity.swift
 //
-// The macOS speech/mic exclusivity bus. macOS has NO AVAudioSession
-// arbitration, and Mac speech runs on SEPARATE engine instances that cannot
-// see each other (each thread view owns a `ThreadSpeaker(engine: ReplyVoice())`;
-// the quick-lane arrival speak and the Settings sample preview run on
-// `ReplyVoice.shared`) — so without arbitration two voices can overlap, and a
-// playing voice bleeds straight into a starting mic capture. This bus is the
-// ONE place those parties coordinate, replacing the point-to-point
-// `ReplyVoice.shared.cancel()` calls that each covered only a single pair.
+// The in-process speech/mic exclusivity bus for macOS and iOS. Speech runs on
+// SEPARATE engine instances that cannot see each other (each thread view owns a
+// `ThreadSpeaker(engine: ReplyVoice())`, each desk voice note owns a
+// `WorkboardAudioCardPlayer`; the quick-lane arrival speak and the Settings
+// sample preview run on `ReplyVoice.shared`) — so without arbitration two
+// voices can overlap, and a playing voice bleeds straight into a starting mic
+// capture. This bus is the ONE place those parties coordinate, replacing the
+// point-to-point `ReplyVoice.shared.cancel()` calls that each covered only a
+// single pair.
+//
+// WHY BOTH PLATFORMS: macOS has no `AVAudioSession` at all, so it has no
+// arbitration of any kind. iOS has one, but it arbitrates BETWEEN apps and not
+// WITHIN this one: two `AVAudioPlayer`s on the same session overlap, and a
+// starting recorder moves the shared session to `.record`, which silences a
+// playing card at the OS level while that card's own state machine still reads
+// `.playing` — audible output and reported state diverge. The session decides
+// what the hardware does; this bus is what makes the surfaces AGREE about it.
 //
 // PRIORITY RULES:
 //   - Mic start → ALL speakers stop (`claim(nil)` from
-//     `DictationService.startRecording`). The mic is never registered as a
-//     party, so it is never preempted — a live capture is sacred.
+//     `DictationService.startRecording` and `InAppAudioRecorder.startRecording`).
+//     The mic is never registered as a party, so it is never preempted — a live
+//     capture is sacred.
 //   - Any speaker start/resume → every OTHER speaker stops (`claim(self)`).
 //     Last-speaker-wins.
 //   - AUTO-speak (the quick-lane arrival path) is suppressed entirely while
@@ -24,28 +34,39 @@
 //     tappable in the thread. MANUAL bubble taps are NOT suppressed during
 //     recording: user-initiated audio obeys the user.
 //
-// PARTIES (macOS): each view-owned `ThreadSpeaker` (registered in its init —
-// the party is the STATE MACHINE, not its engine, because cancelling a
-// `ReplyVoice` directly never fires its completion and would leave the
-// speaker's bubble stuck in `.playing`), and `ReplyVoice.shared` (registered
-// lazily when the singleton is first built). The mic side is a weak registry
-// of `RecordingExclusivityAuthority` objects queried LIVE (each service's own
-// state machine stays the source of truth — no transition bookkeeping, and
-// distinct authorities coexist: the menu-bar `DictationService` and the main
-// window's `InAppAudioRecorder`; see the protocol doc).
+// PARTIES: each view-owned `ThreadSpeaker` (registered in its init — the party
+// is the STATE MACHINE, not its engine, because cancelling a `ReplyVoice`
+// directly never fires its completion and would leave the speaker's bubble
+// stuck in `.playing`), each desk `WorkboardAudioCardPlayer` (registered
+// lazily at its first claim, not in `init`, because SwiftUI re-evaluates an
+// `@State` default initializer on every struct init), and — macOS only —
+// `ReplyVoice.shared`, the always-alive engine behind the quick-lane arrival
+// speak. The mic side is a weak registry of `RecordingExclusivityAuthority`
+// objects queried LIVE (each service's own state machine stays the source of
+// truth — no transition bookkeeping, and distinct authorities coexist: the
+// menu-bar `DictationService` and the main window's `InAppAudioRecorder`; see
+// the protocol doc).
 //
 // The TYPE is deliberately cross-platform (Foundation-only, no gate) so it
 // compiles into every target and its tests run on the authoritative iOS-sim
-// test pass — but ONLY macOS call sites register/claim. iOS, watchOS, and
-// CarPlay never touch it: CarPlay's own `ReplyVoice` instance must never be
-// preemptible (exactly-once completion / deactivate-once are load-bearing).
+// test pass. TWO surfaces stay OUT of it by construction. watchOS: the wrist
+// has one speaker and no second audio surface to arbitrate against, so
+// `ThreadSpeaker`'s bus lines compile out there and this file is not in that
+// target. CarPlay: its own `ReplyVoice` instance and its `CarPlayRecordingService`
+// register NOTHING, so no claim can ever reach them — the car's exactly-once
+// completion / deactivate-once invariants are load-bearing, and a desk card or
+// a composer mic must not be able to preempt them. Surfaces that must not play
+// over a live CarPlay session read `CarPlayRecordingService.anySessionActive`
+// directly instead of registering it here.
 
 import Foundation
 
 /// A speech producer that can be told to stop because another party (a
 /// different speaker, or the mic) is starting. Conformers: `ThreadSpeaker`
-/// (stops via its own `stop()`, keeping bubble UI state in sync) and
-/// `ReplyVoice` (stops via `cancel()`). macOS-only conformances.
+/// (stops via its own `stop()`, keeping bubble UI state in sync),
+/// `WorkboardAudioCardPlayer` (tears the card down and returns it to `.idle`)
+/// and `ReplyVoice` (stops via `cancel()`, macOS-only — only the shared
+/// instance is ever registered).
 @MainActor
 protocol SpeechExclusivityParty: AnyObject {
     func stopForSpeechExclusivity()
@@ -90,8 +111,8 @@ final class SpeechExclusivity {
 
     /// True while ANY live mic authority is actively capturing — queried LIVE
     /// on every read (each authority's own state machine stays the source of
-    /// truth). False when none are registered (iOS/watch — the bus is inert
-    /// there). Compacts dead authorities as it walks.
+    /// truth). False when none are registered (watchOS, and any process where
+    /// no capture surface is alive). Compacts dead authorities as it walks.
     var isRecordingActive: Bool {
         var anyRecording = false
         for (id, box) in authorities {
@@ -126,8 +147,9 @@ final class SpeechExclusivity {
     /// 35 thrash). A live capture is sacred: the SECOND start is refused, never
     /// the first. `requester` is excluded by `ObjectIdentifier` so it can't block
     /// itself — ordering vs. its own `isStarting`/`state` flip is irrelevant.
-    /// Compacts dead authorities as it walks. Inert on iOS/watch (no authorities
-    /// registered → always `true`).
+    /// Compacts dead authorities as it walks. macOS-only by call site: iOS has
+    /// exactly one in-app microphone, and the shared `AVAudioSession` already
+    /// arbitrates it against CarPlay's, so there is no second start to refuse.
     func acquireMicLease(excluding requester: RecordingExclusivityAuthority) -> Bool {
         let requesterID = ObjectIdentifier(requester)
         for (id, box) in authorities {

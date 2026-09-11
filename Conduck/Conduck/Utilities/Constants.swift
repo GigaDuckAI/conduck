@@ -16,6 +16,20 @@ import Security
 enum Constants {
     // MARK: - Build Identity
 
+    /// Optional listing owned by this distribution. Community builds leave it
+    /// empty so forks never solicit reviews for the official app by accident.
+    nonisolated static let appStoreID: String? = {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: "ConduckAppStoreID") as? String,
+              !value.isEmpty,
+              value.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
+        return value
+    }()
+
+    nonisolated static var appStoreReviewURL: URL? {
+        guard let appStoreID else { return nil }
+        return URL(string: "https://apps.apple.com/app/id\(appStoreID)?action=write-review")
+    }
+
     /// Reverse-DNS identity namespace of THIS build, read from the
     /// `ConduckIdentityNamespace` Info.plist key (fed by the xcconfig identity
     /// layer's `CONDUCK_IDENTITY_NAMESPACE`: official `ai.gigaduck.agentrelay`,
@@ -52,6 +66,33 @@ enum Constants {
         Bundle.main.object(forInfoDictionaryKey: "ConduckCloudKitContainerID") as? String
             ?? "iCloud.\(identityNamespace)"
 
+    /// CloudKit container for the payload store — its OWN, never the one above.
+    /// Read from the `ConduckCloudKitBlobsContainerID` Info.plist key (fed by
+    /// `CONDUCK_ICLOUD_BLOBS_CONTAINER_ID`); official value
+    /// `iCloud.ai.gigaduck.agentrelay.blobs` (set-once Apple identity, frozen on
+    /// a product rename like every identifier above).
+    ///
+    /// WHY A SECOND CONTAINER. Core Data refuses to mirror two stores through
+    /// one: setting a second description carrying the same identifier raises
+    /// "Cannot assign the same iCloud Container Identifier to multiple stores"
+    /// while the container is being configured, which kills the app on launch.
+    /// The documented shape for two mirrored stores is one container each.
+    ///
+    /// Nothing about the privacy stance moves with it: both containers are the
+    /// user's own private iCloud database, there is no backend behind either,
+    /// and "Data Not Collected" holds unchanged. The Watch never lists this
+    /// container — it mounts no `Blobs` store at all, and that omission IS the
+    /// payload exclusion.
+    ///
+    /// MUST match the second
+    /// `com.apple.developer.icloud-container-identifiers` entry in BOTH
+    /// `Conduck-Official.entitlements` and `Conduck-Community.entitlements`, and
+    /// must appear in NEITHER `ConduckWatch.entitlements` nor the share
+    /// extensions' (they attach no CloudKit options).
+    nonisolated static let iCloudCloudKitBlobsContainerID =
+        Bundle.main.object(forInfoDictionaryKey: "ConduckCloudKitBlobsContainerID") as? String
+            ?? "iCloud.\(identityNamespace).blobs"
+
     /// Whether THIS process may legally construct the CloudKit container above.
     ///
     /// `CKContainer(identifier:)` RAISES — it does not throw or return nil — when
@@ -74,7 +115,11 @@ enum Constants {
     /// probe would be far worse than the unsigned-build crash this prevents, so
     /// the only path to `false` is a positive reading of its absence.
     #if os(macOS)
-    nonisolated static let hasICloudContainerEntitlement: Bool = {
+    /// Whether the running process's entitlement list names `container`, under
+    /// the fail-open contract documented above. Both container probes share this
+    /// one reading so neither can be judged absent by a rule the other does not
+    /// apply.
+    nonisolated private static func carriesICloudContainerEntitlement(_ container: String) -> Bool {
         guard let task = SecTaskCreateFromSelf(nil) else { return true }
         var probeError: Unmanaged<CFError>?
         let value = SecTaskCopyValueForEntitlement(
@@ -91,10 +136,29 @@ enum Constants {
         // Present but not the documented array-of-strings shape: unreadable, not
         // absent, so it takes the fail-open branch with every other uncertainty.
         guard let containers = value as? [String] else { return true }
-        return containers.contains(iCloudCloudKitContainerID)
-    }()
+        return containers.contains(container)
+    }
+
+    nonisolated static let hasICloudContainerEntitlement: Bool =
+        carriesICloudContainerEntitlement(iCloudCloudKitContainerID)
+
+    /// Whether THIS process may legally mirror the payload store through
+    /// `iCloudCloudKitBlobsContainerID`, on the same fail-open terms: only a
+    /// SUCCESSFUL read of an entitlement list that omits the blobs container
+    /// returns false.
+    ///
+    /// It is a separate reading because the two containers are provisioned
+    /// separately — a signed build can carry the conversations container and
+    /// not the payload one, which is exactly the state between adding this
+    /// container to the app and creating it in the developer portal. That build
+    /// mounts the payload store LOCAL-ONLY rather than crashing, so a container
+    /// that does not exist yet costs the user their payload sync and nothing
+    /// else.
+    nonisolated static let hasICloudBlobsContainerEntitlement: Bool =
+        carriesICloudContainerEntitlement(iCloudCloudKitBlobsContainerID)
     #else
     nonisolated static let hasICloudContainerEntitlement = true
+    nonisolated static let hasICloudBlobsContainerEntitlement = true
     #endif
 
     // MARK: - Request Configuration
@@ -201,6 +265,18 @@ enum Constants {
     /// iCloud-synced (a per-machine "you've seen this screen" flag, mirroring
     /// `onboardingCompletedKey` / `screenshotAskTipSeenKey`).
     static let gatewayPrimerSeenKey = "gateway_primer_seen"
+
+    /// Device-local: whether the one-time Work board tutorial
+    /// (`WorkboardTutorialView`) has been acknowledged. App Groups UserDefaults,
+    /// NOT iCloud-synced (a per-machine "you've seen this screen" flag, mirroring
+    /// `gatewayPrimerSeenKey` / `screenshotAskTipSeenKey`). Device-local is the
+    /// right posture even though briefs sync: the tutorial teaches the board's
+    /// drag / resize / drop affordances, which differ per input device, so a
+    /// first visit on a second device earns its own showing.
+    static let workboardTutorialSeenKey = "workboard_tutorial_seen"
+
+    /// Device-local board presentation; card order continues to sync normally.
+    static let workboardLayoutKey = "workboard_layout"
 
     /// macOS-only, device-local: the Diagnostics relevance gate for the Screen
     /// Recording capability row. Written by the capture preflight
@@ -1006,7 +1082,33 @@ enum Constants {
     /// own server, user-typed URL) OpenRouter is a third-party hosted backend
     /// with a known endpoint the user never types — see
     /// `RemoteAgentBackendMetadata` (`endpoint == .fixed`).
-    static let openRouterBaseURLString = "https://openrouter.ai/api"
+    nonisolated static let openRouterBaseURLString = "https://openrouter.ai/api"
+
+    /// The app URL OpenRouter attributes this client's traffic to — the value of
+    /// the REQUIRED `HTTP-Referer` header. On OpenRouter an app's URL IS its
+    /// identity: the public app page and the rankings row are keyed on it, so a
+    /// request without it is attributed to nobody. Derived from `websiteURL` so
+    /// the two can never name different origins; the trailing slash is dropped
+    /// because the header carries an ORIGIN, not a page. Constant app identity
+    /// only — nothing user-derived, nothing device-derived, so it stays inside
+    /// the no-telemetry posture.
+    static let openRouterAttributionReferer: String = {
+        var origin = websiteURL
+        while origin.hasSuffix("/") { origin.removeLast() }
+        return origin
+    }()
+
+    /// Display name OpenRouter shows on that app page (`X-OpenRouter-Title`).
+    /// The PRODUCT name, never the company name.
+    static let openRouterAttributionTitle = "Conduck"
+
+    /// `X-OpenRouter-Categories` — a comma-separated list drawn from
+    /// OpenRouter's OWN recognized vocabulary, which accepts at most TWO per
+    /// request and silently drops anything it does not recognize. Conduck is a
+    /// voice front end for the user's own agent (`personal-agent`) that also
+    /// carries ordinary conversational turns (`general-chat`). Keep this at two
+    /// recognized tokens; a third is discarded, not merged.
+    static let openRouterAttributionCategories = "personal-agent,general-chat"
 
     /// Context trim policy cap (`docs/ai-context/spec.md`). Under
     /// client-owned history `RemoteAgentClient` sends the active
@@ -1082,7 +1184,7 @@ enum Constants {
     /// together. 128 KB ≈ a very long article's text; anything bigger
     /// truncates at capture time with an honest note in the synthetic
     /// Markdown. FOUNDER-TUNABLE.
-    static let webPageCaptureMaxBytes = 128 * 1024
+    nonisolated static let webPageCaptureMaxBytes = 128 * 1024
 
     /// Max on-disk size (bytes) for the composer's text-vs-binary PROBE
     /// (`TextFileExtractor.extract`, a WHOLE-FILE read into memory) to run at all.
@@ -1633,6 +1735,42 @@ enum Constants {
     static let openRouterTranscriptionsPath = "/v1/audio/transcriptions"
     static let openRouterSpeechPath = "/v1/audio/speech"
 
+    /// Per-request timeout for the ONE OAuth code-for-key exchange behind
+    /// "Sign in with OpenRouter". Longer than the 15 s Test-Connection budget
+    /// and much shorter than a converse hop: the user is watching a spinner
+    /// after having already approved in the browser, but the request is not
+    /// retryable — exchanging the code CREATES a real key, so a premature
+    /// timeout costs the user a stray key in their account rather than a free
+    /// second attempt. 30 s buys a slow network the room to answer once.
+    nonisolated static let openRouterOAuthExchangeTimeout: TimeInterval = 30
+
+    /// Upper bound on the authorization `code` accepted out of an OAuth
+    /// callback. The code is OPAQUE — no charset is imposed, because the
+    /// provider may change its encoding — so a length ceiling plus the
+    /// no-whitespace/no-control-character rule is the whole shape contract. It
+    /// exists to keep anything unbounded from a third party out of the exchange
+    /// body; OpenRouter's own codes are far shorter.
+    nonisolated static let openRouterOAuthMaxCodeLength = 512
+
+    /// OpenRouter's key-management console — "where do I get a key?". The
+    /// SINGLE home for this literal: the voice provider's `consoleURL` derives
+    /// from it. OpenRouter redirects this alias to whichever workspace URL its
+    /// key LIST currently lives at.
+    nonisolated static let openRouterKeysConsoleURLString = "https://openrouter.ai/keys"
+
+    /// Parent of OpenRouter's page for ONE key, addressed by that key's
+    /// lowercase SHA-256 hex (`OpenRouterOAuth.keySettingsURL(forKey:)` appends
+    /// it). This is the route a user follows to inspect or delete the key
+    /// "Sign in with OpenRouter" created for them.
+    ///
+    /// A SEPARATE literal from the console above rather than the console plus a
+    /// path component, because the two are different routes on OpenRouter's
+    /// site: the bare `/keys` alias resolves to the key list, and only
+    /// `/settings/keys/<hash>` resolves to a single key's page — `/keys/<hash>`
+    /// resolves to neither and would strand the user on a not-found page at the
+    /// one moment they need to delete a key.
+    nonisolated static let openRouterKeySettingsURLString = "https://openrouter.ai/settings/keys"
+
     /// Per-request timeout for the "Test Connection" probe
     /// (`timeoutIntervalForRequest`). 15 s is short on purpose — this is
     /// interactive UI with a spinner; the user is waiting. The 300 s
@@ -2110,6 +2248,45 @@ enum Constants {
     /// they never drift. `nonisolated` for the same cross-actor reason as
     /// `sharedInboxDirectoryName` (the writer actor reads it off the main actor).
     nonisolated static let shareTargetsSnapshotFileName = "share-targets.json"
+
+    // MARK: - Work desk
+
+    /// The one Work desk every capture lands on. Work is a single surface, so
+    /// the row that owns every material has a compile-time identity instead of
+    /// a minted one: a capture from a headless intent, the Watch, or the share
+    /// inbox can name the desk without first reading the store, and a replay
+    /// after a crash names the same desk it named before. CloudKit can import
+    /// several physical rows under this id; the board unions their materials
+    /// and never deletes a row, so a duplicate is invisible rather than lossy.
+    ///
+    /// `nonisolated` because the store and drainer actors resolve the desk off
+    /// the main actor. `Constants.swift` is a member of the Watch target too, so
+    /// every surface reads this value rather than a copy.
+    nonisolated static let workboardDeskItemID =
+        UUID(uuidString: "DE5C0000-0000-4000-A000-000000000001")!
+
+    /// Largest material payload (bytes) that rides private CloudKit as a synced
+    /// blob. Anything above stays in the device-local vault and offers reattach.
+    ///
+    /// Deliberately below the only published CKAsset figure — an archived 50 MB
+    /// Web Services limit — because Apple documents no current maximum for a
+    /// native `CKAsset`. Tunable: raise it only on real-device evidence that
+    /// larger blobs export and import reliably, never on inference.
+    nonisolated static let workboardSyncCeilingBytes: Int64 = 30 * 1024 * 1024
+
+    /// Long-edge cap, in pixels, of the copy an image card keeps. Every image
+    /// that lands on the desk is normalised to this size by the desk write
+    /// (`WorkMaterialImagePolicy`), so a card costs the person's iCloud quota
+    /// once at vision size rather than at a screenshot's full backing scale.
+    ///
+    /// Gateway parity on purpose: it equals `ImageProcessor.defaultMaxPixel`,
+    /// the size a chat turn sends inline, so Work holds exactly what an AI
+    /// would have been shown. Written as a literal rather than as that
+    /// reference because this file is compiled into the Watch target, where
+    /// `ImageProcessor` does not exist; `ConduckTests` pins the two equal.
+    /// Raising it is a storage-and-sync decision (every card's bytes ride the
+    /// person's own CloudKit), and this is the one place that decision lives.
+    nonisolated static let workboardImageMaxPixel = 1568
 
     // MARK: - KVS Schema (diagnostic only)
 

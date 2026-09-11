@@ -1362,6 +1362,27 @@ final class BackgroundFileTransfer: NSObject {
         _ = try? await session.data(for: request)
     }
 
+    /// Recovery-grade sibling of `deleteFile`: true only when the server
+    /// confirms the key is gone (2xx, or 404 because it never landed / was
+    /// already reclaimed). The Workboard crash journal keeps the key across
+    /// launches on every transport or server failure and therefore needs this
+    /// acknowledgement instead of best-effort fire-and-forget.
+    func deleteFileForRecovery(
+        snapshot: SettingsManager.FileTransferSnapshot,
+        storedKey: String
+    ) async -> Bool {
+        let request = FileServerClient.buildDeleteRequest(snapshot: snapshot, storedKey: storedKey)
+        let (session, _) = Self.makeEphemeralSession(snapshot: snapshot)
+        defer { session.finishTasksAndInvalidate() }
+        do {
+            let (_, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return (200...299).contains(http.statusCode) || http.statusCode == 404
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - Share-Extension drain reconcile
 
     /// Whether an upload task for `(shareEnvelopeID, sequence)` is currently

@@ -8,24 +8,25 @@
 // PINNED layout in the fixed 480×600 dark panel:
 //
 //   ┌───────────────────────────────────────┐
-//   │ [✕]  ▢ icon  filename / type-desc      │  ← headerBar (PINNED, §B)
-//   │      ▢ doc  Page text · 48 KB    [ ON]  │  ← captureToggleRow (Safari only, §B.5)
-//   │      🔍 Search                          │  ← searchField (PINNED, conditional §C)
+//   │ [✕]  ▢ icon  filename / type-desc     │  ← headerBar (PINNED, §B)
+//   │      ▢ doc  Page text · 48 KB [ ON]   │  ← captureToggleRow (Safari only, §B.5)
+//   │      🔍 Search                        │  ← searchField (PINNED, conditional §C)
 //   ├───────────────────────────────────────┤
-//   │ NEW CONVERSATION                        │  ⎫
-//   │  ● OpenClaw                      ◯/◉    │  ⎬ ScrollView — the ONLY scrolling
-//   │ RECENT CHATS                            │  │   region. Section headers pin.
-//   │  ● Trip planning · 2h            ◯/◉    │  ⎭
+//   │ NEW CONVERSATION                      │  ⎫
+//   │  ● OpenClaw                  ◉        │  ⎪ ScrollView — the ONLY scrolling
+//   │ RECENT CHATS                          │  ⎬   region, holding gateways and
+//   │  ● Trip planning · 2h        ◯        │  ⎭   recent chats. Headers pin.
 //   ├───────────────────────────────────────┤
-//   │ ▢ Add a message…                  (⬆)   │  ← bottomBar (PINNED floor, §D)
+//   │ ▢ Add a message…                      │  ← bottomBar (PINNED floor, §D)
+//   │ [ Add to Work ]  [ Send to OpenClaw ] │  ← the two actions, side by side
+//   │   Nothing is sent to AI               │  ← Work's own caption
 //   └───────────────────────────────────────┘
 //
-// The macOS share host renders NO `.toolbar` (the old layout's Send button lived
-// there → "no Send button" bug). So Send moves into a pinned in-panel bottom bar
-// (an amber send-circle mirroring the main-app `CaptureCircleButton` — reimplemented
-// locally, NOT imported: separate compilation module). The header/search/dividers/
-// bottomBar are SIBLINGS of the `ScrollView`, so the bottom bar always sits on the
-// panel floor and the row list scrolls between them.
+// The macOS share host renders NO `.toolbar` (a primary action placed there is
+// invisible). Both actions therefore live in the pinned in-panel bottom bar. The
+// header/search/dividers/bottomBar are siblings of the `ScrollView`, so the two
+// buttons always sit on the panel floor and the destination list — gateways and
+// recent chats — fills the fixed panel by itself.
 //
 // ── Safari page-text capture (§B.5) ────────────────────────────────────────────
 // When shared from Safari, `resolveCapture` yields a `WebPageCapture.Payload` and
@@ -40,35 +41,38 @@
 // we can't reference it. Same reason the strings use inline `defaultValue:` (the
 // appex carries its OWN `Localizable.xcstrings`; keys are spliced into it later).
 //
-// ── Send / UX decision (the picker is the surface) ─────────────────────────────
-// Sharing ALWAYS sends on the chosen target (share-and-go): the host stamps the
-// manifest's frozen `shouldAutosend` field `true` and the drainer dispatches the
-// turn immediately. The picker is the surface so the user can choose a target
-// (the founder's WhatsApp/Telegram-inspired ask). We deliberately do NOT
-// auto-commit on appear, and we do NOT auto-focus any field: that would rob the
-// user of the chance to pick a non-default target. Send always has a target — the
-// default selection is the first configured gateway (or the first recent, or the
-// legacy fallback), so a single press on Send (or ⌘-Return) is never a dead-end.
-// Send is NEVER disabled.
+// ── Capture / send boundary ────────────────────────────────────────────────────
+// The list answers ONE question — which conversation a send goes to — so it holds
+// only gateways and recent chats. Work is an action on the floor beside Send,
+// never a row: the two inboxes are two buttons that name themselves, rather than
+// two rows that look alike.
+//
+// The panel opens with a row highlighted: the app's published default gateway
+// when it is configured, else the first configured gateway, else nothing. A
+// highlight is not a decision — nothing leaves the panel until a button that
+// NAMES where it goes is pressed, and Send carries that name ("Send to OpenClaw",
+// "Send to Trip planning"). The legacy no-snapshot route is never highlighted for
+// the person: its nil ref lets the drainer continue the app's live quick-capture
+// conversation, a place this panel never named.
+//
+// Add to Work reaches `onAddToWorkboard` and only the inert Work capture inbox,
+// always targetlessly (Work is ONE desk, which the drainer resolves); Send
+// reaches `onSend` and the send manifest. The two cannot be confused: the pick is
+// a `ShareTarget`, which carries no desk case, and the Work helper takes no
+// target at all. Plain Return inserts a line break, ⌘↩ sends, ⌘⇧↩ adds to Work.
+// Neither action fires on appear, the rows lock while a commit runs, and the
+// failure alert's Try Again calls the Work-only helper rather than the pick.
+//
+// `ShareTarget`, the pick this view seeds, and the two rules that read it — which
+// row opens highlighted, and what the Send button names — all live in
+// `ShareTargetFilter.swift`, where `ShareTargetFilterTests` covers them without a
+// SwiftUI body. This file keeps only the localized strings those rules cannot
+// reach.
 
 import SwiftUI
+import Combine
 import AppKit
 import UniformTypeIdentifiers
-
-/// The target the user picked in the "Send to" picker. Maps 1:1 to the
-/// `SharedInboxManifest` routing fields the host writes (see
-/// `ShareViewController.commit(caption:target:)`):
-///   - `.newConversation(nil)`           → legacy/default route (all refs nil)
-///   - `.newConversation(.some(ref))`    → mint a new conversation bound to `ref`
-///   - `.existing(id, backendRef)`       → append to an existing conversation
-enum ShareTarget: Equatable {
-    /// Start a NEW conversation. `gatewayRef == nil` is the legacy/default target
-    /// (the drainer routes to the default gateway); a non-nil ref pins the gateway.
-    case newConversation(gatewayRef: String?)
-    /// Append to an EXISTING conversation, carrying its bound gateway ref as a
-    /// fallback hint should the conversation be deleted before the drain runs.
-    case existing(conversationID: UUID, backendRef: String)
-}
 
 /// The rich, async-resolved descriptor for the shared item's HEADER row — name +
 /// type + an OS-supplied icon/thumbnail. Resolved off the LEAD provider by the
@@ -85,16 +89,76 @@ struct ResolvedHeader {
     let icon: NSImage?
 }
 
+enum WorkboardCommitFailure: Hashable, Identifiable, Sendable {
+    case unavailable
+    case tooLarge
+    case empty
+    /// Something in the share is not a regular file — a folder, a package
+    /// document such as `.rtfd` or `.pages`, or a symlink.
+    case unsupportedItem
+    /// Something in the share is a recording. Work keeps one only when a person
+    /// attaches it at the desk, so the whole capture is refused and the sentence
+    /// names that door. Sending the same recording to a conversation still
+    /// works.
+    case audioRefused
+    /// The assembled capture violates the durable envelope contract, so the
+    /// same share can never publish however often it is replayed.
+    case invalidContent
+
+    var id: Self { self }
+
+    /// Only a transient filesystem failure can improve when replayed unchanged.
+    /// Size, empty-input, unsupported-item, refused-recording, and contract
+    /// failures all require the person to change the share.
+    var allowsRetry: Bool {
+        if case .unavailable = self { return true }
+        return false
+    }
+}
+
+@MainActor
+final class ShareSubmissionState: ObservableObject {
+    enum Phase: Equatable {
+        case addingToWorkboard
+        case sending
+    }
+
+    @Published private(set) var phase: Phase?
+    @Published var workboardFailure: WorkboardCommitFailure?
+
+    var isCommitting: Bool { phase != nil }
+
+    func begin(_ phase: Phase) -> Bool {
+        guard self.phase == nil else { return false }
+        workboardFailure = nil
+        self.phase = phase
+        return true
+    }
+
+    func failWorkboardCommit(_ failure: WorkboardCommitFailure) {
+        phase = nil
+        workboardFailure = failure
+    }
+
+    func cancelCommit() {
+        phase = nil
+    }
+}
+
 struct ShareView: View {
 
     /// Total attachment count (drives the header "+N more" summary).
     let attachmentCount: Int
+    /// macOS activation caps each category independently. A mixed share can
+    /// therefore exceed Conduck's total envelope cap and must be rejected whole.
+    let attachmentLimitExceeded: Bool
     /// Lightweight preview descriptors (no bytes loaded — see
     /// `ShareViewController.buildPreviewItems()`). `previewItems.first` gives the
     /// IMMEDIATE type + name for the header before `resolveLeadHeader` lands.
     let previewItems: [PreviewItem]
-    /// The "Send to" targets the main app published for the picker; `nil` when no
-    /// snapshot exists / it failed to decode (→ legacy single-row fallback).
+    /// The gateway and recent-chat targets the main app published for the
+    /// destination list; `nil` when no snapshot exists / it failed to decode
+    /// (→ legacy single-row fallback).
     let snapshot: ShareTargetsSnapshot?
     /// Resolve the rich header off the LEAD provider (name/type/icon) WITHOUT a
     /// full-byte read. `@MainActor`, returns `nil` on any failure (→ keep the
@@ -108,11 +172,24 @@ struct ShareView: View {
     /// include the captured page text. Owned by the host VC, which resolves
     /// `target` into the manifest's routing fields.
     let onSend: (String, ShareTarget, Bool) -> Void
+    /// Save shared material as an inert Work capture. Work is ONE desk, so the
+    /// capture carries no destination — the host always writes a targetless
+    /// envelope and the drainer resolves the desk. This closure has no
+    /// gateway/send parameter and therefore cannot dispatch.
+    let onAddToWorkboard: (String, Bool) -> Void
     /// Dismiss without queuing anything. Owned by the host VC.
     let onCancel: () -> Void
 
+    @ObservedObject var submissionState: ShareSubmissionState
+
     @State private var caption: String = ""
-    @State private var selection: ShareTarget?
+    /// Which conversation a send goes to. Seeded from the snapshot at init — the
+    /// app's default gateway, else the first configured one, else nothing — and
+    /// moved only by clicking a row. It is a HIGHLIGHT, not a decision: the Send
+    /// button names whatever this holds, and nothing leaves the panel until that
+    /// button (or ⌘↩) is pressed. Nothing survives from a previous share; each
+    /// invocation is a fresh process that reads only the snapshot.
+    @State private var destination: ShareTarget?
     @State private var query: String = ""
     /// Rich header (async); `nil` until `resolveLeadHeader` returns — until then the
     /// header renders the immediate glyph + `previewItems.first` label.
@@ -124,6 +201,37 @@ struct ShareView: View {
     /// Whether the captured page text rides the send. Opt-OUT: defaults ON, and the
     /// host writes the synthetic markdown only while true.
     @State private var includePageText = true
+    /// At an accessibility text size the two floor actions stack instead of
+    /// sharing a row — two half-width buttons cannot hold a scaled-up label.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// Explicit because the pick is seeded from the snapshot: the memberwise init
+    /// cannot reach `@State`, and a `.onAppear` seed would be a decision taken
+    /// after the panel was already on screen.
+    init(
+        attachmentCount: Int,
+        attachmentLimitExceeded: Bool,
+        previewItems: [PreviewItem],
+        snapshot: ShareTargetsSnapshot?,
+        resolveLeadHeader: @escaping @MainActor () async -> ResolvedHeader?,
+        resolveCapture: @escaping @MainActor () async -> WebPageCapture.Payload?,
+        onSend: @escaping (String, ShareTarget, Bool) -> Void,
+        onAddToWorkboard: @escaping (String, Bool) -> Void,
+        onCancel: @escaping () -> Void,
+        submissionState: ShareSubmissionState
+    ) {
+        self.attachmentCount = attachmentCount
+        self.attachmentLimitExceeded = attachmentLimitExceeded
+        self.previewItems = previewItems
+        self.snapshot = snapshot
+        self.resolveLeadHeader = resolveLeadHeader
+        self.resolveCapture = resolveCapture
+        self.onSend = onSend
+        self.onAddToWorkboard = onAddToWorkboard
+        self.onCancel = onCancel
+        self.submissionState = submissionState
+        _destination = State(initialValue: ShareTargetFilter.preselectedTarget(snapshot: snapshot))
+    }
 
     // MARK: - Local palette (mirrors AppColors; appex can't import it)
 
@@ -154,23 +262,20 @@ struct ShareView: View {
             .sorted { $0.lastActivityAt > $1.lastActivityAt }
     }
 
-    /// True when there is nothing to pick → render the single legacy fallback row
-    /// (both manifest refs nil → drainer routes to the default gateway). The share
-    /// must never dead-end.
-    private var isFallback: Bool {
-        configuredGateways.isEmpty && recents.isEmpty
+    /// The legacy "New conversation" row shows only when NO snapshot decoded —
+    /// the roster is unknown, not empty (`ShareTargetFilter`, unit-tested).
+    private var showsLegacyRow: Bool {
+        ShareTargetFilter.showsLegacyNewConversationRow(snapshotDecoded: snapshot != nil)
     }
 
-    /// The selection Send fires when the user hasn't tapped a row yet. First
-    /// configured gateway, else the first recent, else the legacy/default target.
-    private var defaultSelection: ShareTarget {
-        if let first = configuredGateways.first {
-            return .newConversation(gatewayRef: first.ref)
-        }
-        if let firstRecent = recents.first {
-            return .existing(conversationID: firstRecent.id, backendRef: firstRecent.backendRef)
-        }
-        return .newConversation(gatewayRef: nil)
+    /// A decoded snapshot with no configured gateway and no recent chat is TOLD
+    /// in one line rather than offered a send the drainer would refuse
+    /// (`ShareTargetFilter`, unit-tested). The line points at Add to Work, which
+    /// sits on the floor and is unaffected by an empty roster.
+    private var showsNoAILine: Bool {
+        ShareTargetFilter.showsNoAILine(snapshotDecoded: snapshot != nil,
+                                        gatewayCount: configuredGateways.count,
+                                        recentCount: recents.count)
     }
 
     // MARK: - Search
@@ -209,22 +314,17 @@ struct ShareView: View {
                 if capturePayload != nil {             // PINNED, conditional (§B.5)
                     captureToggleRow
                 }
-                if showSearch { searchField }          // PINNED, conditional (§C)
+                if showSearch { searchField }
                 Divider().overlay(Palette.border)
-                scrollRegion                           // the ONLY scrolling region
+                scrollRegion                           // the ONE destination list
                     .frame(maxHeight: .infinity)
                 Divider().overlay(Palette.border)
+                if attachmentLimitExceeded { attachmentLimitBanner }
                 bottomBar                              // PINNED floor (§D)
             }
         }
         .preferredColorScheme(.dark)
         .tint(Palette.amber)
-        .onAppear {
-            // Pre-select the default target so Send always has a destination, but
-            // leave the user free to tap another row before sending. We never
-            // auto-commit here, and never auto-focus a field (see file header).
-            if selection == nil { selection = defaultSelection }
-        }
         .task {
             // Resolve the rich header (name/type/icon) off the lead provider. The
             // header shows the immediate glyph state until this lands; a nil result
@@ -235,6 +335,26 @@ struct ShareView: View {
             // Resolve the Safari page-text capture (nil for every non-Safari
             // share). Only a non-nil payload mounts the toggle row.
             capturePayload = await resolveCapture()
+        }
+        .alert(item: $submissionState.workboardFailure) { failure in
+            if failure.allowsRetry {
+                Alert(
+                    title: Text(Strings.workboardErrorTitle),
+                    message: Text(workboardFailureMessage(failure)),
+                    primaryButton: .default(Text(Strings.retry)) {
+                        addToWorkboard()
+                    },
+                    secondaryButton: .cancel(Text(Strings.cancel)) {
+                        onCancel()
+                    }
+                )
+            } else {
+                Alert(
+                    title: Text(Strings.workboardErrorTitle),
+                    message: Text(workboardFailureMessage(failure)),
+                    dismissButton: .default(Text(Strings.cancel)) { onCancel() }
+                )
+            }
         }
     }
 
@@ -254,12 +374,28 @@ struct ShareView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(Text(Strings.cancel))
+            .disabled(submissionState.isCommitting)
 
             sharedItemHeader
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+    }
+
+    private var attachmentLimitBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Palette.amber)
+            Text(Strings.tooManyItems)
+                .font(.caption)
+                .foregroundStyle(Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .accessibilityElement(children: .combine)
     }
 
     /// The shared-item header content: a 36×36 icon/thumbnail (resolved) or a
@@ -432,11 +568,10 @@ struct ShareView: View {
     private var scrollRegion: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                if isFallback {
-                    // Nothing to pick — single non-selectable legacy row. Both
-                    // manifest refs end up nil → the drainer routes to the default
-                    // gateway. Never a dead-end.
-                    fallbackRow
+                if showsLegacyRow {
+                    legacyNewConversationRow
+                } else if showsNoAILine {
+                    noAILine
                 } else if isEmptySearch {
                     emptySearchState
                 } else {
@@ -446,6 +581,21 @@ struct ShareView: View {
             }
             .padding(.vertical, 4)
         }
+    }
+
+    /// Shown in place of the two send sections when a DECODED snapshot lists no
+    /// configured gateway and no recent chat: the send route is a route the app
+    /// itself says cannot succeed, so it is told rather than offered — and the
+    /// line says so while pointing at the Add to Work button on the floor, which
+    /// an empty roster never takes away.
+    private var noAILine: some View {
+        Text(Strings.noAIWork)
+            .font(.callout)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(Palette.textTertiary)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 40)
     }
 
     /// "New conversation" section (gateway rows). Header pins; only mounted when
@@ -486,8 +636,8 @@ struct ShareView: View {
                 title: Strings.newConversation,
                 subtitle: nil,
                 selectable: true,
-                isSelected: selection == target,
-                action: { selection = target }
+                isSelected: destination == target,
+                action: { destination = target }
             )
         } else {
             ForEach(filteredGateways, id: \.ref) { gateway in
@@ -497,8 +647,8 @@ struct ShareView: View {
                     title: gateway.displayName,
                     subtitle: Strings.newConversation,
                     selectable: true,
-                    isSelected: selection == target,
-                    action: { selection = target }
+                    isSelected: destination == target,
+                    action: { destination = target }
                 )
             }
         }
@@ -517,28 +667,32 @@ struct ShareView: View {
                 title: convo.label.isEmpty ? Strings.untitledChat : convo.label,
                 subtitle: Self.relativeFormatter.localizedString(for: convo.lastActivityAt, relativeTo: Date()),
                 selectable: true,
-                isSelected: selection == target,
-                action: { selection = target }
+                isSelected: destination == target,
+                action: { destination = target }
             )
         }
     }
 
-    /// The no-gateways-and-no-recents fallback: a single non-selectable
-    /// "New conversation" row (teal "+" badge). `selection` stays the legacy
-    /// `.newConversation(nil)` default — the share never dead-ends.
-    private var fallbackRow: some View {
+    /// Shown only when NO snapshot decoded: the roster is UNKNOWN, not empty —
+    /// the app may well hold a gateway this appex cannot see — so the legacy
+    /// route stays on offer (both manifest refs nil → the drainer resolves the
+    /// route). It opens UNHIGHLIGHTED and has to be clicked: a nil-ref send may
+    /// continue the app's live quick-capture conversation, which is a place this
+    /// panel never named, so it is never picked for the person.
+    private var legacyNewConversationRow: some View {
         targetRow(
             badge: badge(monogram: "+", fill: Palette.teal),
             title: Strings.newConversation,
             subtitle: nil,
-            selectable: false,
-            isSelected: false,
-            action: nil
+            selectable: true,
+            isSelected: destination == .newConversation(gatewayRef: nil),
+            action: { destination = .newConversation(gatewayRef: nil) }
         )
     }
 
     /// Centered empty-search state (query non-empty, both filtered lists empty).
-    /// Send stays enabled (the default target still exists).
+    /// Add to Work still sits on the floor below it, so a search that matches
+    /// nothing never leaves the share with nowhere to go.
     private var emptySearchState: some View {
         VStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
@@ -564,6 +718,7 @@ struct ShareView: View {
             .padding(.top, 10)
             .padding(.bottom, 4)
             .background(Palette.background)   // opaque so pinned headers don't bleed
+            .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder
@@ -579,7 +734,7 @@ struct ShareView: View {
             action?()
         } label: {
             HStack(spacing: 12) {
-                badge
+                badge.accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.callout)
@@ -594,7 +749,10 @@ struct ShareView: View {
                     }
                 }
                 Spacer(minLength: 8)
-                if selectable { selectionRing(isSelected: isSelected) }
+                if selectable {
+                    selectionRing(isSelected: isSelected)
+                        .accessibilityHidden(true)
+                }
             }
             .contentShape(Rectangle())
             .padding(.horizontal, 16)
@@ -602,7 +760,15 @@ struct ShareView: View {
             .background(isSelected ? Palette.amber.opacity(0.10) : Color.clear)
         }
         .buttonStyle(.plain)
-        .disabled(!selectable)
+        // Locked while a commit runs: a click during the asynchronous copy must
+        // not move the pick under it (the retry is bound to Work by construction
+        // too).
+        .disabled(!selectable || submissionState.isCommitting)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(
+            subtitle.map { "\(title), \($0)" } ?? title
+        ))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     /// Trailing selection ring (~22pt): amber filled circle + white checkmark when
@@ -639,34 +805,55 @@ struct ShareView: View {
 
     // MARK: - Bottom bar (§D)
 
-    /// PINNED floor: a rounded message field + an amber send-circle. Send fires on
-    /// a tap, a plain Return in the field, or ⌘-Return (works without focus);
-    /// Shift+Return inserts a newline (see the field's `.onKeyPress`, NO
-    /// `.onSubmit`). Send is never disabled — the default target always exists.
+    /// The ONE predicate behind both the Send button's `.disabled(…)` and the
+    /// opacity that draws it as disabled. `.buttonStyle(.plain)` over an explicit
+    /// amber fill and an explicit foreground dims NEITHER on its own, so without
+    /// the opacity a button that refuses every click looks exactly like one that
+    /// commits. Both modifiers read this property, so they cannot drift apart.
+    private var isPrimaryDisabled: Bool {
+        destination == nil || submissionState.isCommitting || attachmentLimitExceeded
+    }
+
+    /// The same, for Add to Work — which needs no pick, because the desk is one
+    /// desk and the button names it. It locks only while a commit already runs
+    /// (and behind the whole-share attachment-limit refusal).
+    private var isWorkDisabled: Bool {
+        submissionState.isCommitting || attachmentLimitExceeded
+    }
+
+    /// The Send button's label — it NAMES where the share goes, so pressing it is
+    /// the moment the person decides. A gateway pick names the gateway, a recent
+    /// pick names the chat, and the legacy nil-ref route, which the drainer
+    /// resolves rather than this panel, says only "Send now".
+    private var sendLabel: String {
+        switch ShareTargetFilter.sendLabel(for: destination, snapshot: snapshot) {
+        case .sendNow: return Strings.sendNow
+        case .sendTo(let name): return Strings.sendTo(name)
+        case .sendToUntitledChat: return Strings.sendTo(Strings.untitledChat)
+        }
+    }
+
+    /// PINNED floor: the multiline message field, then the TWO actions side by
+    /// side — Add to Work leading (secondary), Send trailing (primary), equal
+    /// widths — with Work's "Nothing is sent to AI" caption directly under its own
+    /// button. Each button names its own inbox, so the floor is where the share is
+    /// decided, not the list. Return inserts a line break, ⌘↩ sends, ⌘⇧↩ adds to
+    /// Work; a shortcut can only commit what its button would.
     private var bottomBar: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        VStack(spacing: 10) {
             HStack {
                 TextField(Strings.captionPlaceholder, text: $caption, axis: .vertical)
                     .lineLimit(1...5)
                     .textFieldStyle(.plain)
                     .foregroundStyle(Palette.textPrimary)
-                    // Chat-app Return model: plain Return SENDS, Shift+Return
-                    // inserts a line break. Hardware keyboards only (`.onKeyPress`
-                    // fires for physical keys). We insert the newline EXPLICITLY
-                    // rather than returning `.ignored` — a hardware Return that
-                    // falls through is a no-op on a vertical TextField, so
-                    // `.ignored` would lose the line break entirely. ⌘Return is
-                    // left to the send button's own shortcut (return `.ignored` so
-                    // that accelerator fires once, never double-sending).
+                    // Hardware Return falls through as a no-op on a vertical
+                    // TextField, so insert line breaks explicitly. Leave ⌘-Return
+                    // to the buttons' shortcuts so each commits exactly once.
                     .onKeyPress(keys: [.return]) { keyPress in
-                        if keyPress.modifiers.contains(.shift) {
-                            caption += "\n"
-                            return .handled
-                        }
                         if keyPress.modifiers.contains(.command) {
                             return .ignored
                         }
-                        send()
+                        caption += "\n"
                         return .handled
                     }
             }
@@ -680,37 +867,158 @@ struct ShareView: View {
                     .stroke(Palette.border, lineWidth: 1)
             )
 
-            sendCircle
+            floorActions
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
     }
 
-    /// Local reimplementation of the main-app `CaptureCircleButton` identity (NOT
-    /// imported — separate compilation module): a single `Button` wrapping a single
-    /// morphing `Image`, amber disc + white arrow, press-scale + hover-brighten. The
-    /// ⌘-Return shortcut fires the same `send()` as a tap, and works even when the
-    /// caption field isn't focused (the field's plain-Return send needs focus). Send
-    /// is never disabled.
-    private var sendCircle: some View {
-        Button(action: send) {
-            Image(systemName: "arrow.up")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 32, height: 32)
-                .background(Circle().fill(Palette.amber))
-                .contentShape(Circle())
+    /// The two actions. Side by side at normal text sizes; stacked (Send first) at
+    /// an accessibility size, where a half-width button cannot hold its label.
+    @ViewBuilder
+    private var floorActions: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: 10) {
+                sendButton
+                workColumn
+            }
+        } else {
+            HStack(alignment: .top, spacing: 10) {
+                workColumn
+                sendButton
+            }
         }
-        .buttonStyle(SendButtonStyle())
-        .keyboardShortcut(.return, modifiers: .command)
-        .accessibilityLabel(Text(Strings.send))
     }
 
-    // MARK: - Send
+    /// Add to Work plus the caption that belongs to it. The caption is
+    /// accessibility-hidden because the button already carries it as its hint —
+    /// VoiceOver would otherwise read the reassurance twice.
+    private var workColumn: some View {
+        VStack(spacing: 4) {
+            workButton
+            Text(Strings.nothingSent)
+                .font(.caption2)
+                .foregroundStyle(Palette.textTertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityHidden(true)
+        }
+    }
 
-    private func send() {
-        onSend(caption, selection ?? defaultSelection, includePageText)
+    /// Secondary look — elevated fill, bordered, amber glyph and text — so the
+    /// inert desk never competes with the send it sits beside.
+    private var workButton: some View {
+        Button(action: addToWorkboard) {
+            Group {
+                if submissionState.phase == .addingToWorkboard {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small).tint(Palette.amber)
+                        Text(Strings.addingToWorkboard)
+                    }
+                } else {
+                    Label(Strings.addToWorkboard, systemImage: "tray.and.arrow.down.fill")
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Palette.amber)
+            .lineLimit(2)
+            .minimumScaleFactor(0.85)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .frame(minHeight: 38)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Palette.elevated)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Palette.border, lineWidth: 1)
+            )
+            .opacity(isWorkDisabled ? 0.45 : 1)
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.return, modifiers: [.command, .shift])
+        .accessibilityHint(Text(Strings.nothingSent))
+        .disabled(isWorkDisabled)
+    }
+
+    /// Primary look — the amber pill — and the only control that names a
+    /// conversation.
+    private var sendButton: some View {
+        Button(action: commit) {
+            Group {
+                if submissionState.phase == .sending {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small).tint(Palette.background)
+                        Text(Strings.sending)
+                    }
+                } else {
+                    Label(sendLabel, systemImage: "paperplane.fill")
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Palette.background)
+            .lineLimit(2)
+            .minimumScaleFactor(0.85)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .frame(minHeight: 38)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Palette.amber)
+            )
+            .opacity(isPrimaryDisabled ? 0.45 : 1)
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.return, modifiers: .command)
+        .disabled(isPrimaryDisabled)
+    }
+
+    // MARK: - Commit
+
+    /// The Send button and ⌘-Return. Reads the pick ONCE and hands it to the send
+    /// helper, which is bound to the send manifest by construction. The
+    /// attachment-limit refusal is checked here and again in each helper: an
+    /// over-limit share must be refused however it is reached.
+    private func commit() {
+        guard !attachmentLimitExceeded else { return }
+        guard let destination else { return }
+        send(destination)
+    }
+
+    /// The Add to Work button, ⌘⇧-Return, and the alert's Try Again — so a retry
+    /// can never follow a row clicked after the failed attempt began. It reads no
+    /// pick and takes no target, so it cannot dispatch.
+    private func addToWorkboard() {
+        guard !attachmentLimitExceeded else { return }
+        guard submissionState.begin(.addingToWorkboard) else { return }
+        onAddToWorkboard(caption, includePageText)
+    }
+
+    /// A conversation pick only — the target arrives as an argument, so the desk
+    /// cannot reach the send manifest however this view is edited.
+    private func send(_ target: ShareTarget) {
+        guard !attachmentLimitExceeded else { return }
+        guard submissionState.begin(.sending) else { return }
+        onSend(caption, target, includePageText)
+    }
+
+    private func workboardFailureMessage(_ failure: WorkboardCommitFailure) -> String {
+        switch failure {
+        case .unavailable:
+            return Strings.workboardErrorUnavailable
+        case .tooLarge:
+            return Strings.workboardErrorTooLarge
+        case .empty:
+            return Strings.workboardErrorEmpty
+        case .unsupportedItem:
+            return Strings.workboardErrorUnsupportedItem
+        case .audioRefused:
+            return Strings.workboardErrorAudioRefused
+        case .invalidContent:
+            return Strings.workboardErrorInvalidContent
+        }
     }
 
     // MARK: - Color + monogram helpers
@@ -753,12 +1061,59 @@ struct ShareView: View {
     // MARK: - Localized strings (inline defaults → spliced into the appex's xcstrings)
 
     private enum Strings {
+        static let noAIWork = String(localized: "share.destination.noAI.work",
+            defaultValue: "No personal AI available. You can still add this to Work.",
+            comment: "Shown in place of the gateway rows when the snapshot lists no configured gateway and no recent chat; Add to Work stays available on the floor")
+        static let nothingSent = String(localized: "share.work.inert",
+            defaultValue: "Nothing is sent to AI",
+            comment: "Caption under the Add to Work button on the share sheet's floor, and that button's accessibility hint — privacy reassurance for an inert Work capture")
         static let cancel = String(localized: "share.cancel",
             defaultValue: "Cancel",
             comment: "Cancel / close control in the Share Extension")
-        static let send = String(localized: "share.send",
-            defaultValue: "Send",
-            comment: "Send button in the Share Extension")
+        static let sendNow = String(localized: "share.sendNow",
+            defaultValue: "Send now",
+            comment: "Immediate dispatch button in the Share Extension")
+        static func sendTo(_ name: String) -> String {
+            String(localized: "share.send.to",
+                defaultValue: "Send to \(name)",
+                comment: "Primary share button naming the picked destination (a gateway's name for a new conversation, or a chat's title)")
+        }
+        static let addToWorkboard = String(localized: "share.addToWork",
+            defaultValue: "Add to Work",
+            comment: "Primary button that saves shared material as inert Work")
+        static let addingToWorkboard = String(localized: "share.addToWork.progress",
+            defaultValue: "Adding to Work…",
+            comment: "Progress label while the Share Extension saves inert Work")
+        static let sending = String(localized: "share.send.progress",
+            defaultValue: "Sending…",
+            comment: "Progress label while the Share Extension queues a conversation send")
+        static let tooManyItems = String(localized: "share.error.tooManyItems",
+            defaultValue: "Share up to 10 items at a time. Nothing has been sent — select fewer items and try again.",
+            comment: "Visible refusal when a mixed macOS share exceeds the total attachment limit")
+        static let workboardErrorTitle = String(localized: "share.work.error.title",
+            defaultValue: "Couldn’t Add to Work",
+            comment: "Title shown when the Share Extension cannot persist a Work capture")
+        static let workboardErrorUnavailable = String(localized: "share.work.error.unavailable",
+            defaultValue: "Nothing was saved. Check that your Mac has free storage, then try again.",
+            comment: "Actionable generic Workboard persistence failure message in the Share Extension")
+        static let workboardErrorTooLarge = String(localized: "share.work.error.tooLarge",
+            defaultValue: "This share is too large for Work. Share fewer files or smaller files, then try again.",
+            comment: "Actionable size-limit failure message for a Workboard capture")
+        static let workboardErrorEmpty = String(localized: "share.work.error.empty",
+            defaultValue: "There’s nothing to add yet. Add a message or include at least one shared item, then try again.",
+            comment: "Actionable empty Workboard capture failure message")
+        static let workboardErrorUnsupportedItem = String(localized: "share.work.error.unsupportedItem",
+            defaultValue: "Folders and package documents can’t be added to Work. Share the files inside them instead.",
+            comment: "Non-retryable failure message when a shared item is not a regular file")
+        static let workboardErrorAudioRefused = String(localized: "share.work.error.audioRefused",
+            defaultValue: "Recordings can’t be shared into Work. To keep one, open Work and add it with the attachment button.",
+            comment: "Non-retryable failure message when a share bound for Work carries a recording")
+        static let workboardErrorInvalidContent = String(localized: "share.work.error.invalidContent",
+            defaultValue: "Something in this share can’t be saved to Work. Share it a different way, or share fewer items.",
+            comment: "Non-retryable failure message when a share breaks the Work capture contract")
+        static let retry = String(localized: "share.retry",
+            defaultValue: "Try Again",
+            comment: "Retry button after a Share Extension persistence failure")
         static let captionPlaceholder = String(localized: "share.caption.placeholder",
             defaultValue: "Add a message…",
             comment: "Placeholder for the caption field in the Share Extension")
@@ -846,23 +1201,5 @@ struct ShareView: View {
                     defaultValue: "Text", comment: "Label for shared plain text")
             }
         }
-    }
-}
-
-// MARK: - Send button press style
-
-/// Press-scale + hover-brighten for the bottom-bar send circle — a local stand-in
-/// for the main-app `CaptureButtonStyle` (we can't import it; separate module).
-/// 0.92 scale on press; a subtle opacity lift on hover.
-private struct SendButtonStyle: ButtonStyle {
-    @State private var hovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.92 : 1.0)
-            .brightness(hovering ? 0.06 : 0.0)
-            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
-            .animation(.easeInOut(duration: 0.15), value: hovering)
-            .onHover { hovering = $0 }
     }
 }

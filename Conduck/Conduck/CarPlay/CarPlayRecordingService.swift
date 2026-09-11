@@ -59,8 +59,26 @@
 // - CarPlay VAD preset: a higher threshold to reject road/cabin noise, and a
 //   min-silence LONGER than the library default (1.5 s → 1.792 s felt) so a
 //   driver can pause mid-thought without being endpointed.
-// - Deleted the fixed `"Done."` terminal — replaced by the agent reply (run
-//   through `ReplySanitizer.spoken`).
+// - Agent reply is the terminal spoken line (run through `ReplySanitizer.spoken`).
+//
+// TWO DESTINATIONS, one machine. `sessionDestination` decides what happens to a
+// recording AFTER the tap stops; everything above that — one engine, one tap,
+// one VAD, one audio activation — is shared:
+// - `.chat` (`beginSession`) is the multi-turn loop above.
+// - `.work` (`beginWorkNote`) is a ONE-SHOT note. THE WORDS ARE THE ARTIFACT:
+//   the recording never reaches the desk. The compressed bytes are PARKED in
+//   `PendingRetryStore` before the speech hop — device-local, never synced —
+//   and the desk is written exactly once, by
+//   `WorkVoiceCaptureCoordinator.publishTranscript`, after recognition. So a
+//   refusal anywhere below the fork leaves the note parked on the phone with
+//   nothing on the desk, and the spoken line says precisely that. A park the
+//   store refuses does NOT end the lane: recognition still runs BEST EFFORT,
+//   because a words card is durable in its own right and is the better
+//   outcome than nothing. What a refused park changes is what may be destroyed
+//   (the raw container file stays, as the last copy of the recording) and what
+//   may be promised (no line may say the note is waiting on the phone). It
+//   never re-arms, never registers as the converse-reply target, and never
+//   touches a gateway ref, a conversation or `startConverseHop`.
 
 #if os(iOS)
 import Foundation
@@ -84,6 +102,22 @@ private final class NotificationToken: @unchecked Sendable {
     private let token: NSObjectProtocol
     init(_ token: NSObjectProtocol) { self.token = token }
     deinit { NotificationCenter.default.removeObserver(token) }
+}
+
+/// Where a CarPlay session's recordings go, chosen by the picker row the driver
+/// tapped and fixed for the whole session.
+///
+/// A separate axis rather than a session state, because the two lanes share
+/// every mechanism above the fork — one engine, one tap, one silence guard, one
+/// audio activation — and differ only in what happens to the bytes afterwards.
+/// It is deliberately NOT a mode the driver can switch mid-session: a sticky
+/// mode's failure is a private thought reaching a gateway.
+enum CarPlayCaptureDestination: Sendable, Equatable {
+    /// The multi-turn conversation lane: STT, then the agent converse hop.
+    case chat
+    /// The one-shot Work lane: the recording is parked on the phone, the words
+    /// become a desk card, and nothing reaches a gateway.
+    case work
 }
 
 /// Orchestrates a CarPlay multi-turn voice conversation SESSION.
@@ -156,6 +190,13 @@ final class CarPlayRecordingService {
         static let processing = "processing"
         static let speaking = "speaking"
         static let muted = "muted"
+        /// Shown while a Work note's words are being written to the desk — the
+        /// one hop a driver waits through that is neither thinking nor
+        /// replying. It is a
+        /// TEMPLATE state only, with no matching `State` case: the session is
+        /// still `.processing`, so the scene's state observer never fires and
+        /// never repaints over it.
+        static let saving = "saving"
     }
 
     @ObservationIgnored
@@ -192,7 +233,14 @@ final class CarPlayRecordingService {
             image: nil,
             repeats: false
         )
-        return CPVoiceControlTemplate(voiceControlStates: [listening, processing, speaking, muted])
+        let saving = CPVoiceControlState(
+            identifier: VoiceState.saving,
+            // xcstrings
+            titleVariants: [String(localized: "carplay.voice.saving.title", defaultValue: "Saving…")],
+            image: nil,
+            repeats: false
+        )
+        return CPVoiceControlTemplate(voiceControlStates: [listening, processing, speaking, muted, saving])
     }()
 
     // MARK: - Session state
@@ -256,6 +304,18 @@ final class CarPlayRecordingService {
     /// this to label the Mute/Unmute button. Reset on every `endSession`.
     @ObservationIgnored private(set) var isMicMuted = false
 
+    /// Where THIS session's recording goes. Set by whichever `begin…` the
+    /// picker row called and reset to `.chat` on every `endSession`/`teardown`,
+    /// so a Work note can never leak its destination into the next drive's
+    /// conversation — the failure that matters here is a private thought
+    /// reaching a gateway, so the safe value is the one that has to be asked
+    /// for.
+    ///
+    /// Frozen into a local at the top of `processRecording`: every hop below it
+    /// resumes after a suspension, and a session that ended and restarted under
+    /// one of them must not re-aim a recording already in flight.
+    @ObservationIgnored private var sessionDestination: CarPlayCaptureDestination = .chat
+
     /// The conversation this voice session is bound to (the scene's picker
     /// choice, or the fresh mint on the first turn of a "New voice chat").
     /// CarPlay session state is its own lane: it NEVER touches the shared
@@ -296,13 +356,18 @@ final class CarPlayRecordingService {
     @ObservationIgnored var isVoiceModalPresented: (@MainActor () -> Bool)?
 
     /// Fired when the microphone could not be started at all (activation
-    /// failure, or engine-start retry exhaustion) and the scene is still
-    /// active. The scene delegate uses it to show a one-shot visible hint on
-    /// the picker — the ONLY feedback channel these failures have, because
-    /// their sessions end SILENTLY by doctrine (speaking over a wedged audio
-    /// session is what escalates a recoverable start failure into a
-    /// `mediaserverd` teardown + CarPlay-scene drop). Display copy lives in
-    /// the scene layer. Nil wiring is a no-op.
+    /// failure, capture-file/VAD setup failure, or engine-start retry
+    /// exhaustion) and the scene is still active. It is the scene's ONLY
+    /// signal for these ends, because their sessions end SILENTLY by doctrine
+    /// (speaking over a wedged audio session is what escalates a recoverable
+    /// start failure into a `mediaserverd` teardown + CarPlay-scene drop) AND
+    /// their `endSession` cannot reach the state observer: the listen never
+    /// left `.idle`, so the closing `state = .idle` is an equal assignment
+    /// `@Observable` does not publish. The scene therefore owns both halves —
+    /// raise the one-shot picker hint AND run the end's normal
+    /// dismiss-then-refresh — see `endSilentlyAfterCaptureStartFailure`, which
+    /// is the only caller and fires this AFTER the teardown. Display copy
+    /// lives in the scene layer. Nil wiring is a no-op.
     @ObservationIgnored var onCaptureStartFailed: (@MainActor () -> Void)?
 
     // MARK: - Recording state
@@ -458,6 +523,7 @@ final class CarPlayRecordingService {
         sessionConversationID = nil
         sessionDefaultRef = nil
         sessionBoundRef = nil
+        sessionDestination = .chat
     }
 
     // MARK: - Permission
@@ -520,6 +586,7 @@ final class CarPlayRecordingService {
     /// routing (reads `Conversation.backend`) ignores it. Cleared on `endSession`.
     func beginSession(conversationID: UUID?, defaultRef: RemoteAgentRef) {
         guard state == .idle, !sessionActive else { return }
+        sessionDestination = .chat
         sessionConversationID = conversationID
         sessionDefaultRef = defaultRef
         sessionActive = true
@@ -529,6 +596,36 @@ final class CarPlayRecordingService {
         // Keep the process-wide mirror in lockstep (see `anySessionActive`).
         Self.anySessionActive = true
         CarPlayConverseUploader.shared.setActiveService(self)
+        Task { await startListening(isFollowUp: false) }
+    }
+
+    /// Begin a ONE-SHOT Work note. `beginSession` minus everything a gateway
+    /// needs — no conversation binding, no effective ref, no registration as
+    /// the converse-reply target — because nothing on this lane is ever
+    /// dispatched: the words become a card on the person's own desk, and the
+    /// recording that carried them never leaves the phone.
+    ///
+    /// Registering as the converse-reply target is the omission that matters
+    /// most. `setActiveService(self)` is what routes a background reply into
+    /// this service to be SPOKEN; a Work session that claimed it would let an
+    /// unrelated drive's late reply read itself out over a private note.
+    ///
+    /// The audio-race contract (g1) is the caller's, exactly as it is for
+    /// `beginSession`: the scene calls this INSIDE the `presentTemplate`
+    /// completion.
+    func beginWorkNote() {
+        guard state == .idle, !sessionActive else { return }
+        sessionDestination = .work
+        sessionActive = true
+        // The empty-turn budget is reset for symmetry with `beginSession`, not
+        // because this lane spends it: a Work note never re-arms, so the policy
+        // is never consulted. Leaving a stale count behind would still be a
+        // trap for the next Chat session on this instance.
+        consecutiveEmptyTurns = 0
+        // Keep the process-wide mirror in lockstep (see `anySessionActive`) —
+        // the audio route is held here exactly as it is for a chat, so a
+        // notification-tap auto-speak must stand down for a Work note too.
+        Self.anySessionActive = true
         Task { await startListening(isFollowUp: false) }
     }
 
@@ -634,6 +731,18 @@ final class CarPlayRecordingService {
         didCorroborateSpeechThisListen = false
         healthCollector = CapturePipelineHealthCollector()
 
+        // THE STARTUP GENERATION, taken here and carried to every resumed path
+        // below. `sessionActive` alone answers "is SOME session live", never
+        // "is this startup still the one that session is waiting for" — and the
+        // two come apart because `isArmingListen` is a process latch, not a
+        // session one. An End landing inside `detector.start()` or the engine
+        // retry bumps the lineage; a Work note started right after is turned
+        // away at that latch; and this startup then resumes into a session that
+        // never asked for it. Committing there installs a running engine whose
+        // detector callbacks carry an invalidated id, so the driver's speech
+        // never endpoints; failing there ends the note they just started.
+        let attemptID = listenAttemptID
+
         // Activate the audio session ONCE for the whole session (idempotent if
         // a route renegotiation already re-activated it).
         var didActivateNow = false
@@ -647,12 +756,10 @@ final class CarPlayRecordingService {
                 // End SILENTLY (no error TTS): there is no usable session to
                 // speak on, and speaking over a half-activated session is what
                 // escalates a recoverable start failure into a `mediaserverd`
-                // teardown + CarPlay-scene drop. The one-shot picker hint is
-                // the feedback instead (gated on the modal still being up, same
-                // reasoning as the retry-exhaustion site — see
-                // `startCaptureEngineWithRetry`'s caller).
-                if isSceneActive, isVoiceModalPresented?() ?? true { onCaptureStartFailed?() }
-                endSession(speak: nil)
+                // teardown + CarPlay-scene drop. The picker hint — and the
+                // modal dismiss that has to go with it — is the feedback
+                // instead: see `endSilentlyAfterCaptureStartFailure`.
+                endSilentlyAfterCaptureStartFailure()
                 return
             }
         }
@@ -667,7 +774,10 @@ final class CarPlayRecordingService {
         // the retry/recovery below.
         if didActivateNow {
             try? await Task.sleep(for: .seconds(Constants.carPlayColdStartSettleDelay))
-            guard sessionActive else { return }
+            guard isCurrentListen(attemptID) else {
+                handOnArmingSlotAfterAbandonedStartup()
+                return
+            }
         }
 
         let url = FileManager.default.temporaryDirectory
@@ -687,14 +797,13 @@ final class CarPlayRecordingService {
                 interleaved: false
             )
         } catch {
-            endSession(speak: nil)
+            endSilentlyAfterCaptureStartFailure()
             return
         }
 
         // CarPlay VAD preset: a higher threshold to reject road/cabin noise and
         // a min-silence long enough that a driver can pause mid-thought.
         let health = healthCollector
-        let attemptID = listenAttemptID
         let detector = EndOfSpeechDetector(
             threshold: Constants.carPlayVADThreshold,
             minSilence: Constants.carPlayVADMinSilence,
@@ -723,7 +832,16 @@ final class CarPlayRecordingService {
             try await detector.start()
         } catch {
             try? FileManager.default.removeItem(at: url)
-            endSession(speak: nil)
+            // A model load that fails AFTER this startup was superseded reports
+            // nobody's failure: `endSilentlyAfterCaptureStartFailure` asks only
+            // `sessionActive`, so it would end the session started in the
+            // meantime and paint the picker's "Mic couldn't start" hint over a
+            // note that was recording fine.
+            guard isCurrentListen(attemptID) else {
+                handOnArmingSlotAfterAbandonedStartup()
+                return
+            }
+            endSilentlyAfterCaptureStartFailure()
             return
         }
 
@@ -739,15 +857,15 @@ final class CarPlayRecordingService {
             detector.stop()
             try? FileManager.default.removeItem(at: url)
             // Recovery may have ended the session (End / disconnect mid-retry) —
-            // only end here if it is still live. The hint fires BEFORE the end,
-            // so the `.idle`-driven picker refresh already sees it. It is also
-            // gated on the voice modal still being up: a retry aborted because
-            // the DRIVER dismissed the modal is not a microphone failure, and
-            // "Mic couldn't start" would be a false accusation — while a
-            // genuine start failure always still has the modal presented (g1).
-            if sessionActive {
-                if isSceneActive, isVoiceModalPresented?() ?? true { onCaptureStartFailed?() }
-                endSession(speak: nil)
+            // only end here if THIS startup is still the one the live session is
+            // waiting for (the shared terminal re-checks `sessionActive`; the
+            // explicit test is kept because THIS is the site where recovery can
+            // have raced us, and a bare `sessionActive` would report this
+            // failure against whatever session replaced ours).
+            if isCurrentListen(attemptID) {
+                endSilentlyAfterCaptureStartFailure()
+            } else {
+                handOnArmingSlotAfterAbandonedStartup()
             }
             return
         }
@@ -763,12 +881,19 @@ final class CarPlayRecordingService {
         // the terminal path already drove `state` to `.idle` — and no
         // deactivate here (the session end that raced us owns the
         // deactivate-once).
-        guard sessionActive else {
-            Self.log.info("CarPlay listen abort: session ended during engine start — discarding running engine")
+        //
+        // ASKED OF THE GENERATION, not of `sessionActive`: a session that
+        // replaced ours is live, so the bare flag would commit this engine and
+        // this detector onto it — and the detector's callbacks carry OUR
+        // invalidated id, so the driver could speak into a running microphone
+        // that never endpoints.
+        guard isCurrentListen(attemptID) else {
+            Self.log.info("CarPlay listen abort: startup superseded during engine start — discarding running engine")
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
             detector.stop()
             try? FileManager.default.removeItem(at: url)
+            handOnArmingSlotAfterAbandonedStartup()
             return
         }
 
@@ -810,6 +935,38 @@ final class CarPlayRecordingService {
         state = .recording
         scheduleMaxDurationTimer()
         scheduleSilenceTimer(isFollowUp: isFollowUp)
+    }
+
+    /// Terminal path for a listen that FAILED BEFORE `.recording`: end the
+    /// session silently, then TELL the scene it ended.
+    ///
+    /// The notification is not a nicety, and its position after the teardown is
+    /// the whole point. `endSession` normally reaches the scene through
+    /// `state = .idle` — but a listen that never reached `.recording` leaves
+    /// `state` already `.idle`, and `@Observable` publishes nothing for an
+    /// equal assignment, so the scene's state observer never fires. Left to
+    /// that assignment alone the voice modal stays presented over a DEAD
+    /// session whose "End" button is already a no-op (`endSession` guards on
+    /// `sessionActive`, which this call just cleared), the audio session is
+    /// never deactivated in the dismiss completion, and the one-shot
+    /// "Mic couldn't start" hint is never rendered. So `onCaptureStartFailed`
+    /// fires AFTER the teardown and carries both jobs: raise the hint AND
+    /// finish the end. Firing it after costs the ordering nothing on the
+    /// re-arm path, where `state` really does change: that observation is
+    /// delivered on a main-actor hop, so its refresh still sees the flag.
+    ///
+    /// Gated on the scene being foreground and the voice modal still being up:
+    /// a start aborted because the DRIVER dismissed the modal is not a
+    /// microphone failure, and "Mic couldn't start" would be a false
+    /// accusation — while a genuine start failure always still has the modal
+    /// presented (g1). The `sessionActive` guard keeps a start that lost its
+    /// session mid-`await` (End / disconnect) from accusing the microphone of
+    /// a failure the driver caused: that end owns its own scene transition.
+    private func endSilentlyAfterCaptureStartFailure() {
+        guard sessionActive else { return }
+        let shouldNotifyScene = isSceneActive && (isVoiceModalPresented?() ?? true)
+        endSession(speak: nil)
+        if shouldNotifyScene { onCaptureStartFailed?() }
     }
 
     /// Build a fresh `AVAudioEngine`, install the capture tap, and `start()` it —
@@ -1280,6 +1437,11 @@ final class CarPlayRecordingService {
         // `listenAttemptID` for why the turn token cannot do this job.
         let attemptID = listenAttemptID
 
+        // Frozen for this recording. `sessionDestination` is session state and
+        // everything below suspends, so reading it a second time after an
+        // `await` could hand this recording to the other lane's ending.
+        let destination = sessionDestination
+
         guard let url = recordingURL else {
             // xcstrings
             endSession(speak: String(localized: "Couldn't save — try again."))
@@ -1292,7 +1454,16 @@ final class CarPlayRecordingService {
         let audioData: Data
         do {
             audioData = try Data(contentsOf: url)
-            try? FileManager.default.removeItem(at: url)
+            // Chat's bytes are in memory and nothing will ever want the
+            // container file again, so it goes now, exactly as it always has.
+            // The Work lane KEEPS it until the compressed bytes are parked in
+            // the retry queue: this is the one lane that promises the recording
+            // survives, and a promise made while the only copy is a `Data` in a
+            // process the OS can kill is not one. `endSession` removes it on
+            // every terminal path, so no path can leak it.
+            if destination == .chat {
+                try? FileManager.default.removeItem(at: url)
+            }
         } catch {
             // xcstrings
             endSession(speak: String(localized: "Couldn't save — try again."))
@@ -1304,6 +1475,77 @@ final class CarPlayRecordingService {
         beginBackgroundTask()
 
         let compression = await AudioCompressor.compress(audioData)
+
+        // The compression suspends, and BOTH lanes below it end sessions — the
+        // chat lane through `endRefusalBelowFork`'s chat arm and
+        // `endSession(speak:)`, the Work lane through `secureWorkNote`. Asking
+        // this only on the Work branch left the chat branch free to raise a
+        // refusal for a listen the driver had already abandoned, and
+        // `endSession` ends whatever session is live — so an earlier chat's
+        // "Add your STT key" could end the Work note started in its place and
+        // delete its partial recording.
+        guard isCurrentListen(attemptID) else {
+            endBackgroundTask()
+            return
+        }
+
+        // THE WORK FORK. Everything below this point is shared — the key
+        // verdict, the speech hop, the transcript — and every one of those
+        // steps can refuse. On the Work lane the recording is therefore PARKED
+        // first, so a refusal below leaves a capture the phone can finish
+        // rather than nothing at all. The desk stays empty until the words
+        // arrive. Nothing on this branch touches a gateway ref or a
+        // conversation.
+        var workCapture: WorkNoteCapture?
+        if destination == .work {
+            guard let secured = await secureWorkNote(
+                compression: compression,
+                containerURL: url,
+                attemptID: attemptID
+            ) else {
+                endBackgroundTask()
+                return
+            }
+            workCapture = secured
+        }
+
+        // AUDIO CLEANUP MANDATE, caller's half. The scratch copy the Work lane
+        // wrote above lives until the speech hop takes it — `transcribe`
+        // deletes it on every one of its own exits — so the only paths that
+        // could leak it are the refusals BETWEEN the fork and that call (the
+        // custom-endpoint refusal, the key verdicts, the staleness check).
+        // Handing it over is the flag; anything else deletes it.
+        var workUploadHandedToSTT = false
+        defer {
+            if let workCapture, !workUploadHandedToSTT {
+                try? FileManager.default.removeItem(at: workCapture.audioFileURL)
+            }
+        }
+
+        // A reservation lasts one deferred-notification window and the speech
+        // hop below can outlast it, so a live holder has to keep asking for it.
+        // Renewal can itself fail (a store the OS suspended, a write refused),
+        // so the hold is never ASSUMED downstream: `publishWorkNoteTranscript`
+        // re-asks `stillOwnsCapture` before it writes, because a lapsed hold
+        // can be taken by the phone's retry card — which transcribes the same
+        // bytes and publishes its own words under this same id — and this lane
+        // would then race that surface for the card.
+        let workLeaseRenewal: Task<Void, Never>?
+        if let workCapture {
+            let token = workCapture.guardToken
+            workLeaseRenewal = Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(
+                        nanoseconds: UInt64(PendingRetryGuard.leaseRenewalInterval * 1_000_000_000)
+                    )
+                    guard !Task.isCancelled else { return }
+                    await PendingRetryGuard.renew(token)
+                }
+            }
+        } else {
+            workLeaseRenewal = nil
+        }
+        defer { workLeaseRenewal?.cancel() }
 
         let cachedKey = CarPlaySettings.shared.sttAPIKey
         let cachedLanguage = CarPlaySettings.shared.preferredLanguage
@@ -1326,8 +1568,9 @@ final class CarPlayRecordingService {
         // missing-key prompt below would be misleading.
         if provider.dynamicEndpointKey != nil {
             // xcstrings: hardening
-            endSession(
-                speak: String(localized: "Custom voice endpoints aren't available in the car. Pick another provider in Conduck on your iPhone.")
+            endRefusalBelowFork(
+                workCapture,
+                chatLine: String(localized: "Custom voice endpoints aren't available in the car. Pick another provider in Conduck on your iPhone.")
             )
             return
         }
@@ -1354,6 +1597,21 @@ final class CarPlayRecordingService {
             provider: provider,
             customConfig: nil
         )
+        // The key question suspends, and EVERY verdict below it either speaks
+        // or writes to the desk — on both lanes. A session that ended under
+        // this hop must reach neither.
+        //
+        // NOT scoped to `workCapture`. `endRefusalBelowFork` takes its chat arm
+        // whenever `workCapture` is nil, and that arm is `endSession(speak:)`,
+        // which ends WHATEVER session is live — so an earlier chat resuming
+        // here with `.notConfigured` would speak "Add your STT key" over the
+        // Work note the driver started in its place and delete its partial
+        // recording. The `workUploadHandedToSTT` defer above still removes the
+        // Work lane's scratch copy on this exit.
+        guard isCurrentListen(attemptID) else {
+            endBackgroundTask()
+            return
+        }
         let apiKey: String
         switch readiness {
         case .ready(let key):
@@ -1361,8 +1619,9 @@ final class CarPlayRecordingService {
         case .notConfigured:
             // PROVABLE absence — the only reading this sentence is true of.
             // xcstrings
-            endSession(
-                speak: String(localized: "Add your STT key in Conduck on your iPhone.")
+            endRefusalBelowFork(
+                workCapture,
+                chatLine: String(localized: "Add your STT key in Conduck on your iPhone.")
             )
             return
         case .unreadable:
@@ -1381,25 +1640,41 @@ final class CarPlayRecordingService {
             // capture, for the rest of the drive. Kept to one short conditional
             // because this line is HEARD — a driver cannot re-read it.
             //
-            // The capture itself is lost either way: CarPlay has no preservation
-            // mechanism at all — no `PendingRetryStore` write, no queue — so
-            // "try again" means speak again, which is exactly what the driver
-            // can do once the phone is unlocked.
+            // On the CHAT lane the capture itself is lost: that lane preserves
+            // nothing, so "try again" means speak again, which is exactly what
+            // the driver can do once the phone is unlocked. The WORK lane tried
+            // to park its bytes above the fork, and whether that succeeded
+            // decides which sentence is true — `endRefusalBelowFork` hands the
+            // question to `endWorkNote` rather than guessing at it here.
             // xcstrings
-            endSession(
-                speak: String(localized: "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again.")
+            endRefusalBelowFork(
+                workCapture,
+                chatLine: String(localized: "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again.")
             )
             return
         }
 
-        let uploadURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("carplay_upload_\(UUID().uuidString).m4a")
-        do {
-            try compression.data.write(to: uploadURL, options: .atomic)
-        } catch {
-            // xcstrings
-            endSession(speak: String(localized: "Couldn't save — try again."))
-            return
+        // The Work lane wrote its copy above the fork — the retry record names
+        // that file — so it hands the same URL to the speech hop rather than
+        // writing a second one beside it.
+        let uploadURL: URL
+        if let workCapture {
+            uploadURL = workCapture.audioFileURL
+            // Every refusal that could have leaked it is behind us, and the
+            // next statement that touches this URL is `transcribe`, which owns
+            // the file's deletion from here.
+            workUploadHandedToSTT = true
+        } else {
+            let chatUploadURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("carplay_upload_\(UUID().uuidString).m4a")
+            do {
+                try compression.data.write(to: chatUploadURL, options: .atomic)
+            } catch {
+                // xcstrings
+                endSession(speak: String(localized: "Couldn't save — try again."))
+                return
+            }
+            uploadURL = chatUploadURL
         }
 
         do {
@@ -1428,6 +1703,16 @@ final class CarPlayRecordingService {
 
             let transcript = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !transcript.isEmpty else {
+                if let workCapture {
+                    // A Work note is ONE recording, not a conversation, so
+                    // there is nothing to retry the driver into: whatever
+                    // survived is already where it can be finished from.
+                    // `handleEmptyTurn`'s re-arm belongs to the chat lane and
+                    // would hold the car's radio for a second listening window
+                    // over a note this lane cannot improve.
+                    endWorkNote(workCapture, wordsOnDesk: false)
+                    return
+                }
                 // The user DID speak (VAD endpointed corroborated audio) but STT
                 // returned nothing. Retry once before giving up — see
                 // `handleEmptyTurn`.
@@ -1436,7 +1721,11 @@ final class CarPlayRecordingService {
             }
 
             consecutiveEmptyTurns = 0
-            await startConverseHop(transcript: transcript)
+            if let workCapture {
+                await publishWorkNoteTranscript(workCapture, transcript: transcript, attemptID: attemptID)
+                return
+            }
+            await startConverseHop(transcript: transcript, attemptID: attemptID)
 
         } catch let error as AppError {
             // NO ref on purpose, both arms: only the STT hop throws into here
@@ -1445,6 +1734,16 @@ final class CarPlayRecordingService {
             // capability is in play. `nil` → `.neutral`, today's wording.
             endBackgroundTask()
             guard isCurrentListen(attemptID) else { return }
+            if let workCapture {
+                // EVERY speech verdict lands the same way on this lane, which
+                // is why it is decided here rather than case by case: none of
+                // them can reach the desk, so the only question left is what
+                // survived — and `endWorkNote` is the one place that answers
+                // it. `speakErrorAndEnd` is deliberately not reached: its copy
+                // describes a failed ASK, and nothing was asked.
+                endWorkNote(workCapture, wordsOnDesk: false)
+                return
+            }
             // The provider's own "there was no speech in that" verdict means
             // exactly what an empty transcript means, so it takes the same
             // retry-once path rather than killing the session on the first one.
@@ -1456,13 +1755,409 @@ final class CarPlayRecordingService {
         } catch {
             endBackgroundTask()
             guard isCurrentListen(attemptID) else { return }
+            if let workCapture {
+                endWorkNote(workCapture, wordsOnDesk: false)
+                return
+            }
             speakErrorAndEnd(.unknown(error))
         }
+    }
+
+    // MARK: - Work lane (one-shot; never reaches a gateway)
+
+    /// A Work note past the fork, and what the rest of the lane needs to finish
+    /// it.
+    ///
+    /// Its existence means only that the lane is still going. Whether anything
+    /// is PARKED is a separate question, answered by `guardToken.isDurable`,
+    /// and the two have to stay separate because a refused park does not end
+    /// the note: recognition still runs, and a words card written afterwards is
+    /// durable whether or not the recording behind it ever reached the queue.
+    /// What the park decides is what may be destroyed and what may be said —
+    /// see `unparkedContainerURL` and `endWorkNote`.
+    struct WorkNoteCapture: Sendable {
+        /// Names the desk card the words will become AND the queue entry, so a
+        /// retry an app launch later publishes that same card instead of a
+        /// second one beside it.
+        let captureID: UUID
+        /// When the driver spoke. Carried rather than re-minted at the desk
+        /// write, so the card is dated by the note and not by however long the
+        /// speech hop took.
+        let createdAt: Date
+        /// The compressed copy the speech hop reads. Written before the queue
+        /// entry so the entry's metadata can name it.
+        let audioFileURL: URL
+        /// The reservation this process holds over the queue entry it armed —
+        /// or a token holding none, when the store refused the park.
+        let guardToken: PendingRetryGuard.Token
+        /// The raw container file, carried ONLY while it is the last copy of
+        /// the recording — that is, only when the park was refused. Nil once
+        /// the queue holds its own copy, because phase one deleted it then.
+        /// Whoever makes the words durable deletes it.
+        let unparkedContainerURL: URL?
+    }
+
+    /// What the driver is told about a Work note that survived.
+    ///
+    /// A closed set of TWO, because the words are the artifact and there are
+    /// only two ways a note can survive: the words are on the desk, or the
+    /// recording is waiting on the phone for them. "The recording is on the
+    /// desk" is not a state this lane can produce at all, and a note that
+    /// survived NEITHER way is not an outcome of this enum — see
+    /// `workNoteOutcome`, which answers nil there. The sentence is HEARD once
+    /// at speed by somebody who cannot re-read it, so each case has to be true
+    /// of exactly the state it names.
+    enum WorkNoteOutcome: Sendable, Equatable {
+        /// The words are on the desk. Nothing is outstanding.
+        case saved
+        /// The desk holds nothing and the bytes are parked in the phone's retry
+        /// queue. Every refusal below the fork over a PARKED capture lands
+        /// here, and so does a transcript that came back empty — the driver's
+        /// next step is the same in all of them.
+        case keptOnPhone
+    }
+
+    /// The outcome as a pure function of the two facts that decide it, or nil
+    /// when the note has no outcome to report at all.
+    ///
+    /// THE DESK IS THE OUTER QUESTION and the park the inner one, because the
+    /// words are the artifact: a note whose words are on the desk is saved
+    /// whether or not the recording that carried them was ever parked, and the
+    /// best-effort path through a refused park reaches exactly that pair.
+    ///
+    /// NIL is the fourth cell — nothing parked and nothing on the desk — and it
+    /// is deliberately not a case of the enum. It is not a state of the note;
+    /// it is the ordinary "nothing survived" failure any capture can have, and
+    /// it takes the same raw line the lane speaks above the fork. `.keptOnPhone`
+    /// there would send a driver to a queue that holds nothing.
+    ///
+    /// Extracted so the whole mapping is testable without a CarPlay scene.
+    nonisolated static func workNoteOutcome(
+        recordingParked: Bool,
+        wordsOnDesk: Bool
+    ) -> WorkNoteOutcome? {
+        if wordsOnDesk { return .saved }
+        return recordingParked ? .keptOnPhone : nil
+    }
+
+    /// The spoken line for an outcome. Two distinct sentences, and the
+    /// distinctness is load-bearing: a driver who hears the same acknowledgement
+    /// whether or not their words landed has no way to know they need to open
+    /// the phone.
+    nonisolated static func workNoteAcknowledgement(for outcome: WorkNoteOutcome) -> String {
+        switch outcome {
+        case .saved:
+            // xcstrings
+            return String(localized: "carplay.work.saved.speak", defaultValue: "Saved to Work.")
+        case .keptOnPhone:
+            // Names the DEVICE and the ACTION, because those are the only two
+            // things a driver can act on later, and claims nothing about the
+            // desk — which holds nothing at all in this state.
+            // xcstrings
+            return String(
+                localized: "carplay.work.keptOnPhone.speak",
+                defaultValue: "Kept on your iPhone. Open Conduck to add it to Work."
+            )
+        }
+    }
+
+    /// End a Work note on the one sentence that is true of it.
+    ///
+    /// THE SINGLE EXIT for the Work lane, so the three sentences are decided in
+    /// one place from the two facts that decide them rather than at each of the
+    /// six sites that end a note. `wordsOnDesk` is the caller's own observation
+    /// — only the site that ran the desk write knows it — and the park is read
+    /// off the token, because no site can tell from its own position whether
+    /// the arm took a claim.
+    private func endWorkNote(_ capture: WorkNoteCapture, wordsOnDesk: Bool) {
+        guard let outcome = Self.workNoteOutcome(
+            recordingParked: capture.guardToken.isDurable,
+            wordsOnDesk: wordsOnDesk
+        ) else {
+            // Nothing is parked and nothing is on the desk, so the honest line
+            // is the one that claims neither.
+            // xcstrings
+            endSession(speak: String(localized: "Couldn't save — try again."))
+            return
+        }
+        endSession(speak: Self.workNoteAcknowledgement(for: outcome))
+    }
+
+    /// End a capture refused AFTER the Work fork.
+    ///
+    /// The two lanes disagree about what a refusal there costs, and the whole
+    /// point of the fork is that they do: Chat kept nothing, so its own line
+    /// stands; Work has a note to account for, and only `endWorkNote` knows
+    /// which of its three sentences is true of this one.
+    private func endRefusalBelowFork(_ workCapture: WorkNoteCapture?, chatLine: String) {
+        guard let workCapture else {
+            endSession(speak: chatLine)
+            return
+        }
+        endWorkNote(workCapture, wordsOnDesk: false)
+    }
+
+    /// PHASE 1 — park the recording where it survives this process, before a
+    /// single word has been transcribed. NOTHING IS WRITTEN TO THE DESK HERE.
+    ///
+    /// The ORDER is the feature, and it is the same order every other Work
+    /// voice lane runs: the bytes reach `PendingRetryStore` — device-local,
+    /// never synced — so a process the OS kills mid-drive leaves a retryable
+    /// capture rather than nothing. The desk waits for the words, because the
+    /// words are the artifact and a recording on the desk is a copy of the
+    /// audio riding the person's private CloudKit for ever.
+    ///
+    /// The entry is stamped `.phaseOneFailed`, which is the ORDINARY state of
+    /// every fresh Work capture and not an error: it says the desk holds
+    /// nothing, so these bytes are the only copy. `sourceDevice` is written on
+    /// the entry too, because the surface the words were SPOKEN at is a fact
+    /// only this process knows and the card that is eventually published — here
+    /// or from the phone's retry, an app launch later — has to carry it either
+    /// way.
+    ///
+    /// Returns nil when the lane is over — the session moved on under a
+    /// suspension, or the capture could not be parked and the driver has
+    /// already been told. A non-nil answer is the fork's promise that the bytes
+    /// are parked under a reservation this process holds.
+    private func secureWorkNote(
+        compression: CompressionResult,
+        containerURL: URL,
+        attemptID: UInt64
+    ) async -> WorkNoteCapture? {
+        let captureID = UUID()
+        let createdAt = Date()
+        // `carplay_` prefix on purpose: the launch sweep in
+        // `AgentDownloadScratch` owns that namespace, so a file left behind by
+        // a process that died mid-capture is still collected.
+        let audioFileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("carplay_work_\(captureID.uuidString).\(compression.format.fileExtension)")
+        do {
+            try compression.data.write(to: audioFileURL, options: .atomic)
+        } catch {
+            // Nothing is preserved and nothing is on the desk, so the honest
+            // line is the one that claims neither.
+            // xcstrings
+            endSession(speak: String(localized: "Couldn't save — try again."))
+            return nil
+        }
+
+        // AUDIO CLEANUP MANDATE. From here the scratch file has exactly one
+        // owner: this function until it hands the capture back, `STTClient`'s
+        // own `defer` once the caller passes it to `transcribe`, and the
+        // caller's `defer` for the refusals in between. Deleting it costs
+        // nothing the retry lane needs — `PendingRetryGuard.arm` writes its own
+        // App Group copy of the same bytes, and the in-app retry
+        // re-materialises a fresh temp file from THOSE (the metadata's
+        // `audioFileURL` is bookkeeping, never read back). On the one exit
+        // where that copy does NOT exist — a park the store refused — the
+        // container file is what is kept instead, so no exit here destroys the
+        // last copy of the recording.
+        var handedOff = false
+        defer {
+            if !handedOff { try? FileManager.default.removeItem(at: audioFileURL) }
+        }
+
+        let token = await PendingRetryGuard.arm(
+            audio: compression.data,
+            metadata: PendingRetryMetadata(
+                id: captureID,
+                createdAt: createdAt,
+                audioFileURL: audioFileURL,
+                preferredLanguage: CarPlaySettings.shared.preferredLanguage,
+                attemptCount: 1,
+                lastErrorCode: nil,
+                destination: .work,
+                // The desk holds nothing yet, which is what every fresh Work
+                // capture looks like. Written at the arm rather than left nil,
+                // because a recovery an app launch later reads this field to
+                // decide whether an id naming no card is a publication that
+                // never happened or a card the person deleted.
+                publicationState: .phaseOneFailed,
+                // The surface the words were SPOKEN at, which no later process
+                // can derive: this process is an iPhone, and the note was
+                // dictated at the wheel. Carried on the entry so the card comes
+                // out the same whether it is published here or from the phone.
+                sourceDevice: "carplay"
+            ),
+            // A driver is never asked for notification permission: CarPlay has
+            // nowhere to show the prompt, and the road is not the place to
+            // answer one. An authorisation the person already granted still
+            // carries the recovery notice.
+            requestNotificationAuthorization: false
+        )
+
+        // A PARK THAT WAS NOT CONFIRMED IS NOT A PARK. `arm` answers with a
+        // token whether or not the save landed and whether or not the
+        // reservation was granted, so `isDurable` — bytes on disk AND a
+        // reservation this process holds — is the only reading that licenses
+        // destroying a copy or promising the driver one.
+        //
+        // It does NOT end the lane. The words are the artifact, and a words
+        // card written after a refused park is durable in its own right, so
+        // recognition still runs BEST EFFORT: the driver's note reaching the
+        // desk is strictly better than a refusal that costs them the whole
+        // thing. Only two things change, and both are carried on the capture —
+        // the container file is kept as the last copy of the recording, and no
+        // line below may say the note is waiting on the phone.
+        let parked = token.isDurable
+        if parked {
+            // Only now is the container file expendable — the queue holds its
+            // own copy of the compressed bytes and the temp file above holds
+            // the copy the speech hop reads, so this is the first instant at
+            // which deleting it loses nothing. (`endSession` removes it again
+            // on every terminal path; a second removal is a no-op.)
+            try? FileManager.default.removeItem(at: containerURL)
+        } else {
+            // FACT only. Ships in Release: a park that fails at the wheel is
+            // precisely what a DEBUG-only print never shows.
+            Self.log.error("CarPlay Work capture not parked")
+        }
+
+        guard isCurrentListen(attemptID) else { return nil }
+        // The scratch file leaves with the capture: the caller reads it for the
+        // speech hop and owns it from here.
+        handedOff = true
+        return WorkNoteCapture(
+            captureID: captureID,
+            createdAt: createdAt,
+            audioFileURL: audioFileURL,
+            guardToken: token,
+            unparkedContainerURL: parked ? nil : containerURL
+        )
+    }
+
+    /// PHASE 2 — the words become the card, and whatever the recording was
+    /// costing is released only once they have.
+    ///
+    /// This is the ONLY desk write on the lane. `publishTranscript` is
+    /// idempotent by id: a capture whose card already stands answers with it
+    /// rather than writing a second one, which is what makes a replay after a
+    /// lost session harmless. A THROW means nothing was written — the entry
+    /// stays armed with its bytes and its words, and the phone's retry card
+    /// finishes it.
+    ///
+    /// The durable act happens before the spoken one, and the staleness check
+    /// sits BETWEEN them on purpose: a session that ended under the write still
+    /// owns a finished capture, and leaving it queued would put a retry card on
+    /// the phone for words that are already on the desk.
+    ///
+    /// THE WORDS ARE PARKED ON THE QUEUE ENTRY FIRST, before anything is asked
+    /// about them. The desk write can throw after recognition already
+    /// succeeded — and without the parking the transcript would exist only in
+    /// this process, so the phone's retry would have to buy the same words a
+    /// second time. Parking BEFORE the write also covers a kill during it. The
+    /// stamp stays `.phaseOneFailed` there because it is still true: the desk
+    /// holds nothing until the line below returns. Its result is CHECKED and
+    /// non-fatal — a park that did not land costs one more recognition on a
+    /// later retry, which is not a reason to withhold a card the driver can
+    /// have right now.
+    ///
+    /// OWNERSHIP is asked wherever there is a reservation to ask about, and
+    /// before the write. Lease renewal is best-effort and the speech hop can
+    /// outlast the window, so a lapsed hold can be taken by the phone's retry
+    /// card, which transcribes the same bytes and publishes its own words under
+    /// this same id; writing here afterwards would race that surface for the
+    /// card. It is SKIPPED when the arm took no claim, because
+    /// `stillOwnsCapture` answers false for a claimless token and on this lane
+    /// that state is not "somebody else has it" — it is the refused park the
+    /// best-effort path exists to rescue, and refusing there would throw away
+    /// the driver's words to protect an entry nobody holds.
+    ///
+    /// WHAT THE SUCCESS PATH RELEASES depends on what phase one managed to
+    /// keep: a parked capture is stamped `.published` and disarmed (which is
+    /// what deletes the parked audio), while a refused park has no entry to
+    /// stamp or clear and instead hands back the raw container file it had been
+    /// holding — the words card is the durable copy now, so the recording it
+    /// came from has nothing left to protect.
+    private func publishWorkNoteTranscript(
+        _ capture: WorkNoteCapture,
+        transcript: String,
+        attemptID: UInt64
+    ) async {
+        let wordsParked = await PendingRetryGuard.recordPublicationState(capture.guardToken, transcript: transcript, publicationState: .phaseOneFailed)
+        guard isCurrentListen(attemptID) else { return }
+        if !wordsParked {
+            // FACT only — no transcript, no id. Not a refusal: the words are in
+            // memory and the desk write below is what the driver is waiting
+            // for. What it costs is one more recognition if this process dies
+            // in the next few lines.
+            Self.log.error("CarPlay Work words not parked")
+        }
+        if capture.guardToken.isDurable {
+            guard await PendingRetryGuard.stillOwnsCapture(capture.guardToken) else {
+                // Nothing is written and nothing is disarmed — the entry
+                // belongs to whichever surface holds it, and that surface's
+                // verdict is the one that counts.
+                Self.log.info("CarPlay Work capture overtaken; words not published")
+                guard isCurrentListen(attemptID) else { return }
+                endWorkNote(capture, wordsOnDesk: false)
+                return
+            }
+            // The ownership question suspends, and everything below it either
+            // speaks or writes.
+            guard isCurrentListen(attemptID) else { return }
+        }
+
+        voiceControlTemplate.activateVoiceControlState(withIdentifier: VoiceState.saving)
+        do {
+            _ = try await WorkVoiceCaptureCoordinator.publishTranscript(
+                transcript,
+                forCapture: capture.captureID,
+                createdAt: capture.createdAt,
+                sourceDevice: "carplay",
+                // NO PICTURE AT THE WHEEL. A car note is spoken words and
+                // nothing else, so this card is never a companion to a
+                // screenshot; stated rather than defaulted so the day a picture
+                // reaches this lane it has to be a deliberate edit.
+                attachedTo: nil
+            )
+        } catch {
+            // FACT only (no transcript, no id) — see the phase-one line.
+            Self.log.error("CarPlay Work words not published")
+            guard isCurrentListen(attemptID) else { return }
+            endWorkNote(capture, wordsOnDesk: false)
+            return
+        }
+
+        if capture.guardToken.isDurable {
+            // The verdict before the release, in that order: a clear that fails
+            // leaves an entry a recovery can read, and `.published` is what
+            // tells that recovery the card it cannot find was published and
+            // then deleted by the person, rather than never written at all.
+            await PendingRetryGuard.recordPublicationState(capture.guardToken, publicationState: .published)
+            await PendingRetryGuard.disarm(capture.guardToken)
+        } else if let containerURL = capture.unparkedContainerURL {
+            // No entry exists to stamp or clear. What phase one kept instead is
+            // this file, and the card that just landed is what makes it
+            // expendable.
+            try? FileManager.default.removeItem(at: containerURL)
+        }
+        guard isCurrentListen(attemptID) else { return }
+        endWorkNote(capture, wordsOnDesk: true)
     }
 
     /// Whether `attemptID` still names the live listen of a live session.
     private func isCurrentListen(_ attemptID: UInt64) -> Bool {
         sessionActive && listenAttemptID == attemptID
+    }
+
+    /// A startup that resumed into a session it no longer owns has just
+    /// finished disposing of its half-built capture. Hand the arming slot on.
+    ///
+    /// `isArmingListen` is a PROCESS latch, not a session one, and it is the
+    /// one piece of state a superseded startup holds that its replacement
+    /// needs. The sequence is End → `beginWorkNote` → `startListening`, and
+    /// that third call is refused at the latch because this startup is still
+    /// suspended; nothing re-arms afterwards, so the driver gets a session with
+    /// End on the screen and a microphone that was never started. Deferred into
+    /// a `Task` because the `defer` that clears the latch has not run yet.
+    ///
+    /// Cannot spin: the re-arm is refused unless a session is live and idle,
+    /// and every generation bump comes from a real session or listen change.
+    private func handOnArmingSlotAfterAbandonedStartup() {
+        guard sessionActive, state == .idle else { return }
+        Self.log.info("CarPlay startup superseded — re-arming for the session that replaced it")
+        Task { await startListening(isFollowUp: false) }
     }
 
     // MARK: - Empty-turn retry
@@ -1532,7 +2227,40 @@ final class CarPlayRecordingService {
     /// Resolve-or-create the session's conversation, append the user turn,
     /// assemble client-owned priors, mint a fresh turn token, and start the
     /// BACKGROUND converse hop. Stays in `.processing`.
-    private func startConverseHop(transcript: String) async {
+    ///
+    /// `isCurrentListen(attemptID)` after EVERY suspension, the same contract
+    /// the capture→STT path keeps and for a sharper reason: `currentTurnToken`
+    /// is still `0` for this turn until the mint below, so an End or a
+    /// backgrounding landing anywhere above it cancels NOTHING — `endSession`
+    /// finds the sentinel and the resumed hop would go on to mint a fresh token
+    /// and dispatch a transcript the driver already abandoned. The guards are
+    /// what stop that, and they also keep a hop whose session has been replaced
+    /// (a Work note started meanwhile) from overwriting the live session's
+    /// fields or ending it through the error arm. Below the mint the token is
+    /// non-zero, so cancellation covers the rest.
+    /// Settle a user turn this hop appended and then abandoned above the
+    /// uploader.
+    ///
+    /// `status: "sending"` has exactly ONE writer — `CarPlayConverseUploader`'s
+    /// delegate — so a hop that returns or throws before `uploadConverse`
+    /// creates no task and nothing ever flips the row. The phone then shows an
+    /// unresolved send with no Retry until the next launch's sweep, which is a
+    /// repair, not a settlement. `failed` is the honest terminal (there is no
+    /// `cancelled` send state) and it is what puts the Retry chip in the thread
+    /// — the same value the uploader's own pre-dispatch cancel arm writes.
+    ///
+    /// Addressed BY MESSAGE ID, and the store touches only a `user` row still
+    /// reading `sending`: it cannot reach a replacement session's fields, a
+    /// sibling in-flight turn, or a turn that already resolved.
+    private func terminalizeAbandonedUserTurn(_ messageID: UUID) async {
+        await ConversationStore.shared.markPendingUserTurn(messageID: messageID, to: "failed")
+    }
+
+    private func startConverseHop(transcript: String, attemptID: UInt64) async {
+        // The appended user row, visible to the catch below. Nil until the
+        // append lands; from then on every exit that is not a dispatch has to
+        // settle it (see `terminalizeAbandonedUserTurn`).
+        var appendedUserMessageID: UUID?
         do {
             // CarPlay continuation is EXPLICIT + session-scoped: the scene's
             // picker seeded `sessionConversationID` at session start, and a live
@@ -1555,11 +2283,18 @@ final class CarPlayRecordingService {
             if let existing = sessionConversationID {
                 conversationID = existing
                 let rawBackend = try? await ConversationStore.shared.fetchConversation(id: existing)?.backend
+                guard isCurrentListen(attemptID) else { return }
                 boundRef = RemoteAgentRef(rawString: rawBackend ?? "")
                 // Record it BEFORE anything below can throw, so this turn's
                 // spoken failure answers for the AI it actually routed to.
                 sessionBoundRef = boundRef
-                guard let resolved = await SettingsManager.shared.remoteAgentSnapshot(forConversationBackend: rawBackend ?? "") else {
+                // Hoisted out of the `guard let` so the staleness check sits
+                // BETWEEN the suspension and the refusal it guards: a snapshot
+                // that resolves to nil for a session the driver already ended
+                // must not speak, and must not end whatever session replaced it.
+                let boundSnapshot = await SettingsManager.shared.remoteAgentSnapshot(forConversationBackend: rawBackend ?? "")
+                guard isCurrentListen(attemptID) else { return }
+                guard let resolved = boundSnapshot else {
                     // Unknown raw OR unconfigured bound backend (Decision B — no
                     // silent reroute). This thread is BOUND to its gateway, so
                     // the line names the CHAT, not the default: "set up your
@@ -1593,6 +2328,7 @@ final class CarPlayRecordingService {
                 // ONE resolve for this branch — it supplies both the device-local
                 // fallback pointer and whether that pointer is a placeholder.
                 let deviceVerdict = await SettingsManager.shared.resolveDefaultGateway()
+                guard isCurrentListen(attemptID) else { return }
                 let defaultRef: RemoteAgentRef = sessionDefaultRef ?? deviceVerdict.ref
                 boundRef = defaultRef
                 // Same reason as the resumed-thread fork above.
@@ -1601,6 +2337,7 @@ final class CarPlayRecordingService {
                 // the gateway the driver actually chose — including a custom
                 // they have since retired, which the roster still resolves.
                 let mintRoster = await SettingsManager.shared.gatewayBadgeRoster()
+                guard isCurrentListen(attemptID) else { return }
                 // A pointer the APP parked after a Forget is a placeholder, not a
                 // gateway anyone picked, so a refusal about it drops the name and
                 // speaks the unnamed sentence — the same collapse the phone, the
@@ -1611,7 +2348,10 @@ final class CarPlayRecordingService {
                     (deviceVerdict.pointerIsParked && defaultRef == deviceVerdict.ref)
                     ? nil
                     : RemoteAgentRefMetadata.shortDisplayName(for: defaultRef, customs: mintRoster)
-                guard let resolved = await SettingsManager.shared.remoteAgentSnapshot(for: defaultRef) else {
+                // Hoisted for the same reason as the bound fork's snapshot above.
+                let defaultSnapshot = await SettingsManager.shared.remoteAgentSnapshot(for: defaultRef)
+                guard isCurrentListen(attemptID) else { return }
+                guard let resolved = defaultSnapshot else {
                     // NEW chat, so the default IS the problem — named when the
                     // driver or the user chose it, UNNAMED when the pointer is the
                     // placeholder the app parked (see `mintName` above; a nil
@@ -1638,6 +2378,7 @@ final class CarPlayRecordingService {
                 let fresh = try await ConversationStore.shared.createConversation(
                     backend: defaultRef.rawString
                 )
+                guard isCurrentListen(attemptID) else { return }
                 conversationID = fresh.id
                 // Bind the session to the fresh mint so every follow-up turn
                 // continues THIS thread. In-memory only — the relaunch reply
@@ -1658,6 +2399,16 @@ final class CarPlayRecordingService {
                 sourceDevice: "carplay",
                 status: "sending"
             )
+            appendedUserMessageID = userRecord.id
+            // FROM HERE DOWN THE ROW EXISTS, so every abandonment exit settles
+            // it. `status: "sending"` has exactly one writer — the uploader —
+            // and a hop that returns above `uploadConverse` creates none, so
+            // the phone would render an unresolved send with no Retry until the
+            // next launch sweep. See `terminalizeAbandonedUserTurn`.
+            guard isCurrentListen(attemptID) else {
+                await terminalizeAbandonedUserTurn(userRecord.id)
+                return
+            }
 
             // Capture the exact READY file lane BEFORE history assembly. The
             // same immutable identity decides which historical storedKeys may
@@ -1665,6 +2416,10 @@ final class CarPlayRecordingService {
             // later output recovery.
             let fileTransferLane = await SettingsManager.shared
                 .fileTransferReadySnapshot(for: snapshot.ref)
+            guard isCurrentListen(attemptID) else {
+                await terminalizeAbandonedUserTurn(userRecord.id)
+                return
+            }
 
             // Shared history assembler — also resolves prior-turn image bytes
             // (CarPlay was image-blind before) + the bound ref's
@@ -1677,6 +2432,10 @@ final class CarPlayRecordingService {
                 boundRef: boundRef,
                 dispatchFileLaneID: fileTransferLane?.durableLaneID
             )
+            guard isCurrentListen(attemptID) else {
+                await terminalizeAbandonedUserTurn(userRecord.id)
+                return
+            }
             let priorTurns = assembledHistory.turns
 
             // Mint the turn token: the converse delegate carries it so a stale
@@ -1692,13 +2451,39 @@ final class CarPlayRecordingService {
             let dispatchTurnToken = Self.mintTurnToken()
             currentTurnToken = dispatchTurnToken
 
+            // Register the attempt with the uploader for exactly as long as it
+            // can still ask whether it was cancelled — mint to hop exit.
+            //
+            // The cancel mark is bounded by AGE (`cancelClaimCeiling`), and the
+            // oldest mark is normally an orphan but is also precisely the mark
+            // of the turn that has been suspended since before every other one
+            // started. On a long drive, thirty-two later cancellations evicted
+            // it and this turn resumed to find no claim in front of it. The
+            // registration is what tells the ceiling which marks are provably
+            // orphaned; the `defer` is what makes the answer stop being "no".
+            //
+            // AT THE MINT, not at the `uploadConverse` call: two suspensions
+            // sit between them, and the executor hop into the uploader is a
+            // third. Paired unconditionally — dispatched, refused or thrown,
+            // the hop's exit is the fact that retires the token.
+            CarPlayConverseUploader.shared.beginPendingDispatch(turnToken: dispatchTurnToken)
+            defer { CarPlayConverseUploader.shared.endPendingDispatch(turnToken: dispatchTurnToken) }
+
             // Revalidate the SAME ready physical lane immediately before
             // enqueue. Never replace A with whatever lane now occupies this
             // gateway slot; a removal/repoint leaves this turn failed instead
             // of exposing A-owned history or promising output on B.
             if let fileTransferLane {
-                guard let currentLane = await SettingsManager.shared
-                    .fileTransferReadySnapshot(for: snapshot.ref),
+                // Hoisted out of the `guard let` for the same reason as the two
+                // gateway snapshots above: the staleness check has to sit
+                // BETWEEN the suspension and the refusal it guards.
+                let revalidated = await SettingsManager.shared
+                    .fileTransferReadySnapshot(for: snapshot.ref)
+                guard isCurrentListen(attemptID) else {
+                    await terminalizeAbandonedUserTurn(userRecord.id)
+                    return
+                }
+                guard let currentLane = revalidated,
                       currentLane.durableLaneID == fileTransferLane.durableLaneID,
                       currentLane.identitySignature == fileTransferLane.identitySignature else {
                     throw AppError.fileTransferNotConfigured
@@ -1720,6 +2505,20 @@ final class CarPlayRecordingService {
                 conversationID: conversationID,
                 snapshot: fileTransferLane
             ).key
+
+            // THE LAST GATE BEFORE THE WIRE, and the reason the token alone is
+            // not one. The mint is several suspensions above `uploadConverse`,
+            // and the uploader's pre-dispatch recheck can only answer for the
+            // mark that is still there when it runs: a NEWER turn reaching its
+            // own recheck first used to prune this token's mark on the way out,
+            // and this turn — resumed after the driver's End — then found no
+            // claim and uploaded the transcript they had abandoned. The mark is
+            // retained now (`CarPlayConverseUploader.consumeCancelClaim`), and
+            // this asks the one question a token cannot: whose listen is this.
+            guard isCurrentListen(attemptID) else {
+                await terminalizeAbandonedUserTurn(userRecord.id)
+                return
+            }
 
             // AWAITED: the uploader opens this turn's gateway-attempt row at its
             // final pre-transport boundary, after every preflight above has
@@ -1754,6 +2553,21 @@ final class CarPlayRecordingService {
             // nobody has.
             return
         } catch {
+            // A throw that lands after the driver ended this listen belongs to
+            // nobody: speaking here would answer an empty seat, and — if a Work
+            // note started meanwhile — `speakErrorAndEnd` would end THAT session
+            // with a chat's failure line.
+            //
+            // The row settles ABOVE that fork, so both arms — spoken and silent
+            // — leave the phone with a Retry chip rather than an unresolved
+            // send. A throw is a terminal for this turn whether or not anyone
+            // is left in the seat to hear it, and no uploader exists here to
+            // flip it (the `CancellationError` arm above is the one case where
+            // one already did).
+            if let appendedUserMessageID {
+                await terminalizeAbandonedUserTurn(appendedUserMessageID)
+            }
+            guard isCurrentListen(attemptID) else { return }
             let mapped = (error as? AppError) ?? .remoteAgentUnreachable
             // The routing forks above set `sessionBoundRef` before anything in
             // this `do` can throw, so the spoken line dispatches on the failing
@@ -1891,6 +2705,12 @@ final class CarPlayRecordingService {
         guard sessionActive else { return }
         try? await Task.sleep(for: .seconds(Constants.carPlayHFPSettleDelay))
         guard sessionActive else { return }
+        // A Work note is ONE-SHOT and never re-arms. The reply loop's re-arm
+        // carries no listen id and re-checks only `sessionActive`, so a chat
+        // ended during its sign-off and a Work note started at once could in
+        // theory be re-armed into — a second listen inside a note that already
+        // has its recording.
+        guard sessionDestination == .chat else { return }
         // (d) After the settle delay, immediately before re-arming.
         if let expectedListenID, listenAttemptID != expectedListenID { return }
         // Muted during the settle window — hold passive on `.muted`, don't re-arm.
@@ -2217,6 +3037,11 @@ final class CarPlayRecordingService {
         sessionConversationID = nil
         sessionDefaultRef = nil
         sessionBoundRef = nil
+        // Back to the destination that has to be asked for. A Work note that
+        // left this set would aim the NEXT session — started from "New voice
+        // chat" — at the desk, and a conversation the driver expects an answer
+        // to would silently become a note.
+        sessionDestination = .chat
 
         // Retire the session's listen lineage. Without this, a stale STT
         // result captured under the dying session's last `listenAttemptID`

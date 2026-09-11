@@ -160,7 +160,12 @@ final class MenuBarQuickDestinationTests: XCTestCase {
         // explicit destination strands the turn (stash + snapshot kept latched,
         // repointed to .explicitNew per the error-copy promise).
         coordinator.selectQuickDestination(.explicitConversation(UUID()))
-        await coordinator.handleTranscript("words worth keeping")
+        // The identity a press takes synchronously; the closure that wires
+        // `onTranscript` reads it before its `Task` for exactly this reason.
+        await coordinator.handleTranscript(
+            "words worth keeping",
+            sendGeneration: coordinator.quickSendGeneration
+        )
 
         XCTAssertTrue(coordinator.hasPendingFailedTurn,
                       "Sanity: a deleted explicit destination strands the turn.")

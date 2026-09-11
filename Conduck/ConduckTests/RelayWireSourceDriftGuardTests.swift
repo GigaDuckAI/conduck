@@ -89,10 +89,21 @@ final class RelayWireSourceDriftGuardTests: XCTestCase {
 
         // Sanity: the iOS side must have parsed the known relay literals (guards a
         // broken extractor masquerading as "no drift").
-        XCTAssertEqual(iosLiterals.count, 11,
-                       "Expected 11 relay Wire string literals on iOS; parsed \(iosLiterals.count). Update this guard if the contract intentionally grew/shrank.")
+        XCTAssertEqual(iosLiterals.count, 14,
+                       "Expected 14 relay Wire string literals on iOS; parsed \(iosLiterals.count). Update this guard if the contract intentionally grew/shrank.")
         XCTAssertEqual(iosLiterals["kindValue"], "apple-speech-relay",
                        "Extractor sanity check failed — the parser is not reading the Wire literals correctly.")
+        // The Work-destination trio, named individually because their failure
+        // mode is the quiet one: a wrist that stamps a destination this phone
+        // does not recognise gets its private note transcribed onto the CHAT
+        // lane and hopped to a gateway. Equality below would catch a rename on
+        // one side; these catch a copy that never landed on either.
+        XCTAssertEqual(iosLiterals["destinationKey"], "destination",
+                       "The relay destination key is the switch between the desk and a gateway.")
+        XCTAssertEqual(iosLiterals["destinationWork"], "work",
+                       "Absent means chat; only this exact value diverts a request to the Work desk.")
+        XCTAssertEqual(iosLiterals["resultWorkSavedKey"], "result.work",
+                       "The reply stamp the wrist reads to know its recording was kept.")
 
         XCTAssertEqual(
             watchLiterals, iosLiterals,

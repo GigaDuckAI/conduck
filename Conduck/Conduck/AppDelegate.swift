@@ -274,6 +274,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+
+        // A Work voice request that reached a fully QUIT Mac has no window to
+        // land in. See `revealWorkForAPendingVoiceRequest()`.
+        revealWorkForAPendingVoiceRequest()
+    }
+
+    /// Open the main window for a Work voice request that arrived before any
+    /// window existed.
+    ///
+    /// THE COLD-LAUNCH SLIVER the appearance hooks cannot reach.
+    /// `RecordWorkNoteIntent.perform()` runs while this app is launching, so
+    /// both `.showWorkboardVoiceCapture` and the `.showWorkboard` behind it are
+    /// posted before the `main` scene's subscribers exist and are delivered to
+    /// nobody. This Mac launches quiet (`.accessory`, see
+    /// `applicationWillFinishLaunching`), so no window opens on its own either,
+    /// and every appearance-time recovery is waiting for an appearance nothing
+    /// is going to cause. The route's flag survives all of it, which makes the
+    /// application lifetime the one level that can still answer: activate, then
+    /// post the reveal the scene's own `.onReceive` turns into
+    /// `openWindow(id: "main")`.
+    ///
+    /// A PEEK, never a claim. Consumption stays with the visible composer — the
+    /// only surface that can actually present the recorder — so a request this
+    /// hook reveals is still there to be answered.
+    ///
+    /// The 500 ms is the same wait the onboarding open takes, for the same
+    /// reason: SwiftUI installs the scene's `.onReceive` subscribers after this
+    /// method returns, and a post delivered before they exist is the very drop
+    /// being repaired. The flag is re-read afterwards, so a request a composer
+    /// answered in the meantime costs nothing but the sleep.
+    ///
+    /// Called from launch AND from activation because the ordering between
+    /// `perform()` and this delegate is the system's to choose: a request that
+    /// arrives a moment after launch is answered by the activation the
+    /// foreground intent itself causes.
+    private func revealWorkForAPendingVoiceRequest() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard WorkVoiceCaptureLaunchRoute.shared.isPending else { return }
+            // An `.accessory` app that opens a window without activating puts it
+            // behind whatever is frontmost, and a recorder nobody can see is a
+            // recorder nobody can stop.
+            NSApp.activate(ignoringOtherApps: true)
+            WorkVoiceCaptureLaunchRoute.shared.revealWorkIfPending()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -292,6 +337,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The decision and its wording are `QuitGuard`'s (pure, unit-tested); this
     /// method only supplies the inputs and drives the modality.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // A Work capture between its stop and its desk write is the one thing in
+        // flight that the registry below cannot see: no gateway is involved, and
+        // `AudioRecorder.stopRecording()` has already deleted the audio file, so
+        // for those few hundred milliseconds the recording exists only in this
+        // process. Quitting there takes it with no card and no Try Again behind
+        // it. So wait — silently and briefly; there is nothing here for a person
+        // to decide, and the alert below is reserved for the choice that costs
+        // them something. A power-off is not waited on: the OS is not asking
+        // politely, and it times the app out.
+        if InAppAudioRecorder.workPublicationsInFlight > 0, !isPowerOffInProgress {
+            Task { @MainActor in
+                await InAppAudioRecorder.waitForWorkPublications(timeout: .seconds(5))
+                // The wait is BOUNDED, so it can end with the recording still
+                // in this process's memory — and the answer there is no. The
+                // guard below counts gateway turns and by construction cannot
+                // see a Work capture, so consulting it alone would turn every
+                // slow compression or desk write into a silent deletion.
+                //
+                // Refusing is not a hang: the deferral is over, the app carries
+                // on, and the next ⌘Q waits again — by which time the write has
+                // almost certainly landed. A logout or restart never reaches
+                // here (`isPowerOffInProgress` above), and Force Quit is
+                // unaffected.
+                guard InAppAudioRecorder.workPublicationsInFlight == 0 else {
+                    NSApp.reply(toApplicationShouldTerminate: false)
+                    return
+                }
+                guard self.unsavedWorkCapturePermitsTermination() else {
+                    NSApp.reply(toApplicationShouldTerminate: false)
+                    return
+                }
+                NSApp.reply(toApplicationShouldTerminate: self.quitGuardPermitsTermination())
+            }
+            return .terminateLater
+        }
+        // A capture that has been REFUSED everywhere durable is the other case,
+        // and it is not the same case. Waiting resolves nothing — the desk write
+        // and the retry queue have both already said no — so the only honest
+        // answers are the person's: quit and lose it, or go back to the Try
+        // Again the capture is still showing. Asked before the gateway question
+        // because it is the more destructive loss and the one nothing else can
+        // undo.
+        guard unsavedWorkCapturePermitsTermination() else { return .terminateCancel }
+        return quitGuardPermitsTermination() ? .terminateNow : .terminateCancel
+    }
+
+    /// The unsaved-capture half of the decision. Same shape as the gateway half
+    /// below, and split out for the same reason: the deferred path and the
+    /// direct one must ask the identical question.
+    private func unsavedWorkCapturePermitsTermination() -> Bool {
+        switch QuitGuard.unsavedCaptureVerdict(
+            unsavedCount: InAppAudioRecorder.unsavedWorkCaptureCount,
+            powerOffInProgress: isPowerOffInProgress
+        ) {
+        case .quitNow:
+            return true
+        case .ask(let prompt):
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = prompt.messageText
+            alert.informativeText = prompt.informativeText
+            // DESTRUCTIVE first with no key equivalent, safe second owning Esc —
+            // the rule the gateway alert follows, for the identical reason.
+            alert.addButton(withTitle: prompt.quitButtonTitle).keyEquivalent = ""
+            alert.addButton(withTitle: prompt.keepButtonTitle).keyEquivalent = "\u{1b}"
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+    }
+
+    /// The gateway-turn half of the decision, which is `QuitGuard`'s: quit
+    /// silently, or put the choice to the person. Split out so the wait above
+    /// can answer the same question the direct path does — a delayed quit must
+    /// not become a quit that skipped the guard.
+    private func quitGuardPermitsTermination() -> Bool {
         switch QuitGuard.verdict(
             liveCount: InFlightTurnRegistry.shared.liveCount,
             singleThreadTitle: coordinator.soleLiveThreadTitle,
@@ -299,9 +419,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             powerOffInProgress: isPowerOffInProgress
         ) {
         case .quitNow:
-            return .terminateNow
+            return true
         case .ask(let prompt):
-            return runQuitGuardAlert(prompt) ? .terminateNow : .terminateCancel
+            return runQuitGuardAlert(prompt)
         }
     }
 
@@ -398,6 +518,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // row leaves the Personal AI / Voice list. Posts change only when
         // something moved.
         Task { await SettingsManager.shared.catchUpSyncedRostersOnActivate() }
+
+        // The foreground Work voice intent activates this app; if its request
+        // arrived after launch and before any window existed, this is the hook
+        // that opens one. No-op when nothing is pending.
+        revealWorkForAPendingVoiceRequest()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {

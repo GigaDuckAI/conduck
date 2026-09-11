@@ -19,7 +19,10 @@
 //     unconsumed pick when no compose state exists (incl. a voice-mode
 //     stranded draft, which must NOT pin picks),
 //   - text→voice flip reconciliation (staged image cleared, draft kept),
-//   - the `.voice` wrapper's post-refactor parity on the shared path.
+//   - the `.voice` wrapper's post-refactor parity on the shared path,
+//   - the WORK screenshot slot: never picked up by a chat turn, parked by a
+//     navigation, dropped by the bail that discards its composition, and
+//     scoped so a bail aimed at the chat draft leaves it alone.
 //
 // Every coordinator injects an isolated `ConversationStore(inMemory: true)`
 // via the store seam: the unsigned test host CRASHES (or hangs) on the shared
@@ -288,7 +291,10 @@ final class MenuBarCoordinatorQuickTypedTests: XCTestCase {
     func testVoiceTranscriptOnDeletedExplicitDestinationStillStashes() async {
         let (coordinator, _) = makeCoordinator()
         aimAtDeletedThread(coordinator)
-        await coordinator.handleTranscript("spoken words")
+        await coordinator.handleTranscript(
+            "spoken words",
+            sendGeneration: coordinator.quickSendGeneration
+        )
         XCTAssertTrue(coordinator.hasPendingFailedTurn,
                       "The `.voice` path through the shared `handleQuickSend` must stash exactly as before the refactor.")
         XCTAssertTrue(isError(coordinator),
@@ -397,6 +403,222 @@ final class MenuBarCoordinatorQuickTypedTests: XCTestCase {
         if case .explicitConversation = coordinator.quickDestination?.destination {
             XCTFail("The one-shot explicit pick must be released by the teardown.")
         }
+    }
+
+    // MARK: - The Work screenshot lives in its own slot
+
+    /// The leak this slot exists to prevent, caught at the only place it could
+    /// happen: the attachments a real chat turn assembles.
+    ///
+    /// `pendingCaptureImage` rides the turn as a `PendingAttachment.image`. A
+    /// ⌃⌘W screenshot sharing that ride would be uploaded to a gateway by an Ask
+    /// made minutes later, and a picture of somebody's screen carries far more
+    /// than the sentence they typed.
+    ///
+    /// Asserted AT the assembly, never after the turn. Every exit nils both
+    /// image slots, so a check on the far side reads identically for an image
+    /// that was copied onto the wire and one that was never touched — which is
+    /// exactly the hole this test used to have. The turn runs against a real
+    /// conversation whose VM is already busy, so it assembles its attachments
+    /// and then stops one line later, short of the send tail the unsigned host
+    /// cannot survive.
+    func testAChatTurnCarriesTheChatScreenshotAndNeverTheWorkOne() async throws {
+        let (coordinator, store) = makeCoordinator()
+        let record = try await store.createConversation(backend: "openclaw")
+        // Busy target: the turn reaches the assembly below and returns at the
+        // in-flight claim, so `sendUserTurn` (and the SHARED store inside it) is
+        // never touched. Same stop the busy-stash test above relies on.
+        coordinator.viewModel(for: record.id).isAwaitingReply = true
+        coordinator.selectQuickDestination(.explicitConversation(record.id))
+
+        let chatScreenshot = Data([0x89, 0x50, 0x4E, 0x47])   // what ⌘⇧2 staged
+        let workScreenshot = Data([0x57, 0x4F, 0x52, 0x4B])   // what ⌃⌘W parked
+        coordinator.setPendingCaptureImage(chatScreenshot)
+        coordinator.setPendingWorkCaptureImage(workScreenshot)
+
+        var dispatched: [[PendingAttachment]] = []
+        coordinator.onQuickTurnAttachments = { dispatched.append($0) }
+        coordinator.quickDraft = "a question for the gateway"
+        coordinator.sendQuickTypedDraft()
+
+        await waitUntil("the turn to assemble its attachments") { !dispatched.isEmpty }
+        let attachments = try XCTUnwrap(dispatched.first)
+        XCTAssertEqual(
+            attachments.count, 1,
+            "The turn carries something other than the one ⌘⇧2 screenshot — a second attachment here "
+            + "is the desk's picture riding along: \(attachments)"
+        )
+        guard case .image(let data) = try XCTUnwrap(attachments.first) else {
+            return XCTFail("The ⌘⇧2 screenshot no longer rides as an inline image: \(attachments)")
+        }
+        XCTAssertEqual(data, chatScreenshot,
+                       "The CHAT screenshot is what the turn was given.")
+        XCTAssertNotEqual(
+            data, workScreenshot,
+            "The turn is uploading the desk's screenshot. Nothing captured by ⌃⌘W may ever reach a "
+            + "gateway — that is the entire reason the Work lane holds its picture in its own slot."
+        )
+    }
+
+    /// Control for the test above: with nothing staged for Chat, a turn made
+    /// while a Work picture is parked carries NO attachment at all. Without
+    /// this, an assembly that dropped every image would satisfy the assertion
+    /// that the Work one is absent.
+    func testAChatTurnWithOnlyAWorkPictureParkedCarriesNoAttachment() async throws {
+        let (coordinator, store) = makeCoordinator()
+        let record = try await store.createConversation(backend: "openclaw")
+        coordinator.viewModel(for: record.id).isAwaitingReply = true
+        coordinator.selectQuickDestination(.explicitConversation(record.id))
+        coordinator.setPendingWorkCaptureImage(Data([0x57, 0x4F, 0x52, 0x4B]))
+
+        var dispatched: [[PendingAttachment]] = []
+        coordinator.onQuickTurnAttachments = { dispatched.append($0) }
+        coordinator.quickDraft = "a question with no screenshot of its own"
+        coordinator.sendQuickTypedDraft()
+
+        await waitUntil("the turn to assemble its attachments") { !dispatched.isEmpty }
+        XCTAssertEqual(
+            dispatched.first?.count, 0,
+            "A parked ⌃⌘W screenshot became this turn's attachment: \(String(describing: dispatched.first))"
+        )
+        XCTAssertNotNil(
+            coordinator.pendingWorkCaptureImage,
+            "…and the chat turn consumed it on the way out. It belongs to a composition the person "
+            + "never sent and never discarded."
+        )
+    }
+
+    /// A staged Work picture is enough to commit the Work surface on its own
+    /// (a screenshot with no caption is a perfectly good note) and is not chat
+    /// compose state at all — the two gates read two different slots.
+    func testAWorkScreenshotIsWorkComposeStateAndNotChatComposeState() {
+        let (coordinator, _) = makeTextModeCoordinator()
+        coordinator.openComposeForWorkOnly()
+        coordinator.setPendingWorkCaptureImage(Data([0x89, 0x50]))
+
+        XCTAssertTrue(coordinator.hasWorkComposeState,
+                      "Add to Work is disabled on a captioned-by-nothing screenshot, which is the "
+                      + "commonest ⌃⌘W there is.")
+        XCTAssertFalse(coordinator.hasComposeState,
+                       "A desk screenshot counts as chat compose state, so it pins the chat lane's "
+                       + "one-shot destination pick across dismissals.")
+    }
+
+    /// ⌘⇧1 off the Work surface is a NAVIGATION: the words park, and so does the
+    /// picture. What it may never do is carry either into the Chat composition
+    /// underneath, where one Return sends them to a gateway.
+    func testLeavingTheWorkSurfaceParksItsPictureAndCarriesNothingToChat() {
+        let (coordinator, _) = makeTextModeCoordinator()
+        coordinator.openComposeForWorkOnly()
+        coordinator.quickWorkDraft = "for the desk"
+        coordinator.setPendingWorkCaptureImage(Data([0x89, 0x50]))
+
+        coordinator.closeWorkOnlyCompose()
+
+        XCTAssertEqual(coordinator.composeTarget, .chat)
+        XCTAssertNil(coordinator.pendingCaptureImage,
+                     "The Work screenshot followed the aim into the Chat composition, where the next "
+                     + "Return uploads it.")
+        XCTAssertNotNil(coordinator.pendingWorkCaptureImage,
+                        "The parked composition lost its picture to a navigation — the exact failure "
+                        + "the aim-travels-with-the-words design exists to prevent.")
+        XCTAssertEqual(coordinator.quickWorkDraft, "for the desk")
+    }
+
+    /// The state a text-mode ⌘⇧2 leaves behind when a Work composition was
+    /// standing: the two calls its handler now makes, in order.
+    ///
+    /// All four facts matter together. The aim is back on Chat, so Return sends
+    /// rather than saves. The dragged region is in the Chat slot, which is the
+    /// one the Chat surface's thumbnail reads. And the Work words and picture
+    /// are untouched, waiting for the ⌃⌘W that re-enters them.
+    func testATextModeAskOverAParkedWorkCompositionEndsAimedAtChat() {
+        let (coordinator, _) = makeTextModeCoordinator()
+        coordinator.openComposeForWorkOnly()
+        coordinator.quickWorkDraft = "a note for the desk"
+        coordinator.setPendingWorkCaptureImage(Data([0x57, 0x4F, 0x52, 0x4B]))
+
+        // What `handleRegionCapturePress`'s text arm does, in its order.
+        coordinator.closeWorkOnlyCompose()
+        coordinator.setPendingCaptureImage(Data([0x89, 0x50, 0x4E, 0x47]))
+
+        XCTAssertEqual(coordinator.composeTarget, .chat,
+                       "Return would still save this question to the desk instead of sending it.")
+        XCTAssertEqual(coordinator.pendingCaptureImage, Data([0x89, 0x50, 0x4E, 0x47]),
+                       "The dragged region has to land in the slot the Chat surface draws.")
+        XCTAssertEqual(coordinator.pendingWorkCaptureImage, Data([0x57, 0x4F, 0x52, 0x4B]),
+                       "The parked Work picture is re-entered by the next ⌃⌘W; an Ask may not take it.")
+        XCTAssertEqual(coordinator.quickWorkDraft, "a note for the desk",
+                       "…and neither may it take the words.")
+    }
+
+    /// The explicit bail throws the whole composition away, picture included: a
+    /// screenshot that outlived the words it was dragged for would attach itself
+    /// to the next ⌃⌘W.
+    func testDiscardingTheWorkCompositionThrowsAwayItsPicture() {
+        let (coordinator, _) = makeTextModeCoordinator()
+        coordinator.openComposeForWorkOnly()
+        coordinator.quickWorkDraft = "abandoned"
+        coordinator.setPendingWorkCaptureImage(Data([0x89, 0x50]))
+
+        coordinator.discardWorkOnlyCompose()
+
+        XCTAssertNil(coordinator.pendingWorkCaptureImage)
+        XCTAssertEqual(coordinator.quickWorkDraft, "")
+    }
+
+    /// Esc over the CHAT surface bails the chat composition. `cancelActiveCapture`
+    /// tears both lanes down on that one press, so the Work slot has to be
+    /// scoped to a capture that is actually running — otherwise a bail the person
+    /// aimed at their own draft silently takes a picture they parked elsewhere.
+    func testABailOverTheChatSurfaceLeavesAParkedWorkPictureAlone() {
+        let (coordinator, _) = makeTextModeCoordinator()
+        coordinator.setPendingWorkCaptureImage(Data([0x89, 0x50]))
+        coordinator.quickWorkDraft = "parked for the desk"
+        coordinator.quickDraft = "words to discard"
+
+        coordinator.cancelActiveCapture()
+
+        XCTAssertEqual(coordinator.quickDraft, "", "The chat draft is what the bail was aimed at.")
+        XCTAssertNotNil(coordinator.pendingWorkCaptureImage)
+        XCTAssertEqual(coordinator.quickWorkDraft, "parked for the desk",
+                       "Control: the words survive, so the picture must too — one composition, one "
+                       + "survival rule.")
+    }
+
+    /// …and the mirror: a capture that IS running loses its picture to the same
+    /// call, because that picture is the running capture's own.
+    func testCancellingARunningWorkCaptureDropsItsPicture() {
+        let (coordinator, _) = makeCoordinator()
+        coordinator.claimPopoverForWorkVoiceCapture()   // the ⌃⌘W press's claim
+        coordinator.setPendingWorkCaptureImage(Data([0x89, 0x50]))
+        XCTAssertTrue(coordinator.workCaptureIsActive, "Control: the claim counts as a live capture.")
+
+        coordinator.cancelWorkVoiceCapture()
+
+        XCTAssertNil(coordinator.pendingWorkCaptureImage,
+                     "The cancelled capture's screenshot survives it, and the next ⌃⌘W — including "
+                     + "one that skipped its screenshot — would show it above the wrong words.")
+    }
+
+    /// In voice mode the Work slot is the HUD's thumbnail, so a picture stranded
+    /// there by a text-mode composition would caption the next ⌃⌘W recording.
+    /// Same rule the chat slot already follows across the same flip.
+    func testFlipToVoiceClearsAStagedWorkScreenshot() async {
+        let (coordinator, _) = makeTextModeCoordinator()
+        coordinator.openComposeForWorkOnly()
+        coordinator.setPendingWorkCaptureImage(Data([0x89, 0x50]))
+        coordinator.quickWorkDraft = "typed before the flip"
+
+        modeDefaults.set(MenuBarInputMode.voice.rawValue,
+                         forKey: Constants.menuBarInputModeKey)
+        NotificationCenter.default.post(name: .settingsDidChangeRemotely, object: nil)
+
+        await waitUntil("mode mirror to refresh") { coordinator.menuBarInputMode == .voice }
+        XCTAssertNil(coordinator.pendingWorkCaptureImage)
+        XCTAssertEqual(coordinator.quickWorkDraft, "typed before the flip",
+                       "The draft survives the flip exactly as the chat one does — it is inert in "
+                       + "voice mode and comes back intact on flipping again.")
     }
 }
 #endif

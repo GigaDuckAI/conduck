@@ -89,6 +89,8 @@ struct MacAboutCategory: View {
             }
             .settingsCardRowButton()
 
+            AppReviewLink()
+
             // `Link`, not `Button` — no `ButtonStyle` reaches it, so these rows
             // take `.settingsCardRowLink()`: the same full-bleed live area, row
             // inset and wash `.settingsCardRowButton()` gives the `Button` rows

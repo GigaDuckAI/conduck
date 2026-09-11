@@ -389,7 +389,7 @@ final class DiagnosticsRunnerTests: XCTestCase {
             configured: true, reachAuth: .passed, writeVerified: false, detail: nil)
         XCTAssertEqual(passed.badge, .configuredNotTested,
                        "a carried `.passed` over revoked availability means routing is OFF — another test is the remedy")
-        XCTAssertTrue(passed.needsAttention, "a configured lane that receives nothing is a finding, not a rest state")
+        XCTAssertFalse(passed.needsAttention, "disabled optional setup remains untested, not a failed check")
 
         // Same carry-over, on a lane that lost its config too: it has no server to
         // describe, so `.configuredNotTested` would misstate it.
@@ -502,7 +502,7 @@ final class DiagnosticsRunnerTests: XCTestCase {
             "a lane with no recorded signature has nothing to match against")
     }
 
-    /// A lane testing RIGHT NOW keeps its evidence whatever the store says.
+    /// A lane testing RIGHT NOW keeps its evidence while its server is unchanged.
     ///
     /// THE RACE: `runFileTransferTest` publishes its result, commits the verdict —
     /// which posts `settingsDidChangeRemotely`, and the view turns that into a
@@ -520,10 +520,10 @@ final class DiagnosticsRunnerTests: XCTestCase {
             available: true, testInFlight: true),
             "the lane's own test is about to publish the authoritative answer — nothing else may clear it")
 
-        XCTAssertTrue(DiagnosticsRunner.mayCarryLaneEvidence(
+        XCTAssertFalse(DiagnosticsRunner.mayCarryLaneEvidence(
             prior: midTest, priorSignature: "sig-a", signature: "sig-b",
             available: true, testInFlight: true),
-            "in-flight wins over an identity change too: the test guards its own staleness on completion")
+            "a changed server cannot inherit the old test's running state")
 
         XCTAssertFalse(DiagnosticsRunner.mayCarryLaneEvidence(
             prior: midTest, priorSignature: "sig-a", signature: "sig-a",
@@ -533,12 +533,9 @@ final class DiagnosticsRunnerTests: XCTestCase {
 
     /// Which resting states are neutral, and which is a finding.
     ///
-    /// A CONFIGURED-BUT-DISABLED lane COUNTS. It looks like a rest state and is not:
-    /// a file server is set up and Conduck sends it nothing. Leaving it neutral let
-    /// the summary mint a green "Checks passed" directly above the row that says
-    /// "Uploads disabled — test required". An UNCONFIGURED gateway stays neutral —
-    /// there is no server, so there is nothing broken to report.
-    func testFileLaneRestingStatesRegisterAttentionOnlyWhenSomethingIsHalfDone() {
+    /// Optional saved setup is untested, not broken. The summary counts its
+    /// unfinished check separately and cannot claim that the current setup passed.
+    func testFileLaneRestingStatesRemainNeutralUntilATestFindsAFailure() {
         let verified = FileLaneState(ref: .builtin(.openclaw), displayName: "x", backendKind: "openclaw",
             configured: true, reachAuth: .notRun, writeVerified: true, detail: nil)
         XCTAssertEqual(verified.badge, .verified)
@@ -547,8 +544,8 @@ final class DiagnosticsRunnerTests: XCTestCase {
         let configured = FileLaneState(ref: .builtin(.openclaw), displayName: "x", backendKind: "openclaw",
             configured: true, reachAuth: .notRun, writeVerified: false, detail: nil)
         XCTAssertEqual(configured.badge, .configuredNotTested)
-        XCTAssertTrue(configured.needsAttention,
-                      "set up but receiving nothing — the summary must not call this passing")
+        XCTAssertFalse(configured.needsAttention,
+                       "saved optional setup is untested rather than an outage")
 
         let notSetUp = FileLaneState(ref: .builtin(.openclaw), displayName: "x", backendKind: "openclaw",
             configured: false, reachAuth: .notRun, writeVerified: false, detail: nil)

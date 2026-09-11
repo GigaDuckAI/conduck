@@ -34,6 +34,22 @@ class AudioRecorder: NSObject, ObservableObject {
     /// delegate can distinguish a manual stop from a cap-fired auto-stop.
     private var userInitiatedStop = false
 
+    /// Which START owns the input. Moved by every stop and every cancel,
+    /// including the ones that find nothing to stop.
+    ///
+    /// The entry guard below is read BEFORE the microphone-permission prompt,
+    /// so two starts can both pass it while that system sheet stands: the first
+    /// to resume builds the recorder and captures, and the second used to build
+    /// a SECOND one straight over `audioRecorder` and abandon the live one — a
+    /// stop then returned the earlier recording and lost the speech the person
+    /// was watching being recorded. A cancel during the prompt was invisible for
+    /// the same reason: `cancelRecording()` had no recorder to reach, so the
+    /// microphone came up afterwards with nothing left that could stop it.
+    ///
+    /// A reservation is the only thing a press can leave behind while this call
+    /// owns nothing, which is exactly the window it covers.
+    private var sessionGeneration = 0
+
     /// Start recording audio
     func startRecording() async throws -> Bool {
         // Idempotency: a second start while one is already live would build a
@@ -41,6 +57,7 @@ class AudioRecorder: NSObject, ObservableObject {
         // HAL "there already is a thread" double-start. Callers guard their own
         // state machines, but the primitive must be safe on its own.
         guard !isRecording else { return true }
+        let session = sessionGeneration
 
         // Request microphone permission
         let permissionGranted = await AVAudioApplication.requestRecordPermission()
@@ -48,11 +65,40 @@ class AudioRecorder: NSObject, ObservableObject {
             throw AudioRecorderError.permissionDenied
         }
 
-        // Configure audio session (iOS only - macOS doesn't need this)
+        // THE RESERVATION, checked on the far side of the prompt and above the
+        // first line that takes the input. A stop or a cancel that landed while
+        // it was up moved the session; so did a start that got here first, and
+        // that one owns the recorder now. Either way this call starts nothing:
+        // `false` says so, rather than reporting a capture whose bytes belong to
+        // somebody else.
+        guard session == sessionGeneration, !isRecording else { return false }
+
         #if os(iOS)
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.record, mode: .default)
-        try audioSession.setActive(true)
+        // THE CAR, RE-ASKED ON THE FAR SIDE OF THE PROMPT, and for the same
+        // reason the reservation above is: the callers' own busy refusal
+        // (`InAppAudioRecorder.startRecording()`) is read BEFORE the permission
+        // sheet, so a session the driver started while it stood was invisible to
+        // it. The skip below then took the only consequence away — no session
+        // reconfiguration — and built a second capture on the car's input
+        // anyway, which is the admission this gate exists to refuse. Typed,
+        // because the callers map it onto `audioMicBusy`: a live car capture is
+        // sacred exactly as a live macOS one is, so the SECOND start is refused.
+        guard !CarPlayRecordingService.anySessionActive else {
+            throw AudioRecorderError.microphoneBusy
+        }
+        #endif
+
+        // Configure audio session (iOS only - macOS doesn't need this), UNLESS
+        // CarPlay owns it — see `deactivateSessionUnlessCarPlayOwnsIt()`. Kept
+        // even though the refusal above now stands in front of it: this is the
+        // ACTIVATE half of the gate the deactivate sites belong to, and the pair
+        // is what protects a capture that began before the car connected.
+        #if os(iOS)
+        if !CarPlayRecordingService.anySessionActive {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.record, mode: .default)
+            try audioSession.setActive(true)
+        }
         #endif
 
         // Create temporary file URL. The `conduck-recorder-` prefix is
@@ -124,6 +170,11 @@ class AudioRecorder: NSObject, ObservableObject {
 
     /// Stop recording and return audio data
     func stopRecording() -> Data? {
+        // The session ends whether or not there is anything here to end. A stop
+        // pressed while a start is still suspended in the permission prompt
+        // finds no recorder at all, and without this the prompt's answer would
+        // open the microphone after the stop.
+        sessionGeneration &+= 1
         guard let recorder = audioRecorder, isRecording else {
             return nil
         }
@@ -138,7 +189,7 @@ class AudioRecorder: NSObject, ObservableObject {
 
         // Deactivate audio session (iOS only)
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false)
+        deactivateSessionUnlessCarPlayOwnsIt()
         #endif
 
         // Read audio file data
@@ -153,6 +204,10 @@ class AudioRecorder: NSObject, ObservableObject {
 
     /// Cancel recording without returning data
     func cancelRecording() {
+        // Same rule as the stop, and this is the press that most often has
+        // nothing to act on: Esc during the permission prompt. The reservation
+        // is what the resumed start reads.
+        sessionGeneration &+= 1
         guard let recorder = audioRecorder else { return }
 
         userInitiatedStop = true
@@ -164,13 +219,37 @@ class AudioRecorder: NSObject, ObservableObject {
         warningTimer = nil
 
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false)
+        deactivateSessionUnlessCarPlayOwnsIt()
         #endif
 
         // Clean up temporary file
         let url = recorder.url
         try? FileManager.default.removeItem(at: url)
     }
+
+    #if os(iOS)
+    /// Give the shared `AVAudioSession` back — unless CarPlay is holding it.
+    ///
+    /// There is ONE session per process, so this primitive's category switch and
+    /// its `setActive(false)` land on whoever else is using it. The other user is
+    /// a live CarPlay voice session, and it is the one this surface cannot see:
+    /// a capture that began before the car connected ends after it, and a bare
+    /// deactivate there tears down the route the driver is talking into, mid
+    /// sentence, from a window that is not even on screen. CarPlay's own legs are
+    /// activate-once / deactivate-once, so a foreign deactivate is not something
+    /// it can recover from by re-activating.
+    ///
+    /// Ownership is read from CarPlay's process-wide mirror rather than through
+    /// `SpeechExclusivity`, because CarPlay registers nothing on that bus by
+    /// construction. `ThreadSpeaker` guards the playback session with the
+    /// identical read; this is the capture half of the same rule, and
+    /// `InAppAudioRecorder.startRecording()` refuses outright rather than
+    /// arriving here.
+    private func deactivateSessionUnlessCarPlayOwnsIt() {
+        guard !CarPlayRecordingService.anySessionActive else { return }
+        try? AVAudioSession.sharedInstance().setActive(false)
+    }
+    #endif
 }
 
 // MARK: - AVAudioRecorderDelegate
@@ -210,6 +289,10 @@ extension AudioRecorder: AVAudioRecorderDelegate {
 enum AudioRecorderError: LocalizedError {
     case permissionDenied
     case recordingFailed
+    /// Another surface holds the microphone. Raised only on iOS, and only for
+    /// the one holder this primitive cannot see through the speech bus: a live
+    /// CarPlay voice session, which registers nothing on it by construction.
+    case microphoneBusy
 
     var errorDescription: String? {
         switch self {
@@ -217,6 +300,11 @@ enum AudioRecorderError: LocalizedError {
             return String(localized: "Microphone permission denied. Enable in Settings → Privacy → Microphone.")
         case .recordingFailed:
             return String(localized: "Failed to start audio recording.")
+        case .microphoneBusy:
+            // The taxonomy's own sentence for this state, so the primitive and
+            // every surface above it say the same thing and no second row is
+            // written for one meaning.
+            return AppError.audioMicBusy.errorDescription
         }
     }
 }
