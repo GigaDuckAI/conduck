@@ -42,7 +42,7 @@ final class WorkDeskWorkspaceTests: XCTestCase {
         XCTAssertTrue(workspace.presentsSidebarInline)
     }
 
-    func testSuspensionRetainsDraftButExplicitCloseReadsNewProjectOnReopen() async {
+    func testClosingAndReopeningRetainsTaskWhileRefreshingProjectContext() async {
         let workspace = await makeWorkspace(.init())
         let project = WorkDeskProjectRecord(title: "A project", brief: "Saved")
         let draft = workspace.briefDraft(for: project, resolver: .init())
@@ -58,9 +58,26 @@ final class WorkDeskWorkspaceTests: XCTestCase {
         updated.brief = "Edited on another device"
         updated.updatedAt = project.updatedAt.addingTimeInterval(10)
         let reopened = workspace.briefDraft(for: updated, resolver: .init())
-        XCTAssertFalse(reopened === draft)
-        XCTAssertEqual(reopened.brief, updated.brief)
+        XCTAssertTrue(reopened === draft)
+        XCTAssertEqual(reopened.brief, "Still thinking")
+        XCTAssertEqual(reopened.projectContext, updated.brief)
         XCTAssertEqual(workspace.briefRevisions[project.id], updated.updatedAt)
+    }
+
+    func testResultMaterialArrivingBeforeReceiptRemainsExcludedAcrossDraftResets() async {
+        let project = WorkDeskProjectRecord(title: "A project")
+        let workspace = await makeWorkspace(.init(projects: [project]))
+        let result = WorkboardMaterialSnapshot(kind: .file, name: "Result.txt", projectResultKind: .file)
+        workspace.reconcile(materials: [result])
+        let draft = workspace.briefDraft(for: project, resolver: .init())
+        XCTAssertTrue(draft.excludedIDs.contains(result.id))
+        draft.excludedIDs.remove(result.id)
+        draft.startAnotherConversation()
+        XCTAssertTrue(draft.excludedIDs.contains(result.id))
+        let arriving = WorkboardMaterialSnapshot(kind: .note, name: "Remote.pdf", projectResultKind: .reference)
+        workspace.reconcile(materials: [result, arriving])
+        XCTAssertTrue(draft.excludedIDs.contains(arriving.id))
+        XCTAssertTrue(draft.remoteResultIDs.contains(arriving.id))
     }
 
     func testDifferentProjectsNeverShareDraftExclusionsOrHandoffOwner() async {

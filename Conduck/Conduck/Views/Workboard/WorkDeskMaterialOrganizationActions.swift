@@ -20,6 +20,12 @@ struct WorkDeskMaterialOrganizationActions {
         return workspace.organization.projects.filter { $0.id != current }
     }
     var showsLocation: Bool { workspace.isSearching || workspace.scope == .all }
+    var result: WorkDeskResultRecord? { workspace.results[materialID] }
+    var showsSource: Bool { result != nil }
+    func openSource() {
+        guard let result else { return }
+        workspace.openResultSource(result)
+    }
     func createProject() { workspace.beginProject(materialIDs: [materialID]) }
     func select() { workspace.toggleSelection(materialID) }
 
@@ -45,6 +51,11 @@ struct WorkDeskMaterialMenuActions: View {
     }
 
     var body: some View {
+        if actions.showsSource {
+            Button { actions.openSource() } label: {
+                Label(LocalizedStringResource("workdesk.result.openSource", defaultValue: "Open source conversation"), systemImage: "bubble.left")
+            }
+        }
         Button { actions.select() } label: {
             Label(LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material"), systemImage: "checkmark.circle")
         }
@@ -86,6 +97,9 @@ struct WorkDeskMaterialAccessibilityActions: View {
     }
 
     var body: some View {
+        if actions.showsSource {
+            Button(LocalizedStringResource("workdesk.result.openSource", defaultValue: "Open source conversation")) { actions.openSource() }
+        }
         Button(LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material")) { actions.select() }
         Button(LocalizedStringResource("workdesk.group", defaultValue: "Create project")) { actions.createProject() }
         if actions.projectID != nil {
@@ -112,11 +126,29 @@ struct WorkDeskMaterialLocation: View {
 
     var body: some View {
         let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: materialID)
+        if let result = actions.result {
+            Button { actions.openSource() } label: {
+                Label {
+                    Text(LocalizedStringResource("workdesk.result.label", defaultValue: "Result"))
+                    + Text(verbatim: " · " + sourceName(result))
+                } icon: { Image(systemName: "bubble.left") }
+                    .font(.caption2).lineLimit(1).padding(.vertical, 3)
+            }.inlineLinkButton().foregroundStyle(AppColors.textSecondary)
+            .accessibilityHint(Text(LocalizedStringResource("workdesk.result.openSource", defaultValue: "Open source conversation")))
+        }
         if actions.showsLocation, let project = actions.project {
             Label { Text(verbatim: project.title) } icon: { Image(systemName: "folder") }
                 .font(.caption2)
                 .foregroundStyle(AppColors.textSecondary)
                 .lineLimit(1)
         }
+    }
+
+    private func sourceName(_ result: WorkDeskResultRecord) -> String {
+        let title = workspace.projectConversations.first { $0.id == result.conversationID }?.displayTitle
+        let gateway = RemoteAgentRef(rawString: result.gatewayRef).map {
+            RemoteAgentRefMetadata.displayName(for: $0, customs: workspace.conversationSettings.customGateways)
+        }
+        return [title, gateway].compactMap { $0 }.joined(separator: " · ")
     }
 }

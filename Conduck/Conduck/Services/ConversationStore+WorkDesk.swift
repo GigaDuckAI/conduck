@@ -31,6 +31,12 @@ extension ConversationStore {
         try assignDeskMaterials([materialID], projectID: projectID, in: context)
     }
 
+    nonisolated static func validateProjectConversationDestination(
+        _ projectID: UUID, in context: NSManagedObjectContext
+    ) throws {
+        _ = try liveDeskProjectRows(projectID, in: context)
+    }
+
     func fetchWorkDeskOrganization() async throws -> WorkDeskOrganizationSnapshot {
         try await ensureLoaded()
         let context = newReadContext()

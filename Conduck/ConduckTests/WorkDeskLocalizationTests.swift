@@ -39,10 +39,10 @@ final class WorkDeskLocalizationTests: XCTestCase {
             "workdesk.layout.desk": "Canvas",
             "workdesk.group": "Create project",
             "workdesk.move": "Move to",
-            "workdesk.prepare": "Prepare",
-            "workdesk.brief.title": "Project brief",
-            "workdesk.brief.chooseAI": "Choose your AI",
-            "workdesk.brief.reviewButton": "Review handoff",
+            "workdesk.conversation.new": "New conversation…",
+            "workdesk.conversation.title": "New conversation",
+            "workdesk.conversation.sendTo": "Send to",
+            "workdesk.conversation.review": "Review",
             "workdesk.brief.openChat": "Open chat"
         ]
 
@@ -177,11 +177,11 @@ final class WorkDeskLocalizationTests: XCTestCase {
 
     func testProjectBriefStateReadsAsContentsRatherThanReadiness() throws {
         let bundle = try englishAppBundle()
-        let saved = compiledValue(for: "workdesk.project.brief.saved", bundle: bundle)
-        let none = compiledValue(for: "workdesk.project.brief.none", bundle: bundle)
+        let saved = compiledValue(for: "workdesk.project.context.saved", bundle: bundle)
+        let none = compiledValue(for: "workdesk.project.context.add", bundle: bundle)
 
-        XCTAssertEqual(saved, "Instructions saved")
-        XCTAssertEqual(none, "No instructions yet")
+        XCTAssertEqual(saved, "Project context")
+        XCTAssertEqual(none, "Add context")
         for value in [saved, none] {
             XCTAssertFalse(value.lowercased().contains("ready"),
                            "readiness needs a reachable gateway and present bytes, which this header cannot know: \(value)")

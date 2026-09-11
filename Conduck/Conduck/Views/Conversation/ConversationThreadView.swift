@@ -77,6 +77,7 @@ struct ConversationThreadView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
+    @Environment(\.workDeskOpenConversation) private var workDeskOpenConversation
     #if os(iOS)
     @Environment(\.phoneWorkbenchRouter) private var phoneWorkbenchRouter
     #endif
@@ -1329,6 +1330,10 @@ struct ConversationThreadView: View {
             // dead button.
             viewModel.showingGatewaySheet = false
             if let newID {
+                if let workDeskOpenConversation {
+                    workDeskOpenConversation(newID)
+                    return
+                }
                 NotificationCenter.default.post(
                     name: .openConversationDeepLink,
                     object: nil,

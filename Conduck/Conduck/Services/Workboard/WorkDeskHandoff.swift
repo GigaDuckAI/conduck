@@ -38,6 +38,7 @@ struct WorkDeskGatewayConnection: Sendable {
 enum WorkDeskHandoffError: Error, LocalizedError, Equatable {
     case noGateway, emptyBrief, materialChanged, bytesUnavailable, needsFileTransfer, connectionChanged
     case submissionRefused
+    case remoteResult
 
     var errorDescription: String? {
         switch self {
@@ -55,6 +56,8 @@ enum WorkDeskHandoffError: Error, LocalizedError, Equatable {
             return String(localized: "workdesk.handoff.connectionChanged", defaultValue: "The selected connection changed. Review the handoff again before sending.")
         case .submissionRefused:
             return String(localized: "workdesk.handoff.submissionRefused", defaultValue: "The chat could not accept this handoff. Your brief and materials are still in Work.")
+        case .remoteResult:
+            return String(localized: "workdesk.handoff.remoteResult", defaultValue: "This file is still on its gateway. Open its source conversation, download it, then add the file to this project before including it.")
         }
     }
 }
@@ -69,6 +72,7 @@ enum WorkDeskHandoffPolicy {
 
     static func hasSameContent(_ lhs: WorkboardMaterialSnapshot, _ rhs: WorkboardMaterialSnapshot) -> Bool {
         lhs.id == rhs.id && lhs.revision == rhs.revision && lhs.kind == rhs.kind
+            && lhs.projectResultKind == rhs.projectResultKind
             && lhs.name == rhs.name && lhs.textContent == rhs.textContent
             && lhs.urlString == rhs.urlString && lhs.mimeType == rhs.mimeType
             && lhs.byteCount == rhs.byteCount
@@ -90,6 +94,7 @@ enum WorkDeskHandoffPolicy {
     }
 
     static func blockingReason(_ material: WorkboardMaterialSnapshot, gateway: WorkDeskGatewayOption?) -> String? {
+        if material.isRemoteProjectResult { return WorkDeskHandoffError.remoteResult.localizedDescription }
         guard needsBytes(material) else { return nil }
         if !material.availability.isAvailable { return WorkDeskHandoffError.bytesUnavailable.localizedDescription }
         if let gateway, !gateway.hasFileTransfer, likelyNeedsFileTransfer(material) {
@@ -98,8 +103,11 @@ enum WorkDeskHandoffPolicy {
         return nil
     }
 
-    static func prompt(title: String, brief: String, materials: [WorkboardMaterialSnapshot]) -> String {
-        var sections = [title.trimmingCharacters(in: .whitespacesAndNewlines), brief.trimmingCharacters(in: .whitespacesAndNewlines)]
+    static func prompt(title: String, brief: String, materials: [WorkboardMaterialSnapshot], projectContext: String = "") -> String {
+        var sections = [title.trimmingCharacters(in: .whitespacesAndNewlines)]
+        let context = projectContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !context.isEmpty { sections.append("Project context:\n" + context) }
+        sections.append(brief.trimmingCharacters(in: .whitespacesAndNewlines))
         for (index, material) in materials.enumerated() {
             var content = "Material \(index + 1): \(material.name)"
             if let text = material.textContent, !text.isEmpty { content += "\n\(text)" }
@@ -124,6 +132,8 @@ struct WorkDeskPreparedFile: Sendable {
 
 struct WorkDeskPreparedHandoff: Identifiable, Sendable {
     let id: UUID
+    var projectID: UUID? = nil
+    var taskTitle: String? = nil
     let prompt: String
     let materials: [WorkboardMaterialSnapshot]
     let connection: WorkDeskGatewayConnection
@@ -147,7 +157,7 @@ final class WorkDeskHandoff {
         var export: @MainActor (WorkboardMaterialSnapshot) async throws -> WorkMaterialExportSnapshot
         var upload: @MainActor (URL, String, SettingsManager.FileTransferSnapshot) async throws -> Void
         var removeUpload: @MainActor (String, SettingsManager.FileTransferSnapshot) async -> Void
-        var createConversation: @MainActor (UUID, RemoteAgentRef) async throws -> Void
+        var createConversation: @MainActor (UUID, RemoteAgentRef, UUID?, String?) async throws -> Void
         var removeConversation: @MainActor (UUID) async -> Void
         var submit: @MainActor (UUID, String, [PendingAttachment], RemoteAgentRef, String?, SettingsManager.RemoteAgentSnapshot) async -> Bool
 
@@ -177,8 +187,8 @@ final class WorkDeskHandoff {
                 removeUpload: { key, lane in
                     await ConversationDetailViewModel.deleteOrphanServerFile(storedKey: key, snapshot: lane)
                 },
-                createConversation: { id, ref in
-                    _ = try await ConversationStore.shared.createConversation(id: id, backend: ref.rawString)
+                createConversation: { id, ref, projectID, title in
+                    _ = try await ConversationStore.shared.createConversation(id: id, backend: ref.rawString, projectID: projectID, title: title)
                 },
                 removeConversation: { try? await ConversationStore.shared.deleteConversation(id: $0) },
                 submit: { id, prompt, attachments, ref, laneID, agent in
@@ -191,7 +201,7 @@ final class WorkDeskHandoff {
                         return false
                     }
                     #else
-                    let viewModel = ConversationDetailViewModel(conversationID: id)
+                    let viewModel = conversationResolver.resolve(id) ?? ConversationDetailViewModel(conversationID: id)
                     #endif
                     return await viewModel.submitUserTurnAwaitingLocalAcceptance(prompt, attachments: attachments, expectedRef: ref, expectedFileLaneID: laneID, expectedGatewaySnapshot: agent)
                 }
@@ -231,7 +241,7 @@ final class WorkDeskHandoff {
         errorMessage = nil
     }
 
-    func prepare(title: String, brief: String, cards: [WorkboardMaterialSnapshot], ref: RemoteAgentRef?) async {
+    func prepare(title: String, brief: String, cards: [WorkboardMaterialSnapshot], ref: RemoteAgentRef?, projectID: UUID? = nil, projectContext: String = "", remoteResultIDs: Set<UUID> = []) async {
         guard !isPreparing, !isSending, acceptedConversationID == nil else { return }
         discardPreparation()
         let generation = preparationGeneration
@@ -242,6 +252,7 @@ final class WorkDeskHandoff {
             guard !brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw WorkDeskHandoffError.emptyBrief }
             guard let ref, let connection = await dependencies.connections().first(where: { $0.option.ref == ref }) else { throw WorkDeskHandoffError.noGateway }
             let materials = WorkDeskHandoffPolicy.expanded(cards)
+            guard materials.allSatisfy({ !$0.isRemoteProjectResult && !remoteResultIDs.contains($0.id) }) else { throw WorkDeskHandoffError.remoteResult }
             let conversationID = UUID()
             var files: [WorkDeskPreparedFile] = []
             for material in materials {
@@ -261,7 +272,10 @@ final class WorkDeskHandoff {
             }
             guard generation == preparationGeneration else { exports.forEach { $0.reclaim() }; return }
             try Task.checkCancellation()
-            prepared = WorkDeskPreparedHandoff(id: conversationID, prompt: WorkDeskHandoffPolicy.prompt(title: title, brief: brief, materials: materials), materials: materials, connection: connection, files: files)
+            prepared = WorkDeskPreparedHandoff(id: conversationID, projectID: projectID,
+                taskTitle: ReplySanitizer.displayLine(brief, maxLength: 100, fallback: title),
+                prompt: WorkDeskHandoffPolicy.prompt(title: title, brief: brief, materials: materials, projectContext: projectContext),
+                materials: materials, connection: connection, files: files)
         } catch {
             exports.forEach { $0.reclaim() }
             if generation == preparationGeneration, !(error is CancellationError) { errorMessage = Self.message(for: error) }
@@ -301,7 +315,7 @@ final class WorkDeskHandoff {
                 }
             }
             try await validateConnection(packet.connection)
-            try await dependencies.createConversation(packet.id, packet.connection.option.ref)
+            try await dependencies.createConversation(packet.id, packet.connection.option.ref, packet.projectID, packet.taskTitle)
             conversationCreated = true
             let accepted = await dependencies.submit(packet.id, packet.prompt, attachments, packet.connection.option.ref, packet.connection.files?.durableLaneID, packet.connection.agent)
             guard accepted else { throw WorkDeskHandoffError.submissionRefused }

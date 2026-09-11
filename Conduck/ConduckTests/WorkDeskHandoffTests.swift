@@ -42,7 +42,9 @@ final class WorkDeskHandoffTests: XCTestCase {
         let app = try RefusalLaneSource.source(at: "Conduck/ConduckApp.swift")
         XCTAssertTrue(app.contains("MainWindowView(coordinator: appDelegate.coordinator)"))
         let window = try RefusalLaneSource.source(at: "Conduck/Views/Conversation/MainWindowView.swift")
-        XCTAssertTrue(window.contains(".environment(\\.workDeskConversationResolver, WorkDeskConversationResolver(resolve: { coordinator.viewModel(for: $0) }))"))
+        XCTAssertTrue(window.contains(".environment(\\.workDeskConversationResolver, WorkDeskConversationResolver("))
+        XCTAssertTrue(window.contains("coordinator.retainWorkViewModel(for: id, ownerID: owner)"))
+        XCTAssertTrue(window.contains("coordinator.clearWindowVisibleConversation(ifCurrent: id)"))
         let coordinatorPath = "Conduck/MenuBar/MenuBarCoordinator.swift"
         let coordinator = try RefusalLaneSource.source(at: coordinatorPath)
         let bind = try RefusalLaneSource.body(ofFunction: "bindWindowViewModel", in: coordinator, path: coordinatorPath)
@@ -59,6 +61,63 @@ final class WorkDeskHandoffTests: XCTestCase {
         XCTAssertTrue(prompt.contains("My project\n\nPrepare a plan"))
         XCTAssertEqual(prompt.components(separatedBy: "Keep this exact idea").count, 2)
         XCTAssertTrue(prompt.contains("https://example.invalid/reference"))
+    }
+
+    func testProjectContextAndTaskAreReviewedWithoutOverwritingEither() async {
+        let fixture = Fixture()
+        let model = WorkDeskHandoff(dependencies: fixture.dependencies)
+        let projectID = UUID()
+        await model.prepare(title: "Website", brief: "Review the copy", cards: [], ref: gatewayRef,
+                            projectID: projectID, projectContext: "Use a warm tone")
+        XCTAssertEqual(model.prepared?.projectID, projectID)
+        XCTAssertEqual(model.prepared?.taskTitle, "Review the copy")
+        XCTAssertEqual(model.prepared?.prompt, "Website\n\nProject context:\nUse a warm tone\n\nReview the copy")
+        XCTAssertTrue(fixture.events.isEmpty)
+    }
+
+    func testRemoteResultCannotBeSentAsAFileBySelectingItsReferenceCard() async {
+        let fixture = Fixture()
+        let reference = fixture.add(kind: .note, name: "Report.pdf", text: "")
+        let model = WorkDeskHandoff(dependencies: fixture.dependencies)
+        await model.prepare(title: "Project", brief: "Read this report", cards: [reference], ref: gatewayRef,
+                            remoteResultIDs: [reference.id])
+        XCTAssertNil(model.prepared)
+        XCTAssertEqual(model.errorMessage, WorkDeskHandoffError.remoteResult.localizedDescription)
+        XCTAssertTrue(fixture.events.isEmpty)
+    }
+
+    func testRefreshingStandingContextPreservesTaskAndItsDiscardBaseline() {
+        let draft = WorkDeskBriefDraft(brief: "Old context", preferredGatewayRef: gatewayRef.rawString)
+        draft.brief = "Keep my task"
+        draft.refreshProjectContext("Updated in another window")
+        XCTAssertEqual(draft.brief, "Keep my task")
+        XCTAssertEqual(draft.projectContext, "Updated in another window")
+        draft.projectContext = "Unsaved change"
+        draft.discardUnsavedChanges()
+        XCTAssertEqual(draft.projectContext, "Updated in another window")
+    }
+
+    func testResettingTaskNeverAutomaticallyIncludesExistingResults() {
+        let resultID = UUID()
+        let draft = WorkDeskBriefDraft(brief: "Context", preferredGatewayRef: gatewayRef.rawString)
+        draft.projectResultIDs = [resultID]
+        draft.excludedIDs = [] // Deliberately included for the previous task.
+        draft.discardUnsavedChanges()
+        XCTAssertEqual(draft.excludedIDs, [resultID])
+        draft.excludedIDs = []
+        draft.startAnotherConversation()
+        XCTAssertEqual(draft.excludedIDs, [resultID])
+    }
+
+    func testRemoteResultMarkerBlocksBeforeItsProvenanceReceiptArrives() async {
+        let fixture = Fixture()
+        let reference = WorkboardMaterialSnapshot(kind: .note, name: "Report.pdf", projectResultKind: .reference)
+        let model = WorkDeskHandoff(dependencies: fixture.dependencies)
+        XCTAssertNotNil(WorkDeskHandoffPolicy.blockingReason(reference, gateway: nil))
+        await model.prepare(title: "Project", brief: "Read the report", cards: [reference], ref: gatewayRef)
+        XCTAssertNil(model.prepared)
+        XCTAssertEqual(model.errorMessage, WorkDeskHandoffError.remoteResult.localizedDescription)
+        XCTAssertTrue(fixture.events.isEmpty)
     }
 
     func testAvailabilityAndHostedBinaryReasonsFailClosedWithoutBlockingWords() {
@@ -305,7 +364,7 @@ final class WorkDeskHandoffTests: XCTestCase {
 
     func testHostSuspensionRevokesNavigationBeforeSheetDisappear() {
         let fixture = Fixture()
-        let draft = WorkDeskBriefDraft(brief: "Keep this", preferredGatewayRef: nil, handoff: WorkDeskHandoff(dependencies: fixture.dependencies))
+        let draft = WorkDeskBriefDraft(brief: "Standing context", preferredGatewayRef: nil, task: "Keep this", handoff: WorkDeskHandoff(dependencies: fixture.dependencies))
         let token = draft.beginPresentation()
         XCTAssertTrue(draft.isCurrentPresentation(token))
         draft.suspendPresentation()
@@ -321,7 +380,7 @@ final class WorkDeskHandoffTests: XCTestCase {
         fixture.holdExport = true
         let file = fixture.add(kind: .file, name: "Notes.txt", data: Data("File content".utf8), mime: "text/plain")
         let handoff = WorkDeskHandoff(dependencies: fixture.dependencies)
-        let draft = WorkDeskBriefDraft(brief: "Read this", preferredGatewayRef: gatewayRef.rawString, handoff: handoff)
+        let draft = WorkDeskBriefDraft(brief: "Standing context", preferredGatewayRef: gatewayRef.rawString, task: "Read this", handoff: handoff)
         let token = draft.beginPresentation()
         let preparing = Task { await handoff.prepare(title: "Project", brief: draft.brief, cards: [file], ref: gatewayRef) }
         while fixture.exportContinuation == nil { await Task.yield() }
@@ -338,7 +397,7 @@ final class WorkDeskHandoffTests: XCTestCase {
         let fixture = Fixture()
         fixture.holdSubmission = true
         let handoff = WorkDeskHandoff(dependencies: fixture.dependencies)
-        let draft = WorkDeskBriefDraft(brief: "Plan this", preferredGatewayRef: gatewayRef.rawString, handoff: handoff)
+        let draft = WorkDeskBriefDraft(brief: "Standing context", preferredGatewayRef: gatewayRef.rawString, task: "Plan this", handoff: handoff)
         let token = draft.beginPresentation()
         await handoff.prepare(title: "Project", brief: draft.brief, cards: [], ref: gatewayRef)
         let sending = Task { await handoff.send() }
@@ -361,14 +420,52 @@ final class WorkDeskHandoffTests: XCTestCase {
     func testDiscardResetsToLastSuccessfulSaveWithoutReplacingCurrentEditsAtCheckpoint() {
         let fixture = Fixture()
         let draft = WorkDeskBriefDraft(brief: "Original", preferredGatewayRef: gatewayRef.rawString, handoff: WorkDeskHandoff(dependencies: fixture.dependencies))
-        draft.brief = "Latest unsaved"
-        draft.markSaved(brief: "Earlier accepted save", selectedGateway: .builtin(.hermes))
-        XCTAssertEqual(draft.brief, "Latest unsaved", "A delayed save receipt is a baseline, not an edit")
+        draft.projectContext = "Latest unsaved context"
+        draft.brief = "This conversation task"
+        draft.markSaved(projectContext: "Earlier accepted save", selectedGateway: .builtin(.hermes))
+        XCTAssertEqual(draft.projectContext, "Latest unsaved context", "A delayed save receipt is a baseline, not an edit")
+        XCTAssertEqual(draft.brief, "This conversation task", "Saving project context cannot replace the task")
         draft.excludedIDs = [UUID()]
         draft.discardUnsavedChanges()
-        XCTAssertEqual(draft.brief, "Earlier accepted save")
+        XCTAssertEqual(draft.projectContext, "Earlier accepted save")
+        XCTAssertEqual(draft.brief, "")
         XCTAssertEqual(draft.selectedGateway, .builtin(.hermes))
         XCTAssertTrue(draft.excludedIDs.isEmpty)
+    }
+
+    func testProjectContextDoesNotSeedAConversationTask() {
+        let fixture = Fixture()
+        let draft = WorkDeskBriefDraft(brief: "Build our launch website", preferredGatewayRef: nil,
+                                      handoff: WorkDeskHandoff(dependencies: fixture.dependencies))
+        XCTAssertEqual(draft.projectContext, "Build our launch website")
+        XCTAssertTrue(draft.brief.isEmpty)
+        draft.brief = "Review the wording"
+        draft.markSaved(projectContext: draft.projectContext, selectedGateway: nil)
+        draft.suspendPresentation()
+        _ = draft.beginPresentation()
+        XCTAssertEqual(draft.projectContext, "Build our launch website")
+        XCTAssertEqual(draft.brief, "Review the wording")
+    }
+
+    func testStartingAnotherConversationClearsTaskAndReviewButKeepsProjectContext() async {
+        let fixture = Fixture()
+        let handoff = WorkDeskHandoff(dependencies: fixture.dependencies)
+        let draft = WorkDeskBriefDraft(brief: "Standing project context", preferredGatewayRef: gatewayRef.rawString,
+                                      task: "First task", handoff: handoff)
+        await handoff.prepare(title: "Project", brief: draft.brief, cards: [], ref: gatewayRef)
+        let first = await handoff.send()
+        XCTAssertNotNil(first)
+        draft.excludedIDs = [UUID()]
+        draft.startAnotherConversation()
+        XCTAssertEqual(draft.projectContext, "Standing project context")
+        XCTAssertEqual(draft.selectedGateway, gatewayRef)
+        XCTAssertTrue(draft.brief.isEmpty)
+        XCTAssertTrue(draft.excludedIDs.isEmpty)
+        XCTAssertNil(handoff.acceptedConversationID)
+        XCTAssertNil(handoff.prepared)
+        let unreviewed = await handoff.send()
+        XCTAssertNil(unreviewed)
+        XCTAssertEqual(fixture.events, ["create", "submit"])
     }
 
     func testAnotherHandoffRequiresDeliberateResetAndFreshReview() async {
@@ -451,7 +548,7 @@ final class WorkDeskHandoffTests: XCTestCase {
                     if failUpload { throw WorkDeskHandoffError.submissionRefused }
                 },
                 removeUpload: { [self] _, _ in events.append("remove-upload") },
-                createConversation: { [self] _, _ in events.append("create") },
+                createConversation: { [self] _, _, _, _ in events.append("create") },
                 removeConversation: { [self] _ in events.append("remove-conversation") },
                 submit: { [self] _, _, attachments, ref, lane, _ in
                     events.append("submit")

@@ -1348,6 +1348,15 @@ actor ConversationStore {
     /// caller, so a mis-provisioned store fails loudly instead of
     /// retry-thrashing on each touch.
     private var loadTask: Task<Void, Error>?
+    #if !os(watchOS)
+    var projectResultTask: Task<Void, Never>?
+    var projectResultsNeedPass = false
+    var projectResultsNeedFullPass = false
+    var projectResultPendingConversationIDs: Set<UUID> = []
+    #if CONDUCK_TESTING
+    var projectResultMessageFetchCount = 0
+    #endif
+    #endif
 
     // MARK: - Diagnostics
 
@@ -1833,6 +1842,31 @@ actor ConversationStore {
                 debouncer.schedule()
             }
         }
+        #if !os(watchOS)
+        // SQLite emits remote-change notifications for this coordinator's OWN
+        // saves too. They refresh UI above, but must never trigger full output
+        // history scans. Every local output writer schedules its exact owner;
+        // the import completion below is the cross-device recovery boundary.
+        if container is NSPersistentCloudKitContainer {
+            let storeIDs = Set(container.persistentStoreCoordinator.persistentStores.map(\.identifier))
+            let imports = await MainActor.run {
+                RemoteChangeDebouncer { [weak self] in
+                    Task { await self?.scheduleProjectResultReconciliation() }
+                }
+            }
+            NotificationCenter.default.addObserver(
+                forName: NSPersistentCloudKitContainer.eventChangedNotification,
+                object: nil, queue: .main
+            ) { note in
+                guard let event = note.userInfo?[NSPersistentCloudKitContainer.eventNotificationUserInfoKey]
+                    as? NSPersistentCloudKitContainer.Event,
+                      event.type == .import, event.succeeded, event.endDate != nil,
+                      storeIDs.contains(event.storeIdentifier) else { return }
+                MainActor.assumeIsolated { imports.schedule() }
+            }
+        }
+        scheduleProjectResultReconciliation()
+        #endif
     }
 
     /// Redacted, `Sendable` summaries of recent CloudKit mirroring events for the
@@ -1933,7 +1967,7 @@ actor ConversationStore {
     /// attachments, so the row it later creates has to adopt the identifier the
     /// keys were minted against or that turn's first attachment lands in a
     /// folder no conversation owns.
-    func createConversation(id: UUID = UUID(), backend: String) async throws -> ConversationRecord {
+    func createConversation(id: UUID = UUID(), backend: String, projectID: UUID? = nil, title: String? = nil) async throws -> ConversationRecord {
         try await ensureLoaded()
         let context = newWriteContext()
         // CANONICAL from the very first stamp this row carries, even though a
@@ -1947,15 +1981,21 @@ actor ConversationStore {
         let sessionID = UUID().uuidString
 
         try await context.perform { [context] in
+            #if !os(watchOS)
+            if let projectID { try Self.validateProjectConversationDestination(projectID, in: context) }
+            #endif
             let conversation = NSEntityDescription.insertNewObject(
                 forEntityName: "Conversation", into: context
             )
             conversation.setValue(id, forKey: "id")
-            conversation.setValue(nil, forKey: "title")
+            conversation.setValue(title, forKey: "title")
             conversation.setValue(now, forKey: "createdAt")
             conversation.setValue(now, forKey: "lastActivityAt")
             conversation.setValue(sessionID, forKey: "sessionID")
             conversation.setValue(backend, forKey: "backend")
+            if conversation.entity.attributesByName["projectID"] != nil {
+                conversation.setValue(projectID, forKey: "projectID")
+            }
             // No user turn yet — the snippet is captured on the first user
             // `appendMessage` (below). Set nil explicitly for clarity.
             conversation.setValue(nil, forKey: "titleSnippet")
@@ -1974,12 +2014,13 @@ actor ConversationStore {
 
         return ConversationRecord(
             id: id,
-            title: nil,
+            title: title,
             createdAt: now,
             lastActivityAt: now,
             sessionID: sessionID,
             backend: backend,
-            titleSnippet: nil
+            titleSnippet: nil,
+            projectID: projectID
         )
     }
 
@@ -2056,7 +2097,7 @@ actor ConversationStore {
         let baseMilliseconds = TailProjection.milliseconds(from: now)
         let sessionID = UUID().uuidString
 
-        let outcome: (snippet: String?, continuationMessageID: UUID?, lastActivityAt: Date, tailProjection: String?)
+        let outcome: (snippet: String?, continuationMessageID: UUID?, lastActivityAt: Date, tailProjection: String?, projectID: UUID?)
         outcome = try await context.perform { [context] in
             // Source conversation + its text turns (createdAt-ascending).
             let convoRequest = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
@@ -2066,6 +2107,13 @@ actor ConversationStore {
                 throw StoreError.conversationNotFound
             }
             let sourceTitleSnippet = source.value(forKey: "titleSnippet") as? String
+            var projectID: UUID?
+            #if !os(watchOS)
+            if let sourceProjectID = source.value(forKey: "projectID") as? UUID,
+               (try? Self.validateProjectConversationDestination(sourceProjectID, in: context)) != nil {
+                projectID = sourceProjectID
+            }
+            #endif
 
             let sourceHideEarlierPhotos = source.value(forKey: "hideEarlierPhotos") as? Bool ?? false
 
@@ -2095,6 +2143,7 @@ actor ConversationStore {
             conversation.setValue(nil, forKey: "tailProjection")
             conversation.setValue(sessionID, forKey: "sessionID")
             conversation.setValue(rawString, forKey: "backend")
+            conversation.setValue(projectID, forKey: "projectID")
             conversation.setValue(sourceTitleSnippet, forKey: "titleSnippet")
             // "Keep chatting without photos" is a SAFETY switch the user threw
             // after a gateway choked on this thread's image history, and it must
@@ -2142,6 +2191,10 @@ actor ConversationStore {
                 )
                 message.setValue(messageID, forKey: "id")
                 message.setValue(role, forKey: "role")
+                // Copied history is not new output from the target gateway.
+                // The marker lives on the message, so imported rows cannot be
+                // captured before a separate provenance relation arrives.
+                message.setValue(true, forKey: "projectResultExcluded")
                 message.setValue(text, forKey: "text")
                 message.setValue(createdAt, forKey: "createdAt")
                 message.setValue(sourceMessage.value(forKey: "sourceDevice"), forKey: "sourceDevice")
@@ -2246,7 +2299,7 @@ actor ConversationStore {
             }
 
             try context.save()
-            return (sourceTitleSnippet, continuationMessageID, settledActivityAt, tailProjection)
+            return (sourceTitleSnippet, continuationMessageID, settledActivityAt, tailProjection, projectID)
         }
 
         await postDidChange()
@@ -2265,7 +2318,8 @@ actor ConversationStore {
                 sessionID: sessionID,
                 backend: rawString,
                 titleSnippet: outcome.snippet,
-                tailProjection: outcome.tailProjection
+                tailProjection: outcome.tailProjection,
+                projectID: outcome.projectID
             ),
             continuationMessageID: outcome.continuationMessageID
         )
@@ -3092,6 +3146,11 @@ actor ConversationStore {
         if let dedupeHit = written.dedupeHit { return dedupeHit }
         let now = written.stamp
 
+        #if !os(watchOS)
+        if ["agent", "assistant"].contains(role), !attachments.isEmpty {
+            scheduleProjectResultReconciliation(conversationID: conversationID)
+        }
+        #endif
         await postDidChange()
 
         return MessageRecord(
@@ -3420,7 +3479,12 @@ actor ConversationStore {
             return (nil, now, true)
         }
 
-        if landed.wrote { await postDidChange() }
+        if landed.wrote {
+            #if !os(watchOS)
+            if !attachments.isEmpty { scheduleProjectResultReconciliation(conversationID: conversationID) }
+            #endif
+            await postDidChange()
+        }
         if let existing = landed.existing { return existing }
         let now = landed.stamp
 
@@ -4863,8 +4927,9 @@ actor ConversationStore {
     ///
     /// Refuses anything but an isolated store, so the person's own vault and the
     /// App Group's live locks are unreachable from here even in a signed run.
-    func _removeIsolatedVaultDirectoryForTesting() {
+    func _removeIsolatedVaultDirectoryForTesting() async {
         guard isIsolatedTestStore else { return }
+        await projectResultTask?.value
         if let isolatedVaultBaseURL {
             try? FileManager.default.removeItem(at: isolatedVaultBaseURL)
         }
@@ -4888,6 +4953,9 @@ actor ConversationStore {
     func _unloadForTesting() async throws {
         guard isIsolatedTestStore else { return }
         try await ensureLoaded()
+        #if !os(watchOS)
+        await projectResultTask?.value
+        #endif
         let coordinator = container.persistentStoreCoordinator
         for store in coordinator.persistentStores {
             try coordinator.remove(store)
@@ -5050,11 +5118,11 @@ actor ConversationStore {
         guard !attachments.isEmpty else { return }
         try await ensureLoaded()
         let bgContext = newWriteContext()
-        try await bgContext.perform { [bgContext] in
+        let conversationID: UUID? = try await bgContext.perform { [bgContext] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
             request.fetchLimit = 1
-            guard let message = try bgContext.fetch(request).first else { return }
+            guard let message = try bgContext.fetch(request).first else { return nil }
             let now = Date()
             for draft in attachments {
                 let attachment = NSEntityDescription.insertNewObject(
@@ -5063,7 +5131,12 @@ actor ConversationStore {
                 Self.applyDraft(draft, to: attachment, on: message, id: UUID(), sequence: draft.sequence, at: now)
             }
             try bgContext.save()
+            guard ["agent", "assistant"].contains(message.value(forKey: "role") as? String ?? "") else { return nil }
+            return (message.value(forKey: "conversation") as? NSManagedObject)?.value(forKey: "id") as? UUID
         }
+        #if !os(watchOS)
+        if let conversationID { scheduleProjectResultReconciliation(conversationID: conversationID) }
+        #endif
         await postDidChange()
     }
 
@@ -5299,6 +5372,13 @@ actor ConversationStore {
             try bgContext.save()
             return (insertedAny, changedVisibleState, descriptors)
         }
+        #if !os(watchOS)
+        if outcome.inserted {
+            for conversationID in Set(outcome.descriptors.map(\.conversationID)) {
+                scheduleProjectResultReconciliation(conversationID: conversationID)
+            }
+        }
+        #endif
         if outcome.changedVisibleState { await postDidChange() }
         // Fan out AFTER the save has committed and after the local refresh post,
         // so a courier can never describe a row this device would fail to show.

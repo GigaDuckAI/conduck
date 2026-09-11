@@ -30,8 +30,8 @@ nonisolated enum WorkDeskCopy {
 
     static func projectBriefState(hasBrief: Bool) -> LocalizedStringResource {
         if hasBrief {
-            return LocalizedStringResource("workdesk.project.brief.saved", defaultValue: "Instructions saved")
+            return LocalizedStringResource("workdesk.project.context.saved", defaultValue: "Project context")
         }
-        return LocalizedStringResource("workdesk.project.brief.none", defaultValue: "No instructions yet")
+        return LocalizedStringResource("workdesk.project.context.add", defaultValue: "Add context")
     }
 }

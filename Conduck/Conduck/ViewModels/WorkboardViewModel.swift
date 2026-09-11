@@ -203,6 +203,9 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
     /// the board build and by nothing else: it is absent from every capture
     /// draft and from the store, so it can never be written back.
     var companion: WorkboardCompanionSnapshot?
+    var projectResultKind: WorkMaterialProjectResultKind?
+    var isProjectResult: Bool { projectResultKind != nil }
+    var isRemoteProjectResult: Bool { projectResultKind == .reference || projectResultKind == .unknown }
 
     init(
         id: UUID = UUID(),
@@ -220,7 +223,8 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
         attachedToMaterialID: UUID? = nil,
         createdAt: Date = Date(),
         revision: Int64 = 0,
-        companion: WorkboardCompanionSnapshot? = nil
+        companion: WorkboardCompanionSnapshot? = nil,
+        projectResultKind: WorkMaterialProjectResultKind? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -238,6 +242,7 @@ struct WorkboardMaterialSnapshot: Identifiable, Hashable, Sendable {
         self.createdAt = createdAt
         self.revision = revision
         self.companion = companion
+        self.projectResultKind = projectResultKind
     }
 
     /// The footprint this card actually draws into.

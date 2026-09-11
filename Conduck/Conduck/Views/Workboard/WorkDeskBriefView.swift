@@ -3,7 +3,9 @@
 // Conduck
 // WorkDeskBriefView.swift
 //
-// A project's editable brief and explicit AI handoff. Materials can be left out
+// A conversation task, its project's standing context, and an explicit AI handoff.
+// Closing retains the task locally; only context and the preferred gateway save
+// to the project. Materials can be left out
 // for this send without moving or deleting the source cards. Review prepares
 // local copies; the final named Send is the first operation allowed to upload.
 // Dismissal saves through the caller's revision-aware organization boundary.
@@ -17,21 +19,26 @@ import Observation
 /// reopening a sheet must not seed over the person's edits from synced rows.
 @Observable @MainActor
 final class WorkDeskBriefDraft {
+    var projectContext: String
+    /// The task for this conversation, never the project's standing context.
     var brief: String
     var selectedGateway: RemoteAgentRef?
     var excludedIDs: Set<UUID> = []
+    var remoteResultIDs: Set<UUID> = []
+    var projectResultIDs: Set<UUID> = []
     let handoff: WorkDeskHandoff
     var isSaving = false
     var saveError: String?
-    private var savedBrief: String
+    private var savedProjectContext: String
     private var savedGateway: RemoteAgentRef?
     private var activePresentationID: UUID?
 
-    init(brief: String, preferredGatewayRef: String?, conversationResolver: WorkDeskConversationResolver = .init(), handoff: WorkDeskHandoff? = nil) {
+    init(brief: String, preferredGatewayRef: String?, task: String = "", conversationResolver: WorkDeskConversationResolver = .init(), handoff: WorkDeskHandoff? = nil) {
         let gateway = preferredGatewayRef.flatMap { RemoteAgentRef(rawString: $0) }
-        self.brief = brief
+        self.projectContext = brief
+        self.brief = task
         self.selectedGateway = gateway
-        self.savedBrief = brief
+        self.savedProjectContext = brief
         self.savedGateway = gateway
         self.handoff = handoff ?? WorkDeskHandoff(conversationResolver: conversationResolver)
     }
@@ -62,17 +69,35 @@ final class WorkDeskBriefDraft {
         return activePresentationID == id
     }
 
-    func markSaved(brief: String, selectedGateway: RemoteAgentRef?) {
-        savedBrief = brief
+    func markSaved(projectContext: String, selectedGateway: RemoteAgentRef?) {
+        savedProjectContext = projectContext
         savedGateway = selectedGateway
     }
 
+    /// Refresh only standing context after an explicit edit or a reopened
+    /// sheet. Task text and the chosen destination remain this draft's own.
+    func refreshProjectContext(_ context: String) {
+        projectContext = context
+        savedProjectContext = context
+        handoff.discardPreparation()
+    }
+
     func discardUnsavedChanges() {
-        brief = savedBrief
+        projectContext = savedProjectContext
+        brief = ""
         selectedGateway = savedGateway
-        excludedIDs = []
+        excludedIDs = projectResultIDs
         saveError = nil
         handoff.discardPreparation()
+    }
+
+    /// A new conversation starts with a new task while retaining project context.
+    func startAnotherConversation() {
+        guard !handoff.isSending, !handoff.isPreparing else { return }
+        handoff.beginAnotherHandoff()
+        brief = ""
+        excludedIDs = projectResultIDs
+        saveError = nil
     }
 }
 
@@ -88,6 +113,7 @@ struct WorkDeskBriefView: View {
     @Bindable private var draft: WorkDeskBriefDraft
     @State private var presentationID: UUID?
     @State private var showingDiscardConfirmation = false
+    @State private var showsMaterials = false
 
     init(
         projectID: UUID,
@@ -118,7 +144,7 @@ struct WorkDeskBriefView: View {
     private var gateway: WorkDeskGatewayOption? { handoff.gateways.first { $0.ref == draft.selectedGateway } }
     private var busy: Bool { draft.isSaving || handoff.isPreparing || handoff.isSending }
     private var blocked: Bool {
-        expanded.contains { WorkDeskHandoffPolicy.blockingReason($0, gateway: gateway) != nil }
+        expanded.contains { draft.remoteResultIDs.contains($0.id) || WorkDeskHandoffPolicy.blockingReason($0, gateway: gateway) != nil }
     }
 
     var body: some View {
@@ -132,8 +158,9 @@ struct WorkDeskBriefView: View {
                     } else {
                         introduction
                         instructionEditor
-                        materialChecklist
                         gatewayPicker
+                        projectContextPreview
+                        materialChecklist
                     }
                     if let error = draft.saveError ?? handoff.errorMessage {
                         Label(error, systemImage: "exclamationmark.circle")
@@ -149,7 +176,7 @@ struct WorkDeskBriefView: View {
             .disabled(busy)
             .scrollDismissesKeyboard(.interactively)
             .background(AppColors.background)
-            .navigationTitle(Text(LocalizedStringResource("workdesk.brief.title", defaultValue: "Project brief")))
+            .navigationTitle(Text(LocalizedStringResource("workdesk.conversation.title", defaultValue: "New conversation")))
             .safeAreaInset(edge: .bottom, spacing: 0) { footer }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -162,7 +189,7 @@ struct WorkDeskBriefView: View {
                             dismiss()
                         }
                     } label: {
-                        Text(LocalizedStringResource("workdesk.brief.saveClose", defaultValue: "Save & close"))
+                        Text(LocalizedStringResource("common.close", defaultValue: "Close"))
                     }
                     .disabled(busy)
                 }
@@ -206,16 +233,8 @@ struct WorkDeskBriefView: View {
 
     private var introduction: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label {
-                Text(LocalizedStringResource("workdesk.brief.eyebrow", defaultValue: "FROM IDEAS TO A FIRST PROMPT"))
-                    .font(.caption.weight(.semibold))
-                    .tracking(1.1)
-            } icon: {
-                Image(systemName: "sparkle")
-            }
-            .foregroundStyle(AppColors.brandAmber)
-            Text(title).font(.largeTitle.weight(.bold)).foregroundStyle(AppColors.textPrimary)
-            Text(LocalizedStringResource("workdesk.brief.intro", defaultValue: "Give your AI a clear starting point. Your project stays here as the conversation moves forward."))
+            Text(title).font(.title2.weight(.semibold)).foregroundStyle(AppColors.textPrimary)
+            Text(LocalizedStringResource("workdesk.conversation.intro", defaultValue: "Start a conversation using this project’s context and the materials you choose."))
                 .font(.callout)
                 .foregroundStyle(AppColors.textSecondary)
         }
@@ -223,35 +242,75 @@ struct WorkDeskBriefView: View {
 
     private var instructionEditor: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(LocalizedStringResource("workdesk.brief.instructions", defaultValue: "What would you like to achieve?"))
+            Text(LocalizedStringResource("workdesk.conversation.task", defaultValue: "What would you like to do?"))
                 .font(.headline)
             TextField(
                 text: $draft.brief,
                 axis: .vertical,
                 label: {
-                    Text(LocalizedStringResource("workdesk.brief.placeholder", defaultValue: "Describe the task, the result you want, and anything your AI should keep in mind…"))
+                    Text(LocalizedStringResource("workdesk.conversation.task.placeholder", defaultValue: "Describe the task and the result you want from this conversation…"))
                 }
             )
-            .lineLimit(6...18)
+            .lineLimit(3...10)
             .padding(16)
             .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 16))
             .accessibilityIdentifier("workdesk-brief-instructions")
         }
     }
 
+    private var projectContextPreview: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if draft.projectContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(LocalizedStringResource("workdesk.conversation.context.empty", defaultValue: "No project context. You can add it from the project header."))
+                    .font(.caption).foregroundStyle(AppColors.textSecondary)
+            } else {
+                DisclosureGroup {
+                    Text(verbatim: draft.projectContext)
+                        .font(.callout).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 6)
+                } label: {
+                    Text(LocalizedStringResource("workdesk.conversation.context.included", defaultValue: "Project context included"))
+                        .font(.subheadline.weight(.medium))
+                }
+                .accessibilityIdentifier("workdesk-conversation-context")
+            }
+        }
+    }
+
     private var materialChecklist: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(LocalizedStringResource("workdesk.brief.materials", defaultValue: "Bring into the conversation"))
-                    .font(.headline)
-                Spacer()
-                Text(included.count.formatted()).font(.caption.monospacedDigit()).foregroundStyle(AppColors.textSecondary)
-            }
             if materials.isEmpty {
-                Text(LocalizedStringResource("workdesk.brief.noMaterials", defaultValue: "A clear brief is enough to begin. You can add materials to this project later."))
+                Text(LocalizedStringResource("workdesk.conversation.materials.empty", defaultValue: "No materials yet. You can start with a task alone."))
                     .font(.callout).foregroundStyle(AppColors.textSecondary)
+            } else {
+                DisclosureGroup(isExpanded: $showsMaterials) {
+                    VStack(spacing: 8) {
+                        ForEach(materials) { material in materialRow(material) }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    HStack {
+                        Text(LocalizedStringResource("workdesk.conversation.materials.included", defaultValue: "Materials included"))
+                            .font(.headline)
+                        Spacer()
+                        Text(included.count.formatted())
+                            .font(.caption.monospacedDigit()).foregroundStyle(AppColors.textSecondary)
+                    }
+                }
+                .accessibilityIdentifier("workdesk-conversation-materials")
+                // Capability failures remain visible even with the checklist closed.
+                ForEach(expanded) { material in
+                    if let reason = materialBlockingReason(material) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(verbatim: material.name).font(.caption.weight(.semibold))
+                            Text(verbatim: reason).font(.caption)
+                        }
+                        .foregroundStyle(AppColors.textSecondary)
+                        .accessibilityElement(children: .combine)
+                    }
+                }
             }
-            ForEach(materials) { material in materialRow(material) }
             if !draft.excludedIDs.isEmpty {
                 Text(LocalizedStringResource("workdesk.brief.excluded", defaultValue: "Unchecked materials stay in your project and will not be sent."))
                     .font(.caption).foregroundStyle(AppColors.textSecondary)
@@ -261,9 +320,6 @@ struct WorkDeskBriefView: View {
 
     private func materialRow(_ material: WorkboardMaterialSnapshot) -> some View {
         let selected = !draft.excludedIDs.contains(material.id)
-        let reasons = WorkDeskHandoffPolicy.expanded([material]).compactMap {
-            WorkDeskHandoffPolicy.blockingReason($0, gateway: gateway)
-        }
         return Button {
             if selected { draft.excludedIDs.insert(material.id) } else { draft.excludedIDs.remove(material.id) }
         } label: {
@@ -277,8 +333,9 @@ struct WorkDeskBriefView: View {
                         Text(companion.material.textContent ?? companion.name)
                             .font(.caption).foregroundStyle(AppColors.textSecondary).lineLimit(2)
                     }
-                    if selected, let reason = reasons.first {
-                        Text(reason).font(.caption).foregroundStyle(AppColors.textSecondary).fixedSize(horizontal: false, vertical: true)
+                    if material.isRemoteProjectResult || draft.remoteResultIDs.contains(material.id) {
+                        Text(verbatim: WorkDeskHandoffError.remoteResult.localizedDescription)
+                            .font(.caption).foregroundStyle(AppColors.textSecondary)
                     }
                 }
                 Spacer(minLength: 0)
@@ -293,41 +350,55 @@ struct WorkDeskBriefView: View {
         .accessibilityValue(Text(selected ? LocalizedStringResource("workdesk.brief.included", defaultValue: "Included") : LocalizedStringResource("workdesk.brief.leftOut", defaultValue: "Left out")))
     }
 
+    private func materialBlockingReason(_ material: WorkboardMaterialSnapshot) -> String? {
+        if draft.remoteResultIDs.contains(material.id) { return WorkDeskHandoffError.remoteResult.localizedDescription }
+        return WorkDeskHandoffPolicy.blockingReason(material, gateway: gateway)
+    }
+
     private var gatewayPicker: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(LocalizedStringResource("workdesk.brief.chooseAI", defaultValue: "Choose your AI"))
-                .font(.headline)
-            if handoff.gateways.isEmpty {
-                Text(LocalizedStringResource("workdesk.brief.noConnections", defaultValue: "No AI connection is available on this device. Save this brief, then connect one in Settings → Personal AI."))
-                    .font(.callout).foregroundStyle(AppColors.textSecondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(LocalizedStringResource("workdesk.conversation.sendTo", defaultValue: "Send to"))
+                    .font(.headline)
+                Spacer(minLength: 8)
+                Menu {
+                    ForEach(handoff.gateways) { option in
+                        Button { draft.selectedGateway = option.ref } label: {
+                            if draft.selectedGateway == option.ref {
+                                Label(option.name, systemImage: "checkmark")
+                            } else {
+                                Text(verbatim: option.name)
+                            }
+                        }
+                        .accessibilityIdentifier("workdesk-gateway-\(option.id)")
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if let gateway {
+                            Text(verbatim: gateway.name).lineLimit(2)
+                        } else {
+                            Text(LocalizedStringResource("workdesk.conversation.gateway.choose", defaultValue: "Choose a gateway"))
+                        }
+                        Image(systemName: "chevron.down").font(.caption)
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .padding(.horizontal, 10).frame(minHeight: 44)
+                }
+                .pointerIconButton(size: 44)
+                .disabled(handoff.gateways.isEmpty)
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.conversation.gateway", defaultValue: "Conversation gateway")))
+                .accessibilityValue(gateway?.name ?? "")
             }
-            if draft.selectedGateway != nil, gateway == nil {
+            if let gateway {
+                Text(connectionDescription(gateway))
+                    .font(.caption).foregroundStyle(AppColors.textSecondary)
+            }
+            if handoff.gateways.isEmpty {
+                Text(LocalizedStringResource("workdesk.conversation.gateway.none", defaultValue: "No gateway is available on this device. Your task will stay here when you close. Connect a gateway in Settings → Personal AI."))
+                    .font(.callout).foregroundStyle(AppColors.textSecondary)
+            } else if draft.selectedGateway != nil, gateway == nil {
                 Text(LocalizedStringResource("workdesk.brief.savedUnavailable", defaultValue: "This project's saved connection is unavailable here. Choose another connection to continue."))
                     .font(.callout).foregroundStyle(AppColors.textSecondary)
-            }
-            ForEach(handoff.gateways) { option in
-                Button { draft.selectedGateway = option.ref } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: option.isHosted ? "sparkles" : "server.rack")
-                            .foregroundStyle(AppColors.brandAmber).font(.title3)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(option.name).font(.headline).foregroundStyle(AppColors.textPrimary)
-                            Text(connectionDescription(option))
-                                .font(.caption).foregroundStyle(AppColors.textSecondary)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: draft.selectedGateway == option.ref ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(draft.selectedGateway == option.ref ? AppColors.brandAmber : AppColors.textTertiary)
-                    }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 14))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14).stroke(draft.selectedGateway == option.ref ? AppColors.brandAmber.opacity(0.6) : .clear, lineWidth: 1)
-                    }
-                }
-                .choiceCardButton(cornerRadius: 14)
-                .accessibilityIdentifier("workdesk-gateway-\(option.id)")
             }
         }
     }
@@ -382,7 +453,7 @@ struct WorkDeskBriefView: View {
     private var acceptedHandoff: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label {
-                Text(LocalizedStringResource("workdesk.brief.accepted", defaultValue: "Your handoff is in Chat"))
+                Text(LocalizedStringResource("workdesk.conversation.accepted", defaultValue: "Conversation started"))
             } icon: { Image(systemName: "checkmark.circle") }
             .font(.title2.weight(.bold)).foregroundStyle(AppColors.brandAmber)
             Text(title).font(.title.weight(.bold))
@@ -396,10 +467,9 @@ struct WorkDeskBriefView: View {
             if let acceptedID = handoff.acceptedConversationID {
                 Button {
                     guard !busy else { return }
-                    handoff.beginAnotherHandoff()
-                    draft.excludedIDs = []
+                    draft.startAnotherConversation()
                 } label: {
-                    Text(LocalizedStringResource("workdesk.brief.prepareAnother", defaultValue: "Prepare another handoff"))
+                    Text(LocalizedStringResource("workdesk.conversation.another", defaultValue: "New conversation"))
                         .padding(.vertical, 12)
                 }
                 .inlineLinkButton()
@@ -425,7 +495,7 @@ struct WorkDeskBriefView: View {
                 Button {
                     handoff.discardPreparation()
                 } label: {
-                    Text(LocalizedStringResource("workdesk.brief.edit", defaultValue: "Edit brief"))
+                    Text(LocalizedStringResource("workdesk.conversation.edit", defaultValue: "Edit request"))
                         .padding(.vertical, 12)
                 }
                 .inlineLinkButton()
@@ -461,12 +531,13 @@ struct WorkDeskBriefView: View {
                     Task {
                         let token = presentationID
                         guard await save(), draft.isCurrentPresentation(token) else { return }
-                        await handoff.prepare(title: title, brief: draft.brief, cards: included, ref: draft.selectedGateway)
+                        await handoff.prepare(title: title, brief: draft.brief, cards: included, ref: draft.selectedGateway,
+                            projectID: projectID, projectContext: draft.projectContext, remoteResultIDs: draft.remoteResultIDs)
                     }
                 } label: {
                     HStack(spacing: 8) {
                         if busy { ProgressView().controlSize(.small) }
-                        Text(LocalizedStringResource("workdesk.brief.reviewButton", defaultValue: "Review handoff"))
+                        Text(LocalizedStringResource("workdesk.conversation.review", defaultValue: "Review"))
                         Image(systemName: "arrow.right")
                     }
                     .font(.headline).padding(.horizontal, 20).padding(.vertical, 13)
@@ -487,13 +558,13 @@ struct WorkDeskBriefView: View {
         draft.isSaving = true
         draft.saveError = nil
         defer { draft.isSaving = false }
-        let savedBrief = draft.brief
+        let savedContext = draft.projectContext
         let savedGateway = draft.selectedGateway
-        let success = await onSave(savedBrief, savedGateway?.rawString)
+        let success = await onSave(savedContext, savedGateway?.rawString)
         if success {
-            draft.markSaved(brief: savedBrief, selectedGateway: savedGateway)
+            draft.markSaved(projectContext: savedContext, selectedGateway: savedGateway)
         } else {
-            draft.saveError = String(localized: "workdesk.brief.saveFailed", defaultValue: "Your brief could not be saved. Keep this window open and try again.")
+            draft.saveError = String(localized: "workdesk.conversation.saveFailed", defaultValue: "Your project settings could not be saved. Your task is still here. Keep this window open and try again.")
         }
         return success
     }

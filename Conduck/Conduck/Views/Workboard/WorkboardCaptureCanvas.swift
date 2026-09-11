@@ -391,6 +391,10 @@ struct WorkboardCaptureCanvas: View {
     /// thumbnail in place of the material, and offering to reattach it would ask
     /// a person to repair bytes that are already on their way.
     private func openMaterial(_ material: WorkboardMaterialSnapshot) {
+        if material.kind == .note, let source = viewModel.deskWorkspace.results[material.id] {
+            viewModel.deskWorkspace.openResultSource(source)
+            return
+        }
         WorkboardCardActionPolicy.performPrimaryAction(
             for: material.availability,
             open: { viewModel.openMaterial(material) },
@@ -598,7 +602,7 @@ struct WorkboardCaptureCanvas: View {
             || isImporting
             || isAddingThought
         return CaptureCircleButton(
-            symbol: isAddingThought ? "ellipsis" : "arrow.up",
+            symbol: isAddingThought ? "ellipsis" : "plus",
             fillColor: isDisabled ? AppColors.disabled : AppColors.brandAmber,
             diameter: composerControlDiameter,
             glyphSize: composerGlyphSize,
@@ -954,7 +958,8 @@ private struct WorkboardPaneDropModifier: ViewModifier {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !isImporting, dropSession == nil else { return false }
+        guard workbenchDestinationIsActive, !viewModel.deskWorkspace.isShowingConversation,
+              !isImporting, dropSession == nil else { return false }
         let routed = providers.compactMap { provider -> (NSItemProvider, WorkboardDropProviderRoute)? in
             guard let route = WorkboardDropProviderRoute(provider: provider) else { return nil }
             return (provider, route)
@@ -2804,7 +2809,8 @@ struct WorkboardSourceCard: View {
                     .lineLimit(2)
                     .accessibilityHidden(true)
             }
-            if let organizationActions, organizationActions.showsLocation, organizationActions.project != nil {
+            if let organizationActions,
+               organizationActions.showsSource || (organizationActions.showsLocation && organizationActions.project != nil) {
                 WorkDeskMaterialLocation(actions: organizationActions)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)

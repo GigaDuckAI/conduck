@@ -967,6 +967,7 @@ extension ConversationStore {
         expectedOwnerRevision: Int64? = nil,
         authorization: WorkVoiceWriteAuthorization? = nil,
         projectID: UUID? = nil,
+        resultSource: WorkDeskResultRecord? = nil,
         onProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> WorkMaterialRecord {
         try await publishWorkMaterial(
@@ -978,6 +979,7 @@ extension ConversationStore {
             expectedOwnerRevision: expectedOwnerRevision,
             authorization: authorization,
             projectID: projectID,
+            resultSource: resultSource,
             onProgress: onProgress
         )
         guard let record = try await fetchWorkMaterial(id: draft.id) else {
@@ -1125,8 +1127,13 @@ extension ConversationStore {
         expectedOwnerRevision: Int64?,
         authorization: WorkVoiceWriteAuthorization?,
         projectID: UUID?,
+        resultSource: WorkDeskResultRecord?,
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws {
+        if let resultSource,
+           resultSource.materialID != incoming.id || resultSource.projectID != projectID {
+            throw WorkboardStoreError.invalidMaterialOwner
+        }
         let ownerID = Constants.workboardDeskItemID
 
         while workInitialMaterialClaims.contains(ownerID) {
@@ -1155,6 +1162,12 @@ extension ConversationStore {
         defer { publicationHold?.release() }
 
         let existing = try await fetchWorkMaterial(id: incoming.id)
+        // The receipt outlives a deleted card. Preserve deletion, but let the
+        // normal revision-aware repair restore a still-existing card's bytes.
+        var hasResultReceipt = false
+        if resultSource != nil { hasResultReceipt = try await hasWorkDeskResult(incoming.id) }
+        if hasResultReceipt, existing == nil { return }
+        let newResultSource = hasResultReceipt ? nil : resultSource
         // A material id names ONE card, and a capture whose id already names a
         // card of another KIND is a collision, not a replay of it — wherever
         // that card sits, the desk included. Refused here, before anything is
@@ -1340,7 +1353,17 @@ extension ConversationStore {
                 }
 
                 let now = Date()
+                if let resultSource = newResultSource {
+                    // Same publication lock and transaction as the material;
+                    // another process cannot land a receipt between these writes.
+                    try Self.insertWorkDeskResult(resultSource, in: context)
+                }
                 let materialRows = try Self.workMaterialRows(id: draft.id, in: context)
+                if let resultSource = newResultSource {
+                    for row in materialRows {
+                        row.setValue(resultSource.isRemoteReference ? "reference" : "file", forKey: "projectResultKind")
+                    }
+                }
                 // Before anything else this transaction does with them: every
                 // physical row this id names has to be the same kind of card
                 // this capture is publishing, whoever owns it.
@@ -1556,7 +1579,7 @@ extension ConversationStore {
                             break
                         }
                     }
-                    if createdOwner || repaired || adopted { try context.save() }
+                    if createdOwner || repaired || adopted || newResultSource != nil { try context.save() }
                     return WorkMaterialWriteOutcome(
                         insertedMaterial: false,
                         repairedMaterial: repaired,
@@ -1621,6 +1644,9 @@ extension ConversationStore {
                     updatedAt: now,
                     to: row
                 )
+                if let resultSource = newResultSource {
+                    row.setValue(resultSource.isRemoteReference ? "reference" : "file", forKey: "projectResultKind")
+                }
                 ownerRow.setValue(now, forKey: "updatedAt")
                 try context.save()
                 return WorkMaterialWriteOutcome(
@@ -1680,7 +1706,7 @@ extension ConversationStore {
         if outcome.insertedMaterial
             || outcome.repairedMaterial
             || outcome.adoptedMaterial
-            || outcome.createdOwner {
+            || outcome.createdOwner || newResultSource != nil {
             await postDidChange()
         }
         guard publicationIsDurable else {
@@ -4532,6 +4558,7 @@ extension ConversationStore {
         let attachedToMaterialID: UUID?
         let createdAt: Date
         let updatedAt: Date
+        let projectResultKind: WorkMaterialProjectResultKind?
         /// Where this row sits in the one ordering both selectors use, built by
         /// `ConversationStore.canonicalOrder(of:)` from the row this was
         /// projected from — the SAME call the single-row read makes, so the two
@@ -4572,6 +4599,8 @@ extension ConversationStore {
                 updatedAt: row.value(forKey: "updatedAt") as? Date,
                 createdAt: createdAt
             )
+            projectResultKind = WorkMaterialProjectResultKind.decode(
+                row.entity.attributesByName["projectResultKind"] == nil ? nil : row.value(forKey: "projectResultKind") as? String)
             canonicalOrder = ConversationStore.canonicalOrder(of: row)
         }
 
@@ -4623,7 +4652,8 @@ extension ConversationStore {
                 cardSize: cardSize,
                 attachedToMaterialID: attachedToMaterialID,
                 createdAt: createdAt,
-                updatedAt: updatedAt
+                updatedAt: updatedAt,
+                projectResultKind: projectResultKind
             )
         }
     }

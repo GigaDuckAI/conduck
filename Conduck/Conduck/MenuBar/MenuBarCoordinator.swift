@@ -18,6 +18,9 @@
 //     The lanes are independent: browsing or typing in the window NEVER
 //     retargets where the next hotkey capture lands, and a quick capture
 //     never yanks the window off the thread the user is reading.
+//     Project threads borrow that same registry through explicit Work leases;
+//     those leases retain their state without changing either display lane or
+//     claiming that a backgrounded window has been read.
 //
 // On STT success `DictationService.onTranscript` fires → the coordinator
 // consumes the capture-time `QuickDestinationSnapshot` (NOT a fresh resolve —
@@ -250,6 +253,13 @@ final class MenuBarCoordinator {
     /// `@ObservationIgnored` — views observe the lanes, not the map.
     @ObservationIgnored private var vmRegistry: [UUID: ConversationDetailViewModel] = [:]
 
+    /// Each Work host owns its own lease token. Several project surfaces or a
+    /// preparation and its opened thread can retain the same conversation, and
+    /// releasing one must not evict the VM another still presents. Visibility
+    /// is deliberately separate: losing window focus changes attention markers,
+    /// not the identity of a conversation's in-flight state machine.
+    @ObservationIgnored private var workViewModelOwners: [UUID: UUID] = [:]
+
     /// The popover's quick-capture lane. Nil until the first capture (or a
     /// launch resolve) binds a conversation; the popover renders an empty/start
     /// state while nil.
@@ -302,15 +312,33 @@ final class MenuBarCoordinator {
         sweepRegistry()
     }
 
-    /// Drop registry entries no lane references — EXCEPT mid-turn VMs
+    /// Borrow the coordinator's existing VM without binding either display
+    /// lane. Reusing an owner atomically transfers its lease to the new ID.
+    func retainWorkViewModel(for conversationID: UUID, ownerID: UUID) -> ConversationDetailViewModel {
+        let vm = viewModel(for: conversationID)
+        workViewModelOwners[ownerID] = conversationID
+        sweepRegistry()
+        return vm
+    }
+
+    /// End precisely this host's borrow. An accepted in-flight send keeps its
+    /// existing registry protection after the project host disappears.
+    func releaseWorkViewModel(ownerID: UUID) {
+        guard workViewModelOwners.removeValue(forKey: ownerID) != nil else { return }
+        sweepRegistry()
+    }
+
+    /// Drop registry entries no lane or Work lease references — EXCEPT mid-turn VMs
     /// (`isAwaitingReply`): their in-flight `Task` must stay reachable so a
     /// later re-bind reattaches the live state machine instead of re-minting a
     /// dead-spinner duplicate. Called on every bind + at the end of each
     /// hand-off so the map can't grow unbounded across a long session.
     private func sweepRegistry() {
-        vmRegistry = vmRegistry.filter { _, vm in
+        let workIDs = Set(workViewModelOwners.values)
+        vmRegistry = vmRegistry.filter { id, vm in
             vm === quickViewModel || vm === windowViewModel
                 || vm === popoverOverrideViewModel || vm.isAwaitingReply
+                || workIDs.contains(id)
         }
     }
 

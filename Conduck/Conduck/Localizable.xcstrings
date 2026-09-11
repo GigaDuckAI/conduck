@@ -1356,6 +1356,17 @@
         }
       }
     },
+    "common.retry" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try again"
+          }
+        }
+      }
+    },
     "common.save" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24356,17 +24367,6 @@
         }
       }
     },
-    "workdesk.brief.accepted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your handoff is in Chat"
-          }
-        }
-      }
-    },
     "workdesk.brief.acceptedMessage" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24385,17 +24385,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Attached files"
-          }
-        }
-      }
-    },
-    "workdesk.brief.chooseAI" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose your AI"
           }
         }
       }
@@ -24433,17 +24422,6 @@
         }
       }
     },
-    "workdesk.brief.edit" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Edit brief"
-          }
-        }
-      }
-    },
     "workdesk.brief.excluded" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24451,17 +24429,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Unchecked materials stay in your project and will not be sent."
-          }
-        }
-      }
-    },
-    "workdesk.brief.eyebrow" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "FROM IDEAS TO A FIRST PROMPT"
           }
         }
       }
@@ -24499,28 +24466,6 @@
         }
       }
     },
-    "workdesk.brief.instructions" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "What would you like to achieve?"
-          }
-        }
-      }
-    },
-    "workdesk.brief.intro" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Give your AI a clear starting point. Your project stays here as the conversation moves forward."
-          }
-        }
-      }
-    },
     "workdesk.brief.keepEditing" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24543,39 +24488,6 @@
         }
       }
     },
-    "workdesk.brief.materials" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bring into the conversation"
-          }
-        }
-      }
-    },
-    "workdesk.brief.noConnections" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No AI connection is available on this device. Save this brief, then connect one in Settings → Personal AI."
-          }
-        }
-      }
-    },
-    "workdesk.brief.noMaterials" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A clear brief is enough to begin. You can add materials to this project later."
-          }
-        }
-      }
-    },
     "workdesk.brief.openChat" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24583,28 +24495,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Open chat"
-          }
-        }
-      }
-    },
-    "workdesk.brief.placeholder" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Describe the task, the result you want, and anything your AI should keep in mind…"
-          }
-        }
-      }
-    },
-    "workdesk.brief.prepareAnother" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Prepare another handoff"
           }
         }
       }
@@ -24620,17 +24510,6 @@
         }
       }
     },
-    "workdesk.brief.reviewButton" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Review handoff"
-          }
-        }
-      }
-    },
     "workdesk.brief.reviewIntro" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24642,17 +24521,6 @@
         }
       }
     },
-    "workdesk.brief.saveClose" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Save & close"
-          }
-        }
-      }
-    },
     "workdesk.brief.savedUnavailable" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -24660,17 +24528,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "This project's saved connection is unavailable here. Choose another connection to continue."
-          }
-        }
-      }
-    },
-    "workdesk.brief.saveFailed" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your brief could not be saved. Keep this window open and try again."
           }
         }
       }
@@ -24693,17 +24550,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Your gateway · text and images · file transfer not connected"
-          }
-        }
-      }
-    },
-    "workdesk.brief.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Project brief"
           }
         }
       }
@@ -24959,6 +24805,281 @@
         }
       }
     },
+    "workdesk.collapsed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collapsed"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.accepted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation started"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.another" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New conversation"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.back" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back to project"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.connectionMissing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection unavailable"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.connectionUnavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation's connection is unavailable. Its messages remain here."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.context.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No project context. You can add it from the project header."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.context.included" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Project context included"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.edit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit request"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.gateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation gateway"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.gateway.choose" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a gateway"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.gateway.none" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No gateway is available on this device. Your task will stay here when you close. Connect a gateway in Settings → Personal AI."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.intro" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start a conversation using this project’s context and the materials you choose."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.materials.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No materials yet. You can start with a task alone."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.materials.included" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Materials included"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.new" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New conversation…"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.review" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Review"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.saveFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your project settings could not be saved. Your task is still here. Keep this window open and try again."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.sendTo" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send to"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.task" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What would you like to do?"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.task.placeholder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Describe the task and the result you want from this conversation…"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New conversation"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation couldn’t open."
+          }
+        }
+      }
+    },
+    "workdesk.conversations.loadFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversations couldn’t refresh. Try again."
+          }
+        }
+      }
+    },
+    "workdesk.conversations.toggle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show or hide project conversations"
+          }
+        }
+      }
+    },
     "workdesk.empty.title" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25058,6 +25179,17 @@
         }
       }
     },
+    "workdesk.expanded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expanded"
+          }
+        }
+      }
+    },
     "workdesk.group" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25142,6 +25274,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Choose an available AI connection to continue."
+          }
+        }
+      }
+    },
+    "workdesk.handoff.remoteResult" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This file is still on its gateway. Open its source conversation, download it, then add the file to this project before including it."
           }
         }
       }
@@ -25245,35 +25388,68 @@
         }
       }
     },
-    "workdesk.prepare" : {
+    "workdesk.project.context.add" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Prepare"
+            "value" : "Add context"
           }
         }
       }
     },
-    "workdesk.project.brief.none" : {
+    "workdesk.project.context.explanation" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No instructions yet"
+            "value" : "Background, goals and preferences to include when starting conversations in this project. Give each conversation its own task."
           }
         }
       }
     },
-    "workdesk.project.brief.saved" : {
+    "workdesk.project.context.future" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Instructions saved"
+            "value" : "Changes apply to new requests. Existing conversations keep the context they received."
+          }
+        }
+      }
+    },
+    "workdesk.project.context.placeholder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What should your AI know about this project?"
+          }
+        }
+      }
+    },
+    "workdesk.project.context.saved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Project context"
+          }
+        }
+      }
+    },
+    "workdesk.project.context.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Project context"
           }
         }
       }
@@ -25428,6 +25604,61 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Remove from project"
+          }
+        }
+      }
+    },
+    "workdesk.result.file" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Returned file"
+          }
+        }
+      }
+    },
+    "workdesk.result.label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Result"
+          }
+        }
+      }
+    },
+    "workdesk.result.openSource" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open source conversation"
+          }
+        }
+      }
+    },
+    "workdesk.result.remote" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On gateway · Open source conversation"
+          }
+        }
+      }
+    },
+    "workdesk.result.saved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From project conversation"
           }
         }
       }

@@ -39,7 +39,10 @@ final class WorkDeskLayoutPresentationTests: XCTestCase {
         let host = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskWorkspaceView.swift")
         let header = try RefusalLaneSource.body(ofFunction: "header", in: host,
             path: "Conduck/Views/Workboard/WorkDeskWorkspaceView.swift")
-        XCTAssertTrue(header.contains("WorkDeskLayoutControl("))
+        XCTAssertTrue(header.contains("materialControls"))
+        let actions = try RefusalLaneSource.trailingClosure(after: "var materialActions:", in: host,
+            path: "Conduck/Views/Workboard/WorkDeskWorkspaceView.swift")
+        XCTAssertTrue(actions.contains("WorkDeskLayoutControl("))
         let control = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskLayoutControl.swift")
         XCTAssertTrue(control.contains("Text(renderedMode.title)"), "An icon-only menu hides the new desk again.")
         XCTAssertTrue(control.contains("viewModel.layoutMode = $0"))

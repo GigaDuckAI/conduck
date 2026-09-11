@@ -33,6 +33,7 @@ struct WorkboardDetailView: View {
     var body: some View {
         WorkDeskWorkspaceView(viewModel: viewModel, item: desk.item, workspace: viewModel.deskWorkspace)
         .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !viewModel.deskWorkspace.isShowingConversation {
             WorkboardCaptureCanvas(
                 viewModel: viewModel,
                 item: desk.item,
@@ -44,6 +45,7 @@ struct WorkboardDetailView: View {
             // the band has to reach both window edges even though the card
             // inside it does not.
             .background(.ultraThinMaterial)
+            }
         }
         .workboardPaneDropDestination(viewModel: viewModel)
         .background(AppColors.background.ignoresSafeArea())

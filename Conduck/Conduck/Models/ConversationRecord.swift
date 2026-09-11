@@ -40,6 +40,8 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
     /// Note the two senses of "backend" — this is the gateway KIND, never the
     /// "no backend" privacy claim, which is about servers WE operate.
     let backend: String
+    /// Organizational membership only; never adds project content to a request.
+    let projectID: UUID?
     /// Denormalized first-user-line snippet, written once on the first user
     /// turn (`ConversationStore.snippet(from:)`). Lets the Watch list show a
     /// meaningful row title without a per-row message fetch (no gateway gives
@@ -134,7 +136,8 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
         failureSeenAttemptID: UUID? = nil,
         tailProjection: String? = nil,
         newestSendingAt: Date? = nil,
-        newestFailed: FailedTurnProjection? = nil
+        newestFailed: FailedTurnProjection? = nil,
+        projectID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -142,6 +145,7 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
         self.lastActivityAt = lastActivityAt
         self.sessionID = sessionID
         self.backend = backend
+        self.projectID = projectID
         self.titleSnippet = titleSnippet
         self.hideEarlierPhotos = hideEarlierPhotos
         self.lastViewedAt = lastViewedAt
@@ -163,6 +167,7 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
             ?? Date()
         self.sessionID = (managedObject.value(forKey: "sessionID") as? String) ?? ""
         self.backend = (managedObject.value(forKey: "backend") as? String) ?? ""
+        self.projectID = managedObject.entity.attributesByName["projectID"] == nil ? nil : managedObject.value(forKey: "projectID") as? UUID
         self.titleSnippet = managedObject.value(forKey: "titleSnippet") as? String
         // Compat flag (v4 model): nil (v3 row / partial sync) == false.
         self.hideEarlierPhotos = ((managedObject.value(forKey: "hideEarlierPhotos") as? NSNumber)?.boolValue) ?? false
@@ -212,7 +217,8 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
             failureSeenAttemptID: failureSeenAttemptID,
             tailProjection: tailProjection,
             newestSendingAt: newestSendingAt,
-            newestFailed: newestFailed
+            newestFailed: newestFailed,
+            projectID: projectID
         )
     }
 

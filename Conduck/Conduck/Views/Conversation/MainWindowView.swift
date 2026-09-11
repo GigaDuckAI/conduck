@@ -626,7 +626,14 @@ struct MainWindowView: View {
             if let personalWorkbenchModel {
                 if mountsWorkLayer {
                     workboardExperience(for: personalWorkbenchModel).detailColumn
-                        .environment(\.workDeskConversationResolver, WorkDeskConversationResolver(resolve: { coordinator.viewModel(for: $0) }))
+                        .environment(\.workDeskConversationResolver, WorkDeskConversationResolver(
+                            resolve: { [coordinator] in coordinator.viewModel(for: $0) },
+                            reportVisible: { [coordinator] id, visible in
+                                if visible { coordinator.setWindowVisibleConversation(id) }
+                                else { coordinator.clearWindowVisibleConversation(ifCurrent: id) }
+                            },
+                            retain: { [coordinator] id, owner in coordinator.retainWorkViewModel(for: id, ownerID: owner) },
+                            release: { [coordinator] owner in coordinator.releaseWorkViewModel(ownerID: owner) }))
                         .environment(\.workDeskSidebarIsHosted, true)
                         .environment(\.workbenchDestinationIsActive, workDestinationIsActive)
                         .workbenchDestinationLayer(

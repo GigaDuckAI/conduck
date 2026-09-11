@@ -293,7 +293,8 @@ final class WorkboardLiveRepository {
             // answer it against.
             attachedToMaterialID: record.attachedToMaterialID,
             createdAt: record.createdAt,
-            revision: revision(for: record.updatedAt)
+            revision: revision(for: record.updatedAt),
+            projectResultKind: record.projectResultKind
         )
     }
 

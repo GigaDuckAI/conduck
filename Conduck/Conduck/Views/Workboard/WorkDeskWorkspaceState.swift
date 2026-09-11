@@ -22,6 +22,7 @@ final class WorkDeskWorkspaceState {
         didSet {
             let searching = !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             if isSearching != searching { isSearching = searching }
+            if searching { suspendConversation() }
         }
     }
     private(set) var isSearching = false
@@ -38,7 +39,21 @@ final class WorkDeskWorkspaceState {
     var briefDrafts: [UUID: WorkDeskBriefDraft] = [:]
     var briefRevisions: [UUID: Date] = [:]
     var preparingProjectID: UUID?
+    var editingContextProjectID: UUID?
     var deletingProjectID: UUID?
+    private(set) var projectConversations: [ConversationRecord] = []
+    private(set) var results: [UUID: WorkDeskResultRecord] = [:]
+    private var resultMaterialIDs: Set<UUID> = []
+    private var remoteResultMaterialIDs: Set<UUID> = []
+    var selectedConversationID: UUID?
+    var expandedProjectIDs: Set<UUID> = []
+    var conversationLoadError: String?
+    let conversationSettings = SettingsViewModel()
+    @ObservationIgnored private var conversationModels: [UUID: ConversationDetailViewModel] = [:]
+    @ObservationIgnored private var conversationLeases: [UUID: WorkDeskConversationLease] = [:]
+    @ObservationIgnored private var conversationSessions: [UUID: WorkDeskConversationSession] = [:]
+    @ObservationIgnored private var conversationReloadGeneration = 0
+    @ObservationIgnored private let conversationStore: ConversationStore
     @ObservationIgnored private var canvasSessions: [WorkDeskScope: WorkDeskCanvasSession] = [:]
     @ObservationIgnored private var composerSessions: [WorkDeskScope: WorkDeskComposerSession] = [:]
     @ObservationIgnored private var layoutSessions: [WorkDeskScope: WorkDeskLayoutSession] = [:]
@@ -91,8 +106,9 @@ final class WorkDeskWorkspaceState {
         return session
     }
 
-    init(organization: WorkDeskOrganization? = nil) {
+    init(organization: WorkDeskOrganization? = nil, conversationStore: ConversationStore = .shared) {
         self.organization = organization ?? WorkDeskOrganization()
+        self.conversationStore = conversationStore
         Self.liveWorkspaces.removeAll { $0.value == nil }
         Self.liveWorkspaces.append(WeakWorkspace(self))
     }
@@ -100,6 +116,105 @@ final class WorkDeskWorkspaceState {
     var currentProject: WorkDeskProjectRecord? {
         guard case .project(let id) = scope else { return nil }
         return organization.project(id: id)
+    }
+
+    var currentConversation: ConversationRecord? {
+        guard !isSearching, let id = selectedConversationID else { return nil }
+        return projectConversations.first { $0.id == id && $0.projectID == currentProject?.id }
+    }
+
+    var isShowingConversation: Bool { !isSearching && selectedConversationID != nil }
+
+    func conversations(in projectID: UUID) -> [ConversationRecord] {
+        projectConversations.filter { $0.projectID == projectID }
+    }
+
+    func conversationSession(for id: UUID) -> WorkDeskConversationSession {
+        if let session = conversationSessions[id] { return session }
+        let session = WorkDeskConversationSession(conversationID: id)
+        conversationSessions[id] = session
+        return session
+    }
+
+    /// The sender and visible thread share one owner. macOS supplies its
+    /// coordinator registry; iOS retains the same model created at handoff.
+    func conversationModel(for id: UUID, resolver: WorkDeskConversationResolver) -> ConversationDetailViewModel? {
+        if let model = conversationModels[id] { return model }
+        #if os(macOS)
+        let owner = UUID()
+        guard let model = resolver.retain?(id, owner) ?? resolver.resolve(id) else { return nil }
+        conversationModels[id] = model
+        conversationLeases[id] = WorkDeskConversationLease(ownerID: owner, release: resolver.release)
+        return model
+        #else
+        let model = resolver.resolve(id) ?? ConversationDetailViewModel(conversationID: id)
+        conversationModels[id] = model
+        return model
+        #endif
+    }
+
+    func selectConversation(_ id: UUID, projectID: UUID) {
+        suspendConversation()
+        scope = .project(projectID)
+        search = ""
+        selectedIDs = []
+        isSelecting = false
+        selectedConversationID = id
+        pruneConversationModels()
+        expandedProjectIDs.insert(projectID)
+        showsProjectPicker = false
+    }
+
+    func openResultSource(_ result: WorkDeskResultRecord) {
+        if organization.project(id: result.projectID) != nil {
+            selectConversation(result.conversationID, projectID: result.projectID)
+        } else {
+            NotificationCenter.default.post(name: .openConversationDeepLink, object: nil,
+                userInfo: [NotificationDeepLink.conversationIDKey: result.conversationID.uuidString])
+        }
+    }
+
+    func suspendConversation() {
+        if let id = selectedConversationID { conversationSessions[id]?.suspend() }
+    }
+
+    private func pruneConversationModels() {
+        let sending = Set(briefDrafts.values.filter { $0.handoff.isSending }
+            .compactMap { $0.handoff.prepared?.id ?? $0.handoff.acceptedConversationID })
+        for (id, model) in conversationModels {
+            guard !(isActive && selectedConversationID == id), !model.isAwaitingReply,
+                  !sending.contains(id) else { continue }
+            conversationModels.removeValue(forKey: id)
+            conversationLeases.removeValue(forKey: id)
+        }
+    }
+
+    func reloadProjectActivity(reconcileResults: Bool = false) async {
+        conversationReloadGeneration += 1
+        let generation = conversationReloadGeneration
+        if reconcileResults { await conversationStore.reconcileProjectResults() }
+        do {
+            let conversations = try await conversationStore.fetchConversations(activity: .turnStates)
+            let sources = try await conversationStore.fetchWorkDeskResults()
+            guard generation == conversationReloadGeneration else { return }
+            projectConversations = conversations.filter { $0.projectID != nil }
+            let arrivingResults = Set(sources.keys).subtracting(results.keys)
+            for draft in briefDrafts.values {
+                draft.excludedIDs.formUnion(arrivingResults)
+                draft.projectResultIDs = Set(sources.keys).union(resultMaterialIDs)
+                draft.remoteResultIDs = Set(sources.values.filter(\.isRemoteReference).map(\.materialID)).union(remoteResultMaterialIDs)
+            }
+            results = sources
+            conversationLoadError = nil
+            if let id = selectedConversationID, !projectConversations.contains(where: { $0.id == id }) {
+                suspendConversation()
+                selectedConversationID = nil
+            }
+            pruneConversationModels()
+        } catch {
+            guard generation == conversationReloadGeneration else { return }
+            conversationLoadError = String(localized: "workdesk.conversations.loadFailed", defaultValue: "Conversations couldn’t refresh. Try again.")
+        }
     }
 
     func visibleMaterials(in materials: [WorkboardMaterialSnapshot]) -> [WorkboardMaterialSnapshot] {
@@ -147,6 +262,9 @@ final class WorkDeskWorkspaceState {
     }
 
     func selectScope(_ scope: WorkDeskScope) {
+        suspendConversation()
+        selectedConversationID = nil
+        pruneConversationModels()
         self.scope = scope
         search = ""
         selectedIDs = []
@@ -161,6 +279,15 @@ final class WorkDeskWorkspaceState {
     }
 
     func reconcile(materials: [WorkboardMaterialSnapshot]) {
+        let materialResults = Set(materials.filter(\.isProjectResult).map(\.id))
+        let newResults = materialResults.subtracting(resultMaterialIDs)
+        resultMaterialIDs = materialResults
+        remoteResultMaterialIDs = Set(materials.filter(\.isRemoteProjectResult).map(\.id))
+        for draft in briefDrafts.values {
+            draft.excludedIDs.formUnion(newResults)
+            draft.projectResultIDs = Set(results.keys).union(materialResults)
+            draft.remoteResultIDs.formUnion(remoteResultMaterialIDs)
+        }
         if case .project(let id) = scope,
            !organization.projects.contains(where: { $0.id == id }) {
             selectScope(.all)
@@ -212,21 +339,35 @@ final class WorkDeskWorkspaceState {
 
     func suspend() {
         isActive = false
+        suspendConversation()
         for draft in briefDrafts.values { draft.suspendPresentation() }
+        pruneConversationModels()
     }
 
     func endBriefEditing(projectID: UUID) {
         guard briefDrafts[projectID]?.handoff.isSending != true else { return }
-        briefDrafts.removeValue(forKey: projectID)
-        briefRevisions.removeValue(forKey: projectID)
+        briefDrafts[projectID]?.suspendPresentation()
     }
 
     func briefDraft(for project: WorkDeskProjectRecord, resolver: WorkDeskConversationResolver) -> WorkDeskBriefDraft {
-        if let existing = briefDrafts[project.id] { return existing }
+        if let existing = briefDrafts[project.id] {
+            existing.refreshProjectContext(project.brief)
+            briefRevisions[project.id] = project.updatedAt
+            return existing
+        }
         let draft = WorkDeskBriefDraft(brief: project.brief, preferredGatewayRef: project.preferredGatewayRef, conversationResolver: resolver)
+        // A result joining the project is not permission to send it elsewhere.
+        draft.excludedIDs = Set(results.keys).union(resultMaterialIDs)
+        draft.projectResultIDs = draft.excludedIDs
+        draft.remoteResultIDs = Set(results.values.filter(\.isRemoteReference).map(\.materialID)).union(remoteResultMaterialIDs)
         briefDrafts[project.id] = draft
         briefRevisions[project.id] = project.updatedAt
         return draft
+    }
+
+    func finishConversationDraft(projectID: UUID) {
+        briefDrafts.removeValue(forKey: projectID)
+        briefRevisions.removeValue(forKey: projectID)
     }
 
     private func presentEditor(_ request: WorkDeskProjectEditorRequest) {

@@ -383,6 +383,16 @@ nonisolated struct WorkMaterialDraft: Sendable {
     }
 }
 
+/// Stored on the material itself so an imported result never waits for its
+/// separate provenance receipt to be excluded from a new gateway handoff.
+/// Unknown future result forms stay excluded and non-sendable.
+nonisolated enum WorkMaterialProjectResultKind: String, Sendable, Hashable {
+    case file, reference, unknown
+    static func decode(_ value: String?) -> Self? {
+        value.map { Self(rawValue: $0) ?? .unknown }
+    }
+}
+
 nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
     let id: UUID
     let workItemID: UUID
@@ -419,6 +429,9 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
     let attachedToMaterialID: UUID?
     let createdAt: Date
     let updatedAt: Date
+    let projectResultKind: WorkMaterialProjectResultKind?
+    var isProjectResult: Bool { projectResultKind != nil }
+    var isRemoteProjectResult: Bool { projectResultKind == .reference || projectResultKind == .unknown }
 
     init(
         id: UUID,
@@ -444,7 +457,8 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
         cardSize: WorkMaterialCardSize = .standard,
         attachedToMaterialID: UUID? = nil,
         createdAt: Date,
-        updatedAt: Date
+        updatedAt: Date,
+        projectResultKind: WorkMaterialProjectResultKind? = nil
     ) {
         self.id = id
         self.workItemID = workItemID
@@ -470,6 +484,7 @@ nonisolated struct WorkMaterialRecord: Identifiable, Sendable, Hashable {
         self.attachedToMaterialID = attachedToMaterialID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.projectResultKind = projectResultKind
     }
 }
 

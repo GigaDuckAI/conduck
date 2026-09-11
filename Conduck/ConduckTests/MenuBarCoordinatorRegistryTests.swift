@@ -12,7 +12,7 @@
 //   - The two lanes (`quickViewModel` / `windowViewModel`) bound to the same
 //     id share that ONE instance (one spinner, one in-flight guard).
 //   - The sweep drops orphans (no lane references them, not mid-turn) but
-//     RETAINS lane-referenced and `isAwaitingReply` VMs.
+//     RETAINS lane-referenced, Work-leased and `isAwaitingReply` VMs.
 //
 // …plus the status item's two dots, which are DERIVED from stored conversation
 // rows rather than accumulated from local turn-completion events. That is why
@@ -436,6 +436,100 @@ final class MenuBarCoordinatorRegistryTests: XCTestCase {
         coordinator.bindWindowViewModel(to: UUID())
         XCTAssertTrue(coordinator.viewModel(for: midTurnID) === midTurnVM,
                       "A mid-turn VM must survive losing its lane — re-minting would orphan the in-flight Task's UI.")
+    }
+
+    // MARK: - Work leases retain identity without claiming a display lane
+
+    func testWorkLeaseSurvivesQuickLaneSweepWithoutChangingEitherLane() {
+        let coordinator = MenuBarCoordinator()
+        let quickID = UUID()
+        let windowID = UUID()
+        coordinator.bindQuickViewModel(to: quickID)
+        coordinator.bindWindowViewModel(to: windowID)
+        let workID = UUID()
+        let owner = UUID()
+        let work = coordinator.retainWorkViewModel(for: workID, ownerID: owner)
+        XCTAssertEqual(coordinator.quickViewModel?.conversationID, quickID)
+        XCTAssertEqual(coordinator.windowViewModel?.conversationID, windowID)
+        XCTAssertNil(coordinator.windowVisibleConversationID)
+
+        coordinator.bindQuickViewModel(to: UUID())
+        XCTAssertTrue(coordinator.viewModel(for: workID) === work,
+                      "An idle project thread must keep its VM when an unrelated quick capture sweeps the registry.")
+        coordinator.releaseWorkViewModel(ownerID: owner)
+    }
+
+    func testWorkLeaseSurvivesFocusLoss() {
+        let coordinator = MenuBarCoordinator()
+        let workID = UUID()
+        let owner = UUID()
+        let work = coordinator.retainWorkViewModel(for: workID, ownerID: owner)
+        coordinator.setWindowVisibleConversation(workID)
+        coordinator.clearWindowVisibleConversation(ifCurrent: workID)
+        coordinator.bindQuickViewModel(to: UUID())
+        XCTAssertNil(coordinator.windowVisibleConversationID)
+        XCTAssertTrue(coordinator.viewModel(for: workID) === work,
+                      "Window attention must not be used as the registry's lifetime gate.")
+        coordinator.releaseWorkViewModel(ownerID: owner)
+    }
+
+    func testWorkOwnersReleaseIndependentlyAndLastReleaseSweepsIdleVM() {
+        let coordinator = MenuBarCoordinator()
+        let workID = UUID()
+        let firstOwner = UUID()
+        let secondOwner = UUID()
+        let work = coordinator.retainWorkViewModel(for: workID, ownerID: firstOwner)
+        XCTAssertTrue(coordinator.retainWorkViewModel(for: workID, ownerID: secondOwner) === work)
+
+        coordinator.releaseWorkViewModel(ownerID: firstOwner)
+        coordinator.releaseWorkViewModel(ownerID: firstOwner)
+        coordinator.bindQuickViewModel(to: UUID())
+        XCTAssertTrue(coordinator.viewModel(for: workID) === work,
+                      "A repeated release must not spend another host's lease.")
+        coordinator.releaseWorkViewModel(ownerID: secondOwner)
+        XCTAssertFalse(coordinator.viewModel(for: workID) === work,
+                       "The last released idle Work VM must be swept instead of accumulating forever.")
+    }
+
+    func testReusingWorkOwnerTransfersItsLeaseWithoutRetainingOldThread() {
+        let coordinator = MenuBarCoordinator()
+        let owner = UUID()
+        let firstID = UUID()
+        let first = coordinator.retainWorkViewModel(for: firstID, ownerID: owner)
+        let secondID = UUID()
+        let second = coordinator.retainWorkViewModel(for: secondID, ownerID: owner)
+        coordinator.bindQuickViewModel(to: UUID())
+        XCTAssertFalse(coordinator.viewModel(for: firstID) === first)
+        XCTAssertTrue(coordinator.viewModel(for: secondID) === second)
+        coordinator.releaseWorkViewModel(ownerID: owner)
+    }
+
+    func testReleasedWorkLeaseStillRetainsAnAcceptedSendUntilItSettles() {
+        let coordinator = MenuBarCoordinator()
+        let workID = UUID()
+        let owner = UUID()
+        let work = coordinator.retainWorkViewModel(for: workID, ownerID: owner)
+        work.isAwaitingReply = true
+        coordinator.releaseWorkViewModel(ownerID: owner)
+        coordinator.bindQuickViewModel(to: UUID())
+        XCTAssertTrue(coordinator.viewModel(for: workID) === work)
+
+        work.isAwaitingReply = false
+        coordinator.bindQuickViewModel(to: UUID())
+        XCTAssertFalse(coordinator.viewModel(for: workID) === work)
+    }
+
+    func testWorkLeaseAndChatLaneShareExactlyOneVM() {
+        let coordinator = MenuBarCoordinator()
+        let id = UUID()
+        coordinator.bindWindowViewModel(to: id)
+        let owner = UUID()
+        let work = coordinator.retainWorkViewModel(for: id, ownerID: owner)
+        XCTAssertTrue(work === coordinator.windowViewModel)
+        coordinator.releaseWorkViewModel(ownerID: owner)
+        coordinator.bindQuickViewModel(to: UUID())
+        XCTAssertTrue(work === coordinator.viewModel(for: id),
+                      "Releasing Work must not disturb the same thread's Chat lane.")
     }
 
     // MARK: - startNewWindowConversation clears the window lane ONLY

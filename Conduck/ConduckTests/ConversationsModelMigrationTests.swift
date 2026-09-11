@@ -1656,10 +1656,46 @@ final class ConversationsModelMigrationTests: XCTestCase {
         }
     }
 
+    func testV19ToV20PreservesHistoryAndAddsOptionalProjectMembership() async throws {
+        let old = try requiredModel(named: "Conversations 19.mom")
+        let current = try requiredModel(named: "Conversations 20.mom")
+        let id = UUID()
+        do {
+            let container = try await loadStore(model: old)
+            let context = container.newBackgroundContext()
+            try await context.perform {
+                let conversation = NSEntityDescription.insertNewObject(forEntityName: "Conversation", into: context)
+                conversation.setValue(id, forKey: "id")
+                conversation.setValue("hermes", forKey: "backend")
+                conversation.setValue("Existing history", forKey: "title")
+                try context.save()
+            }
+            for store in container.persistentStoreCoordinator.persistentStores {
+                try container.persistentStoreCoordinator.remove(store)
+            }
+        }
+        let container = try await loadStore(model: current)
+        let context = container.newBackgroundContext()
+        try await context.perform {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
+            let row = try XCTUnwrap(context.fetch(request).first)
+            XCTAssertEqual(row.value(forKey: "id") as? UUID, id)
+            XCTAssertEqual(row.value(forKey: "backend") as? String, "hermes")
+            XCTAssertEqual(row.value(forKey: "title") as? String, "Existing history")
+            XCTAssertNil(row.value(forKey: "projectID"))
+            XCTAssertEqual(try context.count(for: NSFetchRequest<NSManagedObject>(entityName: "WorkDeskResult")), 0)
+            row.setValue(UUID(), forKey: "projectID")
+            try context.save()
+        }
+        let receipt = try XCTUnwrap(current.entitiesByName["WorkDeskResult"])
+        XCTAssertTrue(receipt.attributesByName.values.allSatisfy { $0.isOptional })
+        XCTAssertTrue(current.entities(forConfigurationName: "Core")?.contains(receipt) == true)
+    }
+
     /// The app must open the newest schema. A stale version pointer would
     /// omit the home coordinates its Work layout reads and writes, while the
     /// older models below remain available for inferred migration.
-    func testTheCurrentModelVersionIsV19() throws {
+    func testTheCurrentModelVersionIsV20() throws {
         let bundles = [Bundle.main, Bundle(for: Self.self)]
         let momd = try XCTUnwrap(
             bundles.compactMap { $0.url(forResource: "Conversations", withExtension: "momd") }.first,
@@ -1667,7 +1703,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
         let plist = try XCTUnwrap(
             NSDictionary(contentsOf: momd.appendingPathComponent("VersionInfo.plist")),
             "a compiled momd always carries VersionInfo.plist")
-        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 19")
+        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 20")
     }
 
     /// THE SOURCE MODEL MUST STAY IN THE BUNDLE. Lightweight migration infers a
@@ -1676,7 +1712,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
     /// left with a file nothing can open — which on this app is the user's whole
     /// conversation history.
     func testEveryShippedModelVersionIsStillInTheBundle() throws {
-        for version in 2...19 {
+        for version in 2...20 {
             _ = try requiredModel(named: "Conversations \(version).mom")
         }
         _ = try requiredModel(named: "Conversations.mom")

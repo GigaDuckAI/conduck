@@ -53,16 +53,13 @@ struct WorkDeskLayoutControl: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: renderedMode.symbol)
-                if !compact {
-                    Text(renderedMode.title)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
+                Text(renderedMode.title)
+                    .fixedSize(horizontal: true, vertical: false)
                 Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
             }
             .font(.subheadline.weight(.medium))
-            .padding(.horizontal, 10)
+            .padding(.horizontal, compact ? 6 : 10)
             .frame(minHeight: 44)
-            .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 12))
         }
         .pointerIconButton(size: 44)
         .disabled(!isActive)
