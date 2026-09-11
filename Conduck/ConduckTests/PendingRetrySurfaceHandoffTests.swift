@@ -636,6 +636,60 @@ final class PendingRetrySurfaceHandoffTests: XCTestCase {
                       "The confirmed action no longer reaches the host, so Discard does nothing.")
     }
 
+    /// A successful fallback is additional information about the capture just
+    /// retired. The queue's next capture still owns its count and diagnosis.
+    func testWorkFallbackNoticePreservesTheSettledBacklogAndItsDiagnosis() throws {
+        let path = "Conduck/MenuBar/DictationService.swift"
+        let source = try RefusalLaneSource.source(at: path)
+        let finish = try RefusalLaneSource.body(ofFunction: "finishWorkRetry", in: source, path: path)
+        let settle = try XCTUnwrap(finish.range(of: "await settleAfterFinishing(claim, generation: generation)"))
+        let notice = try XCTUnwrap(finish.range(of: "presentWorkRetryLocationNotice(generation: generation)"))
+        XCTAssertLessThan(settle.upperBound, notice.lowerBound)
+        XCTAssertTrue(Self.callText(finish).contains(Self.callText("""
+            if outcome.savedInAllMaterials {
+                presentWorkRetryLocationNotice(generation: generation)
+            }
+            """)))
+
+        let presentation = try RefusalLaneSource.body(
+            ofFunction: "presentWorkRetryLocationNotice", in: source, path: path
+        )
+        XCTAssertTrue(presentation.contains("guard stillCurrent(generation) else { return }"),
+                      "A cancelled recovery must not paint over a newer capture.")
+        XCTAssertTrue(Self.callText(presentation).contains(Self.callText(#"""
+            if pendingRetryCount > 0, case .error(let backlogMessage, let isRetryable) = state {
+                state = .error(message: backlogMessage + "\n" + notice, isRetryable: isRetryable)
+                return
+            }
+            """#)), "The backlog message and retryability must survive before returning.")
+        XCTAssertFalse(presentation.contains("lastError ="),
+                       "The success notice must not erase the next capture's diagnosis code.")
+        XCTAssertTrue(presentation.contains("presentRetryOutcome(notice, isRetryable: false, generation: generation)"),
+                      "A finished queue gets a success receipt without offering another retry.")
+    }
+
+    /// Missing credentials, empty STT and send refusals use this same message
+    /// field. Only the explicitly tagged successful recovery is informational.
+    func testOnlySuccessfulWorkRecoveryCanShowAStandaloneInformationalRetryNotice() throws {
+        let path = "Conduck/ContentView.swift"
+        let source = try RefusalLaneSource.source(at: path)
+        XCTAssertTrue(source.contains("else if retryShowsStandaloneNotice, let retryErrorMessage"))
+        XCTAssertFalse(source.contains("else if let retryErrorMessage"),
+                       "Ordinary errors without a queued capture must not render as success information.")
+        XCTAssertTrue(source.contains("informational: Bool = false"))
+        let present = try RefusalLaneSource.body(ofFunction: "presentRetryError", in: source, path: path)
+        XCTAssertTrue(present.contains("retryShowsStandaloneNotice = informational"),
+                      "Every new error must replace an earlier notice's informational classification.")
+        let finish = try RefusalLaneSource.body(ofFunction: "finishWorkRetry", in: source, path: path)
+        XCTAssertTrue(Self.callText(finish).contains(Self.callText("""
+            if outcome.savedInAllMaterials {
+                presentRetryError(WorkVoiceCaptureCoordinator.savedInAllMaterialsMessage, informational: true)
+            }
+            """)))
+        XCTAssertEqual(source.components(separatedBy: "informational: true").count - 1, 1,
+                       "Only the successful fallback is allowed to opt into the standalone notice.")
+    }
+
     // MARK: - Fixtures
 
     /// `.../Conduck` relative paths of every SHIPPING Swift source, tests

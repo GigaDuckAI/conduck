@@ -3,10 +3,10 @@
 // ConduckTests
 // ConversationStoreAtomicWorkCaptureTests.swift
 //
-// Work is ONE desk, so a capture publishes at most two rows: the desk itself,
-// created lazily by the first card ever captured, and the card. Both commit in
-// one save or neither does — a half-created desk is a board the person can see
-// and a capture they cannot find, and staged bytes left behind by a refused
+// Work is ONE desk, so an unfiled capture publishes at most two metadata rows:
+// the desk itself, created lazily by the first card ever captured, and the card.
+// Both commit in one save or neither does — a half-created desk is a board the
+// person can see and a capture they cannot find, and staged bytes left behind by a refused
 // transaction are a payload no row will ever name.
 //
 // The desk being the only owner is also a claim about the SHIPPED surface, not

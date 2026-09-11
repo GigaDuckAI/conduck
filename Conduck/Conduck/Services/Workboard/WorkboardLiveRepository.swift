@@ -515,6 +515,7 @@ final class WorkboardLiveRepository {
                 sourceFileURL: sourceFileURL,
                 sourceFileByteSize: material.byteCount,
                 expectedOwnerRevision: expectedDeskRevision,
+                projectID: material.projectID,
                 onProgress: onProgress
             )
         } catch let committed as WorkMaterialCommittedUnavailableError {

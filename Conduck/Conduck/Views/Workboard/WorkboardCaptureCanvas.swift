@@ -76,6 +76,10 @@ struct WorkboardCaptureCanvas: View {
         WorkboardCaptureDestination(workspace: deskWorkspace)
     }
     @State private var pickerDestination: WorkboardCaptureDestination = .all
+    /// Separate from the picker: one launch owns its destination until its
+    /// recorder and any words-only fallback have finished, despite navigation.
+    @State private var voiceDestination: WorkboardCaptureDestination = .all
+    @State private var voiceDraftScope: WorkDeskScope = .all
 
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -162,12 +166,14 @@ struct WorkboardCaptureCanvas: View {
         .sheet(isPresented: activeVoiceCaptureIsPresented) {
             WorkboardVoiceCaptureView(
                 target: .context,
+                projectID: voiceDestination.projectID,
                 onTranscript: { transcript in
-                    viewModel.setComposerDraft(appending(transcript, to: composerText))
+                    viewModel.receiveComposerTranscript(transcript, in: voiceDraftScope)
                     showsVoiceCapture = false
                     composerFocused = true
                 },
-                onCancel: { showsVoiceCapture = false }
+                onCancel: { showsVoiceCapture = false },
+                onSavedInAllMaterials: { viewModel.presentCaptureSavedInAllMaterials() }
             )
         }
         #if os(iOS)
@@ -247,6 +253,10 @@ struct WorkboardCaptureCanvas: View {
         guard workbenchDestinationIsActive else { return }
         guard !showsVoiceCapture else { return }
         guard WorkVoiceCaptureLaunchRoute.shared.consume() else { return }
+        // A Shortcut opens this sheet but supplies no visible project context.
+        // It must never inherit whichever project another window left open.
+        voiceDestination = .all
+        voiceDraftScope = .all
         showsVoiceCapture = true
     }
 
@@ -572,6 +582,8 @@ struct WorkboardCaptureCanvas: View {
             )),
             action: {
                 guard workbenchDestinationIsActive else { return }
+                voiceDestination = destination
+                voiceDraftScope = viewModel.composerScope
                 showsVoiceCapture = true
             }
         )
@@ -662,12 +674,13 @@ struct WorkboardCaptureCanvas: View {
         isAddingThought = true
         let target = destination
         let capturedDraft = composerText
+        let capturedScope = viewModel.composerScope
         Task {
             let added = await viewModel.addThought(thought, projectID: target.projectID)
             if added {
                 // An import may finish after the person continues typing or
                 // voice appends new words. Clear only the draft we captured.
-                if viewModel.composerDraft == capturedDraft { viewModel.setComposerDraft("") }
+                viewModel.clearComposerDraft(capturedDraft, in: capturedScope)
                 let message = String(localized: LocalizedStringResource(
                     "workboard.workspace.thought.saved",
                     defaultValue: "Added to Work. Nothing was sent."
@@ -829,10 +842,6 @@ struct WorkboardCaptureCanvas: View {
         WorkboardImportMapping.reclaim(batch)
     }
 
-    private func appending(_ addition: String, to existing: String) -> String {
-        let clean = existing.trimmingCharacters(in: .whitespacesAndNewlines)
-        return clean.isEmpty ? addition : "\(clean)\n\n\(addition)"
-    }
 }
 
 // MARK: - One pane-wide drop owner

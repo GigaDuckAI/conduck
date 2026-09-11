@@ -122,10 +122,13 @@ final class WorkboardContextualCaptureTests: XCTestCase {
         var deps = dependencies(store: store)
         let importMaterial = deps.importMaterial
         deps.importMaterial = { revision, material, progress in
-            let captured = try await importMaterial(revision, material, progress)
-            _ = await organization.deleteProject(id: projectID)
-            workspace.selectScope(.all)
-            return captured
+            // Delete before the atomic material write. A deletion after the
+            // write is a subsequent organization choice, not capture failure.
+            if organization.project(id: projectID) != nil {
+                _ = await organization.deleteProject(id: projectID)
+                workspace.selectScope(.all)
+            }
+            return try await importMaterial(revision, material, progress)
         }
         let model = WorkboardViewModel(dependencies: deps, deskWorkspace: workspace)
         let valid = WorkboardMaterialImport(kind: .note, name: "Kept", textContent: "Keep this")
@@ -139,7 +142,7 @@ final class WorkboardContextualCaptureTests: XCTestCase {
         XCTAssertNil(organization.projectID(for: valid.id))
         let notice = try XCTUnwrap(model.notice)
         XCTAssertEqual(String(localized: notice.title), "Saved in All materials")
-        XCTAssertTrue(notice.message.contains("1 added to All materials; 1 couldn’t be added"))
+        XCTAssertTrue(notice.message.contains("1 added; 1 couldn’t be added"))
         XCTAssertNil(model.workspaceStatus)
     }
 
@@ -155,4 +158,121 @@ final class WorkboardContextualCaptureTests: XCTestCase {
         XCTAssertEqual(model.desk?.materials.count, 1)
         XCTAssertEqual(String(localized: try XCTUnwrap(model.notice).title), "Saved in All materials")
     }
+
+    func testBatchProbesDeletedProjectOnlyOnceEvenWhenFirstUnfiledWriteFails() async throws {
+        for failFirstFallback in [false, true] {
+            let store = isolated.make()
+            let workspace = WorkDeskWorkspaceState(organization: WorkDeskOrganization(store: store))
+            let deletedProjectID = UUID()
+            var deps = dependencies(store: store)
+            let importMaterial = deps.importMaterial
+            var projectAttempts = 0
+            var unfiledAttempts = 0
+            deps.importMaterial = { revision, material, progress in
+                if material.projectID != nil {
+                    projectAttempts += 1
+                    throw WorkDeskStoreError.projectNotFound
+                }
+                unfiledAttempts += 1
+                if failFirstFallback, unfiledAttempts == 1 {
+                    throw WorkboardLiveRepositoryError.missingPayload
+                }
+                return try await importMaterial(revision, material, progress)
+            }
+            let model = WorkboardViewModel(dependencies: deps, deskWorkspace: workspace)
+            let batch = (0..<20).map {
+                WorkboardMaterialImport(kind: .note, name: "Note \($0)", textContent: "Keep \($0)")
+            }
+
+            let report = await model.importMaterials(batch, projectID: deletedProjectID)
+
+            XCTAssertEqual(projectAttempts, 1)
+            XCTAssertEqual(unfiledAttempts, batch.count)
+            XCTAssertEqual(report.addedCount, failFirstFallback ? 19 : 20)
+            XCTAssertEqual(report.failedCount, failFirstFallback ? 1 : 0)
+            XCTAssertEqual(model.desk?.materials.count, report.addedCount)
+            XCTAssertEqual(String(localized: try XCTUnwrap(model.notice).title), "Saved in All materials")
+            let organization = try await store.fetchWorkDeskOrganization()
+            XCTAssertTrue(organization.placements.isEmpty)
+        }
+    }
+
+    func testCaptureReplayPreservesLaterUserFiling() async throws {
+        let store = isolated.make()
+        let organization = WorkDeskOrganization(store: store)
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        let originalValue = await organization.createProject(title: "Original")
+        let originalID = try XCTUnwrap(originalValue)
+        let laterValue = await organization.createProject(title: "Later")
+        let laterID = try XCTUnwrap(laterValue)
+        let model = WorkboardViewModel(dependencies: dependencies(store: store), deskWorkspace: workspace)
+        let material = WorkboardMaterialImport(kind: .note, name: "Kept", textContent: "Keep this")
+        let first = await model.importMaterials([material], projectID: originalID)
+        XCTAssertEqual(first.addedCount, 1)
+        let moved = await organization.assign(materialIDs: [material.id], to: laterID)
+        XCTAssertTrue(moved)
+
+        let replay = await model.importMaterials([material], projectID: originalID)
+
+        XCTAssertEqual(replay.addedCount, 1)
+        XCTAssertEqual(model.desk?.materials.count, 1)
+        XCTAssertEqual(organization.projectID(for: material.id), laterID)
+    }
+
+    func testDeletedDestinationAndFailedFallbackKeepComposerInput() async throws {
+        let store = isolated.make()
+        let workspace = WorkDeskWorkspaceState(organization: WorkDeskOrganization(store: store))
+        let projectID = UUID()
+        workspace.selectScope(.project(projectID))
+        var deps = dependencies(store: store)
+        deps.importMaterial = { _, material, _ in
+            if material.projectID != nil { throw WorkDeskStoreError.projectNotFound }
+            throw WorkboardLiveRepositoryError.missingPayload
+        }
+        let model = WorkboardViewModel(dependencies: deps, deskWorkspace: workspace)
+        model.setComposerDraft("Keep my unfinished thought")
+
+        let saved = await model.addThought(model.composerDraft, projectID: projectID)
+
+        XCTAssertFalse(saved)
+        XCTAssertEqual(model.composerDraft, "Keep my unfinished thought")
+        XCTAssertNotNil(model.notice)
+        let card = try await store.fetchWorkItem(id: Constants.workboardDeskItemID)
+        XCTAssertNil(card)
+    }
+
+    func testExternalInboxCaptureStaysUnfiledWithProjectOpen() async throws {
+        let store = isolated.make()
+        let organization = WorkDeskOrganization(store: store)
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        let projectValue = await organization.createProject(title: "Open project")
+        let projectID = try XCTUnwrap(projectValue)
+        workspace.selectScope(.project(projectID))
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("contextual-external-inbox-\(UUID().uuidString)")
+        inboxURLs.append(root)
+        let envelopes = [
+            WorkCaptureEnvelope(note: "Shared outside the app", source: .shareExtension, entries: []),
+            WorkCaptureEnvelope(note: "Menu bar capture", source: .app, entries: [])
+        ]
+        for envelope in envelopes {
+            let directory = root.appendingPathComponent(envelope.id.uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try envelope.encoded().write(to: directory.appendingPathComponent("manifest.json"), options: .atomic)
+        }
+        let drainer = WorkCaptureDrainer(inbox: WorkCaptureInbox(baseURL: root),
+            store: store, sourceDevice: "test-device")
+
+        let report = try await drainer.drainAvailableCaptures()
+
+        XCTAssertEqual(report.importedCaptureCount, envelopes.count)
+        let snapshot = try await store.fetchWorkDeskOrganization()
+        for envelope in envelopes {
+            let material = try await store.fetchWorkMaterial(id: envelope.id)
+            XCTAssertEqual(material?.workItemID, Constants.workboardDeskItemID)
+            XCTAssertNil(snapshot.placements[envelope.id]?.projectID)
+        }
+        XCTAssertEqual(workspace.scope, .project(projectID))
+    }
+
 }

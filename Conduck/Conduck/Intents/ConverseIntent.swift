@@ -856,7 +856,8 @@ struct ConverseIntent: AppIntent {
             // at the current device, and a restatement that dropped the field
             // would be stating something about the card rather than repeating
             // what the entry already says.
-            sourceDevice: metadata.sourceDevice
+            sourceDevice: metadata.sourceDevice,
+            workProjectID: metadata.workProjectID
         )
     }
 

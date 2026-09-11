@@ -756,6 +756,9 @@ final class DictationService: RecordingExclusivityAuthority {
             // surface that overtook this one will retire the entry itself. The
             // count refresh inside is what the popover needs regardless.
             _ = await settleAfterFinishing(claim, generation: generation)
+            if outcome.savedInAllMaterials {
+                presentWorkRetryLocationNotice(generation: generation)
+            }
             return true
         } catch {
             presentRetryOutcome(Self.workRetryFailureMessage, generation: generation)
@@ -787,6 +790,18 @@ final class DictationService: RecordingExclusivityAuthority {
         guard stillCurrent(generation) else { return }
         lastError = nil
         state = .error(message: message, isRetryable: isRetryable)
+    }
+
+    /// Add the completed capture's location without replacing the next
+    /// recording's backlog count, retry affordance or Troubleshoot diagnosis.
+    private func presentWorkRetryLocationNotice(generation: Int) {
+        guard stillCurrent(generation) else { return }
+        let notice = WorkVoiceCaptureCoordinator.savedInAllMaterialsMessage
+        if pendingRetryCount > 0, case .error(let backlogMessage, let isRetryable) = state {
+            state = .error(message: backlogMessage + "\n" + notice, isRetryable: isRetryable)
+            return
+        }
+        presentRetryOutcome(notice, isRetryable: false, generation: generation)
     }
 
     /// Retire the entry this reservation holds, cancel the "Recording Saved"

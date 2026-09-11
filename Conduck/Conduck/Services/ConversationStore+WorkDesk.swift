@@ -10,15 +10,49 @@
 // Each intent updates one item's fields, not a JSON copy of the entire desk.
 // Multi-card moves validate all identities and their original scope before any
 // row is inserted or normalized, then save the positions as one transaction.
+// Initial capture placement reuses these metadata rows inside the material's
+// own transaction; it never adds another owner or another publication step.
 
 import Foundation
 import CoreData
 
 extension ConversationStore {
+    /// Called only after the canonical writer proves the material is new. The
+    /// same save publishes its placement, so process death cannot leave an
+    /// otherwise successful capture waiting for a separate filing operation.
+    /// A placement imported ahead of its material is already user organization;
+    /// preserve it just as a replay preserves the placement of an existing card.
+    nonisolated static func placeNewDeskCapture(
+        _ materialID: UUID, projectID: UUID, in context: NSManagedObjectContext
+    ) throws {
+        let placements = try deskRows("WorkDeskPlacement", key: "materialID", id: materialID, in: context)
+        guard placements.isEmpty else { return }
+        _ = try liveDeskProjectRows(projectID, in: context)
+        try assignDeskMaterials([materialID], projectID: projectID, in: context)
+    }
+
     func fetchWorkDeskOrganization() async throws -> WorkDeskOrganizationSnapshot {
         try await ensureLoaded()
         let context = newReadContext()
         return try await context.perform { try Self.deskOrganization(in: context) }
+    }
+
+    /// A fallback inserts no placement. A successfully filed capture retains
+    /// its placement row even when deletion clears its membership locally or
+    /// a synced project tombstone makes that membership resolve to All materials.
+    /// Any later organization also wins over reconstructing a capture receipt.
+    /// Read only these two identities, including their CloudKit duplicates;
+    /// resolving the entire desk would make every stale voice retry expensive.
+    func isUnfiledWorkCaptureFallback(materialID: UUID, projectID: UUID) async throws -> Bool {
+        try await ensureLoaded()
+        let context = newReadContext()
+        return try await context.perform {
+            let placements = try Self.deskRows(
+                "WorkDeskPlacement", key: "materialID", id: materialID, in: context
+            )
+            guard placements.isEmpty else { return false }
+            return try Self.resolvedDeskProjectID(projectID, in: context) == nil
+        }
     }
 
     @discardableResult
@@ -421,6 +455,7 @@ extension ConversationStore {
                 updatedAt: row.value(forKey: "updatedAt") as? Date ?? .distantPast
             )
         }
-        return WorkDeskOrganizationSnapshot(projects: projects, placements: placements)
+        return WorkDeskOrganizationSnapshot(projects: projects, placements: placements,
+                                            deletedProjectIDs: tombstones)
     }
 }

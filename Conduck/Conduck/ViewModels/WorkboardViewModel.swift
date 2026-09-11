@@ -15,7 +15,11 @@
 // The boundary, stated precisely: every operation writes to the person's own
 // private stores, and those stores carry the desk's metadata — and the payload
 // bytes eligible for it — through the person's private iCloud to their other
-// devices. Nothing here is sent to an AI or to a Conduck-operated server: this
+// devices. Capture placement shares each new material's transaction; retries
+// never reassign a standing card, so later user filing wins. A missing project
+// retries that item unfiled and names the recoverable location explicitly. If
+// even that write fails, the composer keeps its input and voice keeps its clip.
+// Nothing here is sent to an AI or to a Conduck-operated server: this
 // model has no transport of any kind, and there is no server of ours anywhere.
 
 import Foundation
@@ -286,6 +290,9 @@ struct WorkboardMaterialImport: Hashable, Sendable {
     var data: Data?
     var fileURL: URL?
     var byteCount: Int64?
+    /// Supplied only by a capture with visible context, before suspension. The
+    /// live adapter carries it into the canonical material write transaction.
+    var projectID: UUID? = nil
 
     init(
         id: UUID = UUID(),
@@ -676,15 +683,16 @@ final class WorkboardViewModel {
     var isLoading = false
     var loadError: String?
     var importState: WorkboardImportState?
-    /// The desk's session-local composer draft. Keeping it above the detail view
-    /// means collapsing or reopening the column never discards half-written
-    /// work.
-    private(set) var composerDraft = ""
+    /// Each destination owns its session-local draft above the detail view.
+    /// Resolve directly from scope rather than an onChange callback: a submit
+    /// in the same turn as navigation must never see the departing draft.
+    var composerScope: WorkDeskScope { deskWorkspace.composerScope }
+    var composerDraft: String { composerDraft(for: composerScope) }
     /// Whether the draft holds text that would survive normalization. It is
-    /// stored rather than derived from `composerDraft` on purpose: a surface
+    /// stored on the scope's session rather than derived from `composerDraft`: a surface
     /// that only needs emptiness reads this and is invalidated when emptiness
     /// flips, not on every keystroke.
-    private(set) var hasComposerDraft = false
+    var hasComposerDraft: Bool { deskWorkspace.composerSession(for: composerScope).hasDraft }
 
     var notice: WorkboardNotice?
     var workspaceStatus: WorkboardTransientStatus?
@@ -696,13 +704,16 @@ final class WorkboardViewModel {
     /// view because a control that drives it can be declared above the canvas —
     /// in a toolbar that has no access to the board's own `@State`.
     ///
-    /// `didSet` is what persists it, and it survives the `@Observable` macro:
-    /// the macro moves the observer onto the underlying storage and leaves the
-    /// property itself tracked, so a SwiftUI binding still invalidates its
-    /// readers. Initialisation does not run the observer, which is what keeps a
-    /// launch from writing back the value it just read.
+    /// Only the explicit setter persists. Resolving another scope, search or
+    /// an accessibility fallback never writes back a preference. Session mode
+    /// is observable, so both pickers and the board retain one effective value.
     var layoutMode: WorkboardLayoutMode {
-        didSet { layoutMode.save() }
+        get { deskWorkspace.layoutSession(for: composerScope).mode }
+        set {
+            let scope = composerScope
+            deskWorkspace.layoutSession(for: scope).mode = newValue
+            newValue.save(for: scope)
+        }
     }
 
     @ObservationIgnored private var loadRequestedWhileLoading = false
@@ -711,7 +722,6 @@ final class WorkboardViewModel {
     init(dependencies: Dependencies, deskWorkspace: WorkDeskWorkspaceState? = nil) {
         self.dependencies = dependencies
         self.cachedDeskWorkspace = deskWorkspace
-        self.layoutMode = WorkboardLayoutMode.load()
     }
 
     /// Every capture mutation is serialized because each success advances the
@@ -722,12 +732,38 @@ final class WorkboardViewModel {
     }
 
     func setComposerDraft(_ value: String) {
-        composerDraft = value
-        let holdsAThought = !WorkboardWorkspaceCaptureLogic.normalizedThought(value).isEmpty
-        // Written only when it changes: observation fires on every assignment,
-        // so an unconditional write would invalidate the emptiness readers on
-        // each keystroke and cost them the coarse seam they exist for.
-        if hasComposerDraft != holdsAThought { hasComposerDraft = holdsAThought }
+        setComposerDraft(value, for: composerScope)
+    }
+
+    func composerDraft(for scope: WorkDeskScope) -> String {
+        deskWorkspace.composerSession(for: scope).text
+    }
+
+    func setComposerDraft(_ value: String, for scope: WorkDeskScope) {
+        deskWorkspace.composerSession(for: scope).setText(value)
+    }
+
+    /// Words returned for editing must be visible before the caller focuses
+    /// the composer. Restore their launch project if it still exists; after
+    /// deletion keep the words in All materials instead of an unreachable draft.
+    func receiveComposerTranscript(_ transcript: String, in launchScope: WorkDeskScope) {
+        let target: WorkDeskScope
+        if case .project(let id) = launchScope,
+           deskWorkspace.organization.project(id: id) == nil || WorkboardLayoutMode.isDeleted(launchScope) {
+            target = .all
+        } else {
+            target = launchScope
+        }
+        if composerScope != target { deskWorkspace.selectScope(target) }
+        let existing = composerDraft(for: target).trimmingCharacters(in: .whitespacesAndNewlines)
+        setComposerDraft(existing.isEmpty ? transcript : "\(existing)\n\n\(transcript)", for: target)
+    }
+
+    /// A delayed save clears only the captured text in its original scope.
+    /// Equal text elsewhere is a different draft; later edits stay intact.
+    func clearComposerDraft(_ capturedText: String, in scope: WorkDeskScope) {
+        guard composerDraft(for: scope) == capturedText else { return }
+        setComposerDraft("", for: scope)
     }
 
     func load() async {
@@ -841,7 +877,8 @@ final class WorkboardViewModel {
             failedCount: priorFailures
         )
         var added = 0
-        var capturedIDs: [UUID] = []
+        var savedOutsideProject = false
+        var remainingProjectID = projectID
         var failed = priorFailures
         var firstFailure: Error?
 
@@ -851,10 +888,9 @@ final class WorkboardViewModel {
                 break
             }
             do {
-                let refreshed = try await dependencies.importMaterial(
-                    current?.revision,
-                    materialImport
-                ) { itemProgress in
+                var contextualImport = materialImport
+                contextualImport.projectID = remainingProjectID
+                let progress: @Sendable (Double) -> Void = { itemProgress in
                     Task { @MainActor [self] in
                         guard var state = self.importState else { return }
                         let bounded = min(1, max(0, itemProgress))
@@ -865,10 +901,27 @@ final class WorkboardViewModel {
                         self.importState = state
                     }
                 }
+                let refreshed: WorkboardItemSnapshot
+                do {
+                    refreshed = try await dependencies.importMaterial(
+                        current?.revision, contextualImport, progress
+                    )
+                } catch WorkDeskStoreError.projectNotFound {
+                    // The atomic write inserted nothing. A missing project is
+                    // recoverable without losing input: save this same capture
+                    // unfiled and keep the remaining batch unfiled too. The
+                    // refusal may have already staged a large payload, so do
+                    // not repeat that expensive probe for every later item.
+                    remainingProjectID = nil
+                    contextualImport.projectID = nil
+                    refreshed = try await dependencies.importMaterial(
+                        current?.revision, contextualImport, progress
+                    )
+                }
+                if projectID != nil, remainingProjectID == nil { savedOutsideProject = true }
                 current = refreshed
                 adopt(refreshed)
                 added += 1
-                capturedIDs.append(materialImport.id)
             } catch {
                 failed += 1
                 if firstFailure == nil { firstFailure = error }
@@ -889,34 +942,35 @@ final class WorkboardViewModel {
                 firstFailure ?? WorkboardLiveRepositoryError.missingPayload
             )
         }
-        // Membership follows the exact committed capture IDs, never a before/
-        // after snapshot difference that could include an unrelated sync arrival.
-        // Failed organization cannot undo a durable capture or prompt a duplicate
-        // retry: return capture success, and explain where its materials remain.
-        if let projectID, !capturedIDs.isEmpty,
-           !(await deskWorkspace.organization.assign(materialIDs: capturedIDs, to: projectID)) {
-            deskWorkspace.organization.errorMessage = nil
-            workspaceStatus = nil
-            notice = WorkboardNotice(
-                kind: .information,
-                title: LocalizedStringResource(
-                    "workdesk.capture.project.failed.title",
-                    defaultValue: "Saved in All materials"
-                ),
-                message: report.hasFailures
-                    ? String.localizedStringWithFormat(
-                        String(localized: LocalizedStringResource(
-                            "workdesk.capture.project.partial.message",
-                            defaultValue: "%1$lld added to All materials; %2$lld couldn’t be added. Saved items couldn’t be placed in the project. Open All materials to organise them."
-                        )), Int64(report.addedCount), Int64(report.failedCount)
-                    )
-                    : String(localized: LocalizedStringResource(
-                        "workdesk.capture.project.failed.message",
-                        defaultValue: "Your added items are safe in All materials, but couldn’t be added to the project. Open All materials to organise them."
-                    ))
-            )
+        if projectID != nil, added > 0 {
+            // Read the transaction's placements into the visible workspace;
+            // this never writes organization or overrides a later user move.
+            await deskWorkspace.organization.reload()
         }
+        if savedOutsideProject { presentCaptureSavedInAllMaterials(report: report) }
         return report
+    }
+
+    /// Shared with the microphone: success in a different location must be
+    /// explicit, and must not be presented as a failure inviting duplication.
+    func presentCaptureSavedInAllMaterials(
+        report: WorkboardImportReport = WorkboardImportReport(addedCount: 1, failedCount: 0)
+    ) {
+        workspaceStatus = nil
+        notice = WorkboardNotice(
+            kind: .information,
+            title: LocalizedStringResource(
+                "workdesk.capture.project.failed.title", defaultValue: "Saved in All materials"
+            ),
+            message: report.hasFailures
+                ? String.localizedStringWithFormat(
+                    String(localized: LocalizedStringResource(
+                        "workdesk.capture.project.atomic.partial.message",
+                        defaultValue: "%1$lld added; %2$lld couldn’t be added. Some saved items couldn’t be placed in the project. Open All materials to organise them."
+                    )), Int64(report.addedCount), Int64(report.failedCount)
+                )
+                : WorkVoiceCaptureCoordinator.savedInAllMaterialsMessage
+        )
     }
 
     func presentImportReport(_ report: WorkboardImportReport) {

@@ -247,6 +247,12 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
     /// device.
     let sourceDevice: String?
 
+    /// Frozen when an in-app Work recording launches. Optional on disk so old
+    /// captures and every external/headless capture remain unfiled. Re-arming
+    /// the same capture preserves the original destination, including nil:
+    /// retrying from another window must never borrow that window's project.
+    let workProjectID: UUID?
+
     var resolvedDestination: PendingRetryDestination { destination ?? .chat }
 
     init(
@@ -260,7 +266,8 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
         transcript: String? = nil,
         publicationState: PendingRetryPublicationState? = nil,
         workAttachedToMaterialID: UUID? = nil,
-        sourceDevice: String? = nil
+        sourceDevice: String? = nil,
+        workProjectID: UUID? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -273,6 +280,7 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
         self.publicationState = publicationState
         self.workAttachedToMaterialID = workAttachedToMaterialID
         self.sourceDevice = sourceDevice
+        self.workProjectID = workProjectID
     }
 
     /// How long a capture may wait for a TRANSCRIPTION it can buy again.
@@ -340,7 +348,8 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
             transcript: transcript,
             publicationState: publicationState,
             workAttachedToMaterialID: workAttachedToMaterialID,
-            sourceDevice: sourceDevice
+            sourceDevice: sourceDevice,
+            workProjectID: workProjectID
         )
     }
 
@@ -366,7 +375,8 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
             // about where the words were spoken and must not be able to erase
             // either.
             workAttachedToMaterialID: workAttachedToMaterialID,
-            sourceDevice: sourceDevice
+            sourceDevice: sourceDevice,
+            workProjectID: workProjectID
         )
     }
 
@@ -382,13 +392,15 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
     /// capture, and a record saying otherwise is exempt from every clock for
     /// ever.
     ///
-    /// Everything else is the newcomer's, because the newcomer is the more
-    /// recent observation of the same capture.
+    /// The project destination also stays with the original launch, including
+    /// nil for external captures. Everything else is the newcomer's, because
+    /// the newcomer is the more recent observation of the same capture.
     func keepingPublication(of previous: PendingRetryMetadata) -> PendingRetryMetadata {
         let keptTranscript = transcript ?? previous.transcript
         let keptState: PendingRetryPublicationState? =
             previous.publicationState == .published ? .published : publicationState
-        guard keptTranscript != transcript || keptState != publicationState else { return self }
+        guard keptTranscript != transcript || keptState != publicationState
+            || workProjectID != previous.workProjectID else { return self }
         return PendingRetryMetadata(
             id: id,
             createdAt: createdAt,
@@ -400,7 +412,8 @@ nonisolated struct PendingRetryMetadata: Codable, Sendable, Equatable {
             transcript: keptTranscript,
             publicationState: keptState,
             workAttachedToMaterialID: workAttachedToMaterialID,
-            sourceDevice: sourceDevice
+            sourceDevice: sourceDevice,
+            workProjectID: previous.workProjectID
         )
     }
 }

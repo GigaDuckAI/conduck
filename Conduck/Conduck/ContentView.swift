@@ -123,6 +123,7 @@ struct ContentView: View {
     @State private var showSendFailedAlert = false
     @State private var isRetrying: Bool = false
     @State private var retryErrorMessage: String? = nil
+    @State private var retryShowsStandaloneNotice = false
     @State private var recorder = InAppAudioRecorder()
     @State private var composerDraft: String = ""
     /// Contextual recovery offered after a GENUINE voice hard failure (language
@@ -600,6 +601,15 @@ struct ContentView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .transition(.opacity.combined(with: .move(edge: .top)))
+        } else if retryShowsStandaloneNotice, let retryErrorMessage {
+            // A recovered Work capture may finish in All materials after its
+            // project disappears. Retiring the last retry hides its card, but
+            // must not hide the successful capture's location notice with it.
+            Text(verbatim: retryErrorMessage)
+                .font(.subheadline)
+                .foregroundStyle(AppColors.textSecondary)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
         }
     }
 
@@ -2175,6 +2185,9 @@ struct ContentView: View {
             // surface that overtook this one will retire the entry itself. The
             // count refresh inside is what the card needs regardless.
             _ = await finishPendingRetry(claim)
+            if outcome.savedInAllMaterials {
+                presentRetryError(WorkVoiceCaptureCoordinator.savedInAllMaterialsMessage, informational: true)
+            }
             return true
         } catch {
             presentRetryError(String(
@@ -2291,8 +2304,13 @@ struct ContentView: View {
     /// only instruction on screen and leave a card that explains nothing. It
     /// clears on the next refresh, alongside the retryability flag it belongs to.
     @MainActor
-    private func presentRetryError(_ message: String, sticky: Bool = false) {
-        withAnimation { retryErrorMessage = message }
+    private func presentRetryError(
+        _ message: String, sticky: Bool = false, informational: Bool = false
+    ) {
+        withAnimation {
+            retryShowsStandaloneNotice = informational
+            retryErrorMessage = message
+        }
         guard !sticky else { return }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 3_500_000_000)

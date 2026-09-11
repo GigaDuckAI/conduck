@@ -34,13 +34,48 @@ enum WorkboardLayoutMode: String, CaseIterable {
         }
     }
 
-    static func load() -> Self {
-        let value = SettingsDependencies.processDefault.defaults.string(forKey: Constants.workboardLayoutKey)
-        return value.flatMap(Self.init(rawValue:)) ?? .desk
+    // The frozen legacy key remains All materials' slot, so existing installs
+    // need no migration or write on launch. Projects have independent UUID
+    // slots; an unreadable/missing project value is Tiles without saving it.
+    static let projectPreferencePrefix = Constants.workboardLayoutKey + ".project."
+    @MainActor private static var prunedProjectIDs: Set<UUID> = []
+
+    @MainActor static func isDeleted(_ scope: WorkDeskScope) -> Bool {
+        guard case .project(let id) = scope else { return false }
+        return prunedProjectIDs.contains(id)
     }
 
-    func save() {
-        SettingsDependencies.processDefault.defaults.set(rawValue, forKey: Constants.workboardLayoutKey)
+    static func preferenceKey(for scope: WorkDeskScope) -> String {
+        switch scope {
+        case .all: Constants.workboardLayoutKey
+        case .project(let id): projectPreferencePrefix + id.uuidString
+        }
+    }
+
+    static func load(for scope: WorkDeskScope = .all) -> Self {
+        let value = SettingsDependencies.processDefault.defaults.string(forKey: preferenceKey(for: scope))
+        let fallback: Self = scope == .all ? .desk : .tiles
+        return value.flatMap(Self.init(rawValue:)) ?? fallback
+    }
+
+    @MainActor func save(for scope: WorkDeskScope = .all) {
+        // An older window may still show a deleted project when its control
+        // fires. It must not recreate a preference that was already reclaimed.
+        guard !Self.isDeleted(scope) else { return }
+        SettingsDependencies.processDefault.defaults.set(rawValue, forKey: Self.preferenceKey(for: scope))
+    }
+
+    @MainActor @discardableResult
+    static func pruneProjectPreferences(deletedProjectIDs: Set<UUID>) -> Set<UUID> {
+        let newlyDeleted = deletedProjectIDs.subtracting(prunedProjectIDs)
+        guard !newlyDeleted.isEmpty else { return [] }
+        prunedProjectIDs.formUnion(newlyDeleted)
+        let defaults = SettingsDependencies.processDefault.defaults
+        for projectID in newlyDeleted {
+            defaults.removeObject(forKey: preferenceKey(for: .project(projectID)))
+        }
+        WorkDeskWorkspaceState.pruneProjectSessions(deletedProjectIDs: newlyDeleted)
+        return newlyDeleted
     }
 }
 

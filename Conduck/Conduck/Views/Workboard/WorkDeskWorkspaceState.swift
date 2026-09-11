@@ -2,8 +2,10 @@
 
 // Presentation of the personal desk. Filters never change material ownership:
 // every capture stays on the canonical desk, and projects refer to its cards.
-// Selection is intersected with the visible snapshot before every operation so
-// a sync, search or project switch cannot silently include a hidden source.
+// Active selection is intersected with the visible snapshot before every
+// operation. Search parks hidden selections until those cards are visible again.
+// Composer sessions follow their destination, including All materials during
+// global search, so looking elsewhere never silently redirects unfinished work.
 
 import SwiftUI
 
@@ -16,9 +18,17 @@ final class WorkDeskWorkspaceState {
     let organization: WorkDeskOrganization
     var scope: WorkDeskScope = .all
     var isActive = false
-    var search = ""
+    var search = "" {
+        didSet {
+            let searching = !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if isSearching != searching { isSearching = searching }
+        }
+    }
+    private(set) var isSearching = false
     var selectedIDs: Set<UUID> = []
-    var isSelecting = false
+    var isSelecting = false {
+        didSet { if !isSelecting { hiddenSelectionIDs.removeAll() } }
+    }
     var showsSidebar = true
     var presentsSidebarInline = true
     var showsProjectPicker = false
@@ -30,6 +40,49 @@ final class WorkDeskWorkspaceState {
     var preparingProjectID: UUID?
     var deletingProjectID: UUID?
     @ObservationIgnored private var canvasSessions: [WorkDeskScope: WorkDeskCanvasSession] = [:]
+    @ObservationIgnored private var composerSessions: [WorkDeskScope: WorkDeskComposerSession] = [:]
+    @ObservationIgnored private var layoutSessions: [WorkDeskScope: WorkDeskLayoutSession] = [:]
+    @ObservationIgnored private var hiddenSelectionIDs: Set<UUID> = []
+    private static var liveWorkspaces: [WeakWorkspace] = []
+
+    private final class WeakWorkspace {
+        weak var value: WorkDeskWorkspaceState?
+        init(_ value: WorkDeskWorkspaceState) { self.value = value }
+    }
+
+    /// A tombstone learned in any window releases sessions in every live window.
+    /// Weak registration does not keep a closed window or its drafts alive.
+    static func pruneProjectSessions(deletedProjectIDs: Set<UUID>) {
+        liveWorkspaces.removeAll { $0.value == nil }
+        for workspace in liveWorkspaces.compactMap(\.value) {
+            for id in deletedProjectIDs {
+                let scope = WorkDeskScope.project(id)
+                workspace.composerSessions.removeValue(forKey: scope)?.setText("")
+                // Invalidate a view that still observes the old session while
+                // its window waits to receive the organization refresh.
+                workspace.layoutSessions.removeValue(forKey: scope)?.mode = .tiles
+                workspace.canvasSessions.removeValue(forKey: scope)
+            }
+        }
+    }
+
+    var composerScope: WorkDeskScope { isSearching ? .all : scope }
+
+    func composerSession(for scope: WorkDeskScope) -> WorkDeskComposerSession {
+        if WorkboardLayoutMode.isDeleted(scope) { return WorkDeskComposerSession() }
+        if let existing = composerSessions[scope] { return existing }
+        let session = WorkDeskComposerSession()
+        composerSessions[scope] = session
+        return session
+    }
+
+    func layoutSession(for scope: WorkDeskScope) -> WorkDeskLayoutSession {
+        if WorkboardLayoutMode.isDeleted(scope) { return WorkDeskLayoutSession(scope: scope) }
+        if let existing = layoutSessions[scope] { return existing }
+        let session = WorkDeskLayoutSession(scope: scope)
+        layoutSessions[scope] = session
+        return session
+    }
 
     func canvasSession(for scope: WorkDeskScope) -> WorkDeskCanvasSession {
         if let existing = canvasSessions[scope] { return existing }
@@ -40,14 +93,14 @@ final class WorkDeskWorkspaceState {
 
     init(organization: WorkDeskOrganization? = nil) {
         self.organization = organization ?? WorkDeskOrganization()
+        Self.liveWorkspaces.removeAll { $0.value == nil }
+        Self.liveWorkspaces.append(WeakWorkspace(self))
     }
 
     var currentProject: WorkDeskProjectRecord? {
         guard case .project(let id) = scope else { return nil }
         return organization.project(id: id)
     }
-
-    var isSearching: Bool { !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     func visibleMaterials(in materials: [WorkboardMaterialSnapshot]) -> [WorkboardMaterialSnapshot] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -113,8 +166,11 @@ final class WorkDeskWorkspaceState {
             selectScope(.all)
         }
         let visibleIDs = Set(visibleMaterials(in: materials).map(\.id))
-        selectedIDs.formIntersection(visibleIDs)
-        if visibleIDs.isEmpty { isSelecting = false }
+        let survivingIDs = Set(materials.map(\.id))
+        let retainedSelection = selectedIDs.union(hiddenSelectionIDs).intersection(survivingIDs)
+        selectedIDs = retainedSelection.intersection(visibleIDs)
+        hiddenSelectionIDs = isSearching ? retainedSelection.subtracting(visibleIDs) : []
+        if materials.isEmpty { isSelecting = false }
     }
 
     func beginProject(materialIDs: [UUID] = [], position: WorkDeskPoint? = nil) {
@@ -196,6 +252,31 @@ final class WorkDeskWorkspaceState {
             selectedIDs = []
             isSelecting = false
         }
+    }
+}
+
+/// Emptiness remains a stored coarse observation seam. Reading it must not
+/// subscribe a whole board to text changes that leave the draft nonempty.
+@Observable @MainActor
+final class WorkDeskComposerSession {
+    private(set) var text = ""
+    private(set) var hasDraft = false
+
+    func setText(_ value: String) {
+        text = value
+        let hasThought = !WorkboardWorkspaceCaptureLogic.normalizedThought(value).isEmpty
+        if hasDraft != hasThought { hasDraft = hasThought }
+    }
+}
+
+/// Initial reads never persist. The model's explicit layout setter is the
+/// only writer, keeping readable search/accessibility fallbacks temporary.
+@Observable @MainActor
+final class WorkDeskLayoutSession {
+    var mode: WorkboardLayoutMode
+
+    init(scope: WorkDeskScope) {
+        mode = WorkboardLayoutMode.load(for: scope)
     }
 }
 

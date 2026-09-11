@@ -9,7 +9,7 @@ import XCTest
 
 @MainActor
 final class WorkDeskLayoutPresentationTests: XCTestCase {
-    func testAllMaterialsAndProjectHonorEverySavedLayout() {
+    func testResolutionHonorsEveryEffectiveScopePreference() {
         for mode in WorkboardLayoutMode.allCases {
             XCTAssertEqual(resolve(mode, spatial: true), mode)
         }

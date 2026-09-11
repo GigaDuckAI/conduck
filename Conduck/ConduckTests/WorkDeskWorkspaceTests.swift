@@ -150,7 +150,7 @@ final class WorkDeskWorkspaceTests: XCTestCase {
         XCTAssertEqual(workspace.search, "")
     }
 
-    func testReconciliationDropsHiddenAndDeletedSelection() async {
+    func testReconciliationParksHiddenSelectionAndDropsDeletedSelection() async {
         let a = material("Needle"), b = material("Other")
         let workspace = await makeWorkspace(.init())
         workspace.isSelecting = true
@@ -160,7 +160,51 @@ final class WorkDeskWorkspaceTests: XCTestCase {
         XCTAssertEqual(workspace.selectedIDs, [a.id])
         workspace.reconcile(materials: [b])
         XCTAssertTrue(workspace.selectedIDs.isEmpty)
-        XCTAssertFalse(workspace.isSelecting, "empty search results dismiss selection controls")
+        XCTAssertTrue(workspace.isSelecting, "empty search results preserve Select mode")
+        workspace.search = ""
+        workspace.reconcile(materials: [b])
+        XCTAssertEqual(workspace.selectedIDs, [b.id], "the hidden surviving selection returns")
+    }
+
+    func testEmptySearchPreservesSelectModeAndRestoresSelectionWhenCleared() async {
+        let a = material("Thought"), b = material("Another thought")
+        let workspace = await makeWorkspace(.init())
+        workspace.toggleSelection(a.id)
+        workspace.search = "no matching card"
+        workspace.reconcile(materials: [a, b])
+        XCTAssertTrue(workspace.isSelecting)
+        XCTAssertTrue(workspace.selectedIDs.isEmpty, "hidden cards are excluded from bulk actions")
+
+        workspace.search = ""
+        workspace.reconcile(materials: [a, b])
+        XCTAssertTrue(workspace.isSelecting)
+        XCTAssertEqual(workspace.selectedIDs, [a.id])
+    }
+
+    func testLeavingSelectModeWhileSearchIsEmptyDiscardsParkedSelection() async {
+        let a = material("Thought")
+        let workspace = await makeWorkspace(.init())
+        workspace.toggleSelection(a.id)
+        workspace.search = "no match"
+        workspace.reconcile(materials: [a])
+        workspace.isSelecting = false
+        workspace.search = ""
+        workspace.reconcile(materials: [a])
+        XCTAssertFalse(workspace.isSelecting)
+        XCTAssertTrue(workspace.selectedIDs.isEmpty)
+    }
+
+    func testGenuinelyEmptyDeskResetsSelectModeAndSelection() async {
+        let a = material("Thought")
+        let workspace = await makeWorkspace(.init())
+        workspace.toggleSelection(a.id)
+        workspace.search = "no match"
+        workspace.reconcile(materials: [a])
+        workspace.reconcile(materials: [])
+        XCTAssertFalse(workspace.isSelecting)
+        workspace.search = ""
+        workspace.reconcile(materials: [a])
+        XCTAssertTrue(workspace.selectedIDs.isEmpty, "deleted selections cannot return with later content")
     }
 
     func testMissingProjectReturnsToAllMaterialsAndClearsSelection() async {

@@ -170,6 +170,13 @@ final class WorkDeskOrganization {
     }
 
     private func publish(_ snapshot: WorkDeskOrganizationSnapshot) {
+        // Only tombstones prune process-wide preferences. Another window may
+        // create a project while this instance awaits its snapshot, so absence
+        // from the returned live list is not evidence of deletion. Successful
+        // loads and mutations carry local/synced tombstones; navigation and
+        // failed reads never write, and unseen deletions still reclaim slots.
+        // The process-wide pruner handles each ID once across all windows.
+        WorkboardLayoutMode.pruneProjectPreferences(deletedProjectIDs: snapshot.deletedProjectIDs)
         // A position seed often finds that all its slots are already saved.
         // Publishing identical arrays still invalidates the whole desk's views.
         if projects != snapshot.projects {

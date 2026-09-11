@@ -85,6 +85,9 @@ nonisolated struct WorkDeskPlacementRecord: Identifiable, Hashable, Sendable {
 nonisolated struct WorkDeskOrganizationSnapshot: Sendable, Equatable {
     var projects: [WorkDeskProjectRecord] = []
     var placements: [UUID: WorkDeskPlacementRecord] = [:]
+    // Absence from a snapshot can mean another window just created a project.
+    // Only durable deletion evidence may erase process-wide preferences.
+    var deletedProjectIDs: Set<UUID> = []
 }
 
 /// A generated slot belongs to the project scope that generated it. A late

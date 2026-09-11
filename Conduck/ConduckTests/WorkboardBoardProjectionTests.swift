@@ -216,6 +216,9 @@ final class WorkboardBoardProjectionTests: XCTestCase {
             replaceMaterial: { _, _, _, _ in throw TestError.unexpectedCall },
             openMaterial: { _ in },
             reorderMaterials: reorderMaterials
-        ))
+        ), deskWorkspace: WorkDeskWorkspaceState(organization: WorkDeskOrganization(
+            fetch: { throw TestError.unexpectedCall },
+            apply: { _ in throw TestError.unexpectedCall }
+        )))
     }
 }

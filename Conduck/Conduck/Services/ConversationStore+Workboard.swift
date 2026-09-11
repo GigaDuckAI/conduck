@@ -18,6 +18,10 @@
 // names it from the material SECOND, and a replay repairs whichever half a
 // crash left behind. `WorkMaterial.payload` is never written: bytes on the
 // material row would ride its CKRecord and be realized by every board load.
+// In-app capture may also publish an initial project placement in the material
+// transaction. Replays preserve later user filing; a missing destination throws
+// before insertion so callers can recover explicitly in All materials. Batches
+// commit per card, preserving earlier filed captures if a later item fails.
 
 import Foundation
 import CoreData
@@ -948,6 +952,12 @@ extension ConversationStore {
     /// - Parameter authorization: The cancellation a Work voice capture's own
     ///   surface can still revoke while this write is in flight. Nil for every
     ///   caller with nothing to cancel, which is every caller but that lane.
+    /// - Parameter projectID: The in-app destination frozen at capture launch.
+    ///   A new card and its placement share one save, closing the crash window
+    ///   between capture and filing. Existing cards never have their placement
+    ///   changed by replay or payload repair: later user filing wins. A missing
+    ///   project throws `projectNotFound` before insertion so the caller can
+    ///   explicitly recover the capture in All materials and explain it.
     func upsertDeskMaterial(
         _ draft: WorkMaterialDraft,
         sourceFileURL: URL? = nil,
@@ -956,6 +966,7 @@ extension ConversationStore {
         legacyProvenance: WorkMaterialLegacyProvenance? = nil,
         expectedOwnerRevision: Int64? = nil,
         authorization: WorkVoiceWriteAuthorization? = nil,
+        projectID: UUID? = nil,
         onProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> WorkMaterialRecord {
         try await publishWorkMaterial(
@@ -966,6 +977,7 @@ extension ConversationStore {
             legacyProvenance: legacyProvenance,
             expectedOwnerRevision: expectedOwnerRevision,
             authorization: authorization,
+            projectID: projectID,
             onProgress: onProgress
         )
         guard let record = try await fetchWorkMaterial(id: draft.id) else {
@@ -1086,7 +1098,9 @@ extension ConversationStore {
     /// The shared write behind `upsertDeskMaterial`. Bytes are staged before
     /// the transaction opens, so a preparation failure never leaves a
     /// half-published card; the transaction then resolves the desk row, the
-    /// material and any payload repair in ONE save.
+    /// material, its initial project placement and any payload repair in ONE
+    /// save. Each batch item keeps its own transaction, so a later refusal
+    /// leaves earlier cards durably filed without rolling their captures back.
     ///
     /// THREE mutexes cover the whole call, staging included. The DESK claim
     /// orders captures onto one board — vault keys are derived from the
@@ -1110,6 +1124,7 @@ extension ConversationStore {
         legacyProvenance: WorkMaterialLegacyProvenance?,
         expectedOwnerRevision: Int64?,
         authorization: WorkVoiceWriteAuthorization?,
+        projectID: UUID?,
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws {
         let ownerID = Constants.workboardDeskItemID
@@ -1561,6 +1576,14 @@ extension ConversationStore {
                     // payload it cannot produce. A fresh capture of the same
                     // source takes the insert path instead.
                     throw WorkboardStoreError.materialNotFound
+                }
+                // Only the insert lane may apply a capture destination. Every
+                // replay/adoption/repair above keeps the person's later filing.
+                // The helper validates before creating either placement or
+                // material; a missing project follows the existing staged-byte
+                // rollback and gives the caller an explicit recovery outcome.
+                if let projectID {
+                    try Self.placeNewDeskCapture(draft.id, projectID: projectID, in: context)
                 }
                 if staged.storageMode == .syncedPayload, let contentHash = staged.contentHash {
                     // An earlier interrupted attempt at this same capture can

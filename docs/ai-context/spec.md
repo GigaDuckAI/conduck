@@ -12,7 +12,7 @@ Everything else lives closer to the thing it describes:
 |---|---|
 | What does this file do? | Its header comment. Every source file has one — `CONTRIBUTING.md` requires it. |
 | What are the folders, targets and build rules? | [`project-structure.md`](project-structure.md) |
-| How does this behave in this exact case? | The tests. There are thousands, and several exist specifically to encode a rule that code review kept failing to catch. |
+| How does this behave in this exact case? | The tests. |
 | What is the current value of some limit? | `Conduck/Conduck/Utilities/Constants.swift`, or the type named beside the constant wherever this document qualifies one. |
 
 **Where this document and the code disagree, the code is right.** Report the discrepancy; do not reconcile the code to the document.
@@ -389,7 +389,7 @@ Treating the two as interchangeable is the single most consequential mistake ava
 
 ### The published repository is the whole application
 
-The official build is this source plus private brand art, signing, and Apple's CarPlay entitlement; no functional code is held back. Community builds replace the identity and art and omit CarPlay. A clone runs in the simulator without configuration, though gateway credentials require signing or QA launch arguments.
+The official build is this source plus private brand art, signing, and Apple's CarPlay entitlement; no functional code is held back. Community builds replace the identity and art and omit CarPlay.
 
 ### The quick-capture trigger stays out of the app
 
@@ -425,7 +425,7 @@ The hard part is not sending it, it is knowing when not to. "No gateway is confi
 
 ## Work captures stay inert until an explicit project handoff
 
-Every capture lands on one private desk without dispatch. Projects reference its materials; grouping and project deletion preserve payloads. Organization syncs privately; viewport zoom stays local. Only explicit handoff creates a gateway-bound conversation: the person edits a brief, chooses a destination and confirms the reviewed packet. Missing or incompatible materials require explicit repair or exclusion. Capture never invokes handoff; dispatch retains ordinary conversation retry and routing rules.
+Every capture lands on one private desk without dispatch; in-app captures in an open project arrive referenced by it, all others unfiled. Projects reference its materials; grouping and project deletion preserve payloads. Organization syncs privately; viewport zoom stays local. Only explicit handoff creates a gateway-bound conversation: the person edits a brief, chooses a destination and confirms the reviewed packet. Missing or incompatible materials require explicit repair or exclusion. Capture never invokes handoff; dispatch retains ordinary conversation retry and routing rules.
 
 The desk lives in the person's own private iCloud, bytes included: a payload within `Constants.workboardSyncCeilingBytes` syncs, anything larger stays in the device-local vault behind a reattach, and neither is durable until its bytes read back at the length written, so a refused reattach returns the previous payload. A card names the bytes it was published with, so a peer's upload serves it only after publication completes; a publication dying before its card strands a payload row nothing may sweep, since an orphan and an arrival in flight are indistinguishable, and it goes only with the card's bytes or the card. One process imports a capture and one publishes a payload, behind App-Group locks; a claim the app cannot hand back is retaken by recovery, and a recapture repairs a bytes-less card but never one newer than the capture it replays. A capture whose identifier already names a card of another kind is republished under one escape identifier derived from it, so every process and replay repairs the same card; a second refusal is terminal, and the capture is retired by a verified copy before the queue lets the original go — one already on disk verified rather than trusted, an interrupted one kept beside it, nothing retired ever claimed, requeued or swept. A Work voice note reaches the desk as words alone, wherever spoken; its recording is kept only until those words are written, and a failed hop keeps it for a retry. The payload store mirrors through a CloudKit container of its own, because one container cannot mirror two stores, and the Watch's entitlements name only the first.
 

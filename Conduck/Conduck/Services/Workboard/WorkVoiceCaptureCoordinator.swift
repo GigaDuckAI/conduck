@@ -50,6 +50,12 @@
 // followed by the `.published` stamp that says the words are durable somewhere
 // other than this entry.
 //
+// Project placement shares the new card's transaction. A retry answers a
+// standing card without touching its placement: later user filing always wins.
+// A deleted destination explicitly falls back to All materials and returns that
+// recoverable outcome to the surface; a failed fallback keeps the parked clip.
+// No capture-to-assignment crash window exists for a successfully filed card.
+//
 // NOTHING HERE PUBLISHES A RECORDING, and there is no function that could. The
 // only desk draft this file builds is `.transcript`; the one `.audio` card it
 // can still touch is one an earlier build left standing, and all it does there
@@ -100,11 +106,23 @@ final class WorkVoiceWriteAuthorization: @unchecked Sendable {
 
 enum WorkVoiceCaptureCoordinator {
 
+    /// The import lane and every voice recovery surface use the same honest
+    /// location notice. It reports success without inviting another capture.
+    static var savedInAllMaterialsMessage: String {
+        String(localized: LocalizedStringResource(
+            "workdesk.capture.project.atomic.failed.message",
+            defaultValue: "Some items couldn’t be added to the project. They’re safe in All materials. Open All materials to organise them."
+        ))
+    }
+
     #if CONDUCK_TESTING
     /// Stands between the store's first-use load and the queued transcript
     /// write — the one gap a press can land in that no `Task.isCancelled` on
     /// the far side would ever see.
     @MainActor static var transcriptWritePauseForTesting: (@Sendable @MainActor () async -> Void)?
+    /// Models a peer publication after project refusal and before the fallback
+    /// rescans candidates. No store mutation lock is held at this boundary.
+    @MainActor static var projectFallbackPauseForTesting: (@Sendable @MainActor () async throws -> Void)?
     #endif
 
     /// What became of words offered to a LEGACY recording — the one desk write
@@ -134,7 +152,7 @@ enum WorkVoiceCaptureCoordinator {
 
     /// Where a capture's words ended up, and which card carries them.
     ///
-    /// Both cases mean the same thing to a caller — the words are on the desk
+    /// All cases mean the same thing to a caller — the words are on the desk
     /// and the parked recording may go — and they differ only in what the
     /// person sees: a card that is the words alone, which is what every capture
     /// produces now, or a legacy recording an earlier build published that took
@@ -144,14 +162,22 @@ enum WorkVoiceCaptureCoordinator {
     enum WorkVoiceTranscriptOutcome: Sendable, Equatable {
         /// A words-only card carries them, under this id.
         case wordsPublished(materialID: UUID)
+        /// The project disappeared before insertion. Words are safe and the
+        /// caller must explain their location rather than invite a duplicate.
+        case wordsPublishedInAllMaterials(materialID: UUID)
         /// A recording published by an earlier build was standing at this id
         /// and took the words onto itself.
         case attachedToRecording(materialID: UUID)
 
+        var savedInAllMaterials: Bool {
+            if case .wordsPublishedInAllMaterials = self { return true }
+            return false
+        }
+
         /// The card the words are on, whichever shape it took.
         var materialID: UUID {
             switch self {
-            case .wordsPublished(let id), .attachedToRecording(let id):
+            case .wordsPublished(let id), .wordsPublishedInAllMaterials(let id), .attachedToRecording(let id):
                 return id
             }
         }
@@ -192,17 +218,20 @@ enum WorkVoiceCaptureCoordinator {
 
         /// A words-only card carries the recovered transcript.
         case wordsPublished
+        case wordsPublishedInAllMaterials
         /// A recording an earlier build had published was standing, and the
         /// words joined it there.
         case attached
         /// Nothing was written and the durable record must stay armed.
         case retryKept(RetryKept)
 
+        var savedInAllMaterials: Bool { self == .wordsPublishedInAllMaterials }
+
         /// Whether the capture is finished, and its durable record may be
         /// released.
         var isTerminal: Bool {
             switch self {
-            case .wordsPublished, .attached:
+            case .wordsPublished, .wordsPublishedInAllMaterials, .attached:
                 return true
             case .retryKept:
                 return false
@@ -252,6 +281,7 @@ enum WorkVoiceCaptureCoordinator {
         sourceDevice: String? = nil,
         attachedTo: UUID? = nil,
         authorization: WorkVoiceWriteAuthorization? = nil,
+        projectID: UUID? = nil,
         store: ConversationStore = .shared
     ) async throws -> WorkVoiceTranscriptOutcome {
         let words = WorkboardWorkspaceCaptureLogic.normalizedThought(transcript)
@@ -268,7 +298,9 @@ enum WorkVoiceCaptureCoordinator {
                 // words are already there, and a second write would spend a
                 // CloudKit round trip advancing the desk's revision under
                 // whatever board mutation is in flight.
-                return .wordsPublished(materialID: candidate)
+                return try await standingWordsOutcome(
+                    materialID: candidate, projectID: projectID, store: store
+                )
             case .audio:
                 // A recording an earlier build published. The words belong ON
                 // it — publishing them beside it leaves a person with a card
@@ -291,7 +323,9 @@ enum WorkVoiceCaptureCoordinator {
                 // last-resort id, because a `.note` at the capture id or its
                 // escape is somebody else's card and has to be escaped, not
                 // adopted.
-                return .wordsPublished(materialID: candidate)
+                return try await standingWordsOutcome(
+                    materialID: candidate, projectID: projectID, store: store
+                )
             default:
                 continue
             }
@@ -321,15 +355,50 @@ enum WorkVoiceCaptureCoordinator {
                         attachedToMaterialID: attachedTo,
                         createdAt: createdAt
                     ),
-                    authorization: authorization
+                    authorization: authorization,
+                    projectID: projectID
                 )
                 return .wordsPublished(materialID: record.id)
+            } catch WorkDeskStoreError.projectNotFound {
+                // The transaction inserted nothing. Preserve the spoken words
+                // with the same deterministic capture id, just as imports keep
+                // a deleted destination's capture in All materials. A failure
+                // here still throws, leaving the durable retry untouched.
+                #if CONDUCK_TESTING
+                if let pause = await projectFallbackPauseForTesting { try await pause() }
+                #endif
+                let outcome = try await publishTranscript(
+                    words, forCapture: captureID, createdAt: createdAt,
+                    sourceDevice: sourceDevice, attachedTo: attachedTo,
+                    authorization: authorization, store: store
+                )
+                switch outcome {
+                case .attachedToRecording, .wordsPublishedInAllMaterials:
+                    return outcome
+                case .wordsPublished:
+                    return .wordsPublishedInAllMaterials(materialID: outcome.materialID)
+                }
             } catch WorkboardStoreError.invalidMaterialOwner {
                 refusal = WorkboardStoreError.invalidMaterialOwner
                 continue
             }
         }
         throw refusal ?? WorkboardStoreError.invalidMaterialOwner
+    }
+
+    /// A process can die after the fallback card commits and before its
+    /// location notice is presented. The durable destination plus current
+    /// placement evidence reconstruct that notice without writing anything.
+    /// A filed card whose project was later deleted retains its placement row;
+    /// it was never refused and must not report a fallback on replay.
+    private static func standingWordsOutcome(
+        materialID: UUID, projectID: UUID?, store: ConversationStore
+    ) async throws -> WorkVoiceTranscriptOutcome {
+        if let projectID,
+           try await store.isUnfiledWorkCaptureFallback(materialID: materialID, projectID: projectID) {
+            return .wordsPublishedInAllMaterials(materialID: materialID)
+        }
+        return .wordsPublished(materialID: materialID)
     }
 
     /// The ids one capture's words may occupy, in the order they are searched
@@ -439,6 +508,7 @@ enum WorkVoiceCaptureCoordinator {
             createdAt: pending.createdAt,
             sourceDevice: pending.sourceDevice,
             attachedTo: attachedTo ?? pending.workAttachedToMaterialID,
+            projectID: pending.workProjectID,
             store: store
         )
         // Recorded the moment it is true rather than on the way out, and with
@@ -450,6 +520,7 @@ enum WorkVoiceCaptureCoordinator {
         )
         switch published {
         case .wordsPublished: return .wordsPublished
+        case .wordsPublishedInAllMaterials: return .wordsPublishedInAllMaterials
         case .attachedToRecording: return .attached
         }
     }

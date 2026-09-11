@@ -27,7 +27,26 @@ struct WorkboardVoiceCaptureView: View {
 
     // A transcription retry must return to inert Work capture. The recorder's
     // default remains Chat for the established conversation composers.
-    @State private var recorder = InAppAudioRecorder(retryDestination: .work)
+    @State private var recorder: InAppAudioRecorder
+    private let onSavedInAllMaterials: @MainActor () -> Void
+
+    init(
+        target: WorkboardVoiceTarget,
+        projectID: UUID? = nil,
+        onTranscript: @escaping @MainActor (String) -> Void,
+        onCancel: @escaping @MainActor () -> Void,
+        onSavedInAllMaterials: @escaping @MainActor () -> Void = {}
+    ) {
+        self.target = target
+        self.onTranscript = onTranscript
+        self.onCancel = onCancel
+        self.onSavedInAllMaterials = onSavedInAllMaterials
+        // State owns this launch's recorder, including the frozen destination.
+        // Re-rendering the sheet cannot retarget a recording already spoken.
+        _recorder = State(initialValue: InAppAudioRecorder(
+            retryDestination: .work, workProjectID: projectID
+        ))
+    }
     @State private var didStart = false
     /// True once "Cancel Transcription" has stopped a hop on this capture.
     ///
@@ -462,6 +481,7 @@ struct WorkboardVoiceCaptureView: View {
             // failure is an error state, not a success, so it never arrives
             // here.
             if recorder.workRecordingMaterialID != nil {
+                if recorder.workCaptureSavedInAllMaterials { onSavedInAllMaterials() }
                 onCancel()
             } else {
                 onTranscript(transcript)

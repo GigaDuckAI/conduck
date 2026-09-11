@@ -29,7 +29,10 @@ selection checks. This checklist focuses on native interaction and appearance.
    and create a project there. Cancel naming: nothing moves or groups.
 5. Search by project title and confirm its materials are discoverable. Inside
    a project, the composer names that project. Capture a note and find the same
-   card in the project and All materials. Search captures go to All materials.
+   card in the project and All materials. Repeat with the microphone, attachments
+   and a drop. Start recording in the project, then navigate before transcription
+   finishes: the note retains its original destination. Search captures, including
+   the microphone, go to All materials.
 6. On an empty desk, pan before adding the first material. It should become
    visible. After arranging existing materials, deliberately pan to blank
    space, search or switch layout, and return: the camera must stay there.
@@ -37,7 +40,9 @@ selection checks. This checklist focuses on native interaction and appearance.
    layout options are available in the project options menu. Check large text,
    VoiceOver selection and movement actions, and keyboard movement with the
    whole card focused. Verify pin actions are absent from card and project menus.
-   Select/Done and Select all remain reachable in a narrow window.
+   Select/Done and Select all remain reachable in a narrow window. A project
+   first opens as Tiles; choosing Canvas or List there leaves All materials and
+   other projects unchanged. Relaunch and check each remembered layout returns.
 8. Delay/fail a save, drag again, and ensure old completions cannot undo the
    newer position. Delete or reassign a selected source in another window
    before release: the stale movement must fail without scattering the group.

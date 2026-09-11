@@ -305,6 +305,10 @@ final class InAppAudioRecorder {
     /// send path.
     let retryDestination: PendingRetryDestination
 
+    /// A recorder belongs to one launch. This immutable destination follows
+    /// both its direct publication and its durable retry, never live navigation.
+    let workProjectID: UUID?
+
     /// The Work desk card that owns this capture's words. Nil until the words
     /// are published — this lane puts nothing on the desk before then — nil for
     /// every Chat capture, and nil for a Work capture whose words turned out to
@@ -314,6 +318,9 @@ final class InAppAudioRecorder {
     /// second capture can never claim the first one's card and a refused start
     /// never strands the first one.
     private(set) var workRecordingMaterialID: UUID?
+    /// A successful capture whose intended project disappeared still keeps its
+    /// words. The sheet reports the recoverable location before dismissing.
+    private(set) var workCaptureSavedInAllMaterials = false
 
     /// The Work capture this recorder is still holding: its bytes, the card it
     /// published (nil while publication is owed) and the words recovered for it
@@ -819,8 +826,9 @@ final class InAppAudioRecorder {
     /// desk card can start audio in the gap before `.recording` is set.
     private var isStarting = false
 
-    init(retryDestination: PendingRetryDestination = .chat) {
+    init(retryDestination: PendingRetryDestination = .chat, workProjectID: UUID? = nil) {
         self.retryDestination = retryDestination
+        self.workProjectID = retryDestination == .work ? workProjectID : nil
         #if os(macOS) || os(iOS)
         // The composer mic joins the speech-exclusivity bus as a mic authority
         // (mirrors the menu-bar `DictationService`), so every playback surface
@@ -1182,6 +1190,7 @@ final class InAppAudioRecorder {
         #if !os(watchOS)
         pendingWorkCapture = nil
         workRecordingMaterialID = nil
+        workCaptureSavedInAllMaterials = false
         workCaptureFacts = .none
         #endif
         #if os(macOS)
@@ -1899,6 +1908,7 @@ final class InAppAudioRecorder {
                         // and the fold heals itself the moment the picture lands.
                         attachedTo: capture.attachedPictureID,
                         authorization: authorization,
+                        projectID: workProjectID,
                         store: workStore
                     )
                 } onCancel: {
@@ -1907,6 +1917,7 @@ final class InAppAudioRecorder {
                 capture.materialID = outcome.materialID
                 capture.transcriptSettled = true
                 workRecordingMaterialID = outcome.materialID
+                workCaptureSavedInAllMaterials = outcome.savedInAllMaterials
                 pendingWorkCapture = nil
                 // What the DESK now holds, artifact by artifact. The words, in
                 // every case. The recording only in the legacy one: a card an
@@ -2233,6 +2244,7 @@ final class InAppAudioRecorder {
     /// the one the retry card asks for by name.
     private func abandonPendingWorkCapture() async {
         workRecordingMaterialID = nil
+        workCaptureSavedInAllMaterials = false
         #if !os(watchOS)
         // The facts belong to the capture being replaced, so they go with it: a
         // receipt for the NEW capture must not report the old one's artifacts.
@@ -2509,7 +2521,8 @@ final class InAppAudioRecorder {
             destination: retryDestination,
             transcript: capture.transcript,
             publicationState: publicationState,
-            workAttachedToMaterialID: workAttachedToMaterialID
+            workAttachedToMaterialID: workAttachedToMaterialID,
+            workProjectID: workProjectID
         )
         // The id is recorded only once the write LANDED. A save that threw
         // parked nothing, so there is no entry to reserve, nothing to clear, and
