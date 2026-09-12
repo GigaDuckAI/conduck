@@ -2,13 +2,16 @@
 
 // The Work identity occupies the same principal toolbar slot as Chat's gateway.
 // Observe the workspace here so selection, search and rename update the title
-// without copying state into a platform host. Project actions live in its pill;
-// the full name stays accessible when a narrow navigation bar truncates it.
+// without copying state into a platform host. A conversation shows only Chat's
+// gateway/clone chooser; project actions belong to the project view. The chooser
+// opens the visible thread's existing sheet; it never rebinds a conversation or
+// owns a second sender. Full names remain accessible when the bar truncates them.
 
 import SwiftUI
 
 struct WorkDeskToolbarTitle: View {
     @Bindable var workspace: WorkDeskWorkspaceState
+    @Environment(\.workDeskConversationResolver) private var conversationResolver
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.phoneWorkbenchRouter) private var phoneWorkbenchRouter
@@ -35,6 +38,19 @@ struct WorkDeskToolbarTitle: View {
     }
 
     var body: some View {
+        if let conversation = workspace.currentConversation,
+           let model = workspace.conversationModel(for: conversation.id, resolver: conversationResolver) {
+            conversationGateway(model)
+                .background(AppColors.cardBackgroundElevated, in: Capsule())
+                #if os(macOS)
+                .fixedSize()
+                #endif
+        } else {
+            projectControl
+        }
+    }
+
+    private var projectControl: some View {
         Group {
             if let project = workspace.currentProject, !workspace.isSearching, !workspace.isProjectTrayPresented {
                 Menu {
@@ -86,5 +102,67 @@ struct WorkDeskToolbarTitle: View {
         .fixedSize()
         .background(AppColors.cardBackgroundElevated, in: Capsule())
         .accessibilityElement(children: .combine)
+    }
+
+    /// Same eligibility and sheet as a bound Chat. A forgotten gateway has no
+    /// presence dot; its recovery action stays beside the error in the thread.
+    private func conversationGateway(_ model: ConversationDetailViewModel) -> some View {
+        let presenceRef = model.boundGatewayAvailable ? model.boundRef : nil
+        let canSwitch = model.canSwitchGateway && model.hasTurns && model.boundGatewayAvailable
+        return HStack(spacing: 6) {
+            #if os(macOS)
+            GatewayPresenceDot(ref: presenceRef, diameter: 6)
+                .padding(.leading, 10)
+            #endif
+            if canSwitch {
+                Button {
+                    guard workspace.isActive, workspace.currentConversation?.id == model.conversationID else { return }
+                    #if os(iOS)
+                    phoneWorkbenchRouter?.dismissPhoneSection(for: .work)
+                    #endif
+                    model.showingGatewaySheet = true
+                } label: {
+                    gatewayLabel(model.backendDisplayName, presenceRef: presenceRef, interactive: true)
+                }
+                .pointerIconButton(shape: .capsule)
+                .accessibilityLabel(Text(LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway"))
+                    + Text(verbatim: ": " + model.backendDisplayName))
+                #if os(iOS)
+                .gatewayPresenceAccessibilityValue(for: presenceRef)
+                #endif
+                .help(String(localized: LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway")))
+                .accessibilityIdentifier("toolbar.cloneGateway")
+            } else {
+                gatewayLabel(model.backendDisplayName, presenceRef: presenceRef, interactive: false)
+            }
+        }
+        .accessibilityIdentifier("workdesk-conversation-gateway")
+    }
+
+    private func gatewayLabel(_ name: String, presenceRef: RemoteAgentRef?, interactive: Bool) -> some View {
+        HStack(spacing: 4) {
+            #if os(iOS)
+            GatewayPresenceDot(ref: presenceRef, standaloneAccessibility: !interactive)
+            #endif
+            Text(verbatim: name)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if interactive {
+                Image(systemName: "chevron.down")
+                    .font(.caption2)
+                    .accessibilityHidden(true)
+            }
+        }
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(AppColors.textSecondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: maximumWidth)
+        .fixedSize(horizontal: false, vertical: true)
+        #if os(iOS)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        #endif
+        .help(name)
     }
 }

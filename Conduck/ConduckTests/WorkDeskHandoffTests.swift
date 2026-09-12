@@ -149,9 +149,13 @@ final class WorkDeskHandoffTests: XCTestCase {
         let app = try RefusalLaneSource.source(at: "Conduck/ConduckApp.swift")
         XCTAssertTrue(app.contains("MainWindowView(coordinator: appDelegate.coordinator)"))
         let window = try RefusalLaneSource.source(at: "Conduck/Views/Conversation/MainWindowView.swift")
-        XCTAssertTrue(window.contains(".environment(\\.workDeskConversationResolver, WorkDeskConversationResolver("))
-        XCTAssertTrue(window.contains("coordinator.retainWorkViewModel(for: id, ownerID: owner)"))
-        XCTAssertTrue(window.contains("coordinator.clearWindowVisibleConversation(ifCurrent: id, ownerID: workVisibilityOwnerID)"))
+        XCTAssertEqual(window.components(separatedBy: ".environment(\\.workDeskConversationResolver, workConversationResolver)").count - 1, 2,
+                       "Work's detail and sibling toolbar must resolve the same conversation owner")
+        let resolver = try RefusalLaneSource.trailingClosure(after: "private var workConversationResolver:", in: window,
+            path: "Conduck/Views/Conversation/MainWindowView.swift")
+        XCTAssertTrue(resolver.contains("coordinator.retainWorkViewModel(for: id, ownerID: owner)"))
+        XCTAssertTrue(resolver.contains("coordinator.releaseWorkViewModel(ownerID: owner)"))
+        XCTAssertTrue(resolver.contains("coordinator.clearWindowVisibleConversation(ifCurrent: id, ownerID: workVisibilityOwnerID)"))
         let coordinatorPath = "Conduck/MenuBar/MenuBarCoordinator.swift"
         let coordinator = try RefusalLaneSource.source(at: coordinatorPath)
         let bind = try RefusalLaneSource.body(ofFunction: "bindWindowViewModel", in: coordinator, path: coordinatorPath)

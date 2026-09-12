@@ -26,7 +26,9 @@ struct WorkDeskWorkspaceView: View {
     private var workspaceLayout: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
-                header(isCompact: geometry.size.width < 600)
+                if !workspace.isShowingConversation || showsConversationBackNavigation || workspace.conversationLoadError != nil {
+                    header(isCompact: geometry.size.width < 600)
+                }
                 workspaceContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -245,14 +247,14 @@ struct WorkDeskWorkspaceView: View {
         }
     }
 
-    /// The toolbar owns project identity and its menu. Context, conversation
-    /// actions and collection tools occupy separate, quiet content rows.
+    /// The toolbar owns project identity and the conversation gateway.
+    /// Context and collection tools occupy separate, quiet content rows.
     /// Selection offers organization and an explicitly counted conversation
     /// draft; the review sheet still owns what leaves the device. Compact
     /// windows retain a named primary action.
     private func header(isCompact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            if !sidebarIsHosted || workspace.isShowingConversation || workspace.isSearching || showsNewConversation {
+            if workspace.isShowingConversation ? showsConversationBackNavigation : (!sidebarIsHosted || workspace.isSearching || showsNewConversation) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 8) {
                         projectIdentity
@@ -281,15 +283,7 @@ struct WorkDeskWorkspaceView: View {
                 .foregroundStyle(AppColors.textSecondary)
                 .accessibilityIdentifier("workdesk-project-context")
             }
-            if workspace.isShowingConversation {
-                if let conversation = workspace.currentConversation {
-                    HStack {
-                        Text(verbatim: conversation.displayTitle).font(.headline).lineLimit(1)
-                        Spacer()
-                        Text(verbatim: workspace.gatewayName(for: conversation)).font(.caption).foregroundStyle(AppColors.textSecondary)
-                    }.padding(.vertical, 6)
-                }
-            } else {
+            if !workspace.isShowingConversation {
                 materialControls
             }
             if let error = workspace.conversationLoadError {
@@ -306,7 +300,15 @@ struct WorkDeskWorkspaceView: View {
     }
 
     private var showsNewConversation: Bool {
-        workspace.currentProject != nil && !workspace.isSearching && !workspace.isSelecting && !workspace.isProjectTrayPresented
+        workspace.currentProject != nil && !workspace.isShowingConversation && !workspace.isSearching && !workspace.isSelecting && !workspace.isProjectTrayPresented
+    }
+
+    private var showsConversationBackNavigation: Bool {
+        #if os(iOS)
+        workspace.isShowingConversation && UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
     }
 
     private var projectIdentity: some View {
@@ -318,7 +320,7 @@ struct WorkDeskWorkspaceView: View {
                 .pointerIconButton(size: 40)
                 .accessibilityLabel(Text(LocalizedStringResource("workdesk.projects.browse", defaultValue: "Browse projects")))
             }
-            if workspace.isShowingConversation {
+            if showsConversationBackNavigation {
                 Button { workspace.selectScope(workspace.scope) } label: {
                     Label { Text(LocalizedStringResource("workdesk.conversation.back", defaultValue: "Back to project")).lineLimit(1) } icon: { Image(systemName: "chevron.left") }
                         .font(.headline).padding(.vertical, 8)

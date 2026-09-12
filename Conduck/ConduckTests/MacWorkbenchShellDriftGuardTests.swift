@@ -212,6 +212,8 @@ final class MacWorkbenchShellDriftGuardTests: XCTestCase {
             in: content, path: Self.path
         )
         XCTAssertTrue(work.contains("WorkDeskToolbarTitle(workspace: personalWorkbenchModel.workboardViewModel.deskWorkspace)"))
+        XCTAssertTrue(work.contains(".environment(\\.workDeskConversationResolver, workConversationResolver)"),
+                      "The toolbar must open the gateway sheet on the same model as the visible Work thread")
         let placeholder = try RefusalLaneSource.trailingClosure(
             after: "else if !coordinator.hasAnyConfiguredGateway",
             in: content, path: Self.path
