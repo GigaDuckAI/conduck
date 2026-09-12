@@ -17,6 +17,113 @@ import UniformTypeIdentifiers
 final class WorkDeskHandoffTests: XCTestCase {
     private let gatewayRef = RemoteAgentRef.builtin(.openclaw)
 
+    func testEmptyDraftPrefillsConfiguredDefaultAmongSeveralGateways() {
+        let draft = WorkDeskBriefDraft(brief: "Context", preferredGatewayRef: nil)
+        draft.prefillGateway(availableRefs: [.builtin(.hermes), gatewayRef], defaultRef: gatewayRef)
+        XCTAssertEqual(draft.selectedGateway, gatewayRef)
+        XCTAssertNil(draft.handoff.prepared)
+        XCTAssertNil(draft.handoff.acceptedConversationID)
+    }
+
+    func testEmptyDraftPrefillsOnlyAvailableGatewayWithoutUsableDefault() {
+        for defaultRef: RemoteAgentRef? in [nil, .builtin(.hermes)] {
+            let draft = WorkDeskBriefDraft(brief: "", preferredGatewayRef: nil)
+            draft.prefillGateway(availableRefs: [gatewayRef], defaultRef: defaultRef)
+            XCTAssertEqual(draft.selectedGateway, gatewayRef)
+        }
+    }
+
+    func testEmptyDraftDoesNotGuessAmongMultipleGatewaysOrSelectUnavailableDefault() {
+        for refs: [RemoteAgentRef] in [[], [gatewayRef, .builtin(.hermes)]] {
+            let draft = WorkDeskBriefDraft(brief: "", preferredGatewayRef: nil)
+            draft.prefillGateway(availableRefs: refs, defaultRef: .builtin(.openrouter))
+            XCTAssertNil(draft.selectedGateway)
+        }
+    }
+
+    func testProjectChoiceAndRetainedChoiceAreNeverReplacedByPrefill() {
+        let preferred = RemoteAgentRef.custom(UUID())
+        let draft = WorkDeskBriefDraft(brief: "", preferredGatewayRef: preferred.rawString)
+        draft.prefillGateway(availableRefs: [gatewayRef], defaultRef: gatewayRef)
+        XCTAssertEqual(draft.selectedGateway, preferred, "An unavailable project choice requires an explicit replacement")
+        draft.selectedGateway = .builtin(.hermes)
+        draft.prefillGateway(availableRefs: [gatewayRef], defaultRef: gatewayRef)
+        XCTAssertEqual(draft.selectedGateway, .builtin(.hermes))
+    }
+
+    func testSuggestedGatewayStaysSelectedWhenDefaultOrRosterChanges() {
+        let draft = WorkDeskBriefDraft(brief: "", preferredGatewayRef: nil)
+        draft.prefillGateway(availableRefs: [gatewayRef], defaultRef: nil)
+        draft.prefillGateway(availableRefs: [.builtin(.hermes)], defaultRef: .builtin(.hermes))
+        XCTAssertEqual(draft.selectedGateway, gatewayRef)
+        draft.prefillGateway(availableRefs: [], defaultRef: nil)
+        XCTAssertEqual(draft.selectedGateway, gatewayRef)
+    }
+
+    func testGatewayCanArriveLaterWithoutOverwritingTaskOrSavingProject() {
+        let draft = WorkDeskBriefDraft(brief: "Context", preferredGatewayRef: nil, task: "Keep task")
+        draft.prefillGateway(availableRefs: [], defaultRef: nil)
+        XCTAssertNil(draft.selectedGateway)
+        draft.prefillGateway(availableRefs: [gatewayRef], defaultRef: nil)
+        XCTAssertEqual(draft.selectedGateway, gatewayRef)
+        XCTAssertEqual(draft.brief, "Keep task")
+        XCTAssertEqual(draft.projectContext, "Context")
+        draft.discardUnsavedChanges()
+        XCTAssertNil(draft.selectedGateway, "Prefilling did not advance the saved project baseline")
+    }
+
+    func testPrefillCannotAlterReviewOrAcceptedHandoff() async {
+        let fixture = Fixture()
+        let handoff = WorkDeskHandoff(dependencies: fixture.dependencies)
+        let draft = WorkDeskBriefDraft(brief: "", preferredGatewayRef: nil, handoff: handoff)
+        await handoff.prepare(title: "Project", brief: "Task", cards: [], ref: gatewayRef)
+        draft.prefillGateway(availableRefs: [.builtin(.hermes)], defaultRef: .builtin(.hermes))
+        XCTAssertNil(draft.selectedGateway)
+        XCTAssertEqual(handoff.prepared?.connection.option.ref, gatewayRef)
+        XCTAssertTrue(fixture.events.isEmpty, "No outbound work happens during suggestion or review")
+        _ = await handoff.send()
+        draft.prefillGateway(availableRefs: [.builtin(.hermes)], defaultRef: .builtin(.hermes))
+        XCTAssertNil(draft.selectedGateway)
+        XCTAssertEqual(fixture.submittedRef, gatewayRef)
+    }
+
+    func testGatewayLoadExposesOnlyAnAvailableDefault() async {
+        let fixture = Fixture()
+        var dependencies = fixture.dependencies
+        dependencies.defaultGateway = { .builtin(.hermes) }
+        let handoff = WorkDeskHandoff(dependencies: dependencies)
+        XCTAssertFalse(handoff.hasLoadedGateways)
+        await handoff.loadGateways()
+        XCTAssertTrue(handoff.hasLoadedGateways)
+        XCTAssertEqual(handoff.gateways.map(\.ref), [gatewayRef])
+        XCTAssertNil(handoff.defaultGatewayRef)
+    }
+
+    func testLateGatewayLoadCannotReplaceNewerRoster() async {
+        let fixture = Fixture()
+        let originalConnections = fixture.dependencies.connections
+        var continuation: CheckedContinuation<[WorkDeskGatewayConnection], Never>?
+        var calls = 0
+        var dependencies = fixture.dependencies
+        dependencies.connections = {
+            calls += 1
+            if calls == 1 {
+                return await withCheckedContinuation { continuation = $0 }
+            }
+            return []
+        }
+        dependencies.defaultGateway = { .builtin(.openclaw) }
+        let handoff = WorkDeskHandoff(dependencies: dependencies)
+        let first = Task { await handoff.loadGateways() }
+        while continuation == nil { await Task.yield() }
+        await handoff.loadGateways()
+        continuation?.resume(returning: await originalConnections())
+        await first.value
+        XCTAssertTrue(handoff.hasLoadedGateways)
+        XCTAssertTrue(handoff.gateways.isEmpty)
+        XCTAssertNil(handoff.defaultGatewayRef)
+    }
+
     /// Runs on the authoritative iOS test host without creating the macOS
     /// coordinator (which owns real app lifecycle observers). The registry's
     /// runtime identity contract is covered by MenuBarCoordinatorRegistryTests;

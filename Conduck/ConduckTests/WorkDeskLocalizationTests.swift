@@ -40,8 +40,6 @@ final class WorkDeskLocalizationTests: XCTestCase {
             "workdesk.group": "Create project",
             "workdesk.move": "Move to",
             "workdesk.conversation.new": "New conversation…",
-            "workdesk.conversation.title": "New conversation",
-            "workdesk.conversation.sendTo": "Send to",
             "workdesk.conversation.review": "Review",
             "workdesk.brief.openChat": "Open chat"
         ]

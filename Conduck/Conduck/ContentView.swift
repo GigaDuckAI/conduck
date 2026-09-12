@@ -405,86 +405,18 @@ struct ContentView: View {
         #endif
     }
 
-    /// The principal-placement gateway `Menu` shared by the iPhone toolbar. Label
-    /// is the selected ref's name + a chevron; content lists the configured
-    /// refs with a checkmark on the active one. Self-hosted gateways render first;
-    /// hosted-model services (OpenRouter) appear in a labelled "Hosted" section below.
-    /// Picking updates the session-local selection and refreshes the title preview.
-    @ViewBuilder
+    /// Shared gateway chooser; the host retains its draft-scoped selection.
     private var gatewayPickerMenu: some View {
-        // Partition configured refs by category so self-hosted renders first.
-        let selfHostedRefs = configuredRefs.filter {
-            guard case .builtin(let b) = $0 else { return true }
-            return RemoteAgentBackendRegistry.lookup(id: b).category == .selfHostedAgent
+        GatewayPicker(
+            options: configuredRefs.map {
+                GatewayPicker.Option(ref: $0, name: RemoteAgentRefMetadata.displayName(for: $0, customs: customGateways))
+            },
+            selectedRef: pickerSelectedRef
+        ) { ref in
+            pickerSelectedRef = ref
+            userPickedRefForNewChat = true
         }
-        let hostedRefs = configuredRefs.filter {
-            guard case .builtin(let b) = $0 else { return false }
-            return RemoteAgentBackendRegistry.lookup(id: b).category == .hostedModel
-        }
-        Menu {
-            ForEach(selfHostedRefs, id: \.self) { ref in
-                let name = RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
-                Button {
-                    pickerSelectedRef = ref
-                    userPickedRefForNewChat = true
-                } label: {
-                    if ref == pickerSelectedRef {
-                        Label(name, systemImage: "checkmark")
-                    } else {
-                        Text(name)
-                    }
-                }
-            }
-            if !hostedRefs.isEmpty {
-                Section(String(localized: LocalizedStringResource(
-                    "settings.remoteAgent.hostedModels.header",
-                    defaultValue: "Hosted models"
-                ))) {
-                    ForEach(hostedRefs, id: \.self) { ref in
-                        let name = RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
-                        Button {
-                            pickerSelectedRef = ref
-                            userPickedRefForNewChat = true
-                        } label: {
-                            if ref == pickerSelectedRef {
-                                Label(name, systemImage: "checkmark")
-                            } else {
-                                Text(name)
-                            }
-                        }
-                    }
-                }
-            }
-        } label: {
-            // Presence dot LEADING of the name — here and in both branches of
-            // `gatewayTitleControl`, so the mark keeps its position as the title
-            // control changes shape. Nested stacks on purpose: 6pt separates the
-            // dot (a statement about the gateway) from the name, while the inner
-            // 4pt stays the existing name-to-chevron affordance gap.
-            HStack(spacing: 6) {
-                // MUTE inside the control, spoken as the Menu's a11y VALUE
-                // below. SwiftUI folds a Menu's label subtree into ONE element
-                // and the explicit `.accessibilityLabel` overwrites it, so a dot
-                // that declared its own element here would simply never be heard.
-                GatewayPresenceDot(ref: presenceRef, standaloneAccessibility: false)
-                HStack(spacing: 4) {
-                    Text(RemoteAgentRefMetadata.displayName(for: pickerSelectedRef, customs: customGateways))
-                        .font(.headline)
-                        .foregroundStyle(AppColors.textPrimary)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(AppColors.textSecondary)
-                }
-            }
-        }
-.accessibilityLabel(Text(LocalizedStringResource(
-            "chat.chooseAI.label",
-            defaultValue: "Choose AI"
-        )))  // VoiceOver reads the taxonomy no visual review ever sees.
-        .accessibilityIdentifier("toolbar.gatewayPicker")  // stable QA target (non-localized)
-        // …and the state the muted dot draws, as this element's VALUE:
-        // "Choose AI, Connected". No-op when there is no verdict to report.
-        .gatewayPresenceAccessibilityValue(for: presenceRef)
+        .accessibilityIdentifier("toolbar.gatewayPicker")
     }
 
     /// The nav-title display name, derived — never snapshotted. Inside a thread:

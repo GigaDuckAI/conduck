@@ -174,6 +174,7 @@ final class WorkDeskHandoff {
         var createConversation: @MainActor (UUID, RemoteAgentRef, UUID?, String?) async throws -> Void
         var removeConversation: @MainActor (UUID) async -> Void
         var submit: @MainActor (UUID, String, [PendingAttachment], RemoteAgentRef, String?, SettingsManager.RemoteAgentSnapshot, [WorkDeskMaterialInput]) async -> Bool
+        var defaultGateway: @MainActor () async -> RemoteAgentRef? = { nil }
 
         static func live(conversationResolver: WorkDeskConversationResolver) -> Self {
             Self(
@@ -218,13 +219,16 @@ final class WorkDeskHandoff {
                     let viewModel = conversationResolver.resolve(id) ?? ConversationDetailViewModel(conversationID: id)
                     #endif
                     return await viewModel.submitUserTurnAwaitingLocalAcceptance(prompt, attachments: attachments, expectedRef: ref, expectedFileLaneID: laneID, expectedGatewaySnapshot: agent, workMaterialInputs: materialInputs)
-                }
+                },
+                defaultGateway: { await SettingsManager.shared.defaultRemoteAgentRefIfSendable() }
             )
         }
     }
 
     private let dependencies: Dependencies
     private(set) var gateways: [WorkDeskGatewayOption] = []
+    private(set) var defaultGatewayRef: RemoteAgentRef?
+    private(set) var hasLoadedGateways = false
     private(set) var prepared: WorkDeskPreparedHandoff?
     private(set) var isPreparing = false
     private(set) var isSending = false
@@ -232,12 +236,22 @@ final class WorkDeskHandoff {
     var errorMessage: String?
     private var claimedPackets = Set<UUID>()
     private var preparationGeneration = UUID()
+    private var gatewayLoadGeneration = UUID()
 
     init(dependencies: Dependencies? = nil, conversationResolver: WorkDeskConversationResolver = .init()) {
         self.dependencies = dependencies ?? .live(conversationResolver: conversationResolver)
     }
 
-    func loadGateways() async { gateways = await dependencies.connections().map(\.option) }
+    func loadGateways() async {
+        let generation = UUID()
+        gatewayLoadGeneration = generation
+        let options = await dependencies.connections().map(\.option)
+        let defaultRef = await dependencies.defaultGateway()
+        guard generation == gatewayLoadGeneration, !Task.isCancelled else { return }
+        gateways = options
+        defaultGatewayRef = defaultRef.flatMap { ref in options.contains { $0.ref == ref } ? ref : nil }
+        hasLoadedGateways = true
+    }
 
     /// A deliberate new handoff from the same project. Previous packet IDs
     /// remain consumed, and this action neither prepares nor sends anything.

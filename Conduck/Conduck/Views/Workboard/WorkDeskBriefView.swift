@@ -79,6 +79,20 @@ final class WorkDeskBriefDraft {
         savedGateway = selectedGateway
     }
 
+    /// Suggest a destination only while the draft has none. This never changes
+    /// the device default or replaces a retained/project choice, even when that
+    /// gateway disappears. Review and the named Send still authorize dispatch.
+    func prefillGateway(availableRefs: [RemoteAgentRef], defaultRef: RemoteAgentRef?) {
+        guard selectedGateway == nil, !isSaving, !handoff.isPreparing,
+              !handoff.isSending, handoff.prepared == nil,
+              handoff.acceptedConversationID == nil else { return }
+        if let defaultRef, availableRefs.contains(defaultRef) {
+            selectedGateway = defaultRef
+        } else if availableRefs.count == 1 {
+            selectedGateway = availableRefs.first
+        }
+    }
+
     /// Refresh only standing context after an explicit edit or a reopened
     /// sheet. Task text and the chosen destination remain this draft's own.
     func refreshProjectContext(_ context: String) {
@@ -199,6 +213,7 @@ struct WorkDeskBriefView: View {
     let onEndEditing: @MainActor () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Bindable private var draft: WorkDeskBriefDraft
     @State private var presentationID: UUID?
     @State private var showingDiscardConfirmation = false
@@ -255,9 +270,9 @@ struct WorkDeskBriefView: View {
                     } else if let packet = handoff.prepared {
                         review(packet)
                     } else {
-                        introduction
+                        Text(title).font(.title2.weight(.semibold)).foregroundStyle(AppColors.textPrimary)
                         instructionEditor
-                        gatewayPicker
+                        gatewayNotice
                         projectContextPreview
                         materialChecklist
                     }
@@ -275,9 +290,13 @@ struct WorkDeskBriefView: View {
             .disabled(busy)
             .scrollDismissesKeyboard(.interactively)
             .background(AppColors.background)
-            .navigationTitle(Text(LocalizedStringResource("workdesk.conversation.title", defaultValue: "New conversation")))
+            .toolbarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom, spacing: 0) { footer }
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    WorkDeskGatewayHeader(draft: draft)
+                }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .cancellationAction) {
                     Button {
                         Task {
@@ -327,26 +346,42 @@ struct WorkDeskBriefView: View {
             Text(LocalizedStringResource("workdesk.brief.discardMessage", defaultValue: "The changes in this window will be lost. Your saved project and materials will stay in Work."))
         }
         .interactiveDismissDisabled()
-        .task { await handoff.loadGateways() }
-        .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
-            Task { await handoff.loadGateways() }
+        .task(id: presentationID) {
+            guard presentationID != nil else { return }
+            await refreshGateways()
         }
-        .onAppear { presentationID = draft.beginPresentation() }
+        .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
+            Task { await refreshGateways() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await refreshGateways() } }
+        }
+        .onChange(of: draft.selectedGateway) { _, _ in
+            observeGatewayPresence()
+        }
+        .onAppear {
+            presentationID = draft.beginPresentation()
+            observeGatewayPresence()
+        }
         .onDisappear {
             if let presentationID { draft.endPresentation(presentationID) }
         }
         #if os(macOS)
-        .frame(minWidth: 580, idealWidth: 740, minHeight: 640, idealHeight: 800)
+        .frame(minWidth: 580, idealWidth: 700, minHeight: 520, idealHeight: 640)
         #endif
     }
 
-    private var introduction: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.title2.weight(.semibold)).foregroundStyle(AppColors.textPrimary)
-            Text(LocalizedStringResource("workdesk.conversation.intro", defaultValue: "Start a conversation using this project’s context and the materials you choose."))
-                .font(.callout)
-                .foregroundStyle(AppColors.textSecondary)
-        }
+    private func refreshGateways() async {
+        let token = presentationID
+        await handoff.loadGateways()
+        guard !Task.isCancelled, draft.isCurrentPresentation(token) else { return }
+        draft.prefillGateway(availableRefs: handoff.gateways.map(\.ref), defaultRef: handoff.defaultGatewayRef)
+        observeGatewayPresence()
+    }
+
+    private func observeGatewayPresence() {
+        guard scenePhase == .active, draft.isCurrentPresentation(presentationID), let gateway else { return }
+        GatewayPresenceMonitor.shared.observe(gateway.ref)
     }
 
     private var instructionEditor: some View {
@@ -499,62 +534,15 @@ struct WorkDeskBriefView: View {
         return WorkDeskHandoffPolicy.blockingReason(material, gateway: gateway)
     }
 
-    private var gatewayPicker: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(LocalizedStringResource("workdesk.conversation.sendTo", defaultValue: "Send to"))
-                    .font(.headline)
-                Spacer(minLength: 8)
-                Menu {
-                    ForEach(handoff.gateways) { option in
-                        Button { draft.selectedGateway = option.ref } label: {
-                            if draft.selectedGateway == option.ref {
-                                Label(option.name, systemImage: "checkmark")
-                            } else {
-                                Text(verbatim: option.name)
-                            }
-                        }
-                        .accessibilityIdentifier("workdesk-gateway-\(option.id)")
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        if let gateway {
-                            Text(verbatim: gateway.name).lineLimit(2)
-                        } else {
-                            Text(LocalizedStringResource("workdesk.conversation.gateway.choose", defaultValue: "Choose a gateway"))
-                        }
-                        Image(systemName: "chevron.down").font(.caption)
-                    }
-                    .font(.subheadline.weight(.medium))
-                    .padding(.horizontal, 10).frame(minHeight: 44)
-                }
-                .pointerIconButton(size: 44)
-                .disabled(handoff.gateways.isEmpty)
-                .accessibilityLabel(Text(LocalizedStringResource("workdesk.conversation.gateway", defaultValue: "Conversation gateway")))
-                .accessibilityValue(gateway?.name ?? "")
-            }
-            if let gateway {
-                Text(connectionDescription(gateway))
-                    .font(.caption).foregroundStyle(AppColors.textSecondary)
-            }
-            if handoff.gateways.isEmpty {
-                Text(LocalizedStringResource("workdesk.conversation.gateway.none", defaultValue: "No gateway is available on this device. Your task will stay here when you close. Connect a gateway in Settings → Personal AI."))
-                    .font(.callout).foregroundStyle(AppColors.textSecondary)
-            } else if draft.selectedGateway != nil, gateway == nil {
-                Text(LocalizedStringResource("workdesk.brief.savedUnavailable", defaultValue: "This project's saved connection is unavailable here. Choose another connection to continue."))
-                    .font(.callout).foregroundStyle(AppColors.textSecondary)
-            }
+    @ViewBuilder
+    private var gatewayNotice: some View {
+        if handoff.hasLoadedGateways, handoff.gateways.isEmpty {
+            Text(LocalizedStringResource("workdesk.conversation.gateway.none", defaultValue: "No gateway is available on this device. Your task will stay here when you close. Connect a gateway in Settings → Personal AI."))
+                .font(.callout).foregroundStyle(AppColors.textSecondary)
+        } else if handoff.hasLoadedGateways, draft.selectedGateway != nil, gateway == nil {
+            Text(LocalizedStringResource("workdesk.brief.savedUnavailable", defaultValue: "This gateway is unavailable on this device. Choose another to continue."))
+                .font(.callout).foregroundStyle(AppColors.textSecondary)
         }
-    }
-
-    private func connectionDescription(_ option: WorkDeskGatewayOption) -> LocalizedStringResource {
-        if option.isHosted {
-            return LocalizedStringResource("workdesk.brief.hostedCapability", defaultValue: "Hosted model · text and images · no file workspace")
-        }
-        if option.hasFileTransfer {
-            return LocalizedStringResource("workdesk.brief.fileCapability", defaultValue: "Your gateway · text, images and attached files")
-        }
-        return LocalizedStringResource("workdesk.brief.textCapability", defaultValue: "Your gateway · text and images · file transfer not connected")
     }
 
     private func review(_ packet: WorkDeskPreparedHandoff) -> some View {
@@ -711,6 +699,32 @@ struct WorkDeskBriefView: View {
             draft.saveError = String(localized: "workdesk.conversation.saveFailed", defaultValue: "Your project settings could not be saved. Your task is still here. Keep this window open and try again.")
         }
         return success
+    }
+}
+
+/// Reads the retained draft from its own body so toolbar observations update
+/// when a gateway arrives or changes. A review always names its frozen route;
+/// returning to Edit request is required before choosing another destination.
+private struct WorkDeskGatewayHeader: View {
+    @Bindable var draft: WorkDeskBriefDraft
+
+    var body: some View {
+        let handoff = draft.handoff
+        let packet = handoff.prepared
+        GatewayPicker(
+            options: handoff.gateways.map { .init(ref: $0.ref, name: $0.name) },
+            selectedRef: packet?.connection.option.ref ?? draft.selectedGateway,
+            selectedName: packet?.gatewayName,
+            allowsSelection: !draft.isSaving && !handoff.isPreparing && !handoff.isSending
+                && packet == nil && handoff.acceptedConversationID == nil,
+            optionAccessibilityPrefix: "workdesk-gateway-"
+        ) { ref in
+            guard !draft.isSaving, !handoff.isPreparing, !handoff.isSending,
+                  handoff.prepared == nil, handoff.acceptedConversationID == nil,
+                  handoff.gateways.contains(where: { $0.ref == ref }) else { return }
+            draft.selectedGateway = ref
+        }
+        .accessibilityIdentifier("workdesk-gateway-picker")
     }
 }
 #endif

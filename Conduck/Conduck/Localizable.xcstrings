@@ -25027,28 +25027,6 @@
         }
       }
     },
-    "workdesk.brief.fileCapability" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your gateway · text, images and attached files"
-          }
-        }
-      }
-    },
-    "workdesk.brief.hostedCapability" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hosted model · text and images · no file workspace"
-          }
-        }
-      }
-    },
     "workdesk.brief.included" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25121,7 +25099,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This project's saved connection is unavailable here. Choose another connection to continue."
+            "value" : "This gateway is unavailable on this device. Choose another to continue."
           }
         }
       }
@@ -25133,17 +25111,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Send to %@"
-          }
-        }
-      }
-    },
-    "workdesk.brief.textCapability" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your gateway · text and images · file transfer not connected"
           }
         }
       }
@@ -25498,17 +25465,6 @@
         }
       }
     },
-    "workdesk.conversation.gateway" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Conversation gateway"
-          }
-        }
-      }
-    },
     "workdesk.conversation.gateway.choose" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25527,17 +25483,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No gateway is available on this device. Your task will stay here when you close. Connect a gateway in Settings → Personal AI."
-          }
-        }
-      }
-    },
-    "workdesk.conversation.intro" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Start a conversation using this project’s context and the materials you choose."
           }
         }
       }
@@ -25597,17 +25542,6 @@
         }
       }
     },
-    "workdesk.conversation.sendTo" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Send to"
-          }
-        }
-      }
-    },
     "workdesk.conversation.task" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25626,17 +25560,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Describe the task and the result you want from this conversation…"
-          }
-        }
-      }
-    },
-    "workdesk.conversation.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New conversation"
           }
         }
       }

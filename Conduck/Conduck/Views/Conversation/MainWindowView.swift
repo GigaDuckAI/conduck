@@ -987,84 +987,21 @@ struct MainWindowView: View {
 
     // MARK: - Gateway picker
 
-    @ViewBuilder
+    /// Shared gateway chooser; the window keeps its dot outside every
+    /// picker/clone/read-only state so the title-bar mark never jumps.
     private var gatewayPickerMenu: some View {
-        // Partition configured refs by category so self-hosted renders first.
-        let selfHostedRefs = configuredRefs.filter {
-            guard case .builtin(let b) = $0 else { return true }
-            return RemoteAgentBackendRegistry.lookup(id: b).category == .selfHostedAgent
+        GatewayPicker(
+            options: configuredRefs.map {
+                GatewayPicker.Option(ref: $0, name: RemoteAgentRefMetadata.displayName(for: $0, customs: customGateways))
+            },
+            selectedRef: selectedRef,
+            showsPresence: false
+        ) { ref in
+            activateChatsForToolbarAction()
+            selectedRef = ref
+            userPickedRefForNewChat = true
+            coordinator.pendingNewConversationRef = ref
         }
-        let hostedRefs = configuredRefs.filter {
-            guard case .builtin(let b) = $0 else { return false }
-            return RemoteAgentBackendRegistry.lookup(id: b).category == .hostedModel
-        }
-        Menu {
-            ForEach(selfHostedRefs, id: \.self) { ref in
-                let name = RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
-                Button {
-                    activateChatsForToolbarAction()
-                    selectedRef = ref
-                    userPickedRefForNewChat = true
-                    coordinator.pendingNewConversationRef = ref
-                } label: {
-                    if ref == selectedRef {
-                        Label(name, systemImage: "checkmark")
-                    } else {
-                        Text(name)
-                    }
-                }
-            }
-            if !hostedRefs.isEmpty {
-                Section(String(localized: LocalizedStringResource(
-                    "settings.remoteAgent.hostedModels.header",
-                    defaultValue: "Hosted models"
-                ))) {
-                    ForEach(hostedRefs, id: \.self) { ref in
-                        let name = RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
-                        Button {
-                            activateChatsForToolbarAction()
-                            selectedRef = ref
-                            userPickedRefForNewChat = true
-                            coordinator.pendingNewConversationRef = ref
-                        } label: {
-                            if ref == selectedRef {
-                                Label(name, systemImage: "checkmark")
-                            } else {
-                                Text(name)
-                            }
-                        }
-                    }
-                }
-            }
-        } label: {
-            // Chevron drawn HERE, and the pill chrome with it. macOS's DEFAULT
-            // menu style hands this to an AppKit popup button that keeps only
-            // the label's TEXT — every custom thing inside is dropped and the
-            // system draws its own tighter capsule instead (measured: ~5pt of
-            // horizontal inset, against the 14pt the sibling pills carry, plus
-            // a disclosure arrow of its own). `.menuStyle(.button)` below is
-            // what makes this label a real SwiftUI view, the same recipe
-            // `AttachmentMenu` uses for its paperclip, so the picker, the clone
-            // pill and the read-only label are finally ONE shape at ONE size.
-            gatewayPillBackground(
-                HStack(spacing: 4) {
-                    Text(RemoteAgentRefMetadata.displayName(for: selectedRef, customs: customGateways))
-                        .font(.subheadline.weight(.semibold))
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                }
-                .foregroundStyle(AppColors.textSecondary)
-            )
-        }
-        .menuStyle(.button)
-        // Sets the button style `.menuStyle(.button)` renders with: no bezel of
-        // its own (the pill IS the chrome) plus the hover wash the clone pill
-        // gets, so the two interactive title-bar states behave identically.
-        .pointerIconButton(shape: .capsule)
-        .help(String(localized: LocalizedStringResource(
-            "chat.chooseAI.label",
-            defaultValue: "Choose AI"
-        )))
     }
 
     /// The ref whose presence the title-bar dot reports: inside a thread the
