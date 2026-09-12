@@ -632,6 +632,8 @@ final class WorkboardViewModel {
     struct Dependencies {
         /// The desk, or nil while no capture has created its row yet.
         var loadDesk: @MainActor () async throws -> WorkboardItemSnapshot?
+        /// Load saved organization before any cards can seed a default layout.
+        var prepareForFirstPresentation: @MainActor () async throws -> Void = {}
         /// `(expectedDeskRevision, material, onProgress) -> refreshed desk`.
         /// The token is nil exactly when this model holds no desk to guard —
         /// the first capture creates the row, and a token for a row that does
@@ -698,6 +700,13 @@ final class WorkboardViewModel {
     /// predates the desk is never loaded, so it can never appear here.
     private(set) var desk: WorkboardItemSnapshot?
     var isLoading = false
+    private(set) var hasLoadedDesk = false
+    /// A successful empty read is warm too. Background refreshes must not
+    /// unmount its workspace, and a cold view must not flash an empty canvas.
+    var deskPresentation: WorkboardDeskPresentation {
+        .resolve(isLoading: !hasLoadedDesk && loadError == nil,
+                 loadError: hasLoadedDesk ? nil : loadError, desk: desk)
+    }
     var loadError: String?
     var importState: WorkboardImportState?
     /// Each destination owns its session-local draft above the detail view.
@@ -796,7 +805,12 @@ final class WorkboardViewModel {
             loadRequestedWhileLoading = false
             loadError = nil
             do {
-                desk = try await dependencies.loadDesk()
+                try await dependencies.prepareForFirstPresentation()
+                let refreshed = try await dependencies.loadDesk()
+                // CloudKit can notify without changing the projected desk.
+                // Avoid invalidating every card for an identical snapshot.
+                if desk != refreshed { desk = refreshed }
+                hasLoadedDesk = true
             } catch is CancellationError {
                 // A trailing request belongs to a different caller/event and
                 // still deserves one fresh attempt below.

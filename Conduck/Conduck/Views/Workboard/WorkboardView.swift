@@ -476,11 +476,7 @@ struct WorkboardDetailColumn: View {
 
     @ViewBuilder
     var body: some View {
-        switch WorkboardDeskPresentation.resolve(
-            isLoading: viewModel.isLoading,
-            loadError: viewModel.loadError,
-            desk: viewModel.desk
-        ) {
+        switch viewModel.deskPresentation {
         case .loading:
             VStack(spacing: 14) {
                 ProgressView()

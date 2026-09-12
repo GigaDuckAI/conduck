@@ -23,10 +23,23 @@
 // from a stale map moves a card the person never aimed at, which is exactly the
 // class of bug a fixed-slot drag was adopted to remove.
 
+import UniformTypeIdentifiers
 import XCTest
 @testable import Conduck
 
 final class WorkboardDragResolutionTests: XCTestCase {
+
+    func testAppExportsItsBuildScopedMaterialDragType() throws {
+        let declarations = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey:
+            "UTExportedTypeDeclarations") as? [[String: Any]])
+        let type = UTType.conduckWorkboardMaterial
+        let declaration = try XCTUnwrap(declarations.first {
+            $0["UTTypeIdentifier"] as? String == type.identifier
+        })
+        XCTAssertEqual(declaration["UTTypeConformsTo"] as? [String], ["public.data"])
+        XCTAssertFalse(type.conforms(to: .text), "A card drag must not become a new text capture")
+        XCTAssertFalse(type.conforms(to: .fileURL), "A card drag must not become a new file capture")
+    }
 
     // MARK: - The pointer, across a scroll
 

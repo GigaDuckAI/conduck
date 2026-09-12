@@ -199,6 +199,73 @@ final class WorkDeskOrganizationTests: XCTestCase {
     }
 
     @MainActor
+    func testFirstPresentationWaitsForSavedMembershipAndPositionsAndReusesSnapshot() async throws {
+        let project = WorkDeskProjectRecord(title: "Saved project", position: .init(x: 500, y: 200))
+        let materialID = UUID()
+        let placement = WorkDeskPlacementRecord(materialID: materialID, projectID: project.id,
+            position: .init(x: 120, y: 80))
+        let snapshot = WorkDeskOrganizationSnapshot(projects: [project], placements: [materialID: placement])
+        let seam = DelayedDeskRead()
+        let organization = WorkDeskOrganization(fetch: { await seam.fetch() }, apply: { _ in snapshot })
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        let first = Task { try await workspace.prepareForFirstPresentation() }
+        await seam.waitForRead()
+        let second = Task { try await workspace.prepareForFirstPresentation() }
+        await Task.yield()
+        XCTAssertTrue(organization.projects.isEmpty, "The first presentation must still be waiting")
+        await seam.finishRead(snapshot)
+        try await first.value
+        try await second.value
+        XCTAssertEqual(organization.projectID(for: materialID), project.id)
+        XCTAssertEqual(organization.placements[materialID]?.position, placement.position)
+        XCTAssertEqual(organization.projects.first?.position, project.position)
+        try await workspace.prepareForFirstPresentation()
+        let reads = await seam.readCount
+        XCTAssertEqual(reads, 1, "Board refreshes reuse the prepared organization")
+    }
+
+    @MainActor
+    func testFailedFirstPresentationRemainsRetryable() async throws {
+        let project = WorkDeskProjectRecord(title: "After retry")
+        let seam = InitialDeskRead(snapshot: .init(projects: [project]), failsFirst: true)
+        let organization = WorkDeskOrganization(fetch: { try await seam.fetch() }, apply: { _ in .init() })
+        do {
+            try await organization.prepareForFirstPresentation()
+            XCTFail("Failed metadata must not license an empty canvas")
+        } catch { XCTAssertEqual(error as? WorkDeskStoreError, .materialNotFound) }
+        XCTAssertTrue(organization.projects.isEmpty)
+        try await organization.prepareForFirstPresentation()
+        XCTAssertEqual(organization.projects.map(\.id), [project.id])
+        let reads = await seam.readCount
+        XCTAssertEqual(reads, 2)
+    }
+
+    @MainActor
+    func testFirstPresentationDoesNotOverwriteAnInterveningMutation() async throws {
+        let seam = DelayedDeskRead()
+        let organization = WorkDeskOrganization(fetch: { await seam.fetch() }, apply: { await seam.apply($0) })
+        let preparation = Task { try await organization.prepareForFirstPresentation() }
+        await seam.waitForRead()
+        let createdID = await organization.createProject(title: "Created during preparation")
+        await seam.finishRead()
+        try await preparation.value
+        try await organization.prepareForFirstPresentation()
+        XCTAssertEqual(organization.projects.map(\.id), [createdID].compactMap { $0 })
+        let reads = await seam.readCount
+        XCTAssertEqual(reads, 1, "The committed mutation supplied a complete snapshot")
+    }
+
+    @MainActor
+    func testFirstPresentationReusesAnEarlierSuccessfulReload() async throws {
+        let seam = InitialDeskRead(snapshot: .init(), failsFirst: false)
+        let organization = WorkDeskOrganization(fetch: { try await seam.fetch() }, apply: { _ in .init() })
+        await organization.reload()
+        try await organization.prepareForFirstPresentation()
+        let reads = await seam.readCount
+        XCTAssertEqual(reads, 1, "An empty but successfully loaded organization is ready too")
+    }
+
+    @MainActor
     func testControllerReloadCannotOverwriteAnInterveningSave() async throws {
         let seam = DelayedDeskRead()
         let organization = WorkDeskOrganization(fetch: { await seam.fetch() }, apply: { mutation in
@@ -232,12 +299,14 @@ final class WorkDeskOrganizationTests: XCTestCase {
 }
 
 private actor DelayedDeskRead {
+    private(set) var readCount = 0
     private var read: CheckedContinuation<WorkDeskOrganizationSnapshot, Never>?
     private var observers: [CheckedContinuation<Void, Never>] = []
     private var snapshot = WorkDeskOrganizationSnapshot()
 
     func fetch() async -> WorkDeskOrganizationSnapshot {
-        await withCheckedContinuation { continuation in
+        readCount += 1
+        return await withCheckedContinuation { continuation in
             read = continuation
             observers.forEach { $0.resume() }
             observers.removeAll()
@@ -249,13 +318,30 @@ private actor DelayedDeskRead {
         await withCheckedContinuation { observers.append($0) }
     }
 
-    func finishRead() {
-        read?.resume(returning: .init())
+    func finishRead(_ snapshot: WorkDeskOrganizationSnapshot = .init()) {
+        read?.resume(returning: snapshot)
         read = nil
     }
 
     func apply(_ mutation: WorkDeskMutation) -> WorkDeskOrganizationSnapshot {
         if case let .createProject(project, _) = mutation { snapshot.projects.append(project) }
+        return snapshot
+    }
+}
+
+private actor InitialDeskRead {
+    let snapshot: WorkDeskOrganizationSnapshot
+    let failsFirst: Bool
+    private(set) var readCount = 0
+
+    init(snapshot: WorkDeskOrganizationSnapshot, failsFirst: Bool) {
+        self.snapshot = snapshot
+        self.failsFirst = failsFirst
+    }
+
+    func fetch() throws -> WorkDeskOrganizationSnapshot {
+        readCount += 1
+        if failsFirst && readCount == 1 { throw WorkDeskStoreError.materialNotFound }
         return snapshot
     }
 }

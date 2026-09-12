@@ -32,6 +32,18 @@
 	     CFBundleURLTypes is what LaunchServices registers; the app itself reads
 	     ConduckOAuthCallbackScheme below, the same way it reads
 	     ConduckIdentityNamespace. -->
+	<!-- Private card drag data is exported by this app, scoped to its build identity. -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>$(CONDUCK_IDENTITY_NAMESPACE).workboard-material</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

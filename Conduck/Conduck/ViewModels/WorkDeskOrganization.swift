@@ -29,6 +29,8 @@ final class WorkDeskOrganization {
     @ObservationIgnored private var pendingMutationCount = 0
     @ObservationIgnored private var generation: UInt64 = 0
     @ObservationIgnored private var reloadPending = false
+    @ObservationIgnored private var hasLoadedSnapshot = false
+    @ObservationIgnored private var initialLoadTask: Task<Void, Error>?
 
     init(store: ConversationStore = .shared) {
         fetch = { try await store.fetchWorkDeskOrganization() }
@@ -93,6 +95,41 @@ final class WorkDeskOrganization {
             for location in locations(for: material.id) { counts[location.location.projectID, default: 0] += 1 }
         }
         return counts
+    }
+
+    /// The first canvas needs saved membership and coordinates before it can
+    /// invent default positions. Warm only this metadata while Chat is visible;
+    /// later board refreshes reuse it and the workspace owns ongoing reloads.
+    /// A failed read is thrown to the board's retry surface, never accepted as
+    /// an empty organization. Concurrent callers share one preparation.
+    func prepareForFirstPresentation() async throws {
+        guard !hasLoadedSnapshot else { return }
+        if let initialLoadTask {
+            try await initialLoadTask.value
+            return
+        }
+        let task = Task { @MainActor [self] in
+            while !hasLoadedSnapshot {
+                if let mutationTail {
+                    _ = await mutationTail.value
+                    continue
+                }
+                generation &+= 1
+                let requestedGeneration = generation
+                do {
+                    let snapshot = try await fetch()
+                    guard requestedGeneration == generation, pendingMutationCount == 0 else { continue }
+                    publish(snapshot)
+                } catch {
+                    // A concurrent successful mutation or reload may already
+                    // have supplied a newer complete organization.
+                    if !hasLoadedSnapshot { throw error }
+                }
+            }
+        }
+        initialLoadTask = task
+        defer { initialLoadTask = nil }
+        try await task.value
     }
 
     func reload() async {
@@ -293,6 +330,7 @@ final class WorkDeskOrganization {
     }
 
     private func publish(_ snapshot: WorkDeskOrganizationSnapshot) {
+        hasLoadedSnapshot = true
         // Only tombstones prune process-wide preferences. Another window may
         // create a project while this instance awaits its snapshot, so absence
         // from the returned live list is not evidence of deletion. Successful

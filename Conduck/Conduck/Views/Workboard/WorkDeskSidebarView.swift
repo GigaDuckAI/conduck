@@ -16,9 +16,7 @@ struct WorkDeskSidebarView: View {
     private var materials: [WorkboardMaterialSnapshot] { viewModel.desk?.materials ?? [] }
 
     private var navigationIsAvailable: Bool {
-        if case .desk = WorkboardDeskPresentation.resolve(
-            isLoading: viewModel.isLoading, loadError: viewModel.loadError, desk: viewModel.desk
-        ) { return true }
+        if case .desk = viewModel.deskPresentation { return true }
         return false
     }
 

@@ -961,7 +961,12 @@ final class PersonalWorkbenchModel {
             }
         )
 
-        let workboardViewModel = WorkboardViewModel(dependencies: repository.makeDependencies())
+        let workspace = WorkDeskWorkspaceState()
+        var dependencies = repository.makeDependencies()
+        dependencies.prepareForFirstPresentation = {
+            try await workspace.prepareForFirstPresentation()
+        }
+        let workboardViewModel = WorkboardViewModel(dependencies: dependencies, deskWorkspace: workspace)
         let refreshCoordinator = WorkCaptureRefreshCoordinator(
             boardIsVisible: { router.destination == .work },
             drainCaptures: {

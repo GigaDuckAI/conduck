@@ -155,6 +155,13 @@ final class WorkDeskWorkspaceState {
         Self.liveWorkspaces.append(WeakWorkspace(self))
     }
 
+    /// Called before the board publishes its first material snapshot. Project
+    /// membership and saved positions must exist before any canvas can seed
+    /// defaults; settings and result reconciliation stay on the visible lane.
+    func prepareForFirstPresentation() async throws {
+        try await organization.prepareForFirstPresentation()
+    }
+
     /// A real mount requests a complete snapshot. Mode changes only drain
     /// changes recorded while hidden, so a round trip through Chats neither
     /// reloads Settings nor scans all project results again.
@@ -305,15 +312,18 @@ final class WorkDeskWorkspaceState {
             let sources = try await conversationStore.fetchWorkDeskResults()
             let uses = try await conversationStore.fetchWorkDeskMaterialUses()
             guard generation == conversationReloadGeneration else { return }
-            projectConversations = conversations.filter { $0.projectID != nil }
+            let projectConversations = conversations.filter { $0.projectID != nil }
+            if self.projectConversations != projectConversations {
+                self.projectConversations = projectConversations
+            }
             let arrivingResults = Set(sources.keys).subtracting(results.keys)
             for draft in briefDrafts.values {
                 draft.excludedIDs.formUnion(arrivingResults.subtracting(draft.projectResultIDs))
                 draft.projectResultIDs.formUnion(Set(sources.keys).union(resultMaterialIDs))
                 draft.remoteResultIDs = Set(sources.values.filter(\.isRemoteReference).map(\.materialID)).union(remoteResultMaterialIDs)
             }
-            results = sources
-            materialUses = uses
+            if results != sources { results = sources }
+            if materialUses != uses { materialUses = uses }
             conversationLoadError = nil
             if let id = selectedConversationID, !projectConversations.contains(where: { $0.id == id }) {
                 suspendConversation()

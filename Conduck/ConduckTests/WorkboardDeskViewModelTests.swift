@@ -24,6 +24,66 @@ final class WorkboardDeskViewModelTests: XCTestCase {
         super.tearDown()
     }
 
+    private enum LoadFailure: Error { case expected }
+
+    func testColdDeskWaitsForOrganizationBeforeFetchingCardsAndRetriesFailure() async {
+        let store = ConversationStore(inMemory: true)
+        let repository = WorkboardLiveRepository(store: store,
+            captureInbox: WorkCaptureInbox(baseURL: temporaryDirectory()), openMaterial: { _ in })
+        var dependencies = repository.makeDependencies()
+        var prepared = false
+        var fetchCount = 0
+        dependencies.prepareForFirstPresentation = {
+            if !prepared { throw LoadFailure.expected }
+        }
+        dependencies.loadDesk = {
+            XCTAssertTrue(prepared)
+            fetchCount += 1
+            return nil
+        }
+        let model = WorkboardViewModel(dependencies: dependencies)
+        XCTAssertEqual(model.deskPresentation, .loading,
+                       "A cold mount must not show an unorganized empty canvas")
+        await model.load()
+        XCTAssertEqual(fetchCount, 0)
+        guard case .loadFailed = model.deskPresentation else {
+            return XCTFail("Organization failure must retain the retry surface")
+        }
+        prepared = true
+        await model.load()
+        XCTAssertEqual(fetchCount, 1)
+        guard case .desk = model.deskPresentation else { return XCTFail("Expected a ready empty desk") }
+    }
+
+    func testLoadedEmptyDeskKeepsWorkspaceThroughRefreshAndFailure() async {
+        let store = ConversationStore(inMemory: true)
+        let repository = WorkboardLiveRepository(store: store,
+            captureInbox: WorkCaptureInbox(baseURL: temporaryDirectory()), openMaterial: { _ in })
+        var dependencies = repository.makeDependencies()
+        var inspectRefresh: (() -> Void)?
+        var shouldFail = false
+        dependencies.loadDesk = {
+            inspectRefresh?()
+            if shouldFail { throw LoadFailure.expected }
+            return nil
+        }
+        let model = WorkboardViewModel(dependencies: dependencies)
+        await model.load()
+        let ready = model.deskPresentation
+        guard case .desk = ready else { return XCTFail("Expected a ready empty desk") }
+        inspectRefresh = {
+            XCTAssertTrue(model.isLoading)
+            XCTAssertEqual(model.deskPresentation, ready,
+                           "A refresh must not unmount the empty workspace and its drafts")
+        }
+        await model.load()
+        shouldFail = true
+        await model.load()
+        XCTAssertEqual(model.deskPresentation, ready)
+        XCTAssertNotNil(model.loadError)
+        XCTAssertNil(model.desk, "Presentation must not create a persistent desk row")
+    }
+
     // MARK: - Only the desk is loaded
 
     func testOnlyTheDeskIsLoadedWhenALegacyProjectRowStillExists() async throws {
