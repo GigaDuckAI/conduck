@@ -244,32 +244,25 @@ struct WorkDeskWorkspaceView: View {
         }
     }
 
-    private var title: String {
-        if workspace.isSearching {
-            return String(localized: LocalizedStringResource("workdesk.search.results", defaultValue: "Search results"))
-        }
-        return switch workspace.scope {
-        case .all: String(localized: LocalizedStringResource("workdesk.all", defaultValue: "All materials"))
-        case .project: workspace.currentProject?.title ?? ""
-        }
-    }
-
-    /// Project actions and collection tools occupy separate, quiet rows.
+    /// The toolbar owns project identity and its menu. Context, conversation
+    /// actions and collection tools occupy separate, quiet content rows.
     /// Selection offers organization and an explicitly counted conversation
     /// draft; the review sheet still owns what leaves the device. Compact
     /// windows retain a named primary action.
     private func header(isCompact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    projectIdentity
-                    Spacer(minLength: 8)
-                    if showsNewConversation { newConversationButton }
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    projectIdentity
-                    if showsNewConversation {
-                        HStack { Spacer(); newConversationButton }
+            if !sidebarIsHosted || workspace.isShowingConversation || workspace.isSearching || showsNewConversation {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        projectIdentity
+                        Spacer(minLength: 8)
+                        if showsNewConversation { newConversationButton }
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        projectIdentity
+                        if showsNewConversation {
+                            HStack { Spacer(); newConversationButton }
+                        }
                     }
                 }
             }
@@ -326,14 +319,11 @@ struct WorkDeskWorkspaceView: View {
             }
             if workspace.isShowingConversation {
                 Button { workspace.selectScope(workspace.scope) } label: {
-                    Label { Text(verbatim: title).lineLimit(1) } icon: { Image(systemName: "chevron.left") }
+                    Label { Text(LocalizedStringResource("workdesk.conversation.back", defaultValue: "Back to project")).lineLimit(1) } icon: { Image(systemName: "chevron.left") }
                         .font(.headline).padding(.vertical, 8)
                 }.inlineLinkButton()
                 .accessibilityHint(Text(LocalizedStringResource("workdesk.conversation.back", defaultValue: "Back to project")))
-            } else {
-                Text(verbatim: title).font(.headline).lineLimit(1)
             }
-            if workspace.currentProject != nil && !workspace.isSearching { workspaceMenu() }
             if workspace.isSearching {
                 Button { workspace.search = ""; workspace.searchIsFocused = false } label: {
                     Image(systemName: "xmark").frame(width: 40, height: 40)
@@ -413,23 +403,6 @@ struct WorkDeskWorkspaceView: View {
             .foregroundStyle(workspace.isSelecting ? AppColors.accent : AppColors.textSecondary)
             .accessibilityIdentifier("workdesk-select")
         }
-    }
-
-    /// Infrequent project actions stay beside the project name. Layout belongs
-    /// exclusively to the responsive material row at every window width.
-    private func workspaceMenu() -> some View {
-        Menu {
-            if let project = workspace.currentProject {
-                Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
-                    workspace.editProject(project)
-                }
-                Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {
-                    workspace.requestProjectDeletion(project.id)
-                }
-            }
-        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
-        .pointerIconButton(size: 44)
-        .accessibilityLabel(Text(LocalizedStringResource("workdesk.options", defaultValue: "Desk options")))
     }
 
     private var selectionBar: some View {

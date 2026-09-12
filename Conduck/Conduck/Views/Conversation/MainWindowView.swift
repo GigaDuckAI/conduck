@@ -26,7 +26,7 @@
 // views and cached content. Section changes suppress split layout motion; only
 // the destination layers dissolve. The sidebar-region toolbar controls the rail and
 // hides Chat's compose action; switching back restores the native Chat toggle
-// and its remembered visibility. Both sections retain a zero-area principal
+// and its remembered visibility. The window retains a principal
 // item whose flexible spaces are the only thing pinning the
 // Work/Chats section control to the trailing edge (see
 // `gatewayToolbarContent`), and that control declared LAST on the detail side
@@ -440,8 +440,7 @@ struct MainWindowView: View {
                 .frame(minWidth: Self.columnMinWidth)
         }
         .toolbar {
-            // Gateway identity, centered in the title bar — fills the otherwise
-            // empty top strip and stays visible across new + existing chats.
+            // One centered identity slot shared by Chat's gateway and Work's title.
             ToolbarItem(placement: .principal) {
                 gatewayToolbarContent
             }
@@ -979,8 +978,8 @@ struct MainWindowView: View {
     /// picker below seeds itself to a gateway that can actually send, so the
     /// stored default not being one of them is no reason to blank the title bar.
     ///
-    /// Chat's alone: the desk sends nothing to a gateway, so a title-bar pill
-    /// there would name a gateway Work never uses.
+    /// Work supplies its workspace identity in this same slot. The desk sends
+    /// nothing to a gateway, so its pill names the collection or project.
     /// The gate is on the CONTENT rather than on the `ToolbarItem` in
     /// `persistentSplitView` — declaring and undeclaring the principal item
     /// re-lays out the bar, and this window's whole arrangement rests on the
@@ -993,8 +992,7 @@ struct MainWindowView: View {
     /// window's trailing edge. Drop the item and that group falls back to the
     /// leading edge of the content region, so the section control jumps to the
     /// left of the divider the moment Work is shown or no gateway is configured.
-    /// The zero-area placeholder keeps the item, the spaces and the arrangement
-    /// identical in both sections.
+    /// Work's title and the no-gateway placeholder both keep that item alive.
     ///
     /// The presence dot sits BESIDE the control, not inside its label: only
     /// one of the three controls is a pill it could live inside, so parked
@@ -1003,7 +1001,9 @@ struct MainWindowView: View {
     /// control's label where that control's own label would replace it.
     @ViewBuilder
     private var gatewayToolbarContent: some View {
-        if !chatDestinationIsActive || !coordinator.hasAnyConfiguredGateway {
+        if workDestinationIsActive, let personalWorkbenchModel {
+            WorkDeskToolbarTitle(workspace: personalWorkbenchModel.workboardViewModel.deskWorkspace)
+        } else if !coordinator.hasAnyConfiguredGateway {
             Color.clear
                 .frame(width: 1, height: 1)
                 .accessibilityHidden(true)

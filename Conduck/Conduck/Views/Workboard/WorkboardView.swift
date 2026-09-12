@@ -260,6 +260,11 @@ struct WorkboardExperience: View {
     @ToolbarContentBuilder
     private func workbenchToolbar(showsProjectNavigation: Bool) -> some ToolbarContent {
         if isActive {
+            ToolbarItem(placement: .principal) {
+                WorkDeskToolbarTitle(workspace: viewModel.deskWorkspace)
+            }
+            .sharedBackgroundVisibility(.hidden)
+
             if showsProjectNavigation {
                 ToolbarItem(placement: .topBarLeading) {
                     WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)

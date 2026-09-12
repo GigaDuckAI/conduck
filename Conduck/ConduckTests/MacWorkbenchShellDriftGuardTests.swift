@@ -12,8 +12,8 @@
 // (3) The Work/Chats section control is
 // declared LAST on the detail side because toolbar items are collected in
 // view-tree order: anything declared after it slides it sideways whenever that
-// item comes or goes. (4) The centred principal item must keep a zero-area
-// placeholder while Work is active — a principal item with empty content
+// item comes or goes. (4) The centred principal item keeps the workspace
+// identity in Work and a placeholder without a gateway — empty principal content
 // produces no `NSToolbarItem`, and the flexible spaces AppKit puts around one
 // are the only thing holding the section control against the trailing edge.
 //
@@ -199,27 +199,24 @@ final class MacWorkbenchShellDriftGuardTests: XCTestCase {
         )
     }
 
-    /// Work's principal slot stays occupied by a zero-area placeholder.
-    func testPrincipalSlotKeepsAZeroAreaPlaceholderWhileWorkIsActive() throws {
+    /// Work's title and the no-gateway placeholder both preserve the slot.
+    func testPrincipalSlotKeepsWorkIdentityAndNoGatewayPlaceholder() throws {
         let source = try shellSource()
         let content = try RefusalLaneSource.trailingClosure(
             after: "private var gatewayToolbarContent: some View",
             in: source,
             path: Self.path
         )
-        let branches = try XCTUnwrap(
-            RefusalLaneSource.branches(
-                ofIf: "if !chatDestinationIsActive || !coordinator.hasAnyConfiguredGateway {",
-                in: content
-            ),
-            "`gatewayToolbarContent` no longer opens with the branch that covers Work and the "
-            + "no-gateway case. If the condition legitimately changed, update this token."
+        let work = try RefusalLaneSource.trailingClosure(
+            after: "if workDestinationIsActive, let personalWorkbenchModel",
+            in: content, path: Self.path
         )
-        XCTAssertTrue(
-            branches.then.contains("Color.clear"),
-            "The Work branch of the principal item no longer resolves to a placeholder. Empty content "
-            + "produces no toolbar item at all, and the section control drops to the leading edge of "
-            + "the content region the moment Work is shown."
+        XCTAssertTrue(work.contains("WorkDeskToolbarTitle(workspace: personalWorkbenchModel.workboardViewModel.deskWorkspace)"))
+        let placeholder = try RefusalLaneSource.trailingClosure(
+            after: "else if !coordinator.hasAnyConfiguredGateway",
+            in: content, path: Self.path
         )
+        XCTAssertTrue(placeholder.contains("Color.clear"))
+        XCTAssertTrue(placeholder.contains(".frame(width: 1, height: 1)"))
     }
 }
