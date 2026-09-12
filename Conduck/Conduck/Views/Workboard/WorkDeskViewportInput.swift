@@ -15,6 +15,10 @@
 // AppKit's additive magnification belongs to the current gesture, never to the
 // absolute document zoom. Touch pan and pinch share a centroid so callback order
 // cannot translate an already-scaled movement a second time.
+// Mouse wheels zoom at the pointer; gesture scrolling (including momentum) pans.
+// AppKit identifies that gesture by its phases, not its precision: some wheels
+// also send precise deltas. UIKit separates discrete wheel and continuous pan
+// recognizers; the wheel recognizer refuses touches so it cannot steal card drags.
 
 #if !os(watchOS)
 import SwiftUI
@@ -40,11 +44,14 @@ nonisolated enum WorkDeskViewportInputMath {
         return !excludedRects.contains { $0.contains(point) }
     }
 
-    static func scroll(delta: CGSize, precise: Bool, shift: Bool, zoom: Bool, anchor: CGPoint) -> WorkDeskViewportInputDelta? {
+    static func scroll(delta: CGSize, precise: Bool, shift: Bool, zoom: Bool,
+                       phase: WorkDeskViewportEventPhase = .unphased,
+                       momentumPhase: WorkDeskViewportEventPhase = .unphased,
+                       anchor: CGPoint) -> WorkDeskViewportInputDelta? {
         guard delta.width.isFinite, delta.height.isFinite,
               anchor.x.isFinite, anchor.y.isFinite,
               delta.width != 0 || delta.height != 0 else { return nil }
-        if zoom {
+        if zoom || (phase == .unphased && momentumPhase == .unphased) {
             let amount = delta.height == 0 ? delta.width : delta.height
             // Exponential increments make equal opposite wheel movements
             // reciprocal, and cap malformed device spikes before exponentiation.
@@ -390,6 +397,8 @@ private struct WorkDeskViewportInputMarker: NSViewRepresentable {
                 precise: event.hasPreciseScrollingDeltas,
                 shift: event.modifierFlags.contains(.shift),
                 zoom: event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control),
+                phase: Self.phase(event.phase),
+                momentumPhase: Self.phase(event.momentumPhase),
                 anchor: point
             ) { configuration.deliver(delta) }
             setSession(.wheel, active: decision.isActive)
@@ -446,6 +455,7 @@ private struct WorkDeskViewportInputMarker: UIViewRepresentable {
     var configuration: WorkDeskViewportInputConfiguration
     private let pan = UIPanGestureRecognizer()
     private let pinch = UIPinchGestureRecognizer()
+    private let wheelScroll = UIPanGestureRecognizer()
     private weak var recognizerOwner: UIView?
     private var sessions = WorkDeskViewportInputSessions()
     private var touchMotion = WorkDeskViewportTouchMotion()
@@ -457,10 +467,13 @@ private struct WorkDeskViewportInputMarker: UIViewRepresentable {
         isAccessibilityElement = false
         pan.minimumNumberOfTouches = 2
         pan.maximumNumberOfTouches = 2
-        pan.allowedScrollTypesMask = .all
+        pan.allowedScrollTypesMask = .continuous
         pan.addTarget(self, action: #selector(panned(_:)))
         pinch.addTarget(self, action: #selector(pinched(_:)))
-        for recognizer in [pan, pinch] {
+        wheelScroll.allowedScrollTypesMask = .discrete
+        wheelScroll.allowedTouchTypes = []
+        wheelScroll.addTarget(self, action: #selector(wheelScrolled(_:)))
+        for recognizer in [pan, pinch, wheelScroll] {
             // Once two-finger navigation recognizes, cancel the first finger's
             // pending button/preview touch. A one-finger gesture never reaches
             // recognition here, so its ordinary controls keep receiving input.
@@ -512,15 +525,18 @@ private struct WorkDeskViewportInputMarker: UIViewRepresentable {
         recognizerOwner = owner
         owner.addGestureRecognizer(pan)
         owner.addGestureRecognizer(pinch)
+        owner.addGestureRecognizer(wheelScroll)
     }
 
     func removeRecognizers() {
         if let recognizerOwner {
             recognizerOwner.removeGestureRecognizer(pan)
             recognizerOwner.removeGestureRecognizer(pinch)
+            recognizerOwner.removeGestureRecognizer(wheelScroll)
             self.recognizerOwner = nil
         }
         pan.setTranslation(.zero, in: self)
+        wheelScroll.setTranslation(.zero, in: self)
         pinch.scale = 1
         touchMotion.reset()
         if let changed = sessions.reset() { configuration.onInteractionChanged(changed) }
@@ -549,7 +565,7 @@ private struct WorkDeskViewportInputMarker: UIViewRepresentable {
         // A first finger can already own a SwiftUI card drag when the second
         // lands. Allow native recognition to begin; onInteractionChanged then
         // lets the host cancel that card's transient drag, never commit it.
-        gestureRecognizer === pan || gestureRecognizer === pinch
+        gestureRecognizer === pan || gestureRecognizer === pinch || gestureRecognizer === wheelScroll
     }
 
     private func setSession(_ kind: WorkDeskViewportInputSessions.Kind, active: Bool) {
@@ -563,6 +579,26 @@ private struct WorkDeskViewportInputMarker: UIViewRepresentable {
         accepts(recognizer.location(in: self)) && (0..<recognizer.numberOfTouches).allSatisfy {
             accepts(recognizer.location(ofTouch: $0, in: self))
         }
+    }
+
+    @objc private func wheelScrolled(_ recognizer: UIPanGestureRecognizer) {
+        guard configuration.isEnabled else { setSession(.wheel, active: false); return }
+        let finished = recognizer.state == .ended || recognizer.state == .cancelled || recognizer.state == .failed
+        if !finished { setSession(.wheel, active: true) }
+        defer {
+            recognizer.setTranslation(.zero, in: self)
+            if finished { setSession(.wheel, active: false) }
+        }
+        guard recognizer.state != .cancelled, recognizer.state != .failed,
+              acceptsGesture(recognizer) else { return }
+        let translation = recognizer.translation(in: self)
+        // UIKit reports scroll translation in view points, even for a wheel;
+        // AppKit's coarse tick multiplier must not be applied a second time.
+        if let delta = WorkDeskViewportInputMath.scroll(
+            delta: CGSize(width: translation.x, height: translation.y),
+            precise: true, shift: false, zoom: true,
+            anchor: recognizer.location(in: self)
+        ) { configuration.deliver(delta) }
     }
 
     @objc private func panned(_ recognizer: UIPanGestureRecognizer) {

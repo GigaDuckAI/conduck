@@ -12,37 +12,77 @@ import XCTest
 
 final class WorkDeskViewportInputTests: XCTestCase {
     func testPreciseScrollKeepsScreenPointMagnitudeAndNativeDirection() {
-        let result = WorkDeskViewportInputMath.scroll(delta: CGSize(width: -3.5, height: 12.25), precise: true, shift: false, zoom: false, anchor: .zero)
+        let result = WorkDeskViewportInputMath.scroll(delta: CGSize(width: -3.5, height: 12.25), precise: true, shift: false, zoom: false, phase: .changed, anchor: .zero)
         XCTAssertEqual(result, .pan(CGSize(width: -3.5, height: 12.25)))
     }
 
-    func testWheelTicksHaveUsefulDistanceAndShiftCannotBecomeVertical() {
-        XCTAssertEqual(
-            WorkDeskViewportInputMath.scroll(delta: CGSize(width: 0, height: -2), precise: false, shift: false, zoom: false, anchor: .zero),
-            .pan(CGSize(width: 0, height: -56))
-        )
-        XCTAssertEqual(
-            WorkDeskViewportInputMath.scroll(delta: CGSize(width: 0, height: -2), precise: false, shift: true, zoom: false, anchor: .zero),
-            .pan(CGSize(width: -56, height: 0))
-        )
-        // AppKit can already redirect Shift-wheel onto X; never swap it back.
-        XCTAssertEqual(
-            WorkDeskViewportInputMath.scroll(delta: CGSize(width: 3, height: 0), precise: false, shift: true, zoom: false, anchor: .zero),
-            .pan(CGSize(width: 84, height: 0))
-        )
+    func testUnmodifiedWheelZoomsWithCoarseAndPreciseDeltas() {
+        let anchor = CGPoint(x: 123, y: 87)
+        // High-resolution mice are still wheels, not trackpads. Precision
+        // affects sensitivity only; unphased events zoom in either case.
+        for precise in [false, true] {
+            guard case .zoom(let factor, let actualAnchor) = WorkDeskViewportInputMath.scroll(
+                delta: CGSize(width: 0, height: 2), precise: precise, shift: false, zoom: false, anchor: anchor
+            ) else { return XCTFail("An unmodified mouse wheel must zoom") }
+            XCTAssertGreaterThan(factor, 1)
+            XCTAssertEqual(actualAnchor, anchor)
+        }
+    }
+
+    func testTrackpadMomentumPansWhenItsTouchPhaseIsEmpty() {
+        for momentumPhase: WorkDeskViewportEventPhase in [.began, .changed, .ended] {
+            XCTAssertEqual(WorkDeskViewportInputMath.scroll(
+                delta: CGSize(width: -3, height: 12), precise: true, shift: false, zoom: false,
+                momentumPhase: momentumPhase, anchor: .zero
+            ), .pan(CGSize(width: -3, height: 12)))
+        }
+    }
+
+    func testShiftWheelStillZoomsWhenAppKitRedirectsItsDeltaOntoX() {
+        let vertical = WorkDeskViewportInputMath.scroll(delta: CGSize(width: 0, height: 2), precise: false, shift: true, zoom: false, anchor: .zero)
+        let horizontal = WorkDeskViewportInputMath.scroll(delta: CGSize(width: 2, height: 0), precise: false, shift: true, zoom: false, anchor: .zero)
+        guard case .zoom = vertical else { return XCTFail("Shift must not restore wheel panning") }
+        XCTAssertEqual(vertical, horizontal)
+    }
+
+    func testTrackpadStillHonorsShiftPanAndExplicitZoomModifier() {
+        XCTAssertEqual(WorkDeskViewportInputMath.scroll(
+            delta: CGSize(width: 0, height: 12), precise: true, shift: true, zoom: false,
+            phase: .changed, anchor: .zero
+        ), .pan(CGSize(width: 12, height: 0)))
+        guard case .zoom(let factor, _) = WorkDeskViewportInputMath.scroll(
+            delta: CGSize(width: 0, height: 12), precise: true, shift: false, zoom: true,
+            phase: .changed, anchor: .zero
+        ) else { return XCTFail("The existing trackpad zoom modifier must remain available") }
+        XCTAssertGreaterThan(factor, 1)
     }
 
     func testOppositeZoomWheelAmountsAreReciprocalAtTheRealAnchor() throws {
         let anchor = CGPoint(x: 73, y: 241)
-        guard case .zoom(let inward, let firstAnchor) = WorkDeskViewportInputMath.scroll(delta: CGSize(width: 0, height: 2), precise: false, shift: false, zoom: true, anchor: anchor),
-              case .zoom(let outward, let secondAnchor) = WorkDeskViewportInputMath.scroll(delta: CGSize(width: 0, height: -2), precise: false, shift: false, zoom: true, anchor: anchor) else {
-            return XCTFail("Modifier-wheel must produce zoom, never a simultaneous pan")
+        guard case .zoom(let inward, let firstAnchor) = WorkDeskViewportInputMath.scroll(delta: CGSize(width: 0, height: 2), precise: false, shift: false, zoom: false, anchor: anchor),
+              case .zoom(let outward, let secondAnchor) = WorkDeskViewportInputMath.scroll(delta: CGSize(width: 0, height: -2), precise: false, shift: false, zoom: false, anchor: anchor) else {
+            return XCTFail("Wheel input must produce zoom, never a simultaneous pan")
         }
         XCTAssertGreaterThan(inward, 1)
         XCTAssertLessThan(outward, 1)
         XCTAssertEqual(inward * outward, 1, accuracy: 0.000_001)
         XCTAssertEqual(firstAnchor, anchor)
         XCTAssertEqual(secondAnchor, anchor)
+    }
+
+    func testWheelZoomKeepsTheWorldPointUnderThePointerAcrossZoomLevels() {
+        let anchor = CGPoint(x: 317, y: 149)
+        for initialScale: CGFloat in [0.02, 0.1, 0.8, 1] {
+            let camera = WorkDeskCanvasTransform(scale: initialScale, offset: CGSize(width: -73, height: 151))
+            let world = WorkDeskCanvasGeometry.worldPoint(anchor, transform: camera)
+            guard case .zoom(let factor, let actualAnchor) = WorkDeskViewportInputMath.scroll(
+                delta: CGSize(width: 0, height: 1), precise: false, shift: false, zoom: false, anchor: anchor
+            ) else { return XCTFail("A wheel must zoom at the pointer") }
+            let result = WorkDeskCanvasGeometry.zoomed(camera, to: camera.scale * factor, anchor: actualAnchor)
+            let screen = WorkDeskCanvasGeometry.screenPoint(world, transform: result)
+            XCTAssertEqual(screen.x, anchor.x, accuracy: 0.000_001)
+            XCTAssertEqual(screen.y, anchor.y, accuracy: 0.000_001)
+        }
     }
 
     func testUIKitPinchScaleIsMultiplicativeAndPreservesFocalPoint() {
@@ -307,6 +347,8 @@ final class WorkDeskViewportInputTests: XCTestCase {
         XCTAssertTrue(mac.contains("event.window === window"))
         XCTAssertTrue(mac.contains("convert(event.locationInWindow, from: nil)"))
         XCTAssertTrue(mac.contains("configuration.accepts(point, bounds: bounds)"))
+        XCTAssertTrue(mac.contains("phase: Self.phase(event.phase)"))
+        XCTAssertTrue(mac.contains("momentumPhase: Self.phase(event.momentumPhase)"))
         XCTAssertTrue(mac.contains("return self.handle(event)"))
         XCTAssertTrue(mac.contains("magnification.receive(event.magnification, anchor: point)"))
         XCTAssertTrue(mac.contains("if phase == .began { magnification.reset() }"))
@@ -337,7 +379,9 @@ final class WorkDeskViewportInputTests: XCTestCase {
         let touch = try RefusalLaneSource.trailingClosure(after: "private final class WorkDeskTouchViewportInputView", in: source, path: Self.path)
         XCTAssertTrue(touch.contains("pan.minimumNumberOfTouches = 2"))
         XCTAssertTrue(touch.contains("pan.maximumNumberOfTouches = 2"))
-        XCTAssertTrue(touch.contains("pan.allowedScrollTypesMask = .all"))
+        XCTAssertTrue(touch.contains("pan.allowedScrollTypesMask = .continuous"))
+        XCTAssertTrue(touch.contains("wheelScroll.allowedScrollTypesMask = .discrete"))
+        XCTAssertTrue(touch.contains("wheelScroll.allowedTouchTypes = []"))
         XCTAssertTrue(touch.contains("recognizer.cancelsTouchesInView = true"))
         XCTAssertTrue(touch.contains("recognizer.delaysTouchesBegan = false"))
         XCTAssertTrue(touch.contains("touch.window === window"))
@@ -360,6 +404,13 @@ final class WorkDeskViewportInputTests: XCTestCase {
         let remove = try RefusalLaneSource.body(ofFunction: "removeRecognizers", in: touch, path: Self.path)
         XCTAssertTrue(remove.contains("recognizerOwner.removeGestureRecognizer(pan)"))
         XCTAssertTrue(remove.contains("recognizerOwner.removeGestureRecognizer(pinch)"))
+        XCTAssertTrue(remove.contains("recognizerOwner.removeGestureRecognizer(wheelScroll)"))
+        let wheel = try RefusalLaneSource.body(ofFunction: "wheelScrolled", in: touch, path: Self.path)
+        XCTAssertTrue(wheel.contains("acceptsGesture(recognizer)"))
+        XCTAssertTrue(wheel.contains("recognizer.setTranslation(.zero, in: self)"))
+        XCTAssertTrue(wheel.contains("if finished { setSession(.wheel, active: false) }"))
+        XCTAssertTrue(wheel.contains("anchor: recognizer.location(in: self)"))
+        XCTAssertFalse(wheel.contains("configuration.onPan"))
     }
 
     private static let path = "Conduck/Views/Workboard/WorkDeskViewportInput.swift"
