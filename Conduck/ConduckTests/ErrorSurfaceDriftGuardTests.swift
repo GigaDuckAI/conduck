@@ -335,6 +335,9 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
     /// reach this registry, and a control labelled anything else is invisible to
     /// it; see KNOWN LIMITS, and Rule 2b for the prose surfaces.
     private static let retrySurfaces: [String: RetryGate] = [
+        "Conduck/Views/Settings/ContentSyncSettingsSection.swift": .notErrorDriven(
+            reason: "Retries a failed local persistent-store transition; no AI request or AppError is retried."
+        ),
         "Conduck/Views/Components/PendingRetryCard.swift": .gated(
             tokens: ["isRetryable"],
             decidedIn: nil,

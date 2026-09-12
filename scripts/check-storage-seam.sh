@@ -86,6 +86,7 @@ ADAPTER_PATTERNS=(
   '\bLiveSecretStore\s*\('
   '\bLiveCloudAvailability\s*\('
   '\bLiveKVSChangeSource\s*\('
+  '\bLiveContentSyncPolicyLock\s*\('
   '\bSettingsDependencies\s*\.\s*live\s*\('
 )
 
@@ -99,6 +100,8 @@ ADAPTER_PATTERNS=(
 # ---------------------------------------------------------------------------
 CONTAINER_PATTERN='containerURL\s*\(\s*forSecurityApplicationGroupIdentifier'
 CONTAINER_ALLOWLIST=(
+  # The live-only preference transaction lock; injected test dependencies omit it.
+  "Conduck/Conduck/Services/Storage/LiveStorage.swift"
   "Conduck/Conduck/Services/PendingRetryStore.swift"
   "Conduck/Conduck/Services/SharedInboxDrainer.swift"
   # Production Workboard capture ingress resolves the App Group here; tests use

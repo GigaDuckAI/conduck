@@ -25,9 +25,11 @@ import Foundation
 final class InMemoryDefaultsStore: DefaultsStore, @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [String: Any] = [:]
+    private let synchronizationSucceeds: Bool
 
-    init(seed: [String: Any] = [:]) {
+    init(seed: [String: Any] = [:], synchronizationSucceeds: Bool = true) {
         storage = seed
+        self.synchronizationSucceeds = synchronizationSucceeds
     }
 
     private func value(forKey key: String) -> Any? {
@@ -88,7 +90,7 @@ final class InMemoryDefaultsStore: DefaultsStore, @unchecked Sendable {
     }
 
     @discardableResult
-    func synchronize() -> Bool { true }
+    func synchronize() -> Bool { synchronizationSucceeds }
 
     func dictionaryRepresentation() -> [String: Any] {
         lock.lock()

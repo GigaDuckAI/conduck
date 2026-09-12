@@ -31,7 +31,9 @@ extension ConversationStore {
 
     func fetchWorkDeskResults() async throws -> [UUID: WorkDeskResultRecord] {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform {
             guard context.persistentStoreCoordinator?.managedObjectModel.entitiesByName["WorkDeskResult"] != nil else { return [:] }
             let rows = try context.fetch(NSFetchRequest<NSManagedObject>(entityName: "WorkDeskResult"))
@@ -57,7 +59,9 @@ extension ConversationStore {
     }
 
     func hasWorkDeskResult(_ materialID: UUID) async throws -> Bool {
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { try Self.workDeskResultExists(materialID, in: context) }
     }
 
@@ -155,7 +159,9 @@ extension ConversationStore {
     ) async throws -> Set<UUID> {
         var tried: Set<UUID> = []
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let fetched: (candidates: [ProjectResultCandidate], queriedMessages: Bool) = try await context.perform {
             let model = context.persistentStoreCoordinator?.managedObjectModel
             guard model?.entitiesByName["Conversation"]?.attributesByName["projectID"] != nil,
@@ -184,6 +190,7 @@ extension ConversationStore {
             }
             return (candidates, true)
         }
+        contextLease.finish()
         #if CONDUCK_TESTING
         if fetched.queriedMessages { projectResultMessageFetchCount += 1 }
         #endif
@@ -231,7 +238,8 @@ extension ConversationStore {
                 do {
                     _ = try await upsertDeskMaterial(draft, projectID: projectID, resultSource: source)
                     completed.insert(materialID)
-                } catch { /* One unavailable result cannot block later files. */ }
+                } catch {
+        contextLease.finish() /* One unavailable result cannot block later files. */ }
             }
         }
         return tried

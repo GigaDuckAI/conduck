@@ -988,4 +988,40 @@ final class WatchWorkRelayPhoneTests: XCTestCase {
     private static let recordingBytes = Data(repeating: 0x6D, count: 4_096)
 }
 
+@MainActor
+final class WatchWorkTextRelayPhoneTests: XCTestCase {
+    func testReceiptFollowsDurableInboxAcceptanceAndReplayKeepsOneCapture() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inbox = WorkCaptureInbox(baseURL: directory)
+        let capture = WatchWorkTextCapture(id: UUID(), text: "Plan the launch review", createdAt: Date())
+        let first = await PhoneSessionManager.acceptWorkTextCapture(capture, inbox: inbox)
+        XCTAssertEqual(WatchWorkTextCaptureWire.accepted(first, for: capture.id), true)
+        let replay = await PhoneSessionManager.acceptWorkTextCapture(capture, inbox: inbox)
+        XCTAssertEqual(WatchWorkTextCaptureWire.accepted(replay, for: capture.id), true)
+        let count = try await inbox.pendingCount()
+        XCTAssertEqual(count, 1)
+
+        // Re-open with a new owner: the ACK must mean bytes are on disk, not
+        // that the old process remembers a request it has not persisted yet.
+        let reopened = WorkCaptureInbox(baseURL: directory)
+        let loadedClaim = try await reopened.claimNext()
+        let claim = try XCTUnwrap(loadedClaim)
+        XCTAssertEqual(claim.id, capture.id)
+        XCTAssertEqual(claim.envelope.note, capture.text)
+        XCTAssertTrue(claim.envelope.entries.isEmpty, "An explicit text capture contains no recording or attachments.")
+    }
+
+    func testStorageFailureNeverAcknowledgesTheTextAsAccepted() async throws {
+        let blockedDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data([1]).write(to: blockedDirectory)
+        defer { try? FileManager.default.removeItem(at: blockedDirectory) }
+        let capture = WatchWorkTextCapture(id: UUID(), text: "Keep this thought", createdAt: Date())
+        let reply = await PhoneSessionManager.acceptWorkTextCapture(
+            capture, inbox: WorkCaptureInbox(baseURL: blockedDirectory)
+        )
+        XCTAssertEqual(WatchWorkTextCaptureWire.accepted(reply, for: capture.id), false)
+    }
+}
+
 #endif // os(iOS)

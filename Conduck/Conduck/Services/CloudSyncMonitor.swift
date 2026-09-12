@@ -77,13 +77,13 @@ final class CloudSyncMonitor {
             switch self {
             case .noAccount:
                 return LocalizedStringResource(
-                    "sync.icloud.settings.noAccount",
-                    defaultValue: "Sign in to iCloud in Settings to sync your conversations across your devices."
+                    "sync.icloud.settings.content.noAccount",
+                    defaultValue: "Sign in to iCloud in Settings to sync conversations, Work and files across your devices."
                 )
             case .restricted:
                 return LocalizedStringResource(
-                    "sync.icloud.settings.restricted",
-                    defaultValue: "iCloud is restricted on this device (e.g. by Screen Time or a profile), so conversations can't sync."
+                    "sync.icloud.settings.content.restricted",
+                    defaultValue: "iCloud is restricted on this device, so conversations, Work and files can't sync."
                 )
             case .quotaExceeded:
                 return LocalizedStringResource(
@@ -104,7 +104,12 @@ final class CloudSyncMonitor {
 
     /// Show the conversation-list banner: unavailable AND not yet dismissed this
     /// episode.
-    var showsBanner: Bool { iCloudUnavailable && !bannerDismissed }
+    var showsBanner: Bool { contentSyncEnabled && iCloudUnavailable && !bannerDismissed }
+
+    /// Intentional OFF suppresses account warnings, while account health remains
+    /// available to Settings when the person turns content sync back on.
+    private(set) var contentSyncEnabled = (try? ContentSyncPreferenceStore.shared.readEnabled()) ?? true
+    private var preferenceObservers: [NSObjectProtocol] = []
 
     private let log = Logger(subsystem: Constants.identityNamespace, category: "CloudSync")
     private static let ringBufferKey = "cloudSyncEventLog"
@@ -134,6 +139,14 @@ final class CloudSyncMonitor {
     func start() {
         guard !started else { return }
         started = true
+        refreshContentSyncPreference()
+        for name in [Notification.Name.contentSyncPreferenceDidChange, .contentSyncStateDidChange] {
+            preferenceObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.refreshContentSyncPreference() }
+            })
+        }
         bannerDismissed = SettingsManager.iCloudBannerDismissed()
 
         #if DEBUG
@@ -208,6 +221,14 @@ final class CloudSyncMonitor {
     }
 
     // MARK: - Account status
+
+    private func refreshContentSyncPreference() {
+        // Lock uncertainty is not a deliberate OFF; keep the last good value
+        // and retry when the runtime announces policy recovery.
+        if let enabled = try? ContentSyncPreferenceStore.shared.readEnabled() {
+            contentSyncEnabled = enabled
+        }
+    }
 
     private func refreshAccountStatus() async {
         // THE construction point, and therefore where the invariant belongs:

@@ -56,11 +56,16 @@ final class WatchAttachmentInbox {
     /// App-Group container in production. Never `UserDefaults(suiteName:)`
     /// directly (`scripts/check-storage-seam.sh` enforces that).
     private let defaults: any DefaultsStore
+    private let isContentSyncEnabled: () -> Bool
 
     private var state: AttachedFileInboxState
 
-    init(defaults: any DefaultsStore = SettingsDependencies.processDefault.defaults) {
+    init(
+        defaults: any DefaultsStore = SettingsDependencies.processDefault.defaults,
+        isContentSyncEnabled: @escaping () -> Bool = { ContentSyncPreferenceStore.shared.isEnabled }
+    ) {
         self.defaults = defaults
+        self.isContentSyncEnabled = isContentSyncEnabled
         if let blob = defaults.data(forKey: Self.storageKey),
            let decoded = try? JSONDecoder().decode(AttachedFileInboxState.self, from: blob) {
             state = decoded
@@ -73,6 +78,12 @@ final class WatchAttachmentInbox {
         // Expire on load rather than only on ingest, so a wrist that receives no
         // further couriers still sheds stale entries.
         if state.purgeExpired() { persist() }
+        clearForDisabledSync()
+        NotificationCenter.default.addObserver(
+            forName: .contentSyncPreferenceDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.clearForDisabledSync() }
+        }
     }
 
     /// Absorb a courier batch. Returns whether the inbox actually changed, which
@@ -84,6 +95,10 @@ final class WatchAttachmentInbox {
     /// drive a refresh against state that a crash would lose.
     @discardableResult
     func ingest(_ descriptors: [AttachedFileDescriptor]) -> Bool {
+        guard isContentSyncEnabled() else {
+            clearForDisabledSync()
+            return false
+        }
         guard !descriptors.isEmpty else { return false }
         guard state.ingest(descriptors) else { return false }
         persist()
@@ -98,6 +113,10 @@ final class WatchAttachmentInbox {
     /// and a post here would run the refresh worker in a loop against its own
     /// output.
     func merged(into messages: [MessageRecord]) -> [MessageRecord] {
+        guard isContentSyncEnabled() else {
+            clearForDisabledSync()
+            return messages
+        }
         let outcome = AgentFileOverlay.merge(state.entries, into: messages)
         if state.remove(attachmentIDs: outcome.resolved) { persist() }
         return outcome.messages
@@ -114,6 +133,16 @@ final class WatchAttachmentInbox {
     /// Pending entry count. Diagnostics/tests only — a count is metadata, the
     /// entries themselves are not.
     var pendingCount: Int { state.entries.count }
+
+    /// Drop only the courier's display overlay. Downloaded Core Data records
+    /// remain the person's local history. Also checked on every read/ingress,
+    /// because the cross-process preference notification is only a wake hint.
+    func clearForDisabledSync() {
+        guard !isContentSyncEnabled(), !state.entries.isEmpty else { return }
+        state = AttachedFileInboxState()
+        defaults.removeObject(forKey: Self.storageKey)
+        NotificationCenter.default.post(name: .conversationsDidChange, object: nil)
+    }
 
     private func persist() {
         guard let blob = try? JSONEncoder().encode(state) else { return }

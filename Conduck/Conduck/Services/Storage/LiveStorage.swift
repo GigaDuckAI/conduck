@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import Foundation
+import Darwin
+import os
 
 // MARK: - Live adapters
 //
@@ -174,6 +176,93 @@ struct LiveSecretStore: SecretStore {
 
 // MARK: - Bundle
 
+/// Real App Group resolution stays behind the live adapter boundary. The file
+/// implementation also accepts an explicit isolated directory for regression
+/// tests, so locking, commits and reopen are tested without live settings.
+nonisolated final class LiveContentSyncPolicyLock: ContentSyncPolicyPersistence, @unchecked Sendable {
+    private let file = ContentSyncPolicyFile(directory: {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Constants.appGroupID)
+    })
+
+    func lock() -> Bool { file.lock() }
+    func unlock() { file.unlock() }
+    func readSnapshot() throws -> Data? { try file.readSnapshot() }
+    func writeSnapshot(_ data: Data) throws { try file.writeSnapshot(data) }
+}
+
+/// The lock file is never replaced or removed. Only its separate JSON snapshot
+/// is atomically replaced, so different processes always lock the same inode.
+/// No UserDefaults or iCloud access: an explicit directory is fully isolated.
+nonisolated final class ContentSyncPolicyFile: ContentSyncPolicyPersistence, @unchecked Sendable {
+    enum Failure: Error { case unavailable }
+    private static let log = Logger(subsystem: Constants.identityNamespace, category: "ContentSyncPolicy")
+    private let localLock = NSLock()
+    private let directory: @Sendable () -> URL?
+    private var lockedDirectory: URL?
+    private var descriptor: Int32 = -1
+
+    init(directoryURL: URL) { directory = { directoryURL } }
+    fileprivate init(directory: @escaping @Sendable () -> URL?) { self.directory = directory }
+
+    func lock() -> Bool {
+        guard localLock.try() else { return false }
+        guard let directory = directory() else {
+            Self.log.error("policy.lock stage=container-unavailable")
+            localLock.unlock()
+            return false
+        }
+        do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
+        catch {
+            Self.log.error("policy.lock stage=directory code=\((error as NSError).code)")
+            localLock.unlock()
+            return false
+        }
+        let path = directory.appendingPathComponent("ContentSyncPreference.lock").path
+        descriptor = Darwin.open(path, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else {
+            Self.log.error("policy.lock stage=open errno=\(errno)")
+            localLock.unlock()
+            return false
+        }
+        var result: Int32
+        repeat { result = flock(descriptor, LOCK_EX | LOCK_NB) } while result != 0 && errno == EINTR
+        guard result == 0 else {
+            let code = errno
+            if code != EWOULDBLOCK && code != EAGAIN {
+                Self.log.error("policy.lock stage=flock errno=\(code)")
+            }
+            Darwin.close(descriptor)
+            descriptor = -1
+            localLock.unlock()
+            return false
+        }
+        lockedDirectory = directory
+        return true
+    }
+
+    func unlock() {
+        flock(descriptor, LOCK_UN)
+        Darwin.close(descriptor)
+        descriptor = -1
+        lockedDirectory = nil
+        localLock.unlock()
+    }
+
+    func readSnapshot() throws -> Data? {
+        guard let lockedDirectory else { throw Failure.unavailable }
+        let url = lockedDirectory.appendingPathComponent("ContentSyncPreference.json")
+        do { return try Data(contentsOf: url) }
+        catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError {
+            return nil
+        }
+    }
+
+    func writeSnapshot(_ data: Data) throws {
+        guard let lockedDirectory else { throw Failure.unavailable }
+        try data.write(to: lockedDirectory.appendingPathComponent("ContentSyncPreference.json"), options: .atomic)
+    }
+}
+
 extension SettingsDependencies {
     /// The production bundle — real App Group, real iCloud KVS, real Keychain.
     nonisolated static func live() -> SettingsDependencies {
@@ -182,7 +271,8 @@ extension SettingsDependencies {
             ubiquitous: LiveUbiquitousStore(),
             secrets: LiveSecretStore(),
             cloudAvailability: LiveCloudAvailability(),
-            changes: LiveKVSChangeSource()
+            changes: LiveKVSChangeSource(),
+            contentSyncPolicyLock: LiveContentSyncPolicyLock()
         )
     }
 }

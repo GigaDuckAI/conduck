@@ -816,10 +816,9 @@ private enum WorkbenchPreviewError: LocalizedError {
                 defaultValue: "This material is not available on this device. Reattach it here to open it."
             )
         case .syncPending:
-            return String(
-                localized: "workboard.material.preview.syncPending",
-                defaultValue: "This material is still arriving from iCloud. It will open once it lands on this device."
-            )
+            return String(localized: ContentSyncPresentationPolicy.missingFileExplanation(
+                enabled: ContentSyncPresentationSnapshot.shared.isEnabled, sharing: false
+            ))
         }
     }
 }
@@ -1224,6 +1223,9 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 model.scheduleRefresh()
             }
             .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
+                model.scheduleRefresh()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .contentSyncPreferenceDidChange)) { _ in
                 model.scheduleRefresh()
             }
             .onReceive(NotificationCenter.default.publisher(for: WorkCaptureInbox.didChangeNotification)) { _ in

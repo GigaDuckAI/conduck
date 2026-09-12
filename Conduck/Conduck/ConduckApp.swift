@@ -588,7 +588,10 @@ struct ConduckApp: App {
         //    sync monitor (telemetry + the one user-actionable "iCloud unavailable"
         //    signal; no visible chrome otherwise).
         Task { await ConversationStore.shared.warmUp() }
-        Task { @MainActor in CloudSyncMonitor.shared.start() }
+        Task { @MainActor in
+            ContentSyncRuntime.shared.start()
+            CloudSyncMonitor.shared.start()
+        }
 
         #if DEBUG
         print("🔔 NotificationDelegate set in ConduckApp.init()")

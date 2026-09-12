@@ -38,6 +38,49 @@ import XCTest
 
 final class WatchAttachmentPushWireTests: XCTestCase {
 
+    func testExplicitWorkTextRelayHasOnlyCaptureFieldsAndCorrelatesItsReceipt() throws {
+        let capture = WatchWorkTextCapture(id: UUID(), text: "Prepare the review", createdAt: Date())
+        let request = WatchWorkTextCaptureWire.request(capture)
+        XCTAssertEqual(Set(request.keys), ["kind", "version", "id", "text", "createdAt"])
+        let decoded = try XCTUnwrap(WatchWorkTextCaptureWire.decode(request))
+        XCTAssertEqual(decoded.id, capture.id)
+        XCTAssertEqual(decoded.text, capture.text)
+        // Crossing Foundation's two time epochs can round sub-microsecond bits.
+        XCTAssertEqual(decoded.createdAt.timeIntervalSince1970,
+                       capture.createdAt.timeIntervalSince1970, accuracy: 0.000001)
+        XCTAssertTrue(PropertyListSerialization.propertyList(request, isValidFor: .binary))
+        let receipt = WatchWorkTextCaptureWire.acknowledgement(id: capture.id, accepted: true)
+        XCTAssertEqual(WatchWorkTextCaptureWire.accepted(receipt, for: capture.id), true)
+        XCTAssertNil(WatchWorkTextCaptureWire.accepted(receipt, for: UUID()))
+        XCTAssertNil(WatchWorkTextCaptureWire.accepted([:], for: capture.id))
+        XCTAssertEqual(WatchWorkTextCaptureWire.maximumCharacters, WorkCaptureEnvelope.maximumNoteCharacters)
+    }
+
+    func testExplicitWorkTextRelayRejectsMalformedOversizedAndUnknownVersionPayloads() {
+        let capture = WatchWorkTextCapture(id: UUID(), text: "Review", createdAt: Date())
+        let valid = WatchWorkTextCaptureWire.request(capture)
+        for (key, value) in [
+            ("text", "  \n" as Any),
+            ("text", String(repeating: "a", count: WatchWorkTextCaptureWire.maximumCharacters + 1)),
+            ("text", String(repeating: "🦆", count: 13_000)),
+            ("id", "not-a-uuid"), ("version", 2), ("createdAt", Double.infinity)
+        ] {
+            var invalid = valid
+            invalid[key] = value
+            XCTAssertNil(WatchWorkTextCaptureWire.decode(invalid), "Invalid field: \(key)")
+        }
+    }
+
+    func testContentSyncWatchWireKeepsTheOriginalPreferenceRevision() throws {
+        let off = ContentSyncPreference(enabled: false, revision: 12, identifier: UUID())
+        let payload = [ContentSyncPreferenceStore.watchMessageKey:
+            try XCTUnwrap(ContentSyncWatchWire.encodedPreference(off))]
+        XCTAssertEqual(ContentSyncWatchWire.preference(in: payload), off)
+        XCTAssertNil(ContentSyncWatchWire.encodedPreference(nil), "An absent default must not be published as a user choice.")
+        XCTAssertNil(ContentSyncWatchWire.preference(in: [:]))
+        XCTAssertNil(ContentSyncWatchWire.preference(in: [ContentSyncPreferenceStore.watchMessageKey: true]))
+    }
+
     // MARK: - Fixtures
 
     private func makeDescriptor(

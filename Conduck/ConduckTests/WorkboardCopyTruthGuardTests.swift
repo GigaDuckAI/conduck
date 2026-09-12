@@ -317,10 +317,13 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
     func testTheTutorialSyncLineNamesTheDeviceLocalLane() throws {
         let strings = try catalogStrings()
         let value = try XCTUnwrap(
-            englishValue(try XCTUnwrap(strings["workboard.tutorial.point.review"])),
+            englishValue(try XCTUnwrap(strings["workboard.tutorial.point.review.optionalSync"])),
             "the tutorial's third line must carry an English value"
         )
         let lowered = value.lowercased()
+
+        XCTAssertTrue(lowered.contains("with content sync on"),
+                      "the tutorial must make cloud delivery conditional on the user's choice: \(value)")
 
         XCTAssertTrue(
             lowered.contains("icloud"),

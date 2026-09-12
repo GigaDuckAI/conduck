@@ -218,6 +218,123 @@ final class ConduckWatchSmokeTests: XCTestCase {
     }
 }
 
+@MainActor
+final class WatchWorkTextRelayTests: XCTestCase {
+    private final class Transport: WatchWorkTextCaptureTransport {
+        var received: [WatchWorkTextCapture] = []
+        var response: [String: Any] = [:]
+        var error: WatchWorkTextRelayError?
+
+        func send(_ capture: WatchWorkTextCapture) async throws -> [String: Any] {
+            received.append(capture)
+            if let error { throw error }
+            return response
+        }
+    }
+
+    func testOnlyTheCorrelatedDurablePhoneReceiptReportsSuccess() async throws {
+        let capture = WatchWorkTextCapture(id: UUID(), text: "Review the release", createdAt: Date())
+        let transport = Transport()
+        transport.response = WatchWorkTextCaptureWire.acknowledgement(id: capture.id, accepted: true)
+        try await WatchWorkTextRelay.send(capture, using: transport)
+        XCTAssertEqual(transport.received, [capture])
+        XCTAssertEqual(WatchWorkboardCaptureText.maximumNoteCharacters, WatchWorkTextCaptureWire.maximumCharacters)
+    }
+
+    func testLegacyRefusedAndMissingReceiptsNeverSilentlySaveOnlyOnTheWrist() async {
+        let capture = WatchWorkTextCapture(id: UUID(), text: "Review", createdAt: Date())
+        for response in [[:], WatchWorkTextCaptureWire.acknowledgement(id: UUID(), accepted: true),
+                         WatchWorkTextCaptureWire.acknowledgement(id: capture.id, accepted: false)] {
+            let transport = Transport()
+            transport.response = response
+            do {
+                try await WatchWorkTextRelay.send(capture, using: transport)
+                XCTFail("A non-acceptance must not report the note as saved.")
+            } catch { }
+            XCTAssertEqual(transport.received.count, 1, "There is no automatic retry after an ambiguous reply.")
+        }
+    }
+
+    func testDeliveryErrorIsPreservedAndOversizedTextNeverStartsTransport() async {
+        let transport = Transport()
+        transport.error = .unconfirmed
+        do {
+            try await WatchWorkTextRelay.send(
+                WatchWorkTextCapture(id: UUID(), text: "Review", createdAt: Date()), using: transport
+            )
+            XCTFail("An unconfirmed delivery must not report success.")
+        } catch {
+            XCTAssertTrue(error is WatchWorkTextRelayError)
+        }
+        let oversized = Transport()
+        do {
+            try await WatchWorkTextRelay.send(
+                WatchWorkTextCapture(id: UUID(), text: String(repeating: "🦆", count: 13_000), createdAt: Date()),
+                using: oversized
+            )
+            XCTFail("An oversized capture must be refused before sending.")
+        } catch { }
+        XCTAssertTrue(oversized.received.isEmpty)
+    }
+
+    func testColdCaptureWaitsForActivationWithoutResendingAnything() async throws {
+        var activated = false
+        var activationCalls = 0
+        var pauses = 0
+        try await WatchWorkTextRelay.awaitSessionActivation(
+            isActivated: { activated },
+            activate: { activationCalls += 1 },
+            pause: {
+                pauses += 1
+                if pauses == 2 { activated = true }
+            },
+            maximumAttempts: 3
+        )
+        XCTAssertEqual(activationCalls, 1)
+        XCTAssertEqual(pauses, 2)
+    }
+
+    func testActivationTimeoutIsNotReportedAsPhoneUnavailable() async {
+        do {
+            try await WatchWorkTextRelay.awaitSessionActivation(
+                isActivated: { false }, activate: {}, pause: {}, maximumAttempts: 2
+            )
+            XCTFail("An unactivated session cannot send a capture.")
+        } catch WatchWorkTextRelayError.connectionStarting {
+        } catch {
+            XCTFail("Activation has its own explanation: \(error)")
+        }
+    }
+
+    func testLateOffDoesNotTurnAnAlreadyCommittedWatchNoteIntoAnUnsavedError() async {
+        let capture = WatchWorkTextCapture(id: UUID(), text: "Already saved", createdAt: Date())
+        for error in [WatchWorkTextRelayError.phoneUnavailable, .refused, .connectionStarting] {
+            let transport = Transport()
+            transport.error = error
+            let completion = await WatchWorkTextRelay.finishCommittedWatchCapture(capture, using: transport)
+            XCTAssertEqual(completion, .watchOnly)
+            XCTAssertTrue(completion.confirmation.contains("Saved on your Watch"))
+            XCTAssertFalse(completion.confirmation.lowercased().contains("try again"))
+            XCTAssertEqual(transport.received, [capture], "A committed capture is attempted only once, retaining its id.")
+        }
+    }
+
+    func testLateOffKeepsAmbiguousPhoneOutcomeDistinctFromConfirmedReceipt() async {
+        let capture = WatchWorkTextCapture(id: UUID(), text: "Already saved", createdAt: Date())
+        let transport = Transport()
+        transport.error = .unconfirmed
+        let ambiguous = await WatchWorkTextRelay.finishCommittedWatchCapture(capture, using: transport)
+        XCTAssertEqual(ambiguous, .watchAndUnconfirmedPhone)
+        XCTAssertTrue(ambiguous.confirmation.contains("may also be"))
+        XCTAssertFalse(ambiguous.confirmation.lowercased().contains("try again"))
+
+        transport.error = nil
+        transport.response = WatchWorkTextCaptureWire.acknowledgement(id: capture.id, accepted: true)
+        let acknowledged = await WatchWorkTextRelay.finishCommittedWatchCapture(capture, using: transport)
+        XCTAssertEqual(acknowledged, .phone)
+    }
+}
+
 /// Watch-scoped official-identity drift guard — the wrist-side counterpart of
 /// ConduckTests/OfficialIdentityLockTests, pinning the persistent identifiers
 /// no iOS-hosted test can reach. Skips under a non-official (community) build

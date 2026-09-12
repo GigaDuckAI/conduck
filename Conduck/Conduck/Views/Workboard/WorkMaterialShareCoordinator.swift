@@ -352,9 +352,8 @@ final class WorkMaterialShareCoordinator {
         for availability: WorkboardMaterialAvailability
     ) -> WorkShareFailure {
         let message: LocalizedStringResource = availability == .syncPending
-            ? LocalizedStringResource(
-                "workboard.material.share.syncPending",
-                defaultValue: "This material is still arriving from iCloud. It can be shared once it lands on this device."
+            ? ContentSyncPresentationPolicy.missingFileExplanation(
+                enabled: ContentSyncPresentationSnapshot.shared.isEnabled, sharing: true
             )
             : LocalizedStringResource(
                 "workboard.material.share.unavailable",

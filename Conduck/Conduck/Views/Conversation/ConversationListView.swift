@@ -341,7 +341,9 @@ struct ConversationListView: View {
             // deletion that also takes them. A single conversation's deletion
             // leaves its content-free records behind for trends, so a message
             // reused between the two would be false on one of them.
-            Text("This removes every conversation and its usage records from this device and all your other devices. Your Work desk and everything on it stay untouched. This cannot be undone.")
+            Text(ContentSyncPresentationPolicy.deleteAllConversations(
+                enabled: ContentSyncPresentationSnapshot.shared.isEnabled
+            ))
         }
         .onChange(of: workbenchDestinationIsActive) { _, isActive in
             if !isActive { activeDeleteAllConfirmation.wrappedValue = false }

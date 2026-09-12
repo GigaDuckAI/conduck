@@ -19,10 +19,6 @@ import SwiftUI
 struct GeneralSettingsView: View {
     @Bindable var viewModel: SettingsViewModel
 
-    /// Shared `@Observable` iCloud-sync health. Surfaces a warning row ONLY when
-    /// iCloud is in a user-actionable bad state; otherwise this screen is unchanged.
-    @State private var syncMonitor = CloudSyncMonitor.shared
-
     /// iPad-only: show the Control Center setup-walkthrough card at the bottom.
     /// On iPhone the Setup card lives on the root `SettingsView` (the iPad has no
     /// sidebar Setup category — General is its natural home, its iPad scope being
@@ -37,13 +33,7 @@ struct GeneralSettingsView: View {
         Form {
             startupSection
             quickCapturesSection
-            if syncMonitor.iCloudUnavailable, let reason = syncMonitor.unavailableReason {
-                Section {
-                    ICloudSyncSettingsRow(reason: reason)
-                } header: {
-                    Text(LocalizedStringResource("sync.icloud.settings.header", defaultValue: "Sync"))
-                }
-            }
+            ContentSyncSettingsSection()
             if showSetupCard { setupCardSection }
         }
         .formStyle(.grouped)

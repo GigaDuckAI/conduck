@@ -80,7 +80,9 @@ extension ConversationStore {
     /// or every coverage denominator on the dashboard silently shrinks.
     func beginGatewayAttempt(draft: GatewayAttemptDraft) async -> GatewayAttemptContext? {
         do { try await ensureLoaded() } catch { return nil }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return nil }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let openedAt: Date? = await context.perform { [context] in
             // One attempt id opens one row, ever. A re-entrant begin on the same
             // candidate id is not a second dispatch and must not become a second
@@ -165,7 +167,9 @@ extension ConversationStore {
     /// everyone else goes through `terminalizeGatewayAttempt`.
     func writeTerminalObservation(_ observation: TerminalAttemptObservation) async {
         guard let attemptID = observation.attemptID else { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             guard let row = Self.gatewayAttemptRow(id: attemptID, in: context) else { return }
             guard Self.applyTerminalObservation(observation, to: row) else { return }
@@ -207,7 +211,9 @@ extension ConversationStore {
         clearedThrough: Date? = nil
     ) async throws -> [GatewayAttemptRecord] {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
             var clauses: [NSPredicate] = []
@@ -252,7 +258,9 @@ extension ConversationStore {
     ) async throws -> [GatewayAttemptRecord] {
         guard !turnIDs.isEmpty else { return [] }
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let ids = Array(turnIDs)
         return try await context.perform { [context] in
             var records: [GatewayAttemptRecord] = []
@@ -291,7 +299,9 @@ extension ConversationStore {
     /// past would describe a period the dashboard no longer counts.
     func earliestGatewayAttemptStart(clearedThrough: Date? = nil) async throws -> Date? {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "GatewayAttempt")
             var clauses = [NSPredicate(format: "startedAt != nil")]
@@ -312,7 +322,9 @@ extension ConversationStore {
     /// row from a count, and never deletes anything.
     func liveConversationIDs() async -> Set<UUID> {
         do { try await ensureLoaded() } catch { return [] }
-        let context = newReadContext()
+        guard let contextLease = try? await newReadContextLease() else { return [] }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return await context.perform { [context] in
             Self.liveConversationIDs(in: context)
         }
@@ -344,7 +356,9 @@ extension ConversationStore {
     @discardableResult
     func purgeGatewayAttempts(through cutoff: Date) async throws -> Int {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         var deleted = 0
         while true {
             let batch: Int = try await context.perform { [context] in
@@ -408,7 +422,9 @@ extension ConversationStore {
     func debugBackdateGatewayAttemptStarts(_ starts: [UUID: Date]) async {
         guard !starts.isEmpty else { return }
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             for (attemptID, startedAt) in starts {
                 guard let row = Self.gatewayAttemptRow(id: attemptID, in: context) else { continue }
@@ -425,7 +441,9 @@ extension ConversationStore {
     /// such a row is otherwise unverifiable. Not used by app code.
     func debugClearGatewayAttemptStart(attemptID: UUID) async throws {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         try await context.perform { [context] in
             guard let row = Self.gatewayAttemptRow(id: attemptID, in: context) else { return }
             row.setValue(nil, forKey: "startedAt")

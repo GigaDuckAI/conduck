@@ -48,6 +48,63 @@ final class WatchSettingsApplyAndQueueTests: XCTestCase {
 
     // MARK: - iPhone→Watch settings APPLY contract (+ monotonic stale guard)
 
+    func testContentSyncPreferenceSurvivesLegacyAndOutOfOrderSettingsDeliveries() async throws {
+        let dependencies = SettingsDependencies.inMemory()
+        let preferences = ContentSyncPreferenceStore(dependencies: dependencies)
+        let manager = WatchSessionManager(contentSyncPreferences: preferences)
+        let off = ContentSyncPreference(enabled: false, revision: 20, identifier: UUID())
+        let oldOn = ContentSyncPreference(enabled: true, revision: 19, identifier: UUID())
+        await manager.applyEnvelopePayload([
+            ContentSyncPreferenceStore.watchMessageKey: try JSONEncoder().encode(off)
+        ])
+        XCTAssertFalse(preferences.isEnabled)
+        await manager.applyEnvelopePayload([:])
+        await manager.applyEnvelopePayload([
+            ContentSyncPreferenceStore.watchMessageKey: try JSONEncoder().encode(oldOn)
+        ])
+        XCTAssertFalse(preferences.isEnabled, "A legacy or delayed settings courier cannot grant new sync consent.")
+        XCTAssertFalse(ContentSyncPreferenceStore(dependencies: dependencies).isEnabled,
+                       "The received choice must survive a Watch process restart.")
+        let on = ContentSyncPreference(enabled: true, revision: 21, identifier: UUID())
+        await manager.applyEnvelopePayload([
+            ContentSyncPreferenceStore.watchMessageKey: try JSONEncoder().encode(on)
+        ])
+        XCTAssertTrue(preferences.isEnabled)
+    }
+
+    func testNewerKVSOffBeatsAnOlderPhoneOnPayload() async throws {
+        let dependencies = SettingsDependencies.inMemory()
+        let off = ContentSyncPreference(enabled: false, revision: 50, identifier: UUID())
+        dependencies.ubiquitous.set(try JSONEncoder().encode(off), forKey: ContentSyncPreferenceStore.storageKey)
+        let preferences = ContentSyncPreferenceStore(dependencies: dependencies)
+        let manager = WatchSessionManager(contentSyncPreferences: preferences)
+        await manager.applyEnvelopePayload([
+            ContentSyncPreferenceStore.watchMessageKey: try JSONEncoder().encode(
+                ContentSyncPreference(enabled: true, revision: 49, identifier: UUID())
+            )
+        ])
+        XCTAssertFalse(preferences.isEnabled)
+        XCTAssertEqual(preferences.currentPreference(), off)
+    }
+
+    func testDisabledContentSyncClearsAndRefusesTheIndependentAttachmentOverlay() {
+        let defaults = InMemoryDefaultsStore()
+        var enabled = true
+        let inbox = WatchAttachmentInbox(defaults: defaults, isContentSyncEnabled: { enabled })
+        let descriptor = AttachedFileDescriptor(
+            conversationID: UUID(), messageID: UUID(), attachmentID: UUID(),
+            storedKey: "opaque-report", filename: "report.txt", mimeType: "text/plain",
+            byteSize: 5, sequence: 0, previewKind: nil, createdAt: Date()
+        )
+        XCTAssertTrue(inbox.ingest([descriptor]))
+        XCTAssertEqual(inbox.pendingCount, 1)
+        enabled = false
+        XCTAssertFalse(inbox.ingest([descriptor]), "A queued pre-OFF courier must not refill the overlay.")
+        XCTAssertEqual(inbox.pendingCount, 0)
+        let reopened = WatchAttachmentInbox(defaults: defaults, isContentSyncEnabled: { false })
+        XCTAssertEqual(reopened.pendingCount, 0, "The old overlay must not return after a restart.")
+    }
+
     func testSTTEnvelopeApplyHydratesNonSecretFieldsAndAdvancesHighWaterMark() async {
         let reader = WatchSettingsReader.shared
         // Strictly newer than any high-water-mark a prior test left (the reader is

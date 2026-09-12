@@ -424,10 +424,9 @@ final class WorkboardLiveRepository {
                 defaultValue: "Reattach on this device to open"
             ))
         case .syncedPending:
-            parts.append(String(
-                localized: "workboard.material.syncPending",
-                defaultValue: "Waiting for iCloud…"
-            ))
+            parts.append(String(localized: ContentSyncPresentationPolicy.missingFileSummary(
+                enabled: ContentSyncPresentationSnapshot.shared.isEnabled
+            )))
         case .metadataOnly, .synced:
             break
         }

@@ -1,600 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "workboard.material.notes.continue" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Continue editing…"
-          }
-        }
-      }
-    },
-    "workdesk.companion.openTranscript" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open transcript"
-          }
-        }
-      }
-    },
-    "workdesk.material.companionNotes" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Notes for attached material…"
-          }
-        }
-      }
-    },
-    "workboard.material.image.open" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open image"
-          }
-        }
-      }
-    },
-    "workboard.material.link.open" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open link"
-          }
-        }
-      }
-    },
-    "workboard.material.notes.add" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add notes…"
-          }
-        }
-      }
-    },
-    "workboard.material.notes.draftKept" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your changes are still here. Try saving again, or load the saved text to replace your changes."
-          }
-        }
-      }
-    },
-    "workboard.material.notes.edit" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Edit notes…"
-          }
-        }
-      }
-    },
-    "workboard.material.notes.explanation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Keep context with this material. These notes are included when you bring it into a new conversation."
-          }
-        }
-      }
-    },
-    "workboard.material.notes.placeholder" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Write here…"
-          }
-        }
-      }
-    },
-    "workboard.material.notes.reload" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Load saved text…"
-          }
-        }
-      }
-    },
-    "workboard.material.notes.reloadAction" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Load saved text"
-          }
-        }
-      }
-    },
-    "workboard.material.notes.reloadConfirm" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Replace your changes with the saved text?"
-          }
-        }
-      }
-    },
-    "workboard.material.original.preview" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Preview original"
-          }
-        }
-      }
-    },
-    "workboard.material.original.unavailable" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The original isn’t available on this device. Your notes are still available here."
-          }
-        }
-      }
-    },
-    "workboard.material.sourceConversation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open source conversation"
-          }
-        }
-      }
-    },
-    "workboard.material.text.edit" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Edit text"
-          }
-        }
-      }
-    },
-    "workboard.material.transcript.edit" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Edit transcript"
-          }
-        }
-      }
-    },
-    "workdesk.conversation.addMaterials" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add materials…"
-          }
-        }
-      }
-    },
-    "workdesk.conversation.addMaterials.explanation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Use materials from anywhere in Work. They stay in their current projects."
-          }
-        }
-      }
-    },
-    "workdesk.conversation.addMaterials.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add materials"
-          }
-        }
-      }
-    },
-    "workdesk.conversation.addSelected" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add selected"
-          }
-        }
-      }
-    },
-    "workdesk.conversation.clearSelection" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Clear selection"
-          }
-        }
-      }
-    },
-    "workdesk.conversation.findMaterial" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Find a material"
-          }
-        }
-      }
-    },
-    "workdesk.conversation.leaveOutMissing" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Leave out missing materials"
-          }
-        }
-      }
-    },
-    "workdesk.conversation.missingSelection" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Some selected materials were removed or moved. Leave them out to continue."
-          }
-        }
-      }
-    },
-    "workdesk.conversation.newCompanionExcluded" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New attached material left out. Uncheck and select this card again to include it."
-          }
-        }
-      }
-    },
-    "workdesk.conversation.selectionChanged" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The selected materials changed. Choose them again."
-          }
-        }
-      }
-    },
-    "workdesk.conversation.withMaterials" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New conversation with %lld materials…"
-          }
-        }
-      }
-    },
-    "workdesk.conversation.withOneMaterial" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New conversation with 1 material…"
-          }
-        }
-      }
-    },
-    "workdesk.error.deletionChanged" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This project or its materials changed. Review the deletion again."
-          }
-        }
-      }
-    },
-    "workdesk.material.notes.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your notes"
-          }
-        }
-      }
-    },
-    "workdesk.material.openProject" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open project"
-          }
-        }
-      }
-    },
-    "workdesk.material.unfiled" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No project"
-          }
-        }
-      }
-    },
-    "workdesk.material.used.count" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Used in %lld conversations"
-          }
-        }
-      }
-    },
-    "workdesk.material.used.empty" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No saved conversations use this material."
-          }
-        }
-      }
-    },
-    "workdesk.material.used.explanation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "These conversations used a copy of the material as it was when sent. Moving or editing it in Work doesn’t change earlier messages."
-          }
-        }
-      }
-    },
-    "workdesk.material.used.once" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Used in 1 conversation"
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.action" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Delete project…"
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.context" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The project and its saved context will be removed."
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.conversation.one" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Its 1 conversation will remain in Chats."
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.conversations" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Its %lld conversations will remain in Chats."
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.empty" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Delete project"
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.failed" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The project couldn’t be deleted."
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.keep" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Keep materials"
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.keep.explanation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "They stay in All materials, grouped together in Desk view. Notes attached to them are kept too."
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.materials" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Delete project and %lld materials"
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.one" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Delete project and 1 material"
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.question" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Delete “%@”?"
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.remove.explanation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Removes these materials and their attached notes from Work on your synced devices. Existing conversations and files already sent to gateways remain."
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.reopen" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Close this review and choose Delete project again to review the latest materials."
-          }
-        }
-      }
-    },
-    "workdesk.project.delete.review" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Delete project"
-          }
-        }
-      }
-    },
-    "workdesk.result.from" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "From %@"
-          }
-        }
-      }
-    },
-    "workdesk.result.sourceConversation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "project conversation"
-          }
-        }
-      }
-    },
     "" : {
 
     },
@@ -2401,6 +1807,28 @@
         }
       }
     },
+    "conversations.deleteAll.local.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This removes every conversation from this device. These deletions can sync while turning off is still in progress or if you turn content sync back on. Usage history is cleared across all your devices even while content sync is off. Your Work desk stays untouched. This cannot be undone."
+          }
+        }
+      }
+    },
+    "conversations.deleteAll.synced.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This removes every conversation and its usage records from this device and all your other devices. Your Work desk and everything on it stay untouched. This cannot be undone."
+          }
+        }
+      }
+    },
     "conversations.empty.micHint" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3929,6 +3357,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "This setup hasn't been fully checked"
+          }
+        }
+      }
+    },
+    "diagnostics.sync.content" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Content sync on this device"
+          }
+        }
+      }
+    },
+    "diagnostics.sync.content.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Content sync couldn’t be updated. Open Settings → General to try again."
+          }
+        }
+      }
+    },
+    "diagnostics.sync.content.off" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Content sync is off on this device. Settings and keys can still sync."
+          }
+        }
+      }
+    },
+    "diagnostics.sync.content.on" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Content sync is on for this device."
           }
         }
       }
@@ -11058,6 +10530,138 @@
         }
       }
     },
+    "settings.contentSync.applying" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Updating content sync on this device…"
+          }
+        }
+      }
+    },
+    "settings.contentSync.disable.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn Off"
+          }
+        }
+      }
+    },
+    "settings.contentSync.disable.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversations, Work, files and usage records will stop syncing as your devices receive this change. Content already on each device and in iCloud is kept. This does not free iCloud storage."
+          }
+        }
+      }
+    },
+    "settings.contentSync.disable.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn off content sync?"
+          }
+        }
+      }
+    },
+    "settings.contentSync.effectiveOff" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Content sync is off on this device."
+          }
+        }
+      }
+    },
+    "settings.contentSync.enable.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn On"
+          }
+        }
+      }
+    },
+    "settings.contentSync.enable.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Content created or changed on any of your devices while sync was off will sync with the current iCloud account, including edits and deletions. Content already in iCloud will become available again as your devices receive this change."
+          }
+        }
+      }
+    },
+    "settings.contentSync.enable.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn on content sync?"
+          }
+        }
+      }
+    },
+    "settings.contentSync.explanation.off" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatic content sync is turned off across your devices as they receive this change. Content already on each device and in iCloud is kept. Settings and keys continue to sync when available."
+          }
+        }
+      }
+    },
+    "settings.contentSync.explanation.on" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversations, Work, files and usage records sync across your devices. This choice applies across your devices. Settings and keys continue to sync when available."
+          }
+        }
+      }
+    },
+    "settings.contentSync.label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync content with iCloud"
+          }
+        }
+      }
+    },
+    "settings.contentSync.save.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t save the sync setting. Try again."
+          }
+        }
+      }
+    },
     "settings.editor.cancel" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -16767,13 +16371,13 @@
         }
       }
     },
-    "settings.usage.clear.message" : {
-      "extractionState" : "extracted_with_value",
+    "settings.usage.clear.message.contentSync" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "This removes every usage record from this device and all your other devices. Your conversations are not affected. This cannot be undone."
+            "state" : "translated",
+            "value" : "This removes every usage record from this device and all your other devices, even when content sync is off. Your conversations are not affected. This cannot be undone."
           }
         }
       }
@@ -21122,6 +20726,61 @@
         }
       }
     },
+    "sync.content.changeFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The sync change could not finish. Your saved data is kept. Try again."
+          }
+        }
+      }
+    },
+    "sync.content.pendingOtherActivity" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for another Conduck session to stop syncing."
+          }
+        }
+      }
+    },
+    "sync.content.pendingSave" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for the current save to finish."
+          }
+        }
+      }
+    },
+    "sync.content.policyUnavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting to read the sync setting. Your saved data is kept."
+          }
+        }
+      }
+    },
+    "sync.content.unavailableInBuild" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This build keeps content on this device because iCloud sync is unavailable."
+          }
+        }
+      }
+    },
     "sync.icloud.banner.dismiss" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -21177,6 +20836,28 @@
         }
       }
     },
+    "sync.icloud.settings.content.noAccount" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in to iCloud in Settings to sync conversations, Work and files across your devices."
+          }
+        }
+      }
+    },
+    "sync.icloud.settings.content.restricted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iCloud is restricted on this device, so conversations, Work and files can't sync."
+          }
+        }
+      }
+    },
     "sync.icloud.settings.header" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -21188,17 +20869,6 @@
         }
       }
     },
-    "sync.icloud.settings.noAccount" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Sign in to iCloud in Settings to sync your conversations across your devices."
-          }
-        }
-      }
-    },
     "sync.icloud.settings.quota" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -21206,17 +20876,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Your iCloud storage is full. Free up space or upgrade your plan to resume syncing."
-          }
-        }
-      }
-    },
-    "sync.icloud.settings.restricted" : {
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "iCloud is restricted on this device (e.g. by Screen Time or a profile), so conversations can't sync."
           }
         }
       }
@@ -21429,9 +21088,6 @@
           }
         }
       }
-    },
-    "This removes every conversation and its usage records from this device and all your other devices. Your Work desk and everything on it stay untouched. This cannot be undone." : {
-
     },
     "This removes every conversation from this device and all your other devices. This cannot be undone." : {
       "extractionState" : "manual",
@@ -23896,6 +23552,17 @@
         }
       }
     },
+    "workboard.material.image.open" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open image"
+          }
+        }
+      }
+    },
     "workboard.material.importing" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23995,6 +23662,17 @@
         }
       }
     },
+    "workboard.material.link.open" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open link"
+          }
+        }
+      }
+    },
     "workboard.material.link.title" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24050,6 +23728,105 @@
         }
       }
     },
+    "workboard.material.notes.add" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add notes…"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.continue" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue editing…"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.draftKept" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your changes are still here. Try saving again, or load the saved text to replace your changes."
+          }
+        }
+      }
+    },
+    "workboard.material.notes.edit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit notes…"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep context with this material. These notes are included when you bring it into a new conversation."
+          }
+        }
+      }
+    },
+    "workboard.material.notes.placeholder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Write here…"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.reload" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load saved text…"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.reloadAction" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load saved text"
+          }
+        }
+      }
+    },
+    "workboard.material.notes.reloadConfirm" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replace your changes with the saved text?"
+          }
+        }
+      }
+    },
     "workboard.material.open" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24057,6 +23834,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Open"
+          }
+        }
+      }
+    },
+    "workboard.material.original.preview" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preview original"
+          }
+        }
+      }
+    },
+    "workboard.material.original.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The original isn’t available on this device. Your notes are still available here."
           }
         }
       }
@@ -24270,6 +24069,39 @@
         }
       }
     },
+    "workboard.material.sourceConversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open source conversation"
+          }
+        }
+      }
+    },
+    "workboard.material.syncOff" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not on this device · content sync is off"
+          }
+        }
+      }
+    },
+    "workboard.material.syncOff.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This material is not on this device, and content sync is off. Use a device where the file is available, or turn content sync on in Settings → General."
+          }
+        }
+      }
+    },
     "workboard.material.syncPending" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24281,6 +24113,17 @@
         }
       }
     },
+    "workboard.material.text.edit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit text"
+          }
+        }
+      }
+    },
     "workboard.material.transcript" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -24288,6 +24131,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Spoken note"
+          }
+        }
+      }
+    },
+    "workboard.material.transcript.edit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit transcript"
           }
         }
       }
@@ -24522,13 +24376,13 @@
         }
       }
     },
-    "workboard.tutorial.point.review" : {
-      "extractionState" : "extracted_with_value",
+    "workboard.tutorial.point.review.optionalSync" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Cards sync through your own iCloud — very large files stay on the device that captured them."
+            "state" : "translated",
+            "value" : "With content sync on, cards sync through your own iCloud. Very large files stay on the device that captured them. You can change content sync in Settings → General."
           }
         }
       }
@@ -25377,6 +25231,17 @@
         }
       }
     },
+    "workdesk.companion.openTranscript" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open transcript"
+          }
+        }
+      }
+    },
     "workdesk.conversation.accepted" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25384,6 +25249,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Conversation started"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.addMaterials" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add materials…"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.addMaterials.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use materials from anywhere in Work. They stay in their current projects."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.addMaterials.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add materials"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.addSelected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add selected"
           }
         }
       }
@@ -25406,6 +25315,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Back to project"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.clearSelection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear selection"
           }
         }
       }
@@ -25465,6 +25385,17 @@
         }
       }
     },
+    "workdesk.conversation.findMaterial" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Find a material"
+          }
+        }
+      }
+    },
     "workdesk.conversation.gateway.choose" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25483,6 +25414,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No gateway is available on this device. Your task will stay here when you close. Connect a gateway in Settings → Personal AI."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.leaveOutMissing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leave out missing materials"
           }
         }
       }
@@ -25509,6 +25451,17 @@
         }
       }
     },
+    "workdesk.conversation.missingSelection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Some selected materials were removed or moved. Leave them out to continue."
+          }
+        }
+      }
+    },
     "workdesk.conversation.new" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25516,6 +25469,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "New conversation…"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.newCompanionExcluded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New attached material left out. Uncheck and select this card again to include it."
           }
         }
       }
@@ -25538,6 +25502,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Your project settings could not be saved. Your task is still here. Keep this window open and try again."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.selectionChanged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The selected materials changed. Choose them again."
           }
         }
       }
@@ -25571,6 +25546,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "This conversation couldn’t open."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.withMaterials" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New conversation with %lld materials…"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.withOneMaterial" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New conversation with 1 material…"
           }
         }
       }
@@ -25615,6 +25612,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The desk changed. Try that action again."
+          }
+        }
+      }
+    },
+    "workdesk.error.deletionChanged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This project or its materials changed. Review the deletion again."
           }
         }
       }
@@ -25828,6 +25836,17 @@
         }
       }
     },
+    "workdesk.material.companionNotes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notes for attached material…"
+          }
+        }
+      }
+    },
     "workdesk.material.count" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25872,6 +25891,28 @@
         }
       }
     },
+    "workdesk.material.notes.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your notes"
+          }
+        }
+      }
+    },
+    "workdesk.material.openProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open project"
+          }
+        }
+      }
+    },
     "workdesk.material.select" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25879,6 +25920,61 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Select material"
+          }
+        }
+      }
+    },
+    "workdesk.material.unfiled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No project"
+          }
+        }
+      }
+    },
+    "workdesk.material.used.count" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Used in %lld conversations"
+          }
+        }
+      }
+    },
+    "workdesk.material.used.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No saved conversations use this material."
+          }
+        }
+      }
+    },
+    "workdesk.material.used.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These conversations used a copy of the material as it was when sent. Moving or editing it in Work doesn’t change earlier messages."
+          }
+        }
+      }
+    },
+    "workdesk.material.used.once" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Used in 1 conversation"
           }
         }
       }
@@ -25982,8 +26078,160 @@
         }
       }
     },
-
-
+    "workdesk.project.delete.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete project…"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.context" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The project and its saved context will be removed."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.conversation.one" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its 1 conversation will remain in Chats."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.conversations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its %lld conversations will remain in Chats."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete project"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The project couldn’t be deleted."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.keep" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep materials"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.keep.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "They stay in All materials, grouped together in Desk view. Notes attached to them are kept too."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.materials" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete project and %lld materials"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.one" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete project and 1 material"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.question" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete “%@”?"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.remove.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removes these materials and their attached notes from Work on your synced devices. Existing conversations and files already sent to gateways remain."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.reopen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close this review and choose Delete project again to review the latest materials."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.review" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete project"
+          }
+        }
+      }
+    },
     "workdesk.project.empty.message" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -26050,7 +26298,6 @@
         }
       }
     },
-
     "workdesk.projects" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -26106,7 +26353,17 @@
         }
       }
     },
-
+    "workdesk.result.from" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From %@"
+          }
+        }
+      }
+    },
     "workdesk.result.openSource" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -26136,6 +26393,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "From project conversation"
+          }
+        }
+      }
+    },
+    "workdesk.result.sourceConversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "project conversation"
           }
         }
       }

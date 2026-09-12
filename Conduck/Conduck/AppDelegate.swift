@@ -244,6 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // "iCloud unavailable" signal; no visible chrome otherwise). Mirrors the
         // iOS `ConduckApp.init` wiring.
         Task { await ConversationStore.shared.warmUp() }
+        ContentSyncRuntime.shared.start()
         CloudSyncMonitor.shared.start()
 
         // Show onboarding on first launch. The 500 ms delay gives the

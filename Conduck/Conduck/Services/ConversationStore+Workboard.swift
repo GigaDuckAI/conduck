@@ -630,7 +630,9 @@ extension ConversationStore {
     /// rows are returned untouched.
     func createWorkItem(_ draft: WorkItemDraft = WorkItemDraft()) async throws -> WorkItemRecord {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let selectedID: UUID
         let created: Bool
         (selectedID, created) = try await context.perform { [context] in
@@ -653,6 +655,7 @@ extension ConversationStore {
             try context.save()
             return (draft.id, true)
         }
+        contextLease.finish()
         if created { await postDidChange() }
         guard let record = try await fetchWorkItem(id: selectedID) else {
             throw WorkboardStoreError.itemNotFound
@@ -1071,13 +1074,13 @@ extension ConversationStore {
         /// A complete blob already carried these exact bytes, so nothing was
         /// written and there is nothing to take back.
         case alreadyPresent
-        /// This call inserted THIS row, named by its permanent object id. Only
+        /// This call inserted THIS row, named by its permanent object-id URI. Only
         /// this call may delete it again: it knows the material never landed,
         /// which a background pass never can. The identity is the row rather
         /// than its `(materialID, contentHash, byteSize)` columns because those
         /// carry no uniqueness — a peer's import or a concurrent publication of
         /// the same bytes matches them too.
-        case inserted(rowID: NSManagedObjectID)
+        case inserted(rowID: URL)
     }
 
     /// What the single write transaction actually did, so the vault's staged-key
@@ -1327,7 +1330,6 @@ extension ConversationStore {
         #endif
 
         // STEP 2 OF THE PUBLICATION.
-        let context = newWriteContext()
         let outcome: WorkMaterialWriteOutcome
         do {
             // New project membership joins deletion's queue only for the final
@@ -1338,6 +1340,12 @@ extension ConversationStore {
             let organizationHold = projectID != nil
                 ? try await workMaterialPublicationLock?.acquireOrganization() : nil
             defer { organizationHold?.release() }
+            // Organization locks precede context admission on every writer.
+            // Holding a context while waiting for a writer whose next context
+            // is paused by a sync transition would deadlock the drain.
+            let contextLease = try await newWriteContextLease()
+            defer { contextLease.finish() }
+            let context = contextLease.context
             outcome = try await context.perform { [context] () -> WorkMaterialWriteOutcome in
                 // THE MUTATION BOUNDARY, and the last place a cancel can still
                 // mean something. Everything above this line — the two claims,
@@ -1675,6 +1683,7 @@ extension ConversationStore {
                     stagedPayloadIsNamed: true
                 )
             }
+            contextLease.finish()
         } catch {
             if let key = staged?.vaultKey { try? await workAssetVault.remove(key) }
             if case .inserted(let rowID) = publishedBlob {
@@ -1994,8 +2003,10 @@ extension ConversationStore {
            )[materialID] != nil {
             return .alreadyPresent
         }
-        let context = newWriteContext()
-        let insertedRowID = try await context.perform { [context] () -> NSManagedObjectID in
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
+        let insertedRowID = try await context.perform { [context] () -> URL in
             let now = Date()
             let row = NSEntityDescription.insertNewObject(
                 forEntityName: "WorkMaterialBlob",
@@ -2018,7 +2029,7 @@ extension ConversationStore {
             // reach here and write rows that are equal in every column.
             try context.obtainPermanentIDs(for: [row])
             try context.save()
-            return row.objectID
+            return row.objectID.uriRepresentation()
         }
         return .inserted(rowID: insertedRowID)
     }
@@ -2035,7 +2046,9 @@ extension ConversationStore {
         materialID: UUID
     ) async throws -> Bool {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSDictionary>(entityName: "WorkMaterial")
             request.resultType = .dictionaryResultType
@@ -2077,7 +2090,9 @@ extension ConversationStore {
         projectionBlobCompletenessCallsForTesting += 1
         #endif
         let unpaired = WorkMaterialBlobPairing(contentHash: nil, byteSize: 0)
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSDictionary>(entityName: "WorkMaterialBlob")
             request.resultType = .dictionaryResultType
@@ -2121,7 +2136,9 @@ extension ConversationStore {
         pairedWith pairing: WorkMaterialBlobPairing
     ) async throws -> Data? {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] () -> Data? in
             for row in try Self.blobRows(materialID: materialID, in: context) {
                 guard let record = Self.blobRecord(of: row), record.isComplete,
@@ -2169,10 +2186,23 @@ extension ConversationStore {
     /// The one thing neither reaches is a device that never took the lock at
     /// all: a peer's IMPORT can carry an identical blob row. That is why
     /// identity here is the object id and never the columns.
-    private func deleteBlobRow(_ rowID: NSManagedObjectID) async {
-        let context = newWriteContext()
+    /// Object identifiers themselves retain their old store. Publication can
+    /// finish after a sync-mode reopen, so only their permanent URI crosses a
+    /// context boundary; resolve it through the currently admitted coordinator.
+    private nonisolated static func workObject(
+        at uri: URL, in context: NSManagedObjectContext
+    ) -> NSManagedObject? {
+        guard let id = context.persistentStoreCoordinator?
+            .managedObjectID(forURIRepresentation: uri) else { return nil }
+        return try? context.existingObject(with: id)
+    }
+
+    private func deleteBlobRow(_ rowID: URL) async {
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
-            guard let row = try? context.existingObject(with: rowID) else { return }
+            guard let row = Self.workObject(at: rowID, in: context) else { return }
             context.delete(row)
             try? context.save()
         }
@@ -2567,7 +2597,9 @@ extension ConversationStore {
         expectedOwnerRevision: Int64?
     ) async throws -> WorkMaterialRecord {
 
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let inserted: Bool
         do {
             inserted = try await context.perform { [context] in
@@ -2601,7 +2633,9 @@ extension ConversationStore {
                 try context.save()
                 return true
             }
+            contextLease.finish()
         } catch {
+            contextLease.finish()
             if let newVaultKey { try? await workAssetVault.remove(newVaultKey) }
             throw error
         }
@@ -2793,7 +2827,9 @@ extension ConversationStore {
             publishedBlob = .none
         }
 
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let swap: WorkMaterialReattachSwap
         do {
             swap = try await context.perform {
@@ -2824,7 +2860,7 @@ extension ConversationStore {
                 // Everything the swap is about to overwrite, per physical row,
                 // so a post-commit refusal can put it back.
                 let priorRows = rows.map(WorkMaterialRowSnapshot.init)
-                var replacedBlobRowIDs: [NSManagedObjectID] = []
+                var replacedBlobRowIDs: [URL] = []
                 let now = Date()
                 switch staged.storageMode {
                 case .syncedPayload:
@@ -2859,7 +2895,7 @@ extension ConversationStore {
                     // has not landed yet, and is not this call's to reclaim.
                     let replaced = try Self.blobRows(materialID: id, in: context)
                     try context.obtainPermanentIDs(for: replaced)
-                    replacedBlobRowIDs = replaced.map(\.objectID)
+                    replacedBlobRowIDs = replaced.map { $0.objectID.uriRepresentation() }
                     for row in rows {
                         Self.pointAtLocalVault(
                             row: row,
@@ -2892,7 +2928,9 @@ extension ConversationStore {
                     replacedBlobRowIDs: replacedBlobRowIDs
                 )
             }
+            contextLease.finish()
         } catch {
+            contextLease.finish()
             if let newKey { try? await workAssetVault.remove(newKey) }
             if case .inserted(let rowID) = publishedBlob {
                 // The card kept the payload it had, so the row this call
@@ -2968,13 +3006,15 @@ extension ConversationStore {
     /// the person their payload every time a confirmation refuses. The one rule
     /// this does not bend is `deleteBlobRows`': a blob is reclaimed only
     /// together with, or behind, the material that names it, never by a sweep.
-    private func retireReplacedBlobRows(_ rowIDs: [NSManagedObjectID]) async {
+    private func retireReplacedBlobRows(_ rowIDs: [URL]) async {
         guard !rowIDs.isEmpty else { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             var retired = 0
             for rowID in rowIDs {
-                guard let row = try? context.existingObject(with: rowID) else { continue }
+                guard let row = Self.workObject(at: rowID, in: context) else { continue }
                 context.delete(row)
                 retired += 1
             }
@@ -3001,13 +3041,13 @@ extension ConversationStore {
         /// raw column, and a row readers compare by `createdAt` would come out
         /// of the round trip at the revision it went in with.
         let priorRows: [WorkMaterialRowSnapshot]
-        let replacedBlobRowIDs: [NSManagedObjectID]
+        let replacedBlobRowIDs: [URL]
     }
 
     /// One physical row's payload-bearing columns as they stood BEFORE a
     /// reattach overwrote them.
     private nonisolated struct WorkMaterialRowSnapshot: Sendable {
-        let rowID: NSManagedObjectID
+        let rowID: URL
         let storageMode: String?
         let localVaultKey: String?
         let contentHash: String?
@@ -3036,7 +3076,7 @@ extension ConversationStore {
         }
 
         init(row: NSManagedObject) {
-            rowID = row.objectID
+            rowID = row.objectID.uriRepresentation()
             storageMode = row.value(forKey: "storageMode") as? String
             localVaultKey = row.value(forKey: "localVaultKey") as? String
             contentHash = row.value(forKey: "contentHash") as? String
@@ -3144,10 +3184,12 @@ extension ConversationStore {
         let restoredStamps = Self.restoredRevisionStamps(
             advancing: priorRows.map(\.effectiveRevision)
         )
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return false }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let restored = await context.perform { [context] () -> Bool in
             for (position, prior) in priorRows.enumerated() {
-                guard let row = try? context.existingObject(with: prior.rowID) else {
+                guard let row = Self.workObject(at: prior.rowID, in: context) else {
                     return false
                 }
                 row.setValue(prior.storageMode, forKey: "storageMode")
@@ -3172,6 +3214,7 @@ extension ConversationStore {
                 return false
             }
         }
+        contextLease.finish()
         if restored, case .inserted(let rowID) = publishedBlob {
             // The card is back on the vault lane, so the blob this call
             // inserted for the replacement names nothing. Same rule as every
@@ -3283,7 +3326,9 @@ extension ConversationStore {
         expectedOwnerRevision: Int64? = nil
     ) async throws {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let outcome = try await context.perform { [context] () -> (Bool, String?, UUID?) in
             let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
             if let workItemID {
@@ -3316,6 +3361,7 @@ extension ConversationStore {
             try context.save()
             return (true, key, owner)
         }
+        contextLease.finish()
         if let key = outcome.1 { try? await workAssetVault.remove(key) }
         if outcome.0 { await postDidChange() }
     }
@@ -3502,7 +3548,9 @@ extension ConversationStore {
         expectedOwnerRevision: Int64? = nil
     ) async throws {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let vaultKeys = try await context.perform { [context] () -> [String] in
             // A card is not its own companion. Unreachable through the kind
             // checks below — one row cannot be both a voice material and an
@@ -3558,6 +3606,7 @@ extension ConversationStore {
             try context.save()
             return keys.sorted()
         }
+        contextLease.finish()
         for key in vaultKeys { try? await workAssetVault.remove(key) }
         // ONE notification, after both cards and both payloads are gone.
         await postDidChange()
@@ -3600,7 +3649,9 @@ extension ConversationStore {
         expectedOwnerRevision: Int64? = nil
     ) async throws -> WorkItemRecord {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let changed = try await context.perform { [context] in
             guard let owner = try Self.workItemRow(id: itemID, in: context) else {
                 throw WorkboardStoreError.itemNotFound
@@ -3679,6 +3730,7 @@ extension ConversationStore {
             try context.save()
             return true
         }
+        contextLease.finish()
         if changed { await postDidChange() }
         guard let record = try await fetchWorkItem(id: itemID) else {
             throw WorkboardStoreError.itemNotFound
@@ -3713,7 +3765,9 @@ extension ConversationStore {
         try await ensureLoaded()
         let hold = try await workMaterialPublicationLock?.acquire(materialID: id)
         defer { hold?.release() }
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         // A concurrent import/delete must refuse this edit rather than let
         // object-trump merge silently replace a newer field or recreate a row.
         context.mergePolicy = NSErrorMergePolicy
@@ -3784,6 +3838,7 @@ extension ConversationStore {
             }
             return true
         }
+        contextLease.finish()
         if changed { await postDidChange() }
         guard let material = try await fetchWorkMaterial(id: id) else {
             throw WorkboardStoreError.materialNotFound
@@ -3806,7 +3861,9 @@ extension ConversationStore {
         itemID: UUID
     ) async throws {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let changed = try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
             request.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
@@ -3826,6 +3883,7 @@ extension ConversationStore {
             try context.save()
             return true
         }
+        contextLease.finish()
         if changed { await postDidChange() }
     }
 
@@ -3875,7 +3933,9 @@ extension ConversationStore {
     /// The pass itself, split out so the in-flight claim above is released on
     /// every exit without a `defer` that would have to spawn a task to do it.
     private func runWorkThumbnailRepairPass() async -> WorkThumbnailRepairReport {
-        let context = newReadContext()
+        guard let contextLease = try? await newReadContextLease() else { return .empty }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let candidates = await context.perform { [context] () -> [WorkThumbnailCandidate] in
             let request = NSFetchRequest<NSDictionary>(entityName: "WorkMaterial")
             request.resultType = .dictionaryResultType
@@ -3906,6 +3966,7 @@ extension ConversationStore {
             }
             return found
         }
+        contextLease.finish()
 
         // Filtered BEFORE the window is taken, which is the whole point of
         // remembering: the bound then applies to work that can still succeed.
@@ -4004,7 +4065,9 @@ extension ConversationStore {
         _ previews: [(WorkThumbnailCandidate, Data)]
     ) async -> Int {
         guard !previews.isEmpty else { return 0 }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return 0 }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return await context.perform { [context] () -> Int in
             var written = 0
             for (candidate, thumbnail) in previews {
@@ -4044,7 +4107,9 @@ extension ConversationStore {
     /// because it is not written.
     func loadWorkMaterialPayload(id: UUID) async throws -> Data? {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let payloadSource = try await context.perform {
             [context] () -> (WorkMaterialStorageMode, String?, WorkMaterialBlobPairing)? in
             guard let row = try Self.workMaterialRow(id: id, in: context) else { return nil }
@@ -4055,6 +4120,7 @@ extension ConversationStore {
             )
             return (mode, row.value(forKey: "localVaultKey") as? String, pairing)
         }
+        contextLease.finish()
         guard let payloadSource else { return nil }
         switch payloadSource.0 {
         case .metadataOnly:
@@ -4093,10 +4159,13 @@ extension ConversationStore {
     /// revision's filename and type.
     func fetchWorkMaterial(id: UUID) async throws -> WorkMaterialRecord? {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let stored = try await context.perform { [context] () -> StoredWorkMaterial? in
             try Self.workMaterialRow(id: id, in: context).map(StoredWorkMaterial.init)
         }
+        contextLease.finish()
         guard let stored else { return nil }
         return try await workMaterialRecords(for: [stored]).first
     }
@@ -4176,7 +4245,9 @@ extension ConversationStore {
         captureEnvelopeID: UUID?
     ) async throws -> [WorkItemRecord] {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let stored = try await context.perform { [context] () -> StoredWorkboard in
             let itemRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkItem")
             if let itemID {
@@ -4204,6 +4275,7 @@ extension ConversationStore {
 
             return StoredWorkboard(items: items, materials: materials)
         }
+        contextLease.finish()
 
         // Deduplicate BEFORE resolving availability: a physically duplicated
         // CloudKit row is not a second card, so it must not become a second
@@ -4277,7 +4349,9 @@ extension ConversationStore {
         using explicitVault: WorkAssetVault? = nil
     ) async throws -> Int {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let referencedKeys = try await context.perform { [context] () -> Set<String> in
             let request = NSFetchRequest<NSDictionary>(entityName: "WorkMaterial")
             request.resultType = .dictionaryResultType
@@ -4288,6 +4362,7 @@ extension ConversationStore {
                 }
             )
         }
+        contextLease.finish()
         return await (explicitVault ?? workAssetVault).reclaimUnreferenced(keeping: referencedKeys)
     }
 
@@ -4821,7 +4896,9 @@ extension ConversationStore {
     /// nothing here may reach the founder's real data from a signed suite run.
     func _workMaterialRowsForTesting(id: UUID) async -> [WorkMaterialRowProbe] {
         do { try await ensureLoaded() } catch { return [] }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return [] }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return await context.perform { [context] in
             guard Self.isInMemory(context) else { return [] }
             let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
@@ -4891,7 +4968,9 @@ extension ConversationStore {
         attachedToMaterialID: UUID? = nil
     ) async {
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             guard Self.isInMemory(context) else { return }
             let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
@@ -4935,7 +5014,9 @@ extension ConversationStore {
     ///   all be the same string.
     func _canonicalRowKeysForTesting(id: UUID) async -> [String] {
         do { try await ensureLoaded() } catch { return [] }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return [] }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return await context.perform { [context] () -> [String] in
             guard Self.isInMemory(context) else { return [] }
             // The BOARD's candidate order: how `loadWorkboard` sorts materials
@@ -4993,7 +5074,9 @@ extension ConversationStore {
         updatedAt: Date?
     ) async {
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             guard Self.isInMemory(context) else { return }
             let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
@@ -5018,7 +5101,9 @@ extension ConversationStore {
     /// vanish or crash the board with nothing to catch it.
     func _setWorkMaterialCardSizeColumnForTesting(_ rawValue: String?, materialID: UUID) async {
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             guard Self.isInMemory(context) else { return }
             let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
@@ -5052,7 +5137,9 @@ extension ConversationStore {
         contentHash: String? = nil
     ) async {
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             guard Self.isInMemory(context) else { return }
             let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
@@ -5075,7 +5162,9 @@ extension ConversationStore {
     /// identically to one correct row.
     func _workMaterialBlobRowsForTesting(materialID: UUID) async -> [WorkMaterialBlobRowProbe] {
         do { try await ensureLoaded() } catch { return [] }
-        let context = newReadContext()
+        guard let contextLease = try? await newReadContextLease() else { return [] }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return await context.perform { [context] in
             guard Self.isInMemory(context) else { return [] }
             let rows = (try? Self.blobRows(materialID: materialID, in: context)) ?? []
@@ -5100,7 +5189,9 @@ extension ConversationStore {
     /// CKRecord as well as its blob's.
     func _workMaterialPayloadColumnForTesting(id: UUID) async -> Data? {
         do { try await ensureLoaded() } catch { return nil }
-        let context = newReadContext()
+        guard let contextLease = try? await newReadContextLease() else { return nil }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return await context.perform { [context] in
             guard Self.isInMemory(context) else { return nil }
             let row = try? Self.workMaterialRow(id: id, in: context)
@@ -5124,7 +5215,9 @@ extension ConversationStore {
         updatedAt: Date
     ) async {
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             guard Self.isInMemory(context) else { return }
             let row = NSEntityDescription.insertNewObject(
@@ -5150,7 +5243,9 @@ extension ConversationStore {
     @discardableResult
     func _deleteWorkMaterialBlobRowsForTesting(materialID: UUID) async -> Int {
         do { try await ensureLoaded() } catch { return 0 }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return 0 }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return await context.perform { [context] in
             guard Self.isInMemory(context) else { return 0 }
             let deleted = (try? Self.deleteBlobRows(materialID: materialID, in: context)) ?? 0
@@ -5169,8 +5264,11 @@ extension ConversationStore {
     /// and then stops where a crash would.
     func _publishDeskMaterialBlobOnlyForTesting(_ draft: WorkMaterialDraft) async throws {
         try await ensureLoaded()
-        let probe = newReadContext()
+        let probeLease = try await newReadContextLease()
+        defer { probeLease.finish() }
+        let probe = probeLease.context
         let isolated = await probe.perform { [probe] in Self.isInMemory(probe) }
+        probeLease.finish()
         guard isolated else { return }
         let staged = try await stageWorkMaterialBytes(
             id: draft.id,

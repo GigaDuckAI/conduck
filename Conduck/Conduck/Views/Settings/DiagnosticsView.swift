@@ -162,6 +162,12 @@ struct DiagnosticsContent: View {
         .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
             Task { await runner.refreshConfig() }
         }
+        .onChange(of: ContentSyncRuntime.shared.state) { _, _ in
+            Task { await runner.refreshConfig() }
+        }
+        .onChange(of: ContentSyncRuntime.shared.desiredEnabled) { _, _ in
+            Task { await runner.refreshConfig() }
+        }
         #if os(macOS)
         // Returning from ANOTHER app (System Settings, where a permission is granted)
         // does not reliably re-fire `scenePhase` on macOS — observe the AppKit

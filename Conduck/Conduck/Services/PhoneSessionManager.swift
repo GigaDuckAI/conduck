@@ -68,6 +68,11 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
         ) { [weak self] _ in
             self?.broadcastToWatchDebounced()
         }
+        NotificationCenter.default.addObserver(
+            forName: .contentSyncPreferenceDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.broadcastToWatchDebounced()
+        }
 
         // Agent-file courier. `ConversationStore` posts this the moment THIS
         // device's retroactive output scan attaches a file to a turn — which is
@@ -175,6 +180,11 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
         var context: [String: Any] = [
             Constants.iCloudKVSUserIDKey: userID
         ]
+        if let preference = ContentSyncWatchWire.encodedPreference(
+            ContentSyncPreferenceStore.shared.currentPreference()
+        ) {
+            context[ContentSyncPreferenceStore.watchMessageKey] = preference
+        }
         if let preferredLanguage = preferredLanguage {
             // Legacy alias kept for older readers; new code reads
             // `sttPreferredLanguageKVSKey`.
@@ -259,6 +269,13 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     /// decision.
     private func assembleSettingsPayload() async -> [String: Any] {
         var payload: [String: Any] = [:]
+        // Explicit OFF must travel even when no provider or gateway exists.
+        // Preserve the revision: a transport delivery is not a new user choice.
+        if let preference = ContentSyncWatchWire.encodedPreference(
+            ContentSyncPreferenceStore.shared.currentPreference()
+        ) {
+            payload[ContentSyncPreferenceStore.watchMessageKey] = preference
+        }
 
         // STT envelope. Skip when no key exists for the active preset
         // (pre-onboarding / post-clear) — no value in shipping an empty
@@ -364,6 +381,7 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     /// A blocked preflight is a silent no-op: CloudKit is still delivering this
     /// row, just slowly, so there is no failure to surface to anyone.
     func courierAttachedFilesToWatch(_ descriptors: [AttachedFileDescriptor]) {
+        guard ContentSyncPreferenceStore.shared.isEnabled else { return }
         guard !descriptors.isEmpty else { return }
         let session = WCSession.default
         guard Self.resendPreflight(
@@ -463,6 +481,23 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
 
     func session(_ session: WCSession, didReceiveMessage message: [String: Any],
                  replyHandler: @escaping ([String: Any]) -> Void) {
+        if message[WatchWorkTextCaptureWire.kindKey] as? String == WatchWorkTextCaptureWire.requestKind {
+            guard let capture = WatchWorkTextCaptureWire.decode(message) else {
+                replyHandler([:])
+                return
+            }
+            Task {
+                let reply = await Self.acceptWorkTextCapture(capture)
+                replyHandler(reply)
+                if WatchWorkTextCaptureWire.accepted(reply, for: capture.id) == true {
+                    // This drains the SHARED inbox, which may also hold phone
+                    // captures. Use its normal receiving-device attribution;
+                    // labelling the entire pass as Watch would mislabel peers.
+                    _ = try? await WorkCaptureDrainer(sourceDevice: SourceDevice.current).drainAvailableCaptures()
+                }
+            }
+            return
+        }
         // ── Apple-speech relay, interactive channel (relay rework, Stage B) ──
         // The Watch sends the whole request inline via `sendMessage` when the
         // iPhone is reachable — deterministic 1–2 s round trips for typical
@@ -558,6 +593,24 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
             }
         } else {
             replyHandler([:])
+        }
+    }
+
+    /// The receipt boundary is durable queue ownership, not a WC delivery
+    /// callback. Injectable inbox lets tests prove a receipt has readable bytes
+    /// behind it without touching the app's files or dispatching any AI work.
+    static func acceptWorkTextCapture(
+        _ capture: WatchWorkTextCapture,
+        inbox: WorkCaptureInbox = .shared
+    ) async -> [String: Any] {
+        do {
+            try await inbox.publishAppCapture(
+                note: capture.text, screenshotPNG: nil,
+                captureID: capture.id, createdAt: min(capture.createdAt, Date())
+            )
+            return WatchWorkTextCaptureWire.acknowledgement(id: capture.id, accepted: true)
+        } catch {
+            return WatchWorkTextCaptureWire.acknowledgement(id: capture.id, accepted: false)
         }
     }
 

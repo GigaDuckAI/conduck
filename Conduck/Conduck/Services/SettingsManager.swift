@@ -103,6 +103,7 @@ actor SettingsManager {
 
     /// iCloud account presence (`ubiquityIdentityToken` in production).
     private let cloudAvailability: any CloudAvailability
+    private let contentSyncPreferences: ContentSyncPreferenceStore
 
     #if DEBUG
     /// Test-only: suspend ALL iCloud KVS participation — the read-fallback
@@ -185,6 +186,7 @@ actor SettingsManager {
         self.iCloudStore = dependencies.ubiquitous
         self.secrets = dependencies.secrets
         self.cloudAvailability = dependencies.cloudAvailability
+        self.contentSyncPreferences = ContentSyncPreferenceStore(dependencies: dependencies)
 
         // Register for iCloud KVS external change notifications
         // UNCONDITIONALLY — no `ubiquityIdentityToken` gate. The token is nil
@@ -6347,6 +6349,7 @@ actor SettingsManager {
     /// syncs. Everything push-up-bearing stays behind the guard.
     func performInitialSync() async {
         iCloudStore.synchronize()
+        _ = contentSyncPreferences.currentPreference()
 
         // UNGATED — see the tier note above and the method's own rationale.
         // POST when it adopted something: launch tasks and view-model loads

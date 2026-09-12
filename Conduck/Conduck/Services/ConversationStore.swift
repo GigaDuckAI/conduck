@@ -45,10 +45,13 @@
 // No Spotlight indexing (`SpotlightIndexer` / the
 // `FeatureFlags` gate) — conversations are not Spotlight-surfaced in V1.
 //
-// CloudKit posture: sync is ENABLED wherever the process actually carries the
-// iCloud container entitlement — the `cloudKitContainerOptions` attach mirrors
-// the local Core Data store into the user's OWN private CloudKit database
-// (developer-blind, no backend). Every other host runs LOCAL-ONLY (plain
+// CloudKit posture: the synced content preference defaults to enabled. Its
+// cached policy is read before loading; live changes drain scoped contexts and
+// reopen the SAME files with or without mirroring. Both stores keep persistent
+// history so later re-enabling can catch up. A cross-process lifetime lease
+// prevents claiming Off while a Shortcut process still owns a mirror.
+// CloudKit is enabled only where the process carries its container entitlement;
+// every other host runs LOCAL-ONLY (plain
 // `NSPersistentContainer`, `cloudKit: false`), because
 // `NSPersistentCloudKitContainer` fatal-asserts on an unentitled host with no
 // signed-in iCloud account / unregistered container: the Simulator always, and
@@ -69,6 +72,22 @@ import Foundation
 import CoreData
 import CloudKit
 import os
+
+/// Desired policy and the result of applying it are separate: a suspended
+/// Shortcut can still hold a mirror, so requesting Off is not proof of Off.
+nonisolated struct ContentSyncState: Sendable, Equatable {
+    enum Phase: Sendable, Equatable { case on, off, applying, failed }
+    enum Failure: Sendable, Equatable {
+        case activeOperations, anotherProcess, storage, unavailableInBuild, policyUnavailable
+    }
+    let desiredEnabled: Bool
+    let phase: Phase
+    let failure: Failure?
+}
+
+extension Notification.Name {
+    static let contentSyncStateDidChange = Notification.Name("contentSyncStateDidChange")
+}
 
 /// Redacted, `Sendable` snapshot of one CloudKit mirroring event — safe to cross
 /// the `ConversationStore` actor boundary (the underlying
@@ -1024,6 +1043,12 @@ final class RemoteChangeDebouncer {
     /// Set by the first `schedule()` of a burst, cleared when a fire lands.
     private var windowStart: ContinuousClock.Instant?
 
+    func cancel() {
+        pending?.cancel()
+        pending = nil
+        windowStart = nil
+    }
+
     init(
         interval: Duration = .milliseconds(300),
         maxLatency: Duration = .milliseconds(1000),
@@ -1305,7 +1330,39 @@ actor ConversationStore {
     // The store is driven only through base-class API (loadPersistentStores /
     // newBackgroundContext / persistentStoreCoordinator), so no CloudKit-only
     // method is lost.
-    private let container: NSPersistentContainer
+    private var container: NSPersistentContainer
+
+    // The actor is reentrant while Core Data performs work. These leases count
+    // contexts through their LAST use, not just through one perform call.
+    private let contentSyncContexts = ContentSyncContextRegistry()
+    private var contentSyncPreferenceStore: ContentSyncPreferenceStore? = .shared
+    private var contentSyncTask: Task<Void, Error>?
+    private var contentSyncObserver: NSObjectProtocol?
+    private var contentSyncPollTask: Task<Void, Never>?
+    private var contentSyncApplied: Bool?
+    private var contentSyncDesiredEnabled = true
+    private var contentSyncLastAttempt: Bool?
+    private var contentSyncFailure: ContentSyncState.Failure?
+    private var contentSyncFailureBeforePolicy: ContentSyncState.Failure?
+    private var mirrorLease: ContentSyncProcessLease.Hold?
+    private var sessionObservers: [NSObjectProtocol] = []
+    private var sessionDebouncers: [RemoteChangeDebouncer] = []
+    private var contentSyncSessionGeneration = 0
+    private var contentSyncSessionReady = false
+    private var contentSyncCloudKitCapable = ConversationStore.processCloudKitCapable
+    #if CONDUCK_TESTING
+    private var failNextContentSyncLoad = false
+    private var contentSyncAdmissionHookForTesting: (@Sendable () async -> Void)?
+    private var contentSyncDrainedHookForTesting: (@Sendable () async -> Void)?
+    #endif
+
+    private nonisolated static var processCloudKitCapable: Bool {
+        #if targetEnvironment(simulator)
+        return false
+        #else
+        return Constants.hasICloudContainerEntitlement
+        #endif
+    }
 
     /// The shipped sqlite. NEVER rename it: every row an existing account owns
     /// lives in this file, and a new name opens an empty store beside it.
@@ -1342,11 +1399,9 @@ actor ConversationStore {
     #endif
     #endif
 
-    /// One-shot store-load task. Created by the first `ensureLoaded()` caller;
-    /// every concurrent / later caller awaits this SAME task (single-flight).
-    /// A failed task is sticky — its error rethrows to every subsequent
-    /// caller, so a mis-provisioned store fails loudly instead of
-    /// retry-thrashing on each touch.
+    /// One load task PER persistence session. Concurrent callers share it; a
+    /// failed load remains sticky until an explicit sync retry/reconfiguration
+    /// replaces that session. Ordinary reads never retry-thrash a broken store.
     private var loadTask: Task<Void, Error>?
     #if !os(watchOS)
     var projectResultTask: Task<Void, Never>?
@@ -1407,6 +1462,8 @@ actor ConversationStore {
         // with the process. Plain QA mode keeps the production store so
         // persistence-sensitive QA flows still behave like the shipping app.
         if QAMode.isScreenshotMode {
+            self.contentSyncPreferenceStore = nil
+            self.contentSyncCloudKitCapable = false
             let container = NSPersistentContainer(name: "Conversations")
             if let core = container.persistentStoreDescriptions.first {
                 core.type = NSInMemoryStoreType
@@ -1439,15 +1496,10 @@ actor ConversationStore {
         // `Constants.hasICloudContainerEntitlement`; macOS sync is a signed
         // founder gate either way). Both fall back to the plain container,
         // which exercises no CloudKit codepath at all.
-        #if targetEnvironment(simulator)
-        let cloudKitUsable = false
-        #else
-        let cloudKitUsable = Constants.hasICloudContainerEntitlement
-        #endif
-
-        let container: NSPersistentContainer = cloudKitUsable
-            ? NSPersistentCloudKitContainer(name: "Conversations")
-            : NSPersistentContainer(name: "Conversations")
+        // Start with a plain unopened description. The lifecycle gate reads the
+        // latest durable preference and takes the cross-process mirror lease
+        // BEFORE it constructs or loads a CloudKit container.
+        let container = NSPersistentContainer(name: "Conversations")
 
         if let core = container.persistentStoreDescriptions.first {
             // App Group store location (CRITICAL — see file header). The
@@ -1478,11 +1530,8 @@ actor ConversationStore {
             container.persistentStoreDescriptions = ConversationStore.storeDescriptions(
                 core: core,
                 blobStoreURL: blobStoreURL,
-                cloudKit: cloudKitUsable
+                cloudKit: false
             )
-            if !cloudKitUsable {
-                NSLog("[ConversationStore] CloudKit mirroring off (Simulator, or a build without the iCloud container entitlement) — conversations stay local to this device.")
-            }
         }
 
         self.container = container
@@ -1505,7 +1554,13 @@ actor ConversationStore {
     /// `CKContainer.default()` (fatal-asserting on an unentitled host) for the
     /// on-disk variant. The store is driven only through base-class API, so no
     /// CloudKit method is lost; tests are local-only by definition.
-    init(inMemory: Bool = false, storeURL: URL? = nil) {
+    init(
+        inMemory: Bool = false,
+        storeURL: URL? = nil,
+        contentSyncPreferenceStore: ContentSyncPreferenceStore? = nil
+    ) {
+        self.contentSyncPreferenceStore = contentSyncPreferenceStore
+        self.contentSyncCloudKitCapable = false
         #if CONDUCK_TESTING
         self.isIsolatedTestStore = true
         #endif
@@ -1549,9 +1604,9 @@ actor ConversationStore {
     /// Shared store-description configuration applied by every init. History
     /// tracking + remote-change posting stay ON in all configurations
     /// (harmless locally; required for CloudKit). The `cloudKit` flag attaches
-    /// the CloudKit mirror to the user's own private iCloud database — ON for the
-    /// production App Group store, OFF for the in-memory/on-disk test seam (tests
-    /// stay local-only by definition).
+    /// the CloudKit mirror to the user's own private iCloud database when the
+    /// resolved preference and entitlement permit it. The in-memory/on-disk
+    /// test seam stays local-only by definition.
     ///
     /// `containerIdentifier` is a parameter rather than a constant because each
     /// mirrored store needs a container of its OWN: two descriptions carrying
@@ -1570,6 +1625,8 @@ actor ConversationStore {
             description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(
                 containerIdentifier: containerIdentifier
             )
+        } else {
+            description.cloudKitContainerOptions = nil
         }
 
         description.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
@@ -1707,10 +1764,9 @@ actor ConversationStore {
         _ = try? await ensureLoaded()
     }
 
-    /// Await the one-time persistent-store load. Single-flight: the first
-    /// caller creates `loadTask`; an async re-entry during the load awaits
-    /// that SAME task, and a failed task rethrows its error to every later
-    /// caller (sticky — pinned by
+    /// Await the policy transition and this session's single-flight store load.
+    /// An isolated store without a preference keeps its original sticky load
+    /// error contract (pinned by
     /// `ConversationHistoryAssemblerTests.testAssembleThrowsWhenTheStoreCannotLoad`:
     /// the first touch rethrows the load failure rather than swallowing it).
     ///
@@ -1719,6 +1775,33 @@ actor ConversationStore {
     /// own entry points on the load the way every method here does. Not
     /// general-purpose module API.
     func ensureLoaded() async throws {
+        if contentSyncPreferenceStore != nil {
+            startContentSyncObservation()
+            do { try await applyContentSyncIfNeeded() }
+            catch {
+                if contentSyncFailure == .policyUnavailable {
+                    try await ensureLocalSessionForUnavailablePolicy()
+                    // Another caller may have recovered the policy while this
+                    // one awaited the fallback. Re-enter the normal gate rather
+                    // than rejecting a now-authorized mirrored session.
+                    if contentSyncFailure != .policyUnavailable {
+                        return try await ensureLoaded()
+                    }
+                }
+                // The transition status and local storage availability differ.
+                // A verified local pair remains usable while another process
+                // finishes stopping, after an enable attempt fell back, or while
+                // the sync preference itself cannot be read. Uncertain policy
+                // may prohibit mirroring, never access to these same local files.
+                guard contentSyncSessionReady,
+                      !(container is NSPersistentCloudKitContainer) else { throw error }
+            }
+            return
+        }
+        try await ensureSessionLoaded()
+    }
+
+    private func ensureSessionLoaded() async throws {
         let task: Task<Void, Error>
         if let loadTask {
             task = loadTask
@@ -1731,6 +1814,314 @@ actor ConversationStore {
             loadTask = task
         }
         try await task.value
+        contentSyncSessionReady = true
+    }
+
+    // MARK: - Content sync lifecycle
+
+    enum ContentSyncTransitionError: Error { case unavailable }
+
+    func currentContentSyncState() -> ContentSyncState {
+        guard contentSyncPreferenceStore != nil else {
+            return ContentSyncState(desiredEnabled: false, phase: .off, failure: nil)
+        }
+        let desired = contentSyncPreferenceStore == nil ? false : contentSyncDesiredEnabled
+        let phase: ContentSyncState.Phase
+        if contentSyncTask != nil { phase = .applying }
+        else if contentSyncFailure != nil { phase = .failed }
+        else if contentSyncApplied == desired { phase = desired ? .on : .off }
+        else { phase = .applying }
+        return ContentSyncState(desiredEnabled: desired, phase: phase, failure: contentSyncFailure)
+    }
+
+    /// Also used by the Watch/headless process; no UI singleton owns the policy.
+    func reconcileContentSyncPreference(forceRetry: Bool = false) async {
+        guard contentSyncPreferenceStore != nil else { return }
+        startContentSyncObservation()
+        do { try await applyContentSyncIfNeeded(forceRetry: forceRetry) }
+        catch {
+            if contentSyncFailure == .policyUnavailable {
+                try? await ensureLocalSessionForUnavailablePolicy()
+            }
+        }
+    }
+
+    private func publishContentSyncState() {
+        Task { @MainActor in
+            NotificationCenter.default.post(name: .contentSyncStateDidChange, object: nil)
+        }
+    }
+
+    private func startContentSyncObservation() {
+        guard contentSyncObserver == nil else { return }
+        contentSyncObserver = NotificationCenter.default.addObserver(
+            forName: .contentSyncPreferenceDidChange, object: nil, queue: nil
+        ) { [weak self] _ in
+            Task { await self?.reconcileContentSyncPreference() }
+        }
+        // Cross-process notifications are only hints (App Nap can drop one).
+        // Re-read durable policy while this process runs. A suspended holder
+        // retains its kernel lease, so another process cannot falsely say Off.
+        contentSyncPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self else { return }
+                await self.pollContentSyncPreference()
+            }
+        }
+    }
+
+    private func pollContentSyncPreference() async {
+        let retry = contentSyncFailure == .anotherProcess || contentSyncFailure == .activeOperations
+            || contentSyncFailure == .policyUnavailable
+        await reconcileContentSyncPreference(forceRetry: retry)
+    }
+
+    private func readDesiredContentSyncPreference() throws -> Bool {
+        guard let preference = contentSyncPreferenceStore else { return false }
+        do {
+            let enabled = try preference.readEnabled()
+            contentSyncDesiredEnabled = enabled
+            if contentSyncFailure == .policyUnavailable {
+                contentSyncFailure = contentSyncFailureBeforePolicy
+                contentSyncFailureBeforePolicy = nil
+                publishContentSyncState()
+            }
+            return enabled
+        } catch {
+            // Lock contention does not change the requested preference. Keep
+            // the last observed choice; availability may conservatively reopen
+            // locally until policy can authorize mirroring again.
+            if contentSyncFailure != .policyUnavailable {
+                contentSyncFailureBeforePolicy = contentSyncFailure
+                contentSyncFailure = .policyUnavailable
+            }
+            publishContentSyncState()
+            throw error
+        }
+    }
+
+    private func applyContentSyncIfNeeded(forceRetry: Bool = false) async throws {
+        if let task = contentSyncTask {
+            try await task.value
+            // A newer preference may have arrived while the caller waited.
+            return try await applyContentSyncIfNeeded(forceRetry: forceRetry)
+        }
+        guard contentSyncPreferenceStore != nil else {
+            return try await ensureSessionLoaded()
+        }
+        let desired = try readDesiredContentSyncPreference()
+        if contentSyncApplied == desired,
+           contentSyncFailure == nil || contentSyncFailure == .unavailableInBuild {
+            return
+        }
+        if !forceRetry, contentSyncLastAttempt == desired, contentSyncFailure != nil {
+            throw ContentSyncTransitionError.unavailable
+        }
+        let task = Task {
+            do {
+                try await self.performContentSyncTransition()
+                self.contentSyncTask = nil
+                self.publishContentSyncState()
+            } catch {
+                self.contentSyncTask = nil
+                if self.contentSyncFailure == nil { self.contentSyncFailure = .storage }
+                self.publishContentSyncState()
+                throw error
+            }
+        }
+        contentSyncTask = task
+        publishContentSyncState()
+        try await task.value
+    }
+
+    /// Reading the preference is a prerequisite for CloudKit, not for opening
+    /// SQLite. A failed settings adapter must not make an existing library
+    /// disappear. Use the same session gate as a normal transition so a late
+    /// context cannot race a mirror being detached. The requested preference is
+    /// unchanged, and the policy-unavailable status remains visible throughout.
+    private func ensureLocalSessionForUnavailablePolicy() async throws {
+        if let task = contentSyncTask {
+            _ = try? await task.value
+            return try await ensureLocalSessionForUnavailablePolicy()
+        }
+        guard contentSyncFailure == .policyUnavailable else { return }
+        if contentSyncSessionReady, !(container is NSPersistentCloudKitContainer) { return }
+
+        let task = Task {
+            do {
+                try await self.openLocalSessionForUnavailablePolicy()
+                self.contentSyncTask = nil
+                self.publishContentSyncState()
+            } catch {
+                self.contentSyncTask = nil
+                // Keep the policy failure eligible for the normal poll retry.
+                // Genuine local-store failure still throws to its data caller.
+                self.publishContentSyncState()
+                throw error
+            }
+        }
+        contentSyncTask = task
+        publishContentSyncState()
+        try await task.value
+    }
+
+    private func openLocalSessionForUnavailablePolicy() async throws {
+        try await drainContentSyncContexts()
+        if container is NSPersistentCloudKitContainer {
+            try await detachContentSyncSession()
+            contentSyncApplied = nil
+            container = try makeContentSyncContainer(cloudKit: false)
+        }
+        // Cold startup already owns the correctly located plain descriptions.
+        // Opening those does not assert OFF or grant permission to mirror.
+        try await ensureSessionLoaded()
+        contentSyncSessionGeneration += 1
+        await postDidChange()
+    }
+
+    private func drainContentSyncContexts() async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while contentSyncContexts.activeCount > 0 {
+            guard ContinuousClock.now < deadline else {
+                if contentSyncFailure != .policyUnavailable { contentSyncFailure = .activeOperations }
+                throw ContentSyncTransitionError.unavailable
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private func performContentSyncTransition() async throws {
+        guard contentSyncPreferenceStore != nil else { return }
+        while true {
+            let desired = try readDesiredContentSyncPreference()
+            contentSyncLastAttempt = desired
+            contentSyncFailure = nil
+            try await drainContentSyncContexts()
+            #if CONDUCK_TESTING
+            if let hook = contentSyncDrainedHookForTesting {
+                contentSyncDrainedHookForTesting = nil
+                await hook()
+            }
+            #endif
+
+            // A retry waiting on another process already has a local pair. It
+            // only needs the barrier; do not reopen that pair every second.
+            if contentSyncApplied != desired || loadTask == nil {
+                try await detachContentSyncSession()
+                contentSyncApplied = nil
+                let latestDesired = try readDesiredContentSyncPreference()
+                let useCloudKit = latestDesired && contentSyncCloudKitCapable
+                if useCloudKit, let url = container.persistentStoreDescriptions.first?.url {
+                    mirrorLease = try ContentSyncProcessLease(beside: url).acquireMirror()
+                    // Read AFTER taking the shared lease. An Off writer can
+                    // then either observe this lease or prevent this new mirror.
+                    let confirmedDesired: Bool
+                    do { confirmedDesired = try readDesiredContentSyncPreference() }
+                    catch {
+                        mirrorLease?.release()
+                        mirrorLease = nil
+                        throw error
+                    }
+                    if !confirmedDesired {
+                        mirrorLease?.release()
+                        mirrorLease = nil
+                        continue
+                    }
+                }
+                do { container = try makeContentSyncContainer(cloudKit: useCloudKit) }
+                catch {
+                    mirrorLease?.release()
+                    mirrorLease = nil
+                    throw error
+                }
+                do {
+                    #if CONDUCK_TESTING
+                    if failNextContentSyncLoad {
+                        failNextContentSyncLoad = false
+                        throw ContentSyncTransitionError.unavailable
+                    }
+                    #endif
+                    try await ensureSessionLoaded()
+                } catch {
+                    // Tear down every partially opened mirror. Desired Off is
+                    // never recovered by reopening a CloudKit-enabled session.
+                    // A failed detach cannot be hidden by replacing our only
+                    // reference to a container that might still be mirroring.
+                    try await detachContentSyncSession()
+                    if latestDesired {
+                        container = try makeContentSyncContainer(cloudKit: false)
+                        do {
+                            try await ensureSessionLoaded()
+                            contentSyncApplied = false
+                        } catch { contentSyncSessionReady = false }
+                    }
+                    contentSyncFailure = .storage
+                    throw error
+                }
+                contentSyncSessionGeneration += 1
+                contentSyncApplied = latestDesired
+            }
+
+            let settledDesired = try readDesiredContentSyncPreference()
+            guard settledDesired == contentSyncApplied else { continue }
+            if !settledDesired, let url = container.persistentStoreDescriptions.first?.url,
+               container.persistentStoreDescriptions.first?.type != NSInMemoryStoreType {
+                do { try ContentSyncProcessLease(beside: url).confirmNoMirrors() }
+                catch ContentSyncProcessLease.Failure.anotherProcessStillMirroring {
+                    contentSyncFailure = .anotherProcess
+                    throw ContentSyncTransitionError.unavailable
+                }
+            }
+            guard try readDesiredContentSyncPreference() == contentSyncApplied else { continue }
+            if settledDesired && !contentSyncCloudKitCapable { contentSyncFailure = .unavailableInBuild }
+            publishContentSyncState()
+            await postDidChange()
+            return
+        }
+    }
+
+    private func makeContentSyncContainer(cloudKit: Bool) throws -> NSPersistentContainer {
+        let previous = container.persistentStoreDescriptions
+        let replacement: NSPersistentContainer = cloudKit
+            ? NSPersistentCloudKitContainer(name: "Conversations")
+            : NSPersistentContainer(name: "Conversations")
+        guard let oldCore = previous.first, oldCore.url != nil,
+              let core = oldCore.copy() as? NSPersistentStoreDescription else {
+            throw ContentSyncTransitionError.unavailable
+        }
+        #if os(watchOS)
+        let blobURL: URL? = nil
+        #else
+        guard let blobURL = previous.dropFirst().first?.url else {
+            throw ContentSyncTransitionError.unavailable
+        }
+        #endif
+        replacement.persistentStoreDescriptions = Self.storeDescriptions(
+            core: core, blobStoreURL: blobURL, cloudKit: cloudKit
+        )
+        return replacement
+    }
+
+    private func detachContentSyncSession() async throws {
+        contentSyncSessionReady = false
+        for observer in sessionObservers { NotificationCenter.default.removeObserver(observer) }
+        sessionObservers.removeAll()
+        let debouncers = sessionDebouncers
+        sessionDebouncers.removeAll()
+        await MainActor.run { for debouncer in debouncers { debouncer.cancel() } }
+        var firstError: Error?
+        let coordinator = container.persistentStoreCoordinator
+        for store in coordinator.persistentStores {
+            do { try coordinator.remove(store) }
+            catch { if firstError == nil { firstError = error } }
+        }
+        if coordinator.persistentStores.isEmpty {
+            mirrorLease?.release()
+            mirrorLease = nil
+            loadTask = nil
+        }
+        if let firstError { throw firstError }
     }
 
     /// Load the persistent stores without ever blocking a thread: the store
@@ -1747,26 +2138,20 @@ actor ConversationStore {
         }
 
         // `loadPersistentStores` calls back once per description, on an
-        // arbitrary queue. First failure wins; success resumes only after the
-        // LAST description lands. Lock-guarded so a late callback can never
-        // double-resume the continuation.
+        // arbitrary queue. Keep the first failure, but wait for EVERY callback
+        // before returning it: tearing down after the first failure races the
+        // other store's successful late mount into an already replaced session.
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let state = OSAllocatedUnfairLock(initialState: (remaining: descriptions.count, resolved: false))
+            let state = OSAllocatedUnfairLock(
+                initialState: (remaining: descriptions.count, error: Optional<Error>.none)
+            )
             container.loadPersistentStores { _, error in
-                // nil = still pending (descriptions outstanding, or a late
-                // callback after the `resolved` latch — either way, not this
-                // callback's resume). First failure wins; success resolves only
-                // once the LAST description lands; the latch makes a second
-                // non-nil result — and thus a double-resume — impossible.
                 let result: Result<Void, Error>? = state.withLock { state in
-                    guard !state.resolved else { return nil }
-                    if let error {
-                        state.resolved = true
-                        return .failure(error)
-                    }
+                    guard state.remaining > 0 else { return nil }
+                    if state.error == nil { state.error = error }
                     state.remaining -= 1
-                    guard state.remaining <= 0 else { return nil }
-                    state.resolved = true
+                    guard state.remaining == 0 else { return nil }
+                    if let error = state.error { return .failure(error) }
                     return .success(())
                 }
                 if let result { continuation.resume(with: result) }
@@ -1825,7 +2210,8 @@ actor ConversationStore {
         // density is measurable from a field log; lock-guarded because the
         // block is `@Sendable` even though `queue: .main` serializes it.
         let remoteChangeCount = OSAllocatedUnfairLock(initialState: 0)
-        NotificationCenter.default.addObserver(
+        sessionDebouncers.append(debouncer)
+        let remoteObserver = NotificationCenter.default.addObserver(
             forName: .NSPersistentStoreRemoteChange,
             object: container.persistentStoreCoordinator,
             queue: .main
@@ -1842,6 +2228,7 @@ actor ConversationStore {
                 debouncer.schedule()
             }
         }
+        sessionObservers.append(remoteObserver)
         #if !os(watchOS)
         // SQLite emits remote-change notifications for this coordinator's OWN
         // saves too. They refresh UI above, but must never trigger full output
@@ -1854,7 +2241,8 @@ actor ConversationStore {
                     Task { await self?.scheduleProjectResultReconciliation() }
                 }
             }
-            NotificationCenter.default.addObserver(
+            sessionDebouncers.append(imports)
+            let importObserver = NotificationCenter.default.addObserver(
                 forName: NSPersistentCloudKitContainer.eventChangedNotification,
                 object: nil, queue: .main
             ) { note in
@@ -1864,6 +2252,7 @@ actor ConversationStore {
                       storeIDs.contains(event.storeIdentifier) else { return }
                 MainActor.assumeIsolated { imports.schedule() }
             }
+            sessionObservers.append(importObserver)
         }
         scheduleProjectResultReconciliation()
         #endif
@@ -1880,7 +2269,9 @@ actor ConversationStore {
     func recentSyncEventSummaries(limit: Int = 20) async -> [SyncEventSummary] {
         do { try await ensureLoaded() } catch { return [] }
         guard container is NSPersistentCloudKitContainer else { return [] }
-        let context = container.newBackgroundContext()
+        guard let contextLease = try? await newReadContextLease() else { return [] }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSPersistentCloudKitContainerEventRequest.fetchEvents(after: .distantPast)
             request.resultType = .events
@@ -1938,21 +2329,55 @@ actor ConversationStore {
     ///
     /// Internal rather than private for the same reason `ensureLoaded` is — the
     /// `+GatewayAttempts` extension is a sibling file, not a general caller.
+    func newWriteContextLease() async throws -> ContentSyncContextLease {
+        try await admitContentSyncContext(writing: true)
+    }
+
+    /// Fresh per-call context for a store READ, with no merge policy for the
+    /// reason above — a read-only context never saves. Exists only because the
+    /// sibling extensions cannot reach `container` from another file. All reads
+    /// and writes now acquire a scoped lease; none retains a raw context across
+    /// a container replacement.
+    func newReadContextLease() async throws -> ContentSyncContextLease {
+        try await admitContentSyncContext(writing: false)
+    }
+
+    private func admitContentSyncContext(writing: Bool) async throws -> ContentSyncContextLease {
+        while true {
+            try await ensureLoaded()
+            #if CONDUCK_TESTING
+            if let hook = contentSyncAdmissionHookForTesting {
+                contentSyncAdmissionHookForTesting = nil
+                await hook()
+            }
+            #endif
+            // Returning from an await can re-enter the actor. Verify admission
+            // once more, then create AND count the context without suspension.
+            guard contentSyncTask == nil, contentSyncSessionReady else { continue }
+            let desired = try? readDesiredContentSyncPreference()
+            if container is NSPersistentCloudKitContainer,
+               desired != true { continue }
+            let context = container.newBackgroundContext()
+            if writing { context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy }
+            return ContentSyncContextLease(context: context, registry: contentSyncContexts)
+        }
+    }
+
+    #if CONDUCK_TESTING
+    /// Legacy fixture construction is restricted to isolated, non-switching
+    /// stores. Production and lifecycle tests must use scoped context leases.
     func newWriteContext() -> NSManagedObjectContext {
+        precondition(isIsolatedTestStore && contentSyncPreferenceStore == nil)
         let context = container.newBackgroundContext()
         context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
         return context
     }
 
-    /// Fresh per-call context for a store READ, with no merge policy for the
-    /// reason above — a read-only context never saves. Exists only because the
-    /// `+GatewayAttempts` extension cannot reach `container` from another file,
-    /// and must not read through `newWriteContext`, which would blur where the
-    /// merge-policy invariant applies. Every read path in THIS file keeps using
-    /// `container.newBackgroundContext()` directly.
     func newReadContext() -> NSManagedObjectContext {
-        container.newBackgroundContext()
+        precondition(isIsolatedTestStore && contentSyncPreferenceStore == nil)
+        return container.newBackgroundContext()
     }
+    #endif
 
     // MARK: - Conversation CRUD
 
@@ -1969,7 +2394,9 @@ actor ConversationStore {
     /// folder no conversation owns.
     func createConversation(id: UUID = UUID(), backend: String, projectID: UUID? = nil, title: String? = nil) async throws -> ConversationRecord {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         // CANONICAL from the very first stamp this row carries, even though a
         // conversation with no messages has no envelope to validate. One rule
         // with no exceptions is the point: `lastActivityAt` is the value every
@@ -2009,6 +2436,7 @@ actor ConversationStore {
             conversation.setValue(nil, forKey: "tailProjection")
             try context.save()
         }
+        contextLease.finish()
 
         await postDidChange()
 
@@ -2089,7 +2517,9 @@ actor ConversationStore {
         targetFileLaneID: String? = nil
     ) async throws -> CloneResult {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let newID = UUID()
         // Canonical, and then every copied turn is derived from its INTEGER
         // millisecond value rather than from this `Date` (see the copy loop).
@@ -2325,6 +2755,7 @@ actor ConversationStore {
             try context.save()
             return (sourceTitleSnippet, continuationMessageID, settledActivityAt, tailProjection, projectID)
         }
+        contextLease.finish()
 
         await postDidChange()
 
@@ -2464,7 +2895,9 @@ actor ConversationStore {
     /// SEPARATELY, so a conversation holding both keeps both facts.
     func fetchUnresolvedUserTurns() async throws -> [UUID: UnresolvedTurns] {
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let start = Date()
         let (turns, rows): ([UUID: UnresolvedTurns], Int) = try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
@@ -2546,7 +2979,9 @@ actor ConversationStore {
         activity: ActivityProjection = .none
     ) async throws -> [ConversationRecord] {
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let start = Date()
         let records: [ConversationRecord] = try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
@@ -2561,6 +2996,7 @@ actor ConversationStore {
             let objects = try context.fetch(request)
             return objects.map { ConversationRecord(managedObject: $0) }
         }
+        contextLease.finish()
         Self.logFetchIfSlow("fetch.conversations", start: start, rows: records.count)
 
         guard case .turnStates = activity else { return records }
@@ -2582,7 +3018,9 @@ actor ConversationStore {
     /// global default.
     func fetchConversation(id: UUID) async throws -> ConversationRecord? {
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
@@ -2605,7 +3043,9 @@ actor ConversationStore {
     /// resolution. READ-ONLY: never mutates the store / re-dispatches.
     func conversationID(forMessageID messageID: UUID) async throws -> UUID? {
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
@@ -2630,7 +3070,9 @@ actor ConversationStore {
     /// remove an attempt row (`purgeGatewayAttempts`).
     func deleteConversation(id: UUID) async throws {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         try await context.perform { [context] in
             let removedAt = Date()
             let dispatchRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkDispatch")
@@ -2648,6 +3090,7 @@ actor ConversationStore {
             }
             try context.save()
         }
+        contextLease.finish()
         await postDidChange()
         #if !os(watchOS)
         // Per-device quick lane: a deleted conversation must not remain the
@@ -2688,7 +3131,9 @@ actor ConversationStore {
         #else
         cutoff = await SettingsManager.shared.advanceGatewayUsageClearedThrough(Date())
         #endif
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         try await context.perform { [context] in
             let dispatchRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkDispatch")
             dispatchRequest.predicate = NSPredicate(format: "conversationID != nil")
@@ -2707,6 +3152,7 @@ actor ConversationStore {
             }
             try context.save()
         }
+        contextLease.finish()
         await postDidChange()
         _ = try? await purgeGatewayAttempts(through: cutoff)
         #if !os(watchOS)
@@ -2815,7 +3261,9 @@ actor ConversationStore {
         try await ensureLoaded()
         guard limit > 0 else { return [] }
         let turns = includeTurnStates ? try await fetchUnresolvedUserTurns() : [:]
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             request.sortDescriptors = [
@@ -2926,7 +3374,9 @@ actor ConversationStore {
         } catch {
             return []
         }
-        let context = container.newBackgroundContext()
+        guard let contextLease = try? await newReadContextLease() else { return [] }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         do {
             return try await context.perform { [context] in
                 let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
@@ -3076,7 +3526,9 @@ actor ConversationStore {
         // callers are the serialized inbox drainers, so that window is
         // unreachable in practice. Skipped entirely when `id == nil` (no probe
         // cost for the fresh-append callers).
-        let bgContext = newWriteContext()
+        let bgContextLease = try await newWriteContextLease()
+        defer { bgContextLease.finish() }
+        let bgContext = bgContextLease.context
         // The settled stamp has to leave the transaction: the `MessageRecord`
         // returned below and its attachment snapshots must report the value the
         // row actually carries, not the clock this method read. A snapshot
@@ -3176,6 +3628,7 @@ actor ConversationStore {
             try bgContext.save()
             return (nil, now)
         }
+        bgContextLease.finish()
 
         if let dedupeHit = written.dedupeHit { return dedupeHit }
         let now = written.stamp
@@ -3387,7 +3840,9 @@ actor ConversationStore {
         // settled value has to travel back out for the returned snapshot.
         let proposedNow = Date()
 
-        let bgContext = newWriteContext()
+        let bgContextLease = try await newWriteContextLease()
+        defer { bgContextLease.finish() }
+        let bgContext = bgContextLease.context
         #if DEBUG
         let injectedSaveFailure = debugFailsAttemptBearingSaves && attempt != nil
         #endif
@@ -3512,6 +3967,7 @@ actor ConversationStore {
             try bgContext.save()
             return (nil, now, true)
         }
+        bgContextLease.finish()
 
         if landed.wrote {
             #if !os(watchOS)
@@ -3715,7 +4171,9 @@ actor ConversationStore {
     /// status flip never blocks the main thread (see `appendMessage`).
     func updateStatus(messageID: UUID, status: String) async throws {
         try await ensureLoaded()
-        let bgContext = newWriteContext()
+        let bgContextLease = try await newWriteContextLease()
+        defer { bgContextLease.finish() }
+        let bgContext = bgContextLease.context
         let changed: Bool = try await bgContext.perform { [bgContext] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
@@ -3725,6 +4183,7 @@ actor ConversationStore {
             try bgContext.save()
             return true
         }
+        bgContextLease.finish()
         guard changed else { return }
         await postDidChange()
     }
@@ -3848,7 +4307,9 @@ actor ConversationStore {
     /// not in the fetch, so it is neither re-written nor re-minted.
     func markPendingUserTurns(conversationID: UUID, to status: String) async {
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(
@@ -3860,6 +4321,7 @@ actor ConversationStore {
             for message in pending { Self.applySendState(status, to: message) }
             try? context.save()
         }
+        contextLease.finish()
         await postDidChange()
     }
 
@@ -3878,7 +4340,9 @@ actor ConversationStore {
     /// non-matching message id is a silent no-op.
     func markPendingUserTurn(messageID: UUID, to status: String) async {
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let flipped: Bool = await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(
@@ -3891,6 +4355,7 @@ actor ConversationStore {
             try? context.save()
             return true
         }
+        contextLease.finish()
         if flipped { await postDidChange() }
     }
 
@@ -3977,7 +4442,9 @@ actor ConversationStore {
         classification: TurnFailureClassification?,
         attempt: TerminalAttemptObservation?
     ) async -> Bool {
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return false }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         #if DEBUG
         let injectedSaveFailure = debugFailsAttemptBearingSaves && attempt != nil
         #endif
@@ -4004,6 +4471,7 @@ actor ConversationStore {
             do { try context.save() } catch { return (false, false) }
             return (true, true)
         }
+        contextLease.finish()
         if pass.changed { await postDidChange() }
         return pass.saved
     }
@@ -4017,7 +4485,9 @@ actor ConversationStore {
     /// conversation (a network-failed turn suddenly reading "Photo declined").
     func failPendingUserTurns(conversationID: UUID, classification: TurnFailureClassification?) async {
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let changed: Bool = await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(
@@ -4033,6 +4503,7 @@ actor ConversationStore {
             try? context.save()
             return true
         }
+        contextLease.finish()
         if changed { await postDidChange() }
     }
 
@@ -4116,7 +4587,9 @@ actor ConversationStore {
         defer { retryClaims.remove(messageID) }
 
         do { try await ensureLoaded() } catch { return false }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return false }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let claimed: Bool = await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(
@@ -4137,6 +4610,7 @@ actor ConversationStore {
             try? context.save()
             return true
         }
+        contextLease.finish()
         if claimed { await postDidChange() }
         return claimed
     }
@@ -4146,7 +4620,9 @@ actor ConversationStore {
     /// banner is visible before any substituted send.
     func setHideEarlierPhotos(conversationID: UUID, _ enabled: Bool) async {
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             request.predicate = NSPredicate(format: "id == %@", conversationID as CVarArg)
@@ -4155,6 +4631,7 @@ actor ConversationStore {
             conversation.setValue(enabled, forKey: "hideEarlierPhotos")
             try? context.save()
         }
+        contextLease.finish()
         await postDidChange()
     }
 
@@ -4210,13 +4687,16 @@ actor ConversationStore {
         }
         #endif
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let moved: Bool = await context.perform { [context] in
             guard let conversation = Self.conversation(id: id, in: context) else { return false }
             guard Self.applyViewed(date, to: conversation) else { return false }
             try? context.save()
             return true
         }
+        contextLease.finish()
         if moved { await postDidChange() }
     }
 
@@ -4259,13 +4739,16 @@ actor ConversationStore {
         }
         #endif
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let moved: Bool = await context.perform { [context] in
             guard let conversation = Self.conversation(id: id, in: context) else { return false }
             guard Self.applyAcknowledgement(attemptID, to: conversation) else { return false }
             try? context.save()
             return true
         }
+        contextLease.finish()
         if moved { await postDidChange() }
     }
 
@@ -4302,7 +4785,9 @@ actor ConversationStore {
         }
         #endif
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let moved: Bool = await context.perform { [context] in
             guard let conversation = Self.conversation(id: id, in: context) else { return false }
             // Both are evaluated, never short-circuited: an acknowledgement must
@@ -4317,6 +4802,7 @@ actor ConversationStore {
             try? context.save()
             return true
         }
+        contextLease.finish()
         if moved { await postDidChange() }
     }
 
@@ -4363,7 +4849,9 @@ actor ConversationStore {
         }
         #endif
         do { try await ensureLoaded() } catch { return .failed }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return .failed }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         // The result is returned WITHOUT a `postDidChange()`, deliberately. The
         // value this commits is one the read path was ALREADY answering with,
         // and the caller keeps answering with it: `ReadStateStore.completeFold`
@@ -4486,7 +4974,9 @@ actor ConversationStore {
         guard !tailProjectionRepairsAttempted.contains(conversationID) else { return false }
         tailProjectionRepairsAttempted.insert(conversationID)
         do { try await ensureLoaded() } catch { return false }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return false }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return await context.perform { [context] in
             guard let conversation = Self.conversation(id: conversationID, in: context),
                   let lastActivityAt = conversation.value(forKey: "lastActivityAt") as? Date else {
@@ -4640,7 +5130,9 @@ actor ConversationStore {
             return
         }
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             guard let conversation = Self.conversation(id: conversationID, in: context) else { return }
             conversation.setValue(value, forKey: "tailProjection")
@@ -4683,7 +5175,9 @@ actor ConversationStore {
             return
         }
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             guard let conversation = Self.conversation(id: conversationID, in: context) else { return }
             conversation.setValue(lastActivityAt, forKey: "lastActivityAt")
@@ -4771,7 +5265,9 @@ actor ConversationStore {
             return MaterialBlobStoresForTesting(materialStoreURL: nil, blobStoreURL: nil)
         }
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let now = Date()
             let material = NSEntityDescription.insertNewObject(
@@ -4840,7 +5336,9 @@ actor ConversationStore {
             )
         }
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let materialRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
             materialRequest.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)
@@ -4993,18 +5491,54 @@ actor ConversationStore {
     /// while the app was not running", are two states the two-store topology
     /// has to survive; both need the files genuinely closed first, and waiting
     /// for the actor to deallocate is not deterministic enough to delete a
-    /// sqlite under. The instance is spent afterwards — its load task still
-    /// reads as done with nothing mounted — so a caller reopens through a
-    /// fresh store.
+    /// sqlite under. Tests treat the instance as spent afterwards and reopen
+    /// through a fresh store; lifecycle tests exercise production switching
+    /// through the preference rather than this shutdown seam.
     func _unloadForTesting() async throws {
         guard isIsolatedTestStore else { return }
         try await ensureLoaded()
+        contentSyncPollTask?.cancel()
+        contentSyncPollTask = nil
+        if let observer = contentSyncObserver {
+            NotificationCenter.default.removeObserver(observer)
+            contentSyncObserver = nil
+        }
+        if let task = contentSyncTask { _ = try? await task.value }
         #if !os(watchOS)
         await projectResultTask?.value
         #endif
-        let coordinator = container.persistentStoreCoordinator
-        for store in coordinator.persistentStores {
-            try coordinator.remove(store)
+        try await detachContentSyncSession()
+    }
+
+    func _contentSyncGenerationForTesting() -> Int {
+        precondition(isIsolatedTestStore)
+        return contentSyncSessionGeneration
+    }
+
+    func _contentSyncTransitionIsRunningForTesting() -> Bool {
+        precondition(isIsolatedTestStore)
+        return contentSyncTask != nil
+    }
+
+    func _setContentSyncAdmissionHookForTesting(_ hook: (@Sendable () async -> Void)?) {
+        precondition(isIsolatedTestStore)
+        contentSyncAdmissionHookForTesting = hook
+    }
+
+    func _setContentSyncDrainedHookForTesting(_ hook: (@Sendable () async -> Void)?) {
+        precondition(isIsolatedTestStore)
+        contentSyncDrainedHookForTesting = hook
+    }
+
+    func _failNextContentSyncLoadForTesting() {
+        precondition(isIsolatedTestStore)
+        failNextContentSyncLoad = true
+    }
+
+    func _contentSyncHistoryOptionsForTesting() -> [Bool] {
+        precondition(isIsolatedTestStore)
+        return container.persistentStoreDescriptions.map {
+            ($0.options[NSPersistentHistoryTrackingKey] as? NSNumber)?.boolValue == true
         }
     }
     #endif
@@ -5112,7 +5646,9 @@ actor ConversationStore {
     ) async {
         do { try await ensureLoaded() } catch { return }
         let cutoff = Date().addingTimeInterval(-interval)
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let flipped: Bool = await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(
@@ -5150,6 +5686,7 @@ actor ConversationStore {
             if didFlip { try? context.save() }
             return didFlip
         }
+        contextLease.finish()
         if flipped { await postDidChange() }
     }
 
@@ -5163,7 +5700,9 @@ actor ConversationStore {
     func addAttachments(messageID: UUID, attachments: [AttachmentDraft]) async throws {
         guard !attachments.isEmpty else { return }
         try await ensureLoaded()
-        let bgContext = newWriteContext()
+        let bgContextLease = try await newWriteContextLease()
+        defer { bgContextLease.finish() }
+        let bgContext = bgContextLease.context
         let conversationID: UUID? = try await bgContext.perform { [bgContext] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
@@ -5180,6 +5719,7 @@ actor ConversationStore {
             guard ["agent", "assistant"].contains(message.value(forKey: "role") as? String ?? "") else { return nil }
             return (message.value(forKey: "conversation") as? NSManagedObject)?.value(forKey: "id") as? UUID
         }
+        bgContextLease.finish()
         #if !os(watchOS)
         if let conversationID { scheduleProjectResultReconciliation(conversationID: conversationID) }
         #endif
@@ -5235,7 +5775,9 @@ actor ConversationStore {
     ) async throws -> Bool {
         guard !results.isEmpty else { return false }
         try await ensureLoaded()
-        let bgContext = newWriteContext()
+        let bgContextLease = try await newWriteContextLease()
+        defer { bgContextLease.finish() }
+        let bgContext = bgContextLease.context
         let outcome: (inserted: Bool, changedVisibleState: Bool, descriptors: [AttachedFileDescriptor])
         outcome = try await bgContext.perform { [bgContext] in
             var insertedAny = false
@@ -5418,6 +5960,7 @@ actor ConversationStore {
             try bgContext.save()
             return (insertedAny, changedVisibleState, descriptors)
         }
+        bgContextLease.finish()
         #if !os(watchOS)
         if outcome.inserted {
             for conversationID in Set(outcome.descriptors.map(\.conversationID)) {
@@ -5452,7 +5995,9 @@ actor ConversationStore {
     ) async throws -> Bool {
         guard !patches.isEmpty else { return false }
         try await ensureLoaded()
-        let bgContext = newWriteContext()
+        let bgContextLease = try await newWriteContextLease()
+        defer { bgContextLease.finish() }
+        let bgContext = bgContextLease.context
         let wroteAny: Bool = try await bgContext.perform { [bgContext] in
             var wrote = false
             for patch in patches {
@@ -5489,6 +6034,7 @@ actor ConversationStore {
             try bgContext.save()
             return wrote
         }
+        bgContextLease.finish()
         // No field written → no visible change → never echo a reload.
         if wroteAny { await postDidChange() }
         return wroteAny
@@ -5504,7 +6050,9 @@ actor ConversationStore {
     /// value (no managed object escapes).
     func fetchPreviewText(messageID: UUID, attachmentID: UUID) async -> String? {
         do { try await ensureLoaded() } catch { return nil }
-        let context = container.newBackgroundContext()
+        guard let contextLease = try? await newReadContextLease() else { return nil }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Attachment")
             request.predicate = NSPredicate(
@@ -5534,7 +6082,9 @@ actor ConversationStore {
     /// crossing the actor boundary (no managed object escapes).
     func loadAttachmentData(for messageID: UUID) async throws -> [Data] {
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Attachment")
             request.predicate = NSPredicate(format: "message.id == %@", messageID as CVarArg)
@@ -5558,7 +6108,9 @@ actor ConversationStore {
     /// without guessing that a thumbnail or extracted preview is the real file.
     func loadLocalAttachmentPayloads(for messageID: UUID) async throws -> [UUID: Data] {
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Attachment")
             request.predicate = NSPredicate(format: "message.id == %@", messageID as CVarArg)
@@ -5591,7 +6143,9 @@ actor ConversationStore {
     func referencedStoredKeys(_ candidates: Set<String>) async throws -> Set<String> {
         guard !candidates.isEmpty else { return [] }
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Attachment")
             request.predicate = NSPredicate(format: "storedKey IN %@", Array(candidates))
@@ -5614,7 +6168,9 @@ actor ConversationStore {
     /// Test-only seam — not used by app code.
     func defensiveSnapshotsFromBareObjects() async throws -> (ConversationRecord, MessageRecord) {
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let convo = NSEntityDescription.insertNewObject(
                 forEntityName: "Conversation", into: context
@@ -5636,7 +6192,9 @@ actor ConversationStore {
     /// release binary (tests run in Debug). Not used by app code.
     func debugClearTitleSnippet(conversationID: UUID) async throws {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             request.predicate = NSPredicate(format: "id == %@", conversationID as CVarArg)
@@ -5653,7 +6211,9 @@ actor ConversationStore {
     /// Not used by app code.
     func debugClearMessageText(messageID: UUID) async throws {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(format: "id == %@", messageID as CVarArg)
@@ -5670,7 +6230,9 @@ actor ConversationStore {
     /// can arrive this way). `#if DEBUG` so it never ships. Not used by app code.
     func debugClearGatewayAttemptOutcome(attemptID: UUID) async throws {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         try await context.perform { [context] in
             guard let row = Self.gatewayAttemptRow(id: attemptID, in: context) else { return }
             row.setValue(nil, forKey: "outcome")
@@ -5711,7 +6273,9 @@ actor ConversationStore {
     /// non-matching value.
     func fetchMessages(for conversationID: UUID) async throws -> [MessageRecord] {
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let start = Date()
         let records: [MessageRecord] = try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
@@ -5742,7 +6306,9 @@ actor ConversationStore {
     /// rather than trust the lightweight snapshot returned by an append.
     func fetchMessage(id: UUID, in conversationID: UUID) async throws -> MessageRecord? {
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
             request.predicate = NSPredicate(
@@ -5771,7 +6337,9 @@ actor ConversationStore {
     ) async throws -> [UUID: MessageRecord] {
         guard !conversationIDsByMessageID.isEmpty else { return [:] }
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let wanted = conversationIDsByMessageID
         return try await context.perform { [context] in
             let clauses = Dictionary(grouping: wanted, by: \.value).map { conversationID, pairs in
@@ -5818,7 +6386,9 @@ actor ConversationStore {
     /// agree.
     func fetchConversationTail(id: UUID) async throws -> ConversationTail? {
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let start = Date()
         let tail: ConversationTail? = try await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Message")
@@ -5861,7 +6431,9 @@ actor ConversationStore {
         guard !trimmed.isEmpty else { return [] }
 
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSDictionary>(entityName: "Conversation")
             request.resultType = .dictionaryResultType
@@ -5905,7 +6477,9 @@ actor ConversationStore {
     /// it is silently ignored on a managed-object fetch.
     func distinctBackends() async throws -> Set<String> {
         try await ensureLoaded()
-        let context = container.newBackgroundContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { [context] in
             let request = NSFetchRequest<NSDictionary>(entityName: "Conversation")
             request.resultType = .dictionaryResultType
@@ -6016,7 +6590,9 @@ actor ConversationStore {
         guard !defaults.bool(forKey: flagKey) else { return }
 
         do { try await ensureLoaded() } catch { return }
-        let context = newWriteContext()
+        guard let contextLease = try? await newWriteContextLease() else { return }
+        defer { contextLease.finish() }
+        let context = contextLease.context
         await context.perform { [context] in
             let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
             // Match nil OR empty snippet (a row written before this field shipped).
@@ -6039,6 +6615,7 @@ actor ConversationStore {
             }
             try? context.save()
         }
+        contextLease.finish()
 
         defaults.set(true, forKey: flagKey)
         await postDidChange()

@@ -99,8 +99,8 @@ struct WorkboardTutorialView: View {
             point(
                 symbol: "lock.shield.fill",
                 text: LocalizedStringResource(
-                    "workboard.tutorial.point.review",
-                    defaultValue: "Cards sync through your own iCloud — very large files stay on the device that captured them."
+                    "workboard.tutorial.point.review.optionalSync",
+                    defaultValue: "With content sync on, cards sync through your own iCloud. Very large files stay on the device that captured them. You can change content sync in Settings → General."
                 )
             )
         }

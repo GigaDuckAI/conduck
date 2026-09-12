@@ -58,26 +58,12 @@ struct MacGeneralCategory: View {
     /// mirroring Personal AI's "Guided Setup".
     @State private var showingMenuBarGuide = false
 
-    /// Shared `@Observable` iCloud-sync health. Surfaces a warning row ONLY when
-    /// iCloud is in a user-actionable bad state; otherwise this screen is unchanged.
-    @State private var syncMonitor = CloudSyncMonitor.shared
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: SettingsCardMetrics.sectionSpacing) {
                 launchSection
                 onLaunchSection
-                if syncMonitor.iCloudUnavailable, let reason = syncMonitor.unavailableReason {
-                    SettingsCard {
-                        // A status block that owns its own inner button, not a
-                        // single row action: it takes the passive treatment, so
-                        // it gets the card's inset and pitch and no hover wash.
-                        ICloudSyncSettingsRow(reason: reason)
-                            .settingsCardPassiveRow()
-                    } header: {
-                        Text(LocalizedStringResource("sync.icloud.settings.header", defaultValue: "Sync"))
-                    }
-                }
+                ContentSyncSettingsSection()
                 menuBarSection
                 shortcutSection
             }

@@ -259,7 +259,8 @@ nonisolated enum WorkboardCardFacePolicy {
                 localized: "workboard.material.unavailableHere",
                 defaultValue: "Reattach on this device to open"
             ),
-            String(localized: "workboard.material.syncPending", defaultValue: "Waiting for iCloud…")
+            String(localized: ContentSyncPresentationPolicy.missingFileSummary(enabled: true)),
+            String(localized: ContentSyncPresentationPolicy.missingFileSummary(enabled: false))
         ]
         if let size = sizeText(byteCount) { derived.insert(size) }
         let kept = detail
@@ -330,7 +331,8 @@ nonisolated enum WorkboardCardFacePolicy {
     /// here and readable, and the sentence exists to explain why the card is
     /// absent on the person's other device, not to ask them to repair anything.
     static func availabilityLabel(
-        for availability: WorkboardMaterialAvailability
+        for availability: WorkboardMaterialAvailability,
+        contentSyncEnabled: Bool = ContentSyncPresentationSnapshot.shared.isEnabled
     ) -> LocalizedStringResource? {
         switch availability {
         case .available:
@@ -341,7 +343,7 @@ nonisolated enum WorkboardCardFacePolicy {
                 defaultValue: "Available on this device"
             )
         case .syncPending:
-            return LocalizedStringResource("workboard.material.syncPending", defaultValue: "Waiting for iCloud…")
+            return ContentSyncPresentationPolicy.missingFileSummary(enabled: contentSyncEnabled)
         case .unavailableOnThisDevice:
             return LocalizedStringResource(
                 "workboard.material.reattach.short",
@@ -355,11 +357,12 @@ nonisolated enum WorkboardCardFacePolicy {
     /// card waiting for iCloud is not a card asking to be repaired, and only
     /// `.unavailableOnThisDevice` is something the person can act on.
     static func availabilityGlyphName(
-        for availability: WorkboardMaterialAvailability
+        for availability: WorkboardMaterialAvailability,
+        contentSyncEnabled: Bool = ContentSyncPresentationSnapshot.shared.isEnabled
     ) -> String {
         switch availability {
         case .localOnly: return "internaldrive"
-        case .syncPending: return "icloud.and.arrow.down"
+        case .syncPending: return contentSyncEnabled ? "icloud.and.arrow.down" : "icloud.slash"
         case .available, .unavailableOnThisDevice: return "paperclip.badge.ellipsis"
         }
     }

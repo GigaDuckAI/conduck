@@ -171,7 +171,7 @@ struct WorkMaterialDetailsSheet: View {
                     }
                 } else {
                     Text(material.availability == .syncPending
-                        ? LocalizedStringResource("workboard.material.syncPending", defaultValue: "Waiting for iCloud…")
+                        ? ContentSyncPresentationPolicy.missingFileSummary(enabled: ContentSyncPresentationSnapshot.shared.isEnabled)
                         : LocalizedStringResource("workboard.material.original.unavailable", defaultValue: "The original isn’t available on this device. Your notes are still available here."))
                         .font(.callout).foregroundStyle(AppColors.textSecondary)
                 }

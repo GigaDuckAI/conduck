@@ -22,7 +22,9 @@ nonisolated struct WorkDeskMaterialUseRecord: Identifiable, Hashable, Sendable {
 extension ConversationStore {
     func fetchWorkDeskMaterialUses() async throws -> [UUID: [WorkDeskMaterialUseRecord]] {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform {
             guard context.persistentStoreCoordinator?.managedObjectModel.entitiesByName["Conversation"]?
                 .attributesByName["workMaterialUsageJSON"] != nil else { return [:] }

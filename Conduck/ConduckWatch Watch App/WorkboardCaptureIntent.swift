@@ -7,7 +7,10 @@
 // deliberately separate from `RecordNoteIntent`: it appends one inert note card
 // and has no gateway, conversation, message, or dispatch codepath. The shared
 // ConversationStore keeps the capture in the same private CloudKit-backed model
-// the other devices read.
+// the other devices read. With content sync disabled, an explicit capture goes
+// to the paired phone's durable Work inbox instead: the wrist has no board UI,
+// so announcing a note saved only here would strand it invisibly. The phone's
+// receipt means queued durably, and the confirmation says where to find it.
 //
 // The wrist writes the desk with raw Core Data because
 // `ConversationStore+Workboard.swift` is not a member of this target, so
@@ -22,6 +25,7 @@
 import AppIntents
 import CoreData
 import Foundation
+import WatchConnectivity
 
 /// One note card's worth of prepared text: the wrist's shape of the same
 /// thought the iOS `CaptureWorkboardIntent` hands `WorkMaterialDraft`, so the
@@ -60,6 +64,140 @@ nonisolated enum WatchWorkboardCaptureText {
             .map { String($0.prefix(72)) }
             ?? String(localized: "workboard.item.untitled", defaultValue: "Untitled note")
         return WatchWorkboardCapture(title: title, textContent: normalized)
+    }
+}
+
+/// Explicit text capture uses the paired phone when the wrist's desk cannot
+/// mirror. A positive result means the phone's durable Work inbox accepted the
+/// capture, not that WatchConnectivity merely queued a message. No automatic
+/// retry follows an ambiguous acknowledgement; that could duplicate a thought.
+protocol WatchWorkTextCaptureTransport {
+    func send(_ capture: WatchWorkTextCapture) async throws -> [String: Any]
+}
+
+struct WCSessionWorkTextCaptureTransport: WatchWorkTextCaptureTransport {
+    func send(_ capture: WatchWorkTextCapture) async throws -> [String: Any] {
+        // A cold Siri launch calls App.init's activate(), but activation is
+        // asynchronous. Give that handshake a short, cancellable opportunity
+        // before judging whether the phone itself can be reached.
+        try await WatchWorkTextRelay.awaitSessionActivation(
+            isActivated: { WCSession.default.activationState == .activated },
+            activate: { WatchSessionManager.shared.activate() }
+        )
+        guard WCSession.default.isReachable else { throw WatchWorkTextRelayError.phoneUnavailable }
+        try Task.checkCancellation()
+        let response: SendablePlistPayload? = await withCheckedContinuation { continuation in
+            WCSession.default.sendMessage(
+                WatchWorkTextCaptureWire.request(capture),
+                replyHandler: { continuation.resume(returning: SendablePlistPayload($0)) },
+                errorHandler: { _ in continuation.resume(returning: nil) }
+            )
+        }
+        guard let payload = response?.dictionary() else { throw WatchWorkTextRelayError.unconfirmed }
+        return payload
+    }
+}
+
+enum WatchWorkTextRelayError: LocalizedError {
+    case connectionStarting, phoneUnavailable, unsupported, refused, unconfirmed, tooLong
+
+    var errorDescription: String? {
+        switch self {
+        case .connectionStarting:
+            String(localized: "intent.workboardCapture.relay.starting",
+                   defaultValue: "Your Watch connection is still starting. Try again in a moment.")
+        case .phoneUnavailable:
+            String(localized: "intent.workboardCapture.relay.unavailable",
+                   defaultValue: "Your paired phone is unavailable. Open Conduck there, then try again, or turn on content sync in General settings.")
+        case .unsupported:
+            String(localized: "intent.workboardCapture.relay.unsupported",
+                   defaultValue: "Update Conduck on your paired phone to add this note while content sync is off.")
+        case .refused:
+            String(localized: "intent.workboardCapture.relay.refused",
+                   defaultValue: "Your paired phone couldn’t save this note. Open Conduck there and check available storage, then try again.")
+        case .unconfirmed:
+            String(localized: "intent.workboardCapture.relay.unconfirmed",
+                   defaultValue: "Couldn’t confirm that your paired phone saved the note. Check Work there before trying again.")
+        case .tooLong:
+            String(localized: "intent.workboardCapture.relay.tooLong",
+                   defaultValue: "This note is too long to send from your watch. Shorten it, then try again.")
+        }
+    }
+}
+
+enum WatchWorkTextRelay {
+    /// Activation only: this never sends or retries a capture. The injectable
+    /// pause proves a cold launch waits without making a test sleep in real time.
+    static func awaitSessionActivation(
+        isActivated: () -> Bool,
+        activate: () -> Void,
+        pause: () async throws -> Void = { try await Task.sleep(for: .milliseconds(50)) },
+        maximumAttempts: Int = 40
+    ) async throws {
+        guard !isActivated() else { return }
+        activate()
+        for _ in 0..<maximumAttempts {
+            if isActivated() { return }
+            try await pause()
+        }
+        guard isActivated() else { throw WatchWorkTextRelayError.connectionStarting }
+    }
+
+    static func send(
+        _ capture: WatchWorkTextCapture,
+        using transport: any WatchWorkTextCaptureTransport = WCSessionWorkTextCaptureTransport()
+    ) async throws {
+        guard WatchWorkTextCaptureWire.decode(WatchWorkTextCaptureWire.request(capture)) != nil else {
+            throw WatchWorkTextRelayError.tooLong
+        }
+        let reply = try await transport.send(capture)
+        guard let accepted = WatchWorkTextCaptureWire.accepted(reply, for: capture.id) else {
+            throw WatchWorkTextRelayError.unsupported
+        }
+        guard accepted else { throw WatchWorkTextRelayError.refused }
+    }
+
+    /// OFF arriving during a committed Watch write cannot turn that successful
+    /// save into an "unsaved, try again" error: a new Shortcut invocation owns a
+    /// new id and would later create a duplicate. Attempt the same-id relay once,
+    /// then describe exactly which durable copy is known to exist.
+    static func finishCommittedWatchCapture(
+        _ capture: WatchWorkTextCapture,
+        using transport: any WatchWorkTextCaptureTransport = WCSessionWorkTextCaptureTransport()
+    ) async -> WatchWorkCaptureCompletion {
+        do {
+            try await send(capture, using: transport)
+            return .phone
+        } catch let error as WatchWorkTextRelayError {
+            switch error {
+            case .connectionStarting, .phoneUnavailable, .refused, .tooLong:
+                return .watchOnly
+            case .unsupported, .unconfirmed:
+                return .watchAndUnconfirmedPhone
+            }
+        } catch {
+            return .watchAndUnconfirmedPhone
+        }
+    }
+}
+
+enum WatchWorkCaptureCompletion: Equatable {
+    case mirroredWatch, phone, watchOnly, watchAndUnconfirmedPhone
+
+    var confirmation: String {
+        switch self {
+        case .mirroredWatch:
+            String(localized: "intent.workboardCapture.confirmation", defaultValue: "Added to Work. Nothing was sent.")
+        case .phone:
+            String(localized: "intent.workboardCapture.relay.confirmation",
+                   defaultValue: "Saved for Work on your paired phone. Open Conduck there to see it.")
+        case .watchOnly:
+            String(localized: "intent.workboardCapture.relay.retainedOnWatch",
+                   defaultValue: "Saved on your Watch. Turn on content sync in General settings to make it available on your other devices.")
+        case .watchAndUnconfirmedPhone:
+            String(localized: "intent.workboardCapture.relay.retainedUnconfirmedPhone",
+                   defaultValue: "Saved on your Watch; it may also be on your paired phone. Turn on content sync in General settings to make the saved note available on your other devices.")
+        }
     }
 }
 
@@ -112,7 +250,9 @@ extension ConversationStore {
         createdAt: Date = Date()
     ) async throws -> String {
         try await ensureLoaded()
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let deskID = Constants.workboardDeskItemID
         let title = try await context.perform { [context] in
             let deskRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkItem")
@@ -210,14 +350,29 @@ struct CaptureWorkboardIntent: AppIntent {
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
         let capture = try WatchWorkboardCaptureText.prepare(thought)
+        let relayCapture = WatchWorkTextCapture(id: UUID(), text: capture.textContent, createdAt: Date())
         // Each run of the Shortcut is its own capture, so the material id is
         // minted per invocation rather than derived from the text: two runs
         // carrying the same words are two cards the person asked for.
-        let title = try await ConversationStore.shared.upsertDeskMaterial(capture)
-        let confirmation = String(
-            localized: "intent.workboardCapture.confirmation",
-            defaultValue: "Added to Work. Nothing was sent."
-        )
+        let completion: WatchWorkCaptureCompletion
+        if ContentSyncPreferenceStore.shared.isEnabled {
+            _ = try await ConversationStore.shared.upsertDeskMaterial(
+                capture, id: relayCapture.id, createdAt: relayCapture.createdAt
+            )
+            // A remote OFF can arrive while the database write suspends. Reuse
+            // this capture id on the phone so later mirroring still identifies
+            // one logical note; never announce a newly stranded wrist note.
+            if ContentSyncPreferenceStore.shared.isEnabled {
+                completion = .mirroredWatch
+            } else {
+                completion = await WatchWorkTextRelay.finishCommittedWatchCapture(relayCapture)
+            }
+        } else {
+            try await WatchWorkTextRelay.send(relayCapture)
+            completion = .phone
+        }
+        let title = capture.title
+        let confirmation = completion.confirmation
         return .result(value: title, dialog: IntentDialog(stringLiteral: confirmation))
     }
 }

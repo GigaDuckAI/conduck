@@ -1,6 +1,105 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "intent.workboardCapture.relay.confirmation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved for Work on your paired phone. Open Conduck there to see it."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.refused" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your paired phone couldn’t save this note. Open Conduck there and check available storage, then try again."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.retainedOnWatch" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved on your Watch. Turn on content sync in General settings to make it available on your other devices."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.retainedUnconfirmedPhone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved on your Watch; it may also be on your paired phone. Turn on content sync in General settings to make the saved note available on your other devices."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.starting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your Watch connection is still starting. Try again in a moment."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.tooLong" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This note is too long to send from your watch. Shorten it, then try again."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your paired phone is unavailable. Open Conduck there, then try again, or turn on content sync in General settings."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.unconfirmed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t confirm that your paired phone saved the note. Check Work there before trying again."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.unsupported" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update Conduck on your paired phone to add this note while content sync is off."
+          }
+        }
+      }
+    },
     "" : {
 
     },

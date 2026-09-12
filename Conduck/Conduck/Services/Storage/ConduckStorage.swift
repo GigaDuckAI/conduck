@@ -141,6 +141,23 @@ protocol SecretStore: Sendable {
 
 // MARK: - Dependency bundle
 
+/// Short cross-process transaction lock for the content-sync preference. It is
+/// separate from a database's lifetime lock: publishing OFF must never wait for
+/// the mirror which that very preference asks to detach. Isolated dependencies
+/// omit it or supply a lock in an explicit temporary directory.
+nonisolated protocol ContentSyncPolicyLock: Sendable {
+    func lock() -> Bool
+    func unlock()
+}
+
+/// Durable snapshot read/written while the transaction lock is held. Production
+/// uses this file rather than treating a UserDefaults flush as a read barrier.
+/// The separate lock inode stays stable when the snapshot is atomically replaced.
+nonisolated protocol ContentSyncPolicyPersistence: ContentSyncPolicyLock {
+    func readSnapshot() throws -> Data?
+    func writeSnapshot(_ data: Data) throws
+}
+
 /// The stores a settings-owning service needs. Passed by constructor so a test
 /// can build an isolated instance; `processDefault` is what production wires.
 struct SettingsDependencies: Sendable {
@@ -149,19 +166,22 @@ struct SettingsDependencies: Sendable {
     let secrets: any SecretStore
     let cloudAvailability: any CloudAvailability
     let changes: any KVSChangeSource
+    let contentSyncPolicyLock: (any ContentSyncPolicyLock)?
 
     init(
         defaults: any DefaultsStore,
         ubiquitous: any UbiquitousStore,
         secrets: any SecretStore,
         cloudAvailability: any CloudAvailability,
-        changes: any KVSChangeSource
+        changes: any KVSChangeSource,
+        contentSyncPolicyLock: (any ContentSyncPolicyLock)? = nil
     ) {
         self.defaults = defaults
         self.ubiquitous = ubiquitous
         self.secrets = secrets
         self.cloudAvailability = cloudAvailability
         self.changes = changes
+        self.contentSyncPolicyLock = contentSyncPolicyLock
     }
 }
 

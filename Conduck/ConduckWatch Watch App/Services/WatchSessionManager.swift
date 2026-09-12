@@ -87,10 +87,22 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     /// construct their own instance with a fake — such an instance never
     /// calls `activate()`, so it observes no live session.
     private let pullTransport: SettingsPullTransport
+    private let contentSyncPreferences: ContentSyncPreferenceStore
 
-    init(pullTransport: SettingsPullTransport = WCSessionSettingsPullTransport()) {
+    init(
+        pullTransport: SettingsPullTransport = WCSessionSettingsPullTransport(),
+        contentSyncPreferences: ContentSyncPreferenceStore = .shared
+    ) {
         self.pullTransport = pullTransport
+        self.contentSyncPreferences = contentSyncPreferences
         super.init()
+    }
+
+    /// Absent legacy keys and malformed payloads are no-ops. The store compares
+    /// revisions shared with KVS, so an older queued ON cannot undo a newer OFF.
+    private func applyContentSyncPreference(_ payload: [String: Any]) {
+        guard let preference = ContentSyncWatchWire.preference(in: payload) else { return }
+        _ = contentSyncPreferences.adopt(preference)
     }
 
     // MARK: - Activation
@@ -119,6 +131,7 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
         Task { @MainActor in
             WatchLog.note(.session, "wc.activated", ["state": activationState.rawValue, "err": errorCode])
             self.isCompanionReachable = isReachable
+            self.applyContentSyncPreference(WCSession.default.receivedApplicationContext)
 
             // Check if application context already has a user ID
             if let userID = WCSession.default.receivedApplicationContext[Constants.iCloudKVSUserIDKey] as? String,
@@ -158,6 +171,7 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
             }
 
             // Handle settings update
+            self.applyContentSyncPreference(context)
             WatchSettingsReader.shared.updateFromContext(context)
         }
     }
@@ -312,6 +326,12 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     /// key (an opaque server path token) and never a filename (user content).
     @MainActor
     private static func ingestAgentFileCourier(_ payload: [String: Any], lane: String) {
+        // A queued courier may predate OFF. Checking only the sender would let
+        // it refill the independent display cache after the mirror detached.
+        guard ContentSyncPreferenceStore.shared.isEnabled else {
+            WatchAttachmentInbox.shared.clearForDisabledSync()
+            return
+        }
         let descriptors = AttachedFileCourierWire.decode(payload)
         guard !descriptors.isEmpty else {
             WatchLog.note(.session, "wc.agentfiles.empty", ["lane": lane])
@@ -345,6 +365,7 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     @MainActor
     func applyEnvelopePayload(_ payload: [String: Any]) async {
         let applyStarted = Date()
+        applyContentSyncPreference(payload)
         // STT envelope (presetID + apiKey + monotonic timestamp).
         if let envelopeDict = payload[Constants.sttActivePresetEnvelopeKey] as? [String: Any],
            let envelope = STTBroadcastEnvelope.decode(from: envelopeDict) {

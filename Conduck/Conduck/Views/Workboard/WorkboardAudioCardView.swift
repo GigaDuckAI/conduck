@@ -159,9 +159,8 @@ enum WorkboardAudioCardChip: Equatable, Sendable {
                 defaultValue: "Available on this device"
             )
         case .syncPending:
-            return LocalizedStringResource(
-                "workboard.material.syncPending",
-                defaultValue: "Waiting for iCloud…"
+            return ContentSyncPresentationPolicy.missingFileSummary(
+                enabled: ContentSyncPresentationSnapshot.shared.isEnabled
             )
         case .reattach:
             return LocalizedStringResource(

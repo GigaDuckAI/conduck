@@ -660,7 +660,9 @@ private extension ConversationStore {
             await pause()
         }
         #endif
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         let written = try await context.perform { [context] () -> (WorkVoiceCaptureCoordinator.WorkVoiceAttachOutcome, Bool) in
             let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
             request.predicate = NSPredicate(format: "id == %@", materialID as CVarArg)

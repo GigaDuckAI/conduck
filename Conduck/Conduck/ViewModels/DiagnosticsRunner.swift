@@ -1247,9 +1247,9 @@ final class DiagnosticsRunner {
             micDenied: micDenied,
             speechDeniedOrRestricted: speechDenied
         )
-        // Sync section shows for iCloud OR a paired Watch. Don't drop a
-        // phase-2-widened sync section on a live re-derive.
-        let newShowsSync = ubiquityPresent || (watchRow != nil) || (carryOver && showsSyncSection)
+        // The content preference is meaningful even without an iCloud account
+        // or paired Watch, so its local runtime state always has a home.
+        let newShowsSync = true
 
         // --- Build the checklist scaffold --------------------------------------
         // On the once-latched auto-read the layout LOCKS here (first paint = final
@@ -1488,15 +1488,28 @@ final class DiagnosticsRunner {
             iCloudStatus = .running
             iCloudDetail = nil
         }
+        let contentSync = Self.contentSyncRowState(
+            state: ContentSyncRuntime.shared.state,
+            message: ContentSyncRuntime.shared.statusMessage
+        )
         built.append(DiagnosticCheck(
-            id: "sync.icloud",
-            title: String(localized: "diagnostics.sync.icloud", defaultValue: "iCloud sync"),
-            category: .sync,
-            tier: .autoRead,
-            status: iCloudStatus,
-            detail: iCloudDetail,
+            id: "sync.content",
+            title: String(localized: "diagnostics.sync.content", defaultValue: "Content sync on this device"),
+            category: .sync, tier: .autoRead,
+            status: contentSync.status, detail: contentSync.detail,
             role: nil, reportLabel: nil
         ))
+        if ContentSyncPreferenceStore.shared.isEnabled {
+            built.append(DiagnosticCheck(
+                id: "sync.icloud",
+                title: String(localized: "diagnostics.sync.icloud", defaultValue: "iCloud sync"),
+                category: .sync,
+                tier: .autoRead,
+                status: iCloudStatus,
+                detail: iCloudDetail,
+                role: nil, reportLabel: nil
+            ))
+        }
         // Historical events are evidence about those attempts only. An import
         // success does not prove a failed export recovered, and an undated tail
         // cannot establish a current outage. Live iCloud status owns that warning.
@@ -1660,7 +1673,7 @@ final class DiagnosticsRunner {
         await CloudSyncMonitor.shared.refresh()
         let iCloudUnavailable = CloudSyncMonitor.shared.iCloudUnavailable
         let iCloudReason = CloudSyncMonitor.shared.unavailableReason
-        if iCloudUnavailable { showsSyncSection = true }   // surface even if signed out
+        if iCloudUnavailable, ContentSyncPreferenceStore.shared.isEnabled { showsSyncSection = true }   // surface even if signed out
         let syncStatus: DiagnosticStatus
         let syncDetail: String
         if iCloudUnavailable, let reason = iCloudReason {
@@ -1675,11 +1688,31 @@ final class DiagnosticsRunner {
         }
         setStatus("sync.icloud", syncStatus, detail: syncDetail)
         factICloudStatus = {
+            if !ContentSyncPreferenceStore.shared.isEnabled { return "content-sync-disabled" }
             if iCloudUnavailable, let reason = iCloudReason {
                 return "unavailable(\(Self.iCloudReasonName(reason)))"
             }
             return factUbiquityPresent ? "available" : "unknown"
         }()
+    }
+
+    /// Content availability and account sign-in are separate facts. A deliberate
+    /// local mode is healthy; a failed transition must never look like OFF has
+    /// completed merely because that is the requested preference.
+    static func contentSyncRowState(
+        state: ContentSyncRuntime.State,
+        message: LocalizedStringResource?
+    ) -> (status: DiagnosticStatus, detail: String) {
+        switch state {
+        case .on:
+            return (.passed, String(localized: "diagnostics.sync.content.on", defaultValue: "Content sync is on for this device."))
+        case .off:
+            return (.passed, String(localized: "diagnostics.sync.content.off", defaultValue: "Content sync is off on this device. Settings and keys can still sync."))
+        case .applying:
+            return (.running, String(localized: message ?? LocalizedStringResource("settings.contentSync.applying", defaultValue: "Updating content sync on this device…")))
+        case .failed:
+            return (.warning, String(localized: message ?? LocalizedStringResource("diagnostics.sync.content.failed", defaultValue: "Content sync couldn’t be updated. Open Settings → General to try again.")))
+        }
     }
 
     /// Re-run the two slow connectivity probes on explicit Refresh / foreground.
@@ -2716,6 +2749,7 @@ final class DiagnosticsRunner {
             }
         }
         lines.append("iCloud: \(factICloudStatus) · token=\(factUbiquityPresent)")
+        lines.append("Content sync requested: \(ContentSyncPreferenceStore.shared.isEnabled ? "on" : "off") · local=\(String(describing: ContentSyncRuntime.shared.state))")
         lines.append("Sync: \(factSyncEventCount) events, \(factSyncErrorCount) errors")
         lines.append("BgRefresh: \(factBackgroundRefresh) · ScreenRec: \(factScreenRecording) · Watch: \(factWatch)")
         // Watch courier + live-query facts (iOS with a paired watch only —

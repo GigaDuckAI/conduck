@@ -1610,11 +1610,11 @@ struct UsageDashboardContent: View {
             ) { }
         } message: {
             Text(LocalizedStringResource(
-                "settings.usage.clear.message",
+                "settings.usage.clear.message.contentSync",
                 defaultValue: """
                     This removes every usage record from this device and all your \
-                    other devices. Your conversations are not affected. This \
-                    cannot be undone.
+                    other devices, even when content sync is off. Your conversations \
+                    are not affected. This cannot be undone.
                     """))
         }
     }

@@ -41,13 +41,17 @@ extension ConversationStore {
 
     func fetchWorkDeskOrganization() async throws -> WorkDeskOrganizationSnapshot {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform { try Self.deskOrganization(in: context) }
     }
 
     func reviewWorkDeskProjectDeletion(id: UUID) async throws -> WorkDeskProjectDeletionReview {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform {
             try Self.pinProjectDeletionReads(in: context)
             return try Self.projectDeletionReview(id: id, in: context)
@@ -220,7 +224,9 @@ extension ConversationStore {
     /// resolving the entire desk would make every stale voice retry expensive.
     func isUnfiledWorkCaptureFallback(materialID: UUID, projectID: UUID) async throws -> Bool {
         try await ensureLoaded()
-        let context = newReadContext()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         return try await context.perform {
             let placements = try Self.deskRows(
                 "WorkDeskPlacement", key: "materialID", id: materialID, in: context
@@ -254,7 +260,9 @@ extension ConversationStore {
         try Task.checkCancellation()
         let organizationHold = try await workMaterialPublicationLock?.acquireOrganization()
         defer { organizationHold?.release() }
-        let context = newWriteContext()
+        let contextLease = try await newWriteContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
         context.mergePolicy = NSErrorMergePolicy
         #if CONDUCK_TESTING
         let afterValidation = workDeskDeletionValidationHookForTesting
@@ -273,6 +281,7 @@ extension ConversationStore {
             if changed { try context.save() }
             return (try Self.deskOrganization(in: context), changed, vaultKeys)
         }
+        contextLease.finish()
         for key in vaultKeys { try? await workAssetVault.remove(key) }
         if changed { await postDidChange() }
         return snapshot
