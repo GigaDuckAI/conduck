@@ -2,7 +2,7 @@
 
 // The current project board must expose whole-card native dragging in both
 // readable layouts. Provider completion must not outlive its destination,
-// change project membership, or move an invisible material. Geometry is local
+// reinterpret a source location, or reorder an invisible material. Geometry is local
 // to a complete row/tile, so lazy offscreen rows need no guessed measurements.
 
 import XCTest
@@ -174,6 +174,51 @@ final class WorkDeskReadableReorderTests: XCTestCase {
         XCTAssertEqual(result, [hiddenA, second, first, hiddenB, third])
         XCTAssertEqual(result.filter { [hiddenA, hiddenB].contains($0) }, [hiddenA, hiddenB])
         XCTAssertEqual(Set(result), Set(allIDs))
+    }
+
+    func testExplicitCrossProjectPayloadFilesAtTheVisibleNeighbour() throws {
+        let source = WorkDeskLocation.project(UUID())
+        let tokens: WorkDeskLocationTokens = [first: [.init(materialID: first, location: source, position: nil)]]
+        let payload = WorkMaterialDragPayload(itemID: Constants.workboardDeskItemID, materialID: first,
+                                              sourceLocation: source, expectedLocationTokens: tokens)
+        let destination = context(ids: [second, third])
+        let reorder = WorkDeskReadableReorder()
+        let token = try XCTUnwrap(reorder.accept(target, context: destination))
+        let operation = try XCTUnwrap(reorder.resolveOperation(payload, token: token, current: destination,
+                                                               isEnabled: true, locations: tokens))
+        guard case .move(let neighbour, let move) = operation else { return XCTFail("Expected a container move") }
+        XCTAssertEqual(neighbour, target)
+        XCTAssertEqual(move.source, source)
+        XCTAssertEqual(move.destination, .project(project))
+        XCTAssertEqual(move.materialIDs, [first])
+        XCTAssertNil(reorder.resolveOperation(payload, token: token, current: destination,
+                                             isEnabled: true, locations: tokens))
+    }
+
+    func testGlobalSearchNeverBecomesAnImplicitMoveDestination() throws {
+        let source = WorkDeskLocation.project(UUID())
+        let tokens: WorkDeskLocationTokens = [first: [.init(materialID: first, location: source, position: nil)]]
+        let payload = WorkMaterialDragPayload(itemID: Constants.workboardDeskItemID, materialID: first,
+                                              sourceLocation: source, expectedLocationTokens: tokens)
+        let destination = context(scope: .all, search: "Thought", ids: [second, third])
+        let reorder = WorkDeskReadableReorder()
+        let token = try XCTUnwrap(reorder.accept(target, context: destination))
+        XCTAssertNil(reorder.resolveOperation(payload, token: token, current: destination,
+                                             isEnabled: true, locations: tokens))
+    }
+
+    func testChangedTargetLocationTokenRejectsLateCrossProjectDrop() throws {
+        let source = WorkDeskLocation.project(UUID())
+        let sourceTokens: WorkDeskLocationTokens = [first: [.init(materialID: first, location: source, position: nil)]]
+        let payload = WorkMaterialDragPayload(itemID: Constants.workboardDeskItemID, materialID: first,
+                                              sourceLocation: source, expectedLocationTokens: sourceTokens)
+        var destination = context(ids: [second, third])
+        destination.locationTokens = [second: [.init(materialID: second, location: .project(project), position: nil)]]
+        let reorder = WorkDeskReadableReorder()
+        let token = try XCTUnwrap(reorder.accept(target, context: destination))
+        destination.locationTokens?[second]?[0].revision = UUID()
+        XCTAssertNil(reorder.resolveOperation(payload, token: token, current: destination,
+                                             isEnabled: true, locations: sourceTokens))
     }
 
     private var target: WorkDeskReadableDropTarget { .init(materialID: second, placement: .after) }

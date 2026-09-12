@@ -977,13 +977,13 @@ final class WorkboardViewModel {
         notice = WorkboardNotice(
             kind: .information,
             title: LocalizedStringResource(
-                "workdesk.capture.project.failed.title", defaultValue: "Saved in All materials"
+                "workdesk.capture.project.failed.title", defaultValue: "Saved on Home"
             ),
             message: report.hasFailures
                 ? String.localizedStringWithFormat(
                     String(localized: LocalizedStringResource(
                         "workdesk.capture.project.atomic.partial.message",
-                        defaultValue: "%1$lld added; %2$lld couldn’t be added. Some saved items couldn’t be placed in the project. Open All materials to organise them."
+                        defaultValue: "%1$lld added; %2$lld couldn’t be added. Some saved items couldn’t be placed in the project. Open Home to organise them."
                     )), Int64(report.addedCount), Int64(report.failedCount)
                 )
                 : WorkVoiceCaptureCoordinator.savedInAllMaterialsMessage

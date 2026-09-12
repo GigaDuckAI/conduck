@@ -38,12 +38,27 @@ extension UTType {
     )
 }
 
-/// Identity only, plus the desk the card was lifted from: a material may be
-/// rearranged only inside the desk that holds it, so a receiving desk rejects a
-/// payload carrying a different `itemID` before it plans anything.
+/// Identity plus optional location tokens for a move between project containers.
+/// Legacy Workboard drags still reorder within their own item. Container moves
+/// require the explicit source and its captured organization revision, so a
+/// delayed provider cannot reinterpret a shared material's current locations.
 nonisolated struct WorkMaterialDragPayload: Codable, Hashable, Sendable, Transferable {
     let itemID: UUID
     let materialID: UUID
+    let sourceLocation: WorkDeskLocation?
+    let additionalMaterialIDs: [UUID]?
+    let expectedLocationTokens: WorkDeskLocationTokens?
+
+    init(itemID: UUID, materialID: UUID, sourceLocation: WorkDeskLocation? = nil,
+         additionalMaterialIDs: [UUID]? = nil, expectedLocationTokens: WorkDeskLocationTokens? = nil) {
+        self.itemID = itemID
+        self.materialID = materialID
+        self.sourceLocation = sourceLocation
+        self.additionalMaterialIDs = additionalMaterialIDs
+        self.expectedLocationTokens = expectedLocationTokens
+    }
+
+    var materialIDs: [UUID] { [materialID] + (additionalMaterialIDs ?? []) }
 
     static var transferRepresentation: some TransferRepresentation {
         CodableRepresentation(contentType: .conduckWorkboardMaterial)

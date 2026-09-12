@@ -12,18 +12,57 @@ import SwiftUI
 struct WorkDeskMaterialOrganizationActions {
     let workspace: WorkDeskWorkspaceState
     let materialID: UUID
+    /// The location that drew this card, which may differ from the project
+    /// selected in the floating tray. A search result has no source location.
+    let sourceLocation: WorkDeskLocation?
 
-    var projectID: UUID? { workspace.organization.projectID(for: materialID) }
-    var project: WorkDeskProjectRecord? { projectID.flatMap { workspace.organization.project(id: $0) } }
-    var destinations: [WorkDeskProjectRecord] {
-        let current = projectID
-        return workspace.organization.projects.filter { $0.id != current }
+    init(workspace: WorkDeskWorkspaceState, materialID: UUID, sourceLocation: WorkDeskLocation?) {
+        self.workspace = workspace
+        self.materialID = materialID
+        self.sourceLocation = sourceLocation
     }
-    var showsLocation: Bool { workspace.isSearching || workspace.scope == .all }
-    var canCreateProject: Bool { workspace.scope == .all }
+
+    init(workspace: WorkDeskWorkspaceState, materialID: UUID) {
+        self.init(workspace: workspace, materialID: materialID,
+                  sourceLocation: workspace.isSearching ? nil : workspace.scope.location)
+    }
+
+    var projects: [WorkDeskProjectRecord] {
+        workspace.organization.projects.filter {
+            workspace.organization.contains(materialID: materialID, at: .project($0.id))
+        }
+    }
+    var sourceProject: WorkDeskProjectRecord? {
+        guard case .project(let id) = sourceLocation else { return nil }
+        return workspace.organization.project(id: id)
+    }
+    var project: WorkDeskProjectRecord? {
+        if let sourceProject, workspace.organization.contains(materialID: materialID, at: .project(sourceProject.id)) {
+            return sourceProject
+        }
+        return projects.first
+    }
+    var projectID: UUID? { project?.id }
+    var destinations: [WorkDeskProjectRecord] {
+        workspace.organization.projects.filter { WorkDeskLocation.project($0.id) != sourceLocation }
+    }
+    var additionalDestinations: [WorkDeskProjectRecord] {
+        workspace.organization.projects.filter {
+            !workspace.organization.contains(materialID: materialID, at: .project($0.id))
+        }
+    }
+    var isOnHome: Bool { workspace.organization.contains(materialID: materialID, at: .home) }
+    var showsLocation: Bool { workspace.isSearching || sourceLocation == nil || sourceLocation == .home || projects.count > 1 }
+    var canCreateProject: Bool { sourceLocation == .home && !workspace.isSearching }
+    var canMove: Bool {
+        guard let sourceLocation else { return false }
+        return workspace.organization.contains(materialID: materialID, at: sourceLocation)
+    }
+    var canMoveHome: Bool { canMove && sourceLocation != .home }
+    var canRemoveFromProject: Bool { canMove && sourceProject != nil }
     var conversationMaterialIDs: Set<UUID> {
         guard !workspace.isSearching, let current = workspace.currentProject,
-              current.id == projectID else { return [] }
+              sourceLocation == .project(current.id), canMove else { return [] }
         return workspace.selectedIDs.contains(materialID) ? workspace.selectedIDs : [materialID]
     }
     var canStartConversation: Bool { !conversationMaterialIDs.isEmpty }
@@ -48,7 +87,11 @@ struct WorkDeskMaterialOrganizationActions {
     var accessibilityMetadata: [String] {
         var parts: [String] = []
         if showsLocation {
-            parts.append(project?.title ?? String(localized: "workdesk.material.unfiled", defaultValue: "No project"))
+            var names = projects.map(\.title)
+            if isOnHome { names.insert(String(localized: "workdesk.material.home", defaultValue: "Home"), at: 0) }
+            if !names.isEmpty {
+                parts.append(String(localized: "workdesk.material.locations", defaultValue: "In \(names.joined(separator: ", "))"))
+            }
         }
         if showsSource {
             parts.append(String(localized: "workdesk.result.from", defaultValue: "From \(sourceName)"))
@@ -57,9 +100,10 @@ struct WorkDeskMaterialOrganizationActions {
         return parts
     }
     func showUses() { workspace.materialUsePickerID = materialID }
-    func openProject() {
-        guard let project else { return }
-        workspace.selectScope(.project(project.id))
+    func openProject(_ projectID: UUID? = nil) {
+        guard let id = projectID ?? project?.id,
+              workspace.organization.project(id: id) != nil else { return }
+        workspace.selectScope(.project(id))
     }
     func openSource() {
         guard let result else { return }
@@ -67,14 +111,41 @@ struct WorkDeskMaterialOrganizationActions {
     }
     func createProject() {
         guard canCreateProject else { return }
+        if workspace.scope != .all { workspace.selectScope(.all) }
         workspace.beginProject(materialIDs: [materialID])
     }
     func startConversation() { workspace.requestConversation(materialIDs: conversationMaterialIDs) }
-    func select() { workspace.toggleSelection(materialID) }
+    func select() {
+        if let sourceLocation, workspace.scope.location != sourceLocation {
+            switch sourceLocation {
+            case .home: workspace.selectScope(.all)
+            case .project(let id): workspace.selectScope(.project(id))
+            }
+        }
+        workspace.toggleSelection(materialID)
+    }
 
     @discardableResult
     func move(to projectID: UUID?) async -> Bool {
-        let saved = await workspace.organization.assign(materialIDs: [materialID], to: projectID)
+        guard let sourceLocation else { return false }
+        let destination = projectID.map(WorkDeskLocation.project) ?? .home
+        let saved = await workspace.organization.move(materialIDs: [materialID], from: sourceLocation, to: destination,
+            expected: workspace.organization.locationTokens(for: [materialID]))
+        if saved { workspace.selectedIDs.remove(materialID) }
+        return saved
+    }
+
+    @discardableResult
+    func add(to projectID: UUID) async -> Bool {
+        await workspace.organization.add(materialIDs: [materialID], to: .project(projectID),
+            expected: workspace.organization.locationTokens(for: [materialID]))
+    }
+
+    @discardableResult
+    func removeFromProject() async -> Bool {
+        guard canRemoveFromProject, let sourceLocation else { return false }
+        let saved = await workspace.organization.remove(materialIDs: [materialID], from: sourceLocation,
+            expected: workspace.organization.locationTokens(for: [materialID]))
         if saved { workspace.selectedIDs.remove(materialID) }
         return saved
     }
@@ -83,14 +154,16 @@ struct WorkDeskMaterialOrganizationActions {
 struct WorkDeskMaterialMenuActions: View {
     @Bindable private var workspace: WorkDeskWorkspaceState
     private let materialID: UUID
+    private let sourceLocation: WorkDeskLocation?
 
     init(actions: WorkDeskMaterialOrganizationActions) {
         workspace = actions.workspace
         materialID = actions.materialID
+        sourceLocation = actions.sourceLocation
     }
 
     private var actions: WorkDeskMaterialOrganizationActions {
-        .init(workspace: workspace, materialID: materialID)
+        .init(workspace: workspace, materialID: materialID, sourceLocation: sourceLocation)
     }
 
     var body: some View {
@@ -99,9 +172,13 @@ struct WorkDeskMaterialMenuActions: View {
                 actions.showUses()
             }
         }
-        if actions.showsLocation, actions.project != nil {
-            Button(LocalizedStringResource("workdesk.material.openProject", defaultValue: "Open project"), systemImage: "folder") {
-                actions.openProject()
+        if actions.showsLocation, !actions.projects.isEmpty {
+            Menu {
+                ForEach(actions.projects) { project in
+                    Button { actions.openProject(project.id) } label: { Text(verbatim: project.title) }
+                }
+            } label: {
+                Label(LocalizedStringResource("workdesk.material.openProject", defaultValue: "Open project"), systemImage: "folder")
             }
         }
         if actions.showsSource {
@@ -122,12 +199,17 @@ struct WorkDeskMaterialMenuActions: View {
                 Label(LocalizedStringResource("workdesk.group", defaultValue: "Create project"), systemImage: "folder.badge.plus")
             }
         }
-        if actions.projectID != nil {
+        if actions.canMoveHome {
             Button { Task { await actions.move(to: nil) } } label: {
-                Label(LocalizedStringResource("workdesk.removeFromProject", defaultValue: "Remove from project"), systemImage: "arrow.uturn.backward")
+                Label(LocalizedStringResource("workdesk.moveToHome", defaultValue: "Move to Home"), systemImage: "tray.and.arrow.up")
             }
         }
-        if !actions.destinations.isEmpty {
+        if actions.canRemoveFromProject {
+            Button { Task { await actions.removeFromProject() } } label: {
+                Label(LocalizedStringResource("workdesk.removeFromThisProject", defaultValue: "Remove from this project"), systemImage: "folder.badge.minus")
+            }
+        }
+        if actions.canMove, !actions.destinations.isEmpty {
             Menu {
                 ForEach(actions.destinations) { project in
                     Button { Task { await actions.move(to: project.id) } } label: {
@@ -138,6 +220,16 @@ struct WorkDeskMaterialMenuActions: View {
                 Label(LocalizedStringResource("workdesk.move", defaultValue: "Move to"), systemImage: "folder")
             }
         }
+        if !actions.additionalDestinations.isEmpty {
+            Menu {
+                ForEach(actions.additionalDestinations) { project in
+                    Button { Task { await actions.add(to: project.id) } } label: { Text(verbatim: project.title) }
+                }
+            } label: {
+                Label(LocalizedStringResource("workdesk.addToAnotherProject", defaultValue: "Add to another project…"), systemImage: "folder.badge.plus")
+            }
+        }
+
     }
 }
 
@@ -146,23 +238,27 @@ struct WorkDeskMaterialMenuActions: View {
 struct WorkDeskMaterialAccessibilityActions: View {
     @Bindable private var workspace: WorkDeskWorkspaceState
     private let materialID: UUID
+    private let sourceLocation: WorkDeskLocation?
 
     init(actions: WorkDeskMaterialOrganizationActions) {
         workspace = actions.workspace
         materialID = actions.materialID
+        sourceLocation = actions.sourceLocation
     }
 
     private var actions: WorkDeskMaterialOrganizationActions {
-        .init(workspace: workspace, materialID: materialID)
+        .init(workspace: workspace, materialID: materialID, sourceLocation: sourceLocation)
     }
 
     var body: some View {
         if !actions.uses.isEmpty {
             Button(WorkDeskCopy.conversationUses(actions.uses.count)) { actions.showUses() }
         }
-        if actions.showsLocation, actions.project != nil {
-            Button(LocalizedStringResource("workdesk.material.openProject", defaultValue: "Open project")) {
-                actions.openProject()
+        if actions.showsLocation {
+            ForEach(actions.projects) { project in
+                Button { actions.openProject(project.id) } label: {
+                    Text(LocalizedStringResource("workdesk.material.openNamedProject", defaultValue: "Open \(project.title)"))
+                }
             }
         }
         if actions.showsSource {
@@ -175,16 +271,29 @@ struct WorkDeskMaterialAccessibilityActions: View {
         if actions.canCreateProject {
             Button(LocalizedStringResource("workdesk.group", defaultValue: "Create project")) { actions.createProject() }
         }
-        if actions.projectID != nil {
-            Button(LocalizedStringResource("workdesk.removeFromProject", defaultValue: "Remove from project")) {
+        if actions.canMoveHome {
+            Button(LocalizedStringResource("workdesk.moveToHome", defaultValue: "Move to Home")) {
                 Task { await actions.move(to: nil) }
             }
         }
-        ForEach(actions.destinations) { project in
-            Button { Task { await actions.move(to: project.id) } } label: {
-                Text(LocalizedStringResource("workdesk.move", defaultValue: "Move to")) + Text(verbatim: ": " + project.title)
+        if actions.canRemoveFromProject {
+            Button(LocalizedStringResource("workdesk.removeFromThisProject", defaultValue: "Remove from this project")) {
+                Task { await actions.removeFromProject() }
             }
         }
+        if actions.canMove {
+            ForEach(actions.destinations) { project in
+                Button { Task { await actions.move(to: project.id) } } label: {
+                    Text(LocalizedStringResource("workdesk.material.moveToNamedProject", defaultValue: "Move to \(project.title)"))
+                }
+            }
+        }
+        ForEach(actions.additionalDestinations) { project in
+            Button { Task { await actions.add(to: project.id) } } label: {
+                Text(LocalizedStringResource("workdesk.material.addToNamedProject", defaultValue: "Add to \(project.title)"))
+            }
+        }
+
     }
 }
 
@@ -200,14 +309,16 @@ enum WorkDeskMaterialConversationCopy {
 struct WorkDeskMaterialLocation: View {
     @Bindable private var workspace: WorkDeskWorkspaceState
     private let materialID: UUID
+    private let sourceLocation: WorkDeskLocation?
 
     init(actions: WorkDeskMaterialOrganizationActions) {
         workspace = actions.workspace
         materialID = actions.materialID
+        sourceLocation = actions.sourceLocation
     }
 
     var body: some View {
-        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: materialID)
+        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: materialID, sourceLocation: sourceLocation)
         VStack(alignment: .leading, spacing: 2) {
             if actions.showsSource {
                 Label {
@@ -224,16 +335,21 @@ struct WorkDeskMaterialLocation: View {
                     .anchorPreference(key: WorkDeskMetadataBounds.self, value: .bounds) { [.uses: $0] }
             }
             if actions.showsLocation {
-                if let project = actions.project {
+                if actions.projects.count > 1 {
+                    Label(LocalizedStringResource("workdesk.material.projectCount", defaultValue: "In \(actions.projects.count) projects"), systemImage: "folder.on.folder")
+                        .font(.caption2).lineLimit(1).padding(.vertical, 3)
+                        .foregroundStyle(AppColors.textSecondary)
+                } else if let project = actions.projects.first {
                     Label { Text(verbatim: project.title) } icon: { Image(systemName: "folder") }
                         .font(.caption2).lineLimit(1).padding(.vertical, 3)
                         .foregroundStyle(AppColors.textSecondary)
                         .anchorPreference(key: WorkDeskMetadataBounds.self, value: .bounds) { [.project: $0] }
                 } else {
-                    Label(LocalizedStringResource("workdesk.material.unfiled", defaultValue: "No project"), systemImage: "tray")
+                    Label(LocalizedStringResource("workdesk.material.home", defaultValue: "Home"), systemImage: "tray")
                         .font(.caption2).foregroundStyle(AppColors.textTertiary).lineLimit(1)
                 }
             }
+
         }
     }
 }

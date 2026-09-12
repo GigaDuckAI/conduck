@@ -1,6 +1,380 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "workdesk.addToAnotherProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to another project…"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.releaseToMove" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Release to move into project"
+          }
+        }
+      }
+    },
+    "workdesk.home.loose" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On Home"
+          }
+        }
+      }
+    },
+    "workdesk.material.addToNamedProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to %@"
+          }
+        }
+      }
+    },
+    "workdesk.material.delete.everywhere" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete Everywhere"
+          }
+        }
+      }
+    },
+    "workdesk.material.delete.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete this material everywhere?"
+          }
+        }
+      }
+    },
+    "workdesk.material.home" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Home"
+          }
+        }
+      }
+    },
+    "workdesk.material.locations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In %@"
+          }
+        }
+      }
+    },
+    "workdesk.material.moveToNamedProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move to %@"
+          }
+        }
+      }
+    },
+    "workdesk.material.openNamedProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open %@"
+          }
+        }
+      }
+    },
+    "workdesk.material.projectCount" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In %lld projects"
+          }
+        }
+      }
+    },
+    "workdesk.moveToHome" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move to Home"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.keep.homeExplanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Materials that are only in this project return together to Home. Materials used elsewhere stay in those locations. Attached notes are kept too."
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.materialsEverywhere" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete project and materials everywhere"
+          }
+        }
+      }
+    },
+    "workdesk.project.delete.shared" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Some materials also appear in other projects. Keeping materials preserves those appearances; deleting materials removes them everywhere in Work."
+          }
+        }
+      }
+    },
+    "workdesk.project.previewEmpty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop materials into this project"
+          }
+        }
+      }
+    },
+    "workdesk.project.previewMore" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld more materials"
+          }
+        }
+      }
+    },
+    "workdesk.removeFromThisProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from this project"
+          }
+        }
+      }
+    },
+    "workdesk.transfer.cancelHint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Release here to cancel"
+          }
+        }
+      }
+    },
+    "workdesk.transfer.moveTo" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move to %@"
+          }
+        }
+      }
+    },
+    "workdesk.tray.close" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close project"
+          }
+        }
+      }
+    },
+    "workdesk.tray.conversations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversations"
+          }
+        }
+      }
+    },
+    "workdesk.tray.dropHome" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop here to move to Home"
+          }
+        }
+      }
+    },
+    "workdesk.tray.expand" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Expand project tray"
+          }
+        }
+      }
+    },
+    "workdesk.tray.move" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move project tray"
+          }
+        }
+      }
+    },
+    "workdesk.tray.moveLeft" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move tray left"
+          }
+        }
+      }
+    },
+    "workdesk.tray.moveRight" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move tray right"
+          }
+        }
+      }
+    },
+    "workdesk.tray.projectActions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Project"
+          }
+        }
+      }
+    },
+    "workdesk.tray.projectActionsLabel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Project actions"
+          }
+        }
+      }
+    },
+    "workdesk.tray.restore" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restore project tray"
+          }
+        }
+      }
+    },
+    "workdesk.undo.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Undo"
+          }
+        }
+      }
+    },
+    "workdesk.undo.dismiss" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dismiss undo message"
+          }
+        }
+      }
+    },
+    "workdesk.undo.organization" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organise materials"
+          }
+        }
+      }
+    },
+    "workdesk.undo.updated" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Materials organised"
+          }
+        }
+      }
+    },
     "" : {
 
     },
@@ -24799,7 +25173,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "All materials"
+            "value" : "Home"
           }
         }
       }
@@ -24810,7 +25184,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Capture a thought or add a file below. Everything you collect appears here, including materials in projects."
+            "value" : "Capture a thought or add a file below. Move related materials into projects to make room on your desk."
           }
         }
       }
@@ -25079,17 +25453,6 @@
         }
       }
     },
-    "workdesk.canvas.releaseToAdd" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Release to add to project"
-          }
-        }
-      }
-    },
     "workdesk.canvas.releaseToGroup" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25151,7 +25514,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Drop into All materials"
+            "value" : "Drop into Home"
           }
         }
       }
@@ -25162,7 +25525,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Add to All materials…"
+            "value" : "Add to Home…"
           }
         }
       }
@@ -25172,7 +25535,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Some items couldn’t be added to the project. They’re safe in All materials. Open All materials to organise them."
+            "value" : "Some items couldn’t be added to the project. They’re safe on Home. Open Home to organise them."
           }
         }
       }
@@ -25182,7 +25545,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld added; %2$lld couldn’t be added. Some saved items couldn’t be placed in the project. Open All materials to organise them."
+            "value" : "%1$lld added; %2$lld couldn’t be added. Some saved items couldn’t be placed in the project. Open Home to organise them."
           }
         }
       }
@@ -25204,7 +25567,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Saved in All materials"
+            "value" : "Saved on Home"
           }
         }
       }
@@ -25875,7 +26238,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This material will be removed from Work and its project."
+            "value" : "This material will be deleted from Home and every project that contains it."
           }
         }
       }
@@ -25886,7 +26249,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This picture and the voice note inside it will be removed from Work and its project."
+            "value" : "This picture and its voice note will be deleted from Home and every project that contains them."
           }
         }
       }
@@ -26155,17 +26518,6 @@
         }
       }
     },
-    "workdesk.project.delete.keep.explanation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "They stay in All materials, grouped together in Desk view. Notes attached to them are kept too."
-          }
-        }
-      }
-    },
     "workdesk.project.delete.materials" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -26238,7 +26590,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Capture a thought below, or move materials into this project from All materials."
+            "value" : "Capture a thought below, or move materials here from Home or another project."
           }
         }
       }
@@ -26327,17 +26679,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bring related ideas together. Select a few cards to create your first project."
-          }
-        }
-      }
-    },
-    "workdesk.removeFromProject" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Remove from project"
           }
         }
       }

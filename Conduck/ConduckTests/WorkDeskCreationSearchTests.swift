@@ -43,7 +43,7 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         XCTAssertEqual(workspace.scope, .all)
     }
 
-    func testClearingGlobalSearchRestoresProjectOrAllScope() async {
+    func testClearingGlobalSearchRestoresProjectOrHomeScope() async {
         let member = material("Related"), pinned = material("Pinned"), loose = material("Loose")
         let project = WorkDeskProjectRecord(title: "Project")
         let workspace = await makeWorkspace(.init(projects: [project], placements: [
@@ -59,7 +59,10 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         workspace.search = "Related"
         XCTAssertEqual(workspace.visibleMaterials(in: [loose, member, pinned]).map(\.id), [member.id])
         workspace.search = ""
-        XCTAssertEqual(workspace.visibleMaterials(in: [loose, member, pinned]).map(\.id), [loose.id, member.id, pinned.id])
+        XCTAssertEqual(workspace.visibleMaterials(in: [loose, member, pinned]).map(\.id), [loose.id, pinned.id])
+        XCTAssertEqual(workspace.scope, .all)
+        XCTAssertTrue(workspace.organization.contains(materialID: member.id, at: .project(project.id)))
+        XCTAssertFalse(workspace.organization.contains(materialID: member.id, at: .home))
     }
 
     func testCountsIncludeLooseAndOrphanedCardsAndOnlyDisplayedCompanionGroups() async {
@@ -103,9 +106,10 @@ final class WorkDeskCreationSearchTests: XCTestCase {
     func testAssignSelectionFiltersForeignSearchResultsBeforeReconciliation() async {
         let local = material("Shared local"), foreign = material("Shared foreign")
         let source = WorkDeskProjectRecord(title: "Other project")
+        let current = WorkDeskProjectRecord(title: "Current project")
         let destination = WorkDeskProjectRecord(title: "Destination")
-        let snapshot = WorkDeskOrganizationSnapshot(projects: [source, destination], placements: [
-            local.id: .init(materialID: local.id, projectID: destination.id),
+        let snapshot = WorkDeskOrganizationSnapshot(projects: [source, current, destination], placements: [
+            local.id: .init(materialID: local.id, projectID: current.id),
             foreign.id: .init(materialID: foreign.id, projectID: source.id)
         ])
         let recorder = AssignmentRecorder()
@@ -115,7 +119,7 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         })
         await organization.reload()
         let workspace = WorkDeskWorkspaceState(organization: organization)
-        workspace.selectScope(.project(destination.id))
+        workspace.selectScope(.project(current.id))
         workspace.search = "Shared"
         workspace.toggleSelection(local.id)
         workspace.toggleSelection(foreign.id)
@@ -123,8 +127,34 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         // No reconcile call: the action itself must exclude the hidden result.
         await workspace.assignSelection(to: destination.id, materials: [local, foreign])
         let assignments = await recorder.assignments
-        XCTAssertEqual(assignments, [[local.id]])
+        XCTAssertEqual(assignments, [.move([local.id], .project(current.id), .project(destination.id))])
         XCTAssertTrue(workspace.selectedIDs.isEmpty)
+    }
+
+    func testGlobalSearchSelectionAddsToDestinationWithoutInventingASource() async {
+        let local = material("Shared local"), foreign = material("Shared foreign")
+        let source = WorkDeskProjectRecord(title: "Source")
+        let destination = WorkDeskProjectRecord(title: "Destination")
+        let snapshot = WorkDeskOrganizationSnapshot(projects: [source, destination], placements: [
+            foreign.id: .init(materialID: foreign.id, projectID: source.id)
+        ])
+        let recorder = AssignmentRecorder()
+        let organization = WorkDeskOrganization(fetch: { snapshot }, apply: { mutation in
+            await recorder.record(mutation)
+            return snapshot
+        })
+        await organization.reload()
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        workspace.selectScope(.project(source.id))
+        workspace.search = "Shared"
+        workspace.toggleSelection(local.id)
+        workspace.toggleSelection(foreign.id)
+        await workspace.assignSelection(to: destination.id, materials: [local, foreign])
+        let assignments = await recorder.assignments
+        XCTAssertEqual(assignments, [.add([local.id, foreign.id], .project(destination.id))],
+                       "A complete search has no single source appearance to remove")
+        XCTAssertTrue(workspace.selectedIDs.isEmpty)
+        XCTAssertEqual(workspace.scope, .project(source.id))
     }
 
     func testForeignOnlySelectionCannotMoveAfterSearchClearsWithoutReconciliation() async {
@@ -173,14 +203,22 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         XCTAssertEqual(organization.materialCounts(in: [member])[nil], 1)
     }
 
-    func testSelectionCreatesProjectWhereItsDeskCardsWereArranged() async {
+    func testSelectionCreatesProjectWhereItsDeskCardsWereArranged() async throws {
         let one = UUID(), two = UUID()
         let workspace = await makeWorkspace(.init(placements: [
             one: .init(materialID: one, position: .init(x: 1200, y: 900)),
             two: .init(materialID: two, position: .init(x: 1500, y: 1100))
         ]))
         workspace.beginProject(materialIDs: [one, two, one])
-        XCTAssertEqual(workspace.projectEditor?.position, WorkDeskPoint(x: 1350, y: 712))
+        let position = try XCTUnwrap(workspace.projectEditor?.position)
+        let folder = WorkDeskCanvasGeometry.frame(at: position, bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: 1)
+        for point in [WorkDeskPoint(x: 1200, y: 900), WorkDeskPoint(x: 1500, y: 1100)] {
+            XCTAssertFalse(folder.intersects(WorkDeskCanvasGeometry.frame(at: point,
+                bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: 1)))
+        }
+        XCTAssertLessThanOrEqual(hypot(position.x - 1350, position.y - 1000),
+            Double(WorkDeskCanvasGeometry.projectBodySize.height + WorkDeskCanvasGeometry.cardBodySize.height),
+            "The new folder must remain beside the arranged selection, not return to the default origin")
     }
 
     func testExplicitCreationPointWinsOverSelectionAndCamera() async {
@@ -205,7 +243,7 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         XCTAssertEqual(workspace.projectEditor?.position, insertion, "the editor must retain the original camera position")
     }
 
-    func testUnopenedDeskCreationAvoidsSavedCardsAndDoesNotUseProjectLocalCoordinates() async {
+    func testUnopenedDeskCreationAvoidsSavedCardsAndDoesNotUseProjectLocalCoordinates() async throws {
         let child = UUID(), loose = UUID()
         let project = WorkDeskProjectRecord(title: "Existing", position: .init(x: 292, y: 26))
         let workspace = await makeWorkspace(.init(projects: [project], placements: [
@@ -214,7 +252,15 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         ]))
         workspace.selectScope(.project(project.id))
         workspace.beginProject(materialIDs: [child])
-        XCTAssertEqual(workspace.projectEditor?.position, WorkDeskPoint(x: 556, y: 26))
+        let position = try XCTUnwrap(workspace.projectEditor?.position)
+        let folder = WorkDeskCanvasGeometry.frame(at: position, bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: 1)
+        XCTAssertFalse(folder.intersects(WorkDeskCanvasGeometry.frame(at: .init(x: 28, y: 26),
+            bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: 1)))
+        XCTAssertFalse(folder.intersects(WorkDeskCanvasGeometry.frame(at: .init(x: 292, y: 26),
+            bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: 1)))
+        XCTAssertLessThanOrEqual(hypot(position.x - 28, position.y - 26),
+            Double(WorkDeskCanvasGeometry.projectBodySize.width + WorkDeskCanvasGeometry.cardBodySize.height),
+            "An unopened Home should use a nearby free slot, not the child's distant project coordinates")
     }
 
     func testCreationSpotRoundTripsAndLateLayoutSeedCannotRelocateIt() async throws {
@@ -248,10 +294,21 @@ final class WorkDeskCreationSearchTests: XCTestCase {
         func next() -> WorkDeskOrganizationSnapshot { snapshots.removeFirst() }
     }
 
+    private enum Assignment: Equatable, Sendable {
+        case move([UUID], WorkDeskLocation, WorkDeskLocation)
+        case add([UUID], WorkDeskLocation)
+        case legacy([UUID], UUID?)
+    }
+
     private actor AssignmentRecorder {
-        var assignments: [[UUID]] = []
+        var assignments: [Assignment] = []
         func record(_ mutation: WorkDeskMutation) {
-            if case .assign(let ids, _) = mutation { assignments.append(ids) }
+            switch mutation {
+            case .moveLocations(let ids, let source, let destination, _, _): assignments.append(.move(ids, source, destination))
+            case .addLocations(let ids, let destination, _, _): assignments.append(.add(ids, destination))
+            case .assign(let ids, let projectID): assignments.append(.legacy(ids, projectID))
+            default: break
+            }
         }
     }
 }

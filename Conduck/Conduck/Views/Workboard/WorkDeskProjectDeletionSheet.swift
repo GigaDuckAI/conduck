@@ -28,12 +28,19 @@ struct WorkDeskProjectDeletionSheet: View {
                         Text(WorkDeskCopy.retainedConversationCount(review.conversationCount))
                             .foregroundStyle(AppColors.textSecondary)
                     }
+                    if !review.sharedMaterialIDs.isEmpty {
+                        Text(LocalizedStringResource("workdesk.project.delete.shared",
+                            defaultValue: "Some materials also appear in other projects. Keeping materials preserves those appearances; deleting materials removes them everywhere in Work."))
+                            .font(.subheadline).foregroundStyle(AppColors.textSecondary)
+                    }
                     if let error {
                         Text(verbatim: error).foregroundStyle(AppColors.warning)
                         Text(LocalizedStringResource("workdesk.project.delete.reopen",
                             defaultValue: "Close this review and choose Delete project again to review the latest materials."))
                             .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                     } else if review.materialCount > 0 {
+                        Text(WorkDeskCopy.materialCount(review.materialCount))
+                            .font(.headline)
                         VStack(alignment: .leading, spacing: 8) {
                             Button(LocalizedStringResource("workdesk.project.delete.keep", defaultValue: "Keep materials")) {
                                 delete(keepingMaterials: true)
@@ -41,13 +48,14 @@ struct WorkDeskProjectDeletionSheet: View {
                             .buttonStyle(.borderedProminent)
                             .keyboardShortcut(.defaultAction)
                             .accessibilityIdentifier("workdesk-delete-project-keep")
-                            Text(LocalizedStringResource("workdesk.project.delete.keep.explanation",
-                                defaultValue: "They stay in All materials, grouped together in Desk view. Notes attached to them are kept too."))
+                            Text(LocalizedStringResource("workdesk.project.delete.keep.homeExplanation",
+                                defaultValue: "Materials that are only in this project return together to Home. Materials used elsewhere stay in those locations. Attached notes are kept too."))
                                 .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                         }
                         Divider()
                         VStack(alignment: .leading, spacing: 8) {
-                            Button(WorkDeskCopy.deleteProjectAndMaterials(review.materialCount), role: .destructive) {
+                            Button(LocalizedStringResource("workdesk.project.delete.materialsEverywhere",
+                                defaultValue: "Delete project and materials everywhere"), role: .destructive) {
                                 delete(keepingMaterials: false)
                             }.buttonStyle(.bordered)
                                 .accessibilityIdentifier("workdesk-delete-project-materials")
@@ -74,7 +82,7 @@ struct WorkDeskProjectDeletionSheet: View {
                 }
             }
         }
-        .frame(minWidth: 320, idealWidth: 480, minHeight: 400)
+        .workboardDesktopSheetFrame(minWidth: 320, minHeight: 400, idealWidth: 480)
         .presentationDetents([.large])
         .interactiveDismissDisabled(isDeleting)
     }

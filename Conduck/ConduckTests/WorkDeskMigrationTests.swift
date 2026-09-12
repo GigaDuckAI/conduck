@@ -51,6 +51,70 @@ final class WorkDeskMigrationTests: XCTestCase {
         XCTAssertEqual(after.entities(forConfigurationName: "Blobs")?.compactMap(\.name), ["WorkMaterialBlob"])
     }
 
+    func testV22AddsOptionalLocationMetadataAndEveryShippedModelCanUpgrade() throws {
+        let before = try model(version: 21), after = try model(version: 22)
+        XCTAssertEqual(Set(after.entitiesByName.keys).subtracting(before.entitiesByName.keys), ["WorkDeskLocation"])
+        for (name, entity) in before.entitiesByName where name != "WorkDeskPlacement" {
+            XCTAssertEqual(after.entitiesByName[name]?.versionHash, entity.versionHash,
+                           "Adding references must not change captured content or payload models")
+        }
+        let old = try XCTUnwrap(before.entitiesByName["WorkDeskPlacement"])
+        let legacy = try XCTUnwrap(after.entitiesByName["WorkDeskPlacement"])
+        XCTAssertEqual(Set(legacy.attributesByName.keys).subtracting(old.attributesByName.keys),
+                       ["locationsProjectedAt", "locationsProjectID"])
+        let locations = try XCTUnwrap(after.entitiesByName["WorkDeskLocation"])
+        XCTAssertTrue(locations.relationshipsByName.isEmpty)
+        XCTAssertTrue(locations.uniquenessConstraints.isEmpty)
+        for attribute in locations.attributesByName.values {
+            XCTAssertTrue(attribute.isOptional)
+            XCTAssertNil(attribute.defaultValue)
+        }
+        XCTAssertTrue(after.entities(forConfigurationName: "Core")!.contains { $0.name == "WorkDeskLocation" })
+        XCTAssertEqual(after.entities(forConfigurationName: "Blobs")?.compactMap(\.name), ["WorkMaterialBlob"])
+        for version in 1...21 {
+            XCTAssertNoThrow(try NSMappingModel.inferredMappingModel(forSourceModel: model(version: version), destinationModel: after))
+        }
+    }
+
+    func testV21SQLiteAdoptsFiledMaterialOnlyInsideProjectAndKeepsLooseHome() async throws {
+        let looseID = UUID(), filedID = UUID(), projectID = UUID()
+        let old = try await container(version: 21)
+        let context = old.newBackgroundContext()
+        try await context.perform {
+            let project = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
+            project.setValue(projectID, forKey: "id")
+            project.setValue("Existing", forKey: "title")
+            for id in [looseID, filedID] {
+                let material = NSEntityDescription.insertNewObject(forEntityName: "WorkMaterial", into: context)
+                material.setValue(id, forKey: "id")
+                material.setValue(Constants.workboardDeskItemID, forKey: "workItemID")
+                material.setValue("note", forKey: "kind")
+                material.setValue("Original", forKey: "title")
+                let placement = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskPlacement", into: context)
+                placement.setValue(id, forKey: "materialID")
+                placement.setValue(id == filedID ? projectID : nil, forKey: "projectID")
+                placement.setValue(80.0, forKey: "positionX")
+                placement.setValue(90.0, forKey: "positionY")
+                placement.setValue(700.0, forKey: "homePositionX")
+                placement.setValue(800.0, forKey: "homePositionY")
+            }
+            try context.save()
+        }
+        try unload(old)
+        let store = isolated.make(storeURL: coreURL)
+        let migrated = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(migrated.locations(for: filedID).map(\.location), [.project(projectID)])
+        XCTAssertEqual(migrated.locations(for: filedID).first?.position, .init(x: 80, y: 90))
+        XCTAssertEqual(migrated.locations(for: looseID).map(\.location), [.home])
+        XCTAssertEqual(migrated.locations(for: looseID).first?.position, .init(x: 700, y: 800))
+        let added = try await store.applyWorkDeskMutation(.addLocations(materialIDs: [filedID], to: .home,
+            positions: [filedID: .init(x: 100, y: 200)], expected: nil))
+        XCTAssertEqual(Set(added.locations(for: filedID).map(\.location)), [.home, .project(projectID)])
+        let reopened = isolated.make(storeURL: coreURL)
+        let persisted = try await reopened.fetchWorkDeskOrganization()
+        XCTAssertEqual(persisted.materialLocations, added.materialLocations)
+    }
+
     func testEveryShippedVersionCanInferAnUpgradeToV18() throws {
         let target = try model(version: 18)
         for version in 1...17 {

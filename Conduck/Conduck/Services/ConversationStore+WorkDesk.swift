@@ -91,7 +91,8 @@ extension ConversationStore {
         // Include placements whose material is still in transit. If that row
         // arrives while the dialog is open, its new content token invalidates
         // the review instead of being swept into a destructive choice.
-        let assigned = Set(placements.values.filter { $0.projectID == id }.map(\.materialID))
+        let locations = try deskLocationState(in: context)
+        let assigned = Set(locations.filter { $0.value.contains(where: { $0.location == .project(id) }) }.keys)
         let request = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
         request.predicate = NSPredicate(format: "workItemID == %@", Constants.workboardDeskItemID as CVarArg)
         var rowsByID: [UUID: [NSManagedObject]] = [:]
@@ -131,7 +132,11 @@ extension ConversationStore {
             retainedPositions: positions, focusPoint: visible.first.flatMap { positions[$0] } ?? project.position ?? .init(x: 28, y: 26),
             project: project, assignedMaterialIDs: assigned,
             placementTokens: placements.filter { reviewedPlacements.contains($0.key) },
-            materialTokens: canonical.filter { included.contains($0.key) }.mapValues { canonicalOrder(of: $0) })
+            materialTokens: canonical.filter { included.contains($0.key) }.mapValues { canonicalOrder(of: $0) },
+            locationTokens: locations.filter { reviewedPlacements.contains($0.key) },
+            sharedMaterialIDs: Set(visible.filter { materialID in
+                locations[materialID]?.contains(where: { $0.location != .project(id) }) ?? false
+            }))
     }
 
     private nonisolated static func releasedProjectPositions(
@@ -197,6 +202,7 @@ extension ConversationStore {
               current.assignedMaterialIDs == review.assignedMaterialIDs,
               current.materialTokens == review.materialTokens,
               current.placementTokens == review.placementTokens,
+              current.locationTokens == review.locationTokens,
               current.visibleMaterialIDs == review.visibleMaterialIDs else {
             throw WorkDeskStoreError.staleProjectDeletion
         }
@@ -204,12 +210,15 @@ extension ConversationStore {
         // The metadata tombstone remains the authority for a placement that
         // imports later. Conversations and result receipts deliberately remain.
         try applyDeskMutation(.deleteProject(id: review.projectID), in: context)
-        for materialID in current.materialIDs {
-            let placements = try deskPlacementRows(materialID, in: context)
-            editDeskRows(placements) { row in
-                row.setValue(nil, forKey: "projectID")
-                setDeskPoint(nil, on: row)
-                if !deleteMaterials { setHomePoint(current.retainedPositions[materialID], on: row) }
+        if !deleteMaterials {
+            let released = try deskLocationState(materialIDs: Set(current.materialIDs), in: context)
+            for materialID in current.materialIDs {
+                guard var locations = released[materialID],
+                      let home = locations.firstIndex(where: { $0.location == .home }),
+                      !current.sharedMaterialIDs.contains(materialID) else { continue }
+                locations[home].position = current.retainedPositions[materialID]
+                try writeDeskLocationState(materialID: materialID, desired: locations,
+                    previous: released[materialID] ?? [], in: context)
             }
         }
         if deleteMaterials { return try deleteReviewedDeskMaterials(ids: current.materialIDs, in: context) }
@@ -271,6 +280,15 @@ extension ConversationStore {
         #endif
         let (snapshot, changed, vaultKeys) = try await context.perform {
             var vaultKeys: [String] = []
+            switch mutation {
+            case .moveLocations, .addLocations, .removeLocations, .positionLocations, .restoreLocations, .createProjectFrom, .reorderLocations, .moveAndReorderLocations:
+                try Self.pinProjectDeletionReads(in: context)
+            default: break
+            }
+            let locationIDs = Self.deskLocationMutationMaterialIDs(mutation)
+            let companionIDs = try Self.deskLocationCompanions(for: Array(locationIDs), in: context).values
+            let affectedLocations = locationIDs.union(companionIDs)
+            let locationBefore = try Self.deskLocationState(materialIDs: affectedLocations, in: context)
             if case let .deleteReviewedProject(review, deleteMaterials) = mutation {
                 try Self.pinProjectDeletionReads(in: context)
                 vaultKeys = try Self.applyReviewedProjectDeletion(review, deleteMaterials: deleteMaterials, in: context,
@@ -279,7 +297,18 @@ extension ConversationStore {
             try Self.applyDeskMutation(mutation, in: context)
             let changed = context.hasChanges
             if changed { try context.save() }
-            return (try Self.deskOrganization(in: context), changed, vaultKeys)
+            var snapshot = try Self.deskOrganization(in: context)
+            let locationAfter = try Self.deskLocationState(materialIDs: affectedLocations, in: context)
+            let changedLocations = affectedLocations.filter { locationBefore[$0] != locationAfter[$0] }
+            if !changedLocations.isEmpty {
+                let restoring: Bool
+                if case .restoreLocations = mutation { restoring = true } else { restoring = false }
+                snapshot.locationUndo = .init(
+                    before: locationBefore.filter { changedLocations.contains($0.key) },
+                    after: locationAfter.filter { changedLocations.contains($0.key) },
+                    isRestoration: restoring)
+            }
+            return (snapshot, changed, vaultKeys)
         }
         contextLease.finish()
         for key in vaultKeys { try? await workAssetVault.remove(key) }
@@ -304,6 +333,12 @@ extension ConversationStore {
         _ mutation: WorkDeskMutation, in context: NSManagedObjectContext
     ) throws {
         switch mutation {
+        case let .createProjectFrom(project, materialIDs, source, expected):
+            try applyDeskMutation(.createProject(project, materialIDs: []), in: context)
+            try applyDeskLocationMutation(.moveLocations(materialIDs: materialIDs, from: source, to: .project(project.id),
+                                                        positions: [:], expected: expected), in: context)
+        case .moveLocations, .addLocations, .removeLocations, .positionLocations, .restoreLocations, .reorderLocations, .moveAndReorderLocations:
+            try applyDeskLocationMutation(mutation, in: context)
         case .deleteReviewedProject:
             // Validated and applied before this metadata-only switch.
             break
@@ -336,6 +371,7 @@ extension ConversationStore {
                 row.setValue(preferredGatewayRef, forKey: "preferredGatewayRef")
             }
         case let .deleteProject(id):
+            let locationState = try deskLocationState(in: context)
             let rows = try deskRows("WorkDeskProject", key: "id", id: id, in: context)
             guard !rows.isEmpty else { throw WorkDeskStoreError.projectNotFound }
             editDeskRows(rows) { row in
@@ -361,6 +397,11 @@ extension ConversationStore {
                         setDeskPoint(nil, on: row)
                     }
                 }
+            }
+            for (materialID, locations) in locationState where locations.contains(where: { $0.location == .project(id) }) {
+                var remaining = locations.filter { $0.location != .project(id) }
+                if remaining.isEmpty { remaining = [.init(materialID: materialID, location: .home, position: nil)] }
+                try writeDeskLocationState(materialID: materialID, desired: remaining, previous: locations, in: context)
             }
         case let .assign(materialIDs, projectID):
             if let projectID { _ = try liveDeskProjectRows(projectID, in: context) }
@@ -438,6 +479,16 @@ extension ConversationStore {
                 // of the batch or inventing a missing capture.
                 do { try requireDeskMaterials([seed.materialID], in: context) }
                 catch WorkDeskStoreError.materialNotFound { continue }
+                if try !deskRows("WorkDeskLocation", key: "materialID", id: seed.materialID, in: context).isEmpty {
+                    let location = seed.isHome ? WorkDeskLocation.home : seed.projectID.map(WorkDeskLocation.project) ?? .home
+                    let current = try deskLocationState(materialIDs: [seed.materialID], in: context)[seed.materialID] ?? []
+                    guard let index = current.firstIndex(where: { $0.location == location }), current[index].position == nil else { continue }
+                    var desired = current
+                    desired[index].position = seed.position
+                    try writeDeskLocationState(materialID: seed.materialID, desired: desired, previous: current,
+                                               seedingPositions: true, in: context)
+                    continue
+                }
                 if seed.isHome {
                     let existing = try deskRows("WorkDeskPlacement", key: "materialID", id: seed.materialID, in: context)
                     let storedProjectID = existing.first?.value(forKey: "projectID") as? UUID
@@ -493,7 +544,7 @@ extension ConversationStore {
         }
     }
 
-    private nonisolated static func requireDeskMaterials(
+    nonisolated static func requireDeskMaterials(
         _ ids: [UUID], in context: NSManagedObjectContext
     ) throws {
         guard !ids.isEmpty else { return }
@@ -534,6 +585,7 @@ extension ConversationStore {
             let children = deskFoldedCompanions(canonical: grouped.compactMapValues { canonicalRow(among: $0) })
             for parent in ids { if let child = children[parent] { expanded.insert(child) } }
         }
+        try replaceDeskLocations(materialIDs: Array(expanded), projectID: projectID, in: context)
         for id in expanded {
             let rows = try deskPlacementRows(id, in: context)
             editDeskRows(rows) { row in
@@ -552,7 +604,7 @@ extension ConversationStore {
 
     /// Same eligibility and lowest-child identity rule as the visible fold.
     /// A duplicate or late linked note cannot invent a second displayed child.
-    private nonisolated static func deskFoldedCompanions(
+    nonisolated static func deskFoldedCompanions(
         canonical: [UUID: NSManagedObject]
     ) -> [UUID: UUID] {
         var childByParent: [UUID: UUID] = [:]
@@ -587,7 +639,7 @@ extension ConversationStore {
 
     /// The membership the person sees. Missing or partially arrived projects
     /// and any tombstone resolve to the unfiled desk, without changing rows.
-    private nonisolated static func resolvedDeskProjectID(
+    nonisolated static func resolvedDeskProjectID(
         _ id: UUID?, in context: NSManagedObjectContext
     ) throws -> UUID? {
         guard let id else { return nil }
@@ -597,7 +649,7 @@ extension ConversationStore {
         return id
     }
 
-    private nonisolated static func deskPlacementRows(
+    nonisolated static func deskPlacementRows(
         _ id: UUID, in context: NSManagedObjectContext
     ) throws -> [NSManagedObject] {
         let rows = try deskRows("WorkDeskPlacement", key: "materialID", id: id, in: context)
@@ -611,7 +663,7 @@ extension ConversationStore {
         return [row]
     }
 
-    private nonisolated static func deskRows(
+    nonisolated static func deskRows(
         _ entity: String, key: String, id: UUID, in context: NSManagedObjectContext
     ) throws -> [NSManagedObject] {
         let request = NSFetchRequest<NSManagedObject>(entityName: entity)
@@ -621,7 +673,7 @@ extension ConversationStore {
 
     /// Equal write dates have a deterministic tie-break using synced values.
     /// Object IDs are device-local and would let peers choose different rows.
-    private nonisolated static func deskRowPrecedes(_ lhs: NSManagedObject, _ rhs: NSManagedObject) -> Bool {
+    nonisolated static func deskRowPrecedes(_ lhs: NSManagedObject, _ rhs: NSManagedObject) -> Bool {
         let leftDate = lhs.value(forKey: "updatedAt") as? Date ?? .distantPast
         let rightDate = rhs.value(forKey: "updatedAt") as? Date ?? .distantPast
         if leftDate != rightDate { return leftDate > rightDate }
@@ -642,7 +694,7 @@ extension ConversationStore {
         }
     }
 
-    private nonisolated static func editDeskRows(
+    nonisolated static func editDeskRows(
         _ rows: [NSManagedObject], edit: (NSManagedObject) -> Void
     ) {
         let stamp = advancedWriteStamp(Date(), notBelow: rows.compactMap { $0.value(forKey: "updatedAt") as? Date })
@@ -652,24 +704,24 @@ extension ConversationStore {
         }
     }
 
-    private nonisolated static func setDeskPoint(_ position: WorkDeskPoint?, on row: NSManagedObject) {
+    nonisolated static func setDeskPoint(_ position: WorkDeskPoint?, on row: NSManagedObject) {
         row.setValue(position?.x, forKey: "positionX")
         row.setValue(position?.y, forKey: "positionY")
     }
 
-    private nonisolated static func setHomePoint(_ position: WorkDeskPoint?, on row: NSManagedObject) {
+    nonisolated static func setHomePoint(_ position: WorkDeskPoint?, on row: NSManagedObject) {
         row.setValue(position?.x, forKey: "homePositionX")
         row.setValue(position?.y, forKey: "homePositionY")
     }
 
-    private nonisolated static func homePoint(on row: NSManagedObject) -> WorkDeskPoint? {
+    nonisolated static func homePoint(on row: NSManagedObject) -> WorkDeskPoint? {
         guard let x = row.value(forKey: "homePositionX") as? Double,
               let y = row.value(forKey: "homePositionY") as? Double,
               x.isFinite, y.isFinite else { return nil }
         return WorkDeskPoint(x: x, y: y)
     }
 
-    private nonisolated static func deskPoint(on row: NSManagedObject) -> WorkDeskPoint? {
+    nonisolated static func deskPoint(on row: NSManagedObject) -> WorkDeskPoint? {
         guard let x = row.value(forKey: "positionX") as? Double,
               let y = row.value(forKey: "positionY") as? Double,
               x.isFinite, y.isFinite else { return nil }
@@ -720,7 +772,12 @@ extension ConversationStore {
                 updatedAt: row.value(forKey: "updatedAt") as? Date ?? .distantPast
             )
         }
+        let explicitRequest = NSFetchRequest<NSManagedObject>(entityName: "WorkDeskLocation")
+        explicitRequest.propertiesToFetch = ["materialID"]
+        let explicitIDs = Set(try context.fetch(explicitRequest).compactMap { $0.value(forKey: "materialID") as? UUID })
+            .intersection(materialIDs)
+        let locations = try deskLocationState(materialIDs: explicitIDs, in: context)
         return WorkDeskOrganizationSnapshot(projects: projects, placements: placements,
-                                            deletedProjectIDs: tombstones)
+                                            deletedProjectIDs: tombstones, materialLocations: locations)
     }
 }

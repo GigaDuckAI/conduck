@@ -110,6 +110,7 @@ nonisolated struct WorkDeskCanvasDrag {
     let origins: [WorkDeskCanvasItemID: WorkDeskPoint]
     let startTransform: WorkDeskCanvasTransform
     var memberships: [UUID: UUID?] = [:]
+    var expectedLocationTokens: WorkDeskLocationTokens? = nil
     var translation: CGSize = .zero
 
     func positions(transform: WorkDeskCanvasTransform) -> [WorkDeskCanvasItemID: WorkDeskPoint] {

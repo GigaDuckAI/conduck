@@ -26,7 +26,7 @@ final class WorkboardContextualCaptureTests: XCTestCase {
             openMaterial: { _ in }).makeDependencies()
     }
 
-    func testProjectThoughtRemainsCanonicalAndVisibleInAllMaterials() async throws {
+    func testProjectThoughtRemainsCanonicalAndAppearsInsideItsProject() async throws {
         let store = isolated.make()
         let organization = WorkDeskOrganization(store: store)
         let workspace = WorkDeskWorkspaceState(organization: organization)
@@ -45,6 +45,8 @@ final class WorkboardContextualCaptureTests: XCTestCase {
         XCTAssertEqual(persisted?.workItemID, Constants.workboardDeskItemID)
         XCTAssertEqual(workspace.visibleMaterials(in: model.desk?.materials ?? []).map(\.id), [card.id])
         workspace.selectScope(.all)
+        XCTAssertTrue(workspace.visibleMaterials(in: model.desk?.materials ?? []).isEmpty)
+        workspace.search = "useful thought"
         XCTAssertEqual(workspace.visibleMaterials(in: model.desk?.materials ?? []).map(\.id), [card.id])
     }
 
@@ -141,7 +143,7 @@ final class WorkboardContextualCaptureTests: XCTestCase {
         XCTAssertEqual(saved?.textContent, "Keep this")
         XCTAssertNil(organization.projectID(for: valid.id))
         let notice = try XCTUnwrap(model.notice)
-        XCTAssertEqual(String(localized: notice.title), "Saved in All materials")
+        XCTAssertEqual(String(localized: notice.title), "Saved on Home")
         XCTAssertTrue(notice.message.contains("1 added; 1 couldn’t be added"))
         XCTAssertNil(model.workspaceStatus)
     }
@@ -156,7 +158,7 @@ final class WorkboardContextualCaptureTests: XCTestCase {
 
         XCTAssertTrue(saved)
         XCTAssertEqual(model.desk?.materials.count, 1)
-        XCTAssertEqual(String(localized: try XCTUnwrap(model.notice).title), "Saved in All materials")
+        XCTAssertEqual(String(localized: try XCTUnwrap(model.notice).title), "Saved on Home")
     }
 
     func testBatchProbesDeletedProjectOnlyOnceEvenWhenFirstUnfiledWriteFails() async throws {
@@ -191,7 +193,7 @@ final class WorkboardContextualCaptureTests: XCTestCase {
             XCTAssertEqual(report.addedCount, failFirstFallback ? 19 : 20)
             XCTAssertEqual(report.failedCount, failFirstFallback ? 1 : 0)
             XCTAssertEqual(model.desk?.materials.count, report.addedCount)
-            XCTAssertEqual(String(localized: try XCTUnwrap(model.notice).title), "Saved in All materials")
+            XCTAssertEqual(String(localized: try XCTUnwrap(model.notice).title), "Saved on Home")
             let organization = try await store.fetchWorkDeskOrganization()
             XCTAssertTrue(organization.placements.isEmpty)
         }

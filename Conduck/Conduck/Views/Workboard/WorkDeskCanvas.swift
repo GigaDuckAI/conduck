@@ -5,6 +5,8 @@
 // screen deltas, while cards keep a stable world position and foreground order.
 // Drop feedback is a separate foreground layer, never a child hidden by the card
 // being held. Existing previews retain ownership of playback, sharing and repair.
+// A workspace coordinator carries that same gesture across project trays. The
+// source owns cancellation; only the frontmost destination accepts a transfer.
 
 import SwiftUI
 
@@ -25,11 +27,21 @@ struct WorkDeskCanvas<CardContent: View>: View {
     let onOpenProject: (UUID) -> Void
     let onSeedPositions: ([WorkDeskPositionSeed], [UUID: WorkDeskPoint]) async -> Bool
     var onCreateProject: ((WorkDeskPoint) -> Void)? = nil
+    var transferCoordinator: WorkDeskTransferCoordinator? = nil
+    var transferLocation: WorkDeskLocation = .home
+    var transferTitle: String = ""
+    var transferPriority = 0
+    var onTransfer: ((WorkDeskTransferRequest) async -> Bool)? = nil
+    var organization: WorkDeskOrganization? = nil
+    var onNativeTransfer: ([UUID]) -> Void = { _ in }
+    var onEditProject: ((WorkDeskProjectRecord) -> Void)? = nil
+    var onDeleteProject: ((UUID) -> Void)? = nil
     @ViewBuilder var cardContent: (WorkboardMaterialSnapshot, CGSize) -> CardContent
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.workbenchDestinationIsActive) private var isActive
     @State private var viewport: CGSize = .zero
+    @State private var globalFrame: CGRect = .zero
     @State private var controlsFrame: CGRect = .zero
     @State private var coordinateSpace = UUID()
     @State private var viewportOwner = UUID()
@@ -48,6 +60,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
     @State private var pending = WorkDeskPendingPositions()
     @State private var dropCandidates: [WorkDeskDropCandidate] = []
     @State private var hover = WorkDeskDropHover()
+    @State private var projectPreview = WorkDeskDropHover()
     @State private var edgePanTask: Task<Void, Never>?
     @State private var backgroundPointer = WorkDeskCanvasBackgroundPointer()
     @GestureState private var isPanning = false
@@ -55,45 +68,64 @@ struct WorkDeskCanvas<CardContent: View>: View {
     private var transform: WorkDeskCanvasTransform { session.transform }
     private var motion: Animation? { reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.86) }
     private var viewportCenter: CGPoint { CGPoint(x: viewport.width / 2, y: viewport.height / 2) }
+    private var inputExclusions: [CGRect] {
+        [controlsFrame] + (transferCoordinator?.occludedRects(above: transferPriority, in: globalFrame) ?? [])
+    }
 
     var body: some View {
         GeometryReader { proxy in
             canvasLayers
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .workDeskViewportInput(
-                    isEnabled: isActive,
-                    excludedRects: [controlsFrame],
+                    isEnabled: isActive && transferCoordinator?.isDragging != true,
+                    excludedRects: inputExclusions,
                     onPan: panViewport,
                     onZoom: zoomViewport,
                     onInteractionChanged: nativeInteractionChanged
                 )
                 .overlay { dropFeedback }
+                .overlay { projectHoverPreview }
                 .overlay(alignment: .bottomTrailing) {
                     viewportControls
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(coordinateSpace)) }
-                        action: { controlsFrame = $0 }
+                        action: { controlsFrame = $0; registerTransferSurface() }
                         .padding(14)
                 }
                 .clipped()
                 .coordinateSpace(name: coordinateSpace)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) }
+                action: { globalFrame = $0; registerTransferSurface() }
                 .onChange(of: proxy.size, initial: true) { _, size in
                     updateViewport(size)
                 }
                 .onChange(of: materials.map(\.id), initial: true) { _, _ in refreshLayout() }
                 .onChange(of: projects.map(\.record), initial: true) { _, _ in refreshLayout() }
                 .onChange(of: placements) { _, _ in refreshLayout() }
+                .onChange(of: transform) { _, _ in
+                    projectPreview.reset()
+                    registerTransferSurface()
+                }
+                .onChange(of: session.layerRevision) { _, _ in registerTransferSurface() }
+                .onChange(of: transferCoordinator?.isDragging) { _, active in
+                    if active == true { projectPreview.reset() }
+                }
                 .onChange(of: isPanning) { _, active in
                     if !active { lastPanTranslation = .zero; suppressPanUntilRelease = false }
                 }
                 .onChange(of: isActive) { _, active in
                     updateViewport(proxy.size)
-                    if !active { cancelInteractions() }
+                    if !active {
+                        cancelInteractions()
+                        transferCoordinator?.removeSurface(id: viewportOwner)
+                    } else { registerTransferSurface() }
                 }
                 .onDisappear {
                     session.suspendViewport(owner: viewportOwner)
                     cancelInteractions()
+                    transferCoordinator?.removeSurface(id: viewportOwner)
                 }
                 .task(id: hover.generation) { await armDropAfterDwell() }
+                .task(id: projectPreview.generation) { await showProjectPreviewAfterDwell() }
         }
         .accessibilityIdentifier("workdesk-spatial-canvas")
     }
@@ -152,7 +184,8 @@ struct WorkDeskCanvas<CardContent: View>: View {
                 DragGesture(minimumDistance: 4)
                     .updating($isPanning) { _, active, _ in active = true }
                     .onChanged { value in
-                        guard isActive, drag == nil, !nativeNavigation, !suppressPanUntilRelease else { return }
+                        guard isActive, drag == nil, transferCoordinator?.isDragging != true,
+                              !nativeNavigation, !suppressPanUntilRelease else { return }
                         if lastPanTranslation == .zero { dismissCaptureKeyboard() }
                         let delta = CGSize(width: value.translation.width - lastPanTranslation.width,
                                            height: value.translation.height - lastPanTranslation.height)
@@ -222,23 +255,23 @@ struct WorkDeskCanvas<CardContent: View>: View {
     private func projectPile(_ project: WorkDeskCanvasProject) -> some View {
         let id = WorkDeskCanvasItemID.project(project.id)
         let frame = screenFrame(for: id)
-        let highlighted = hover.target == id
+        let highlighted = hover.target == id || transferCoordinator?.highlightedProject(in: viewportOwner) == project.id
         let lifted = livePositions[id] != nil
-        let isOverview = transform.scale < WorkDeskCanvasGeometry.overviewThreshold
         return Button {
             activate(id)
-            if isOverview { focus(id) } else { onOpenProject(project.id) }
+            projectPreview.reset()
+            onOpenProject(project.id)
         } label: {
-            projectFace(project)
+            WorkDeskProjectFolder(project: project, isTargeted: highlighted)
+                .frame(width: WorkDeskCanvasGeometry.projectBodySize.width,
+                       height: WorkDeskCanvasGeometry.projectBodySize.height)
                 .scaleEffect(transform.scale)
                 .frame(width: frame.width, height: frame.height)
         }
         .choiceCardButton(cornerRadius: 13 * transform.scale)
         .frame(width: frame.width, height: frame.height)
         .accessibilityLabel(Text(verbatim: project.record.title))
-        .accessibilityHint(Text(isOverview
-            ? LocalizedStringResource("workdesk.canvas.focusMaterial", defaultValue: "Zoom in to this material")
-            : LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project")))
+        .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project")))
         .overlay {
             RoundedRectangle(cornerRadius: 13 * transform.scale)
                 .strokeBorder(highlighted || lifted ? AppColors.brandAmber : .clear, lineWidth: 2)
@@ -248,6 +281,9 @@ struct WorkDeskCanvas<CardContent: View>: View {
                 radius: lifted ? 19 : 8 * transform.scale, y: lifted ? 11 : 4 * transform.scale)
         .animation(motion, value: lifted)
         .animation(motion, value: highlighted)
+        .onHover { active in updateProjectPreview(project.id, isHovered: active) }
+        .modifier(WorkDeskCanvasProjectNativeDrop(projectID: project.id,
+            organization: organization, isEnabled: isActive, onMoved: onNativeTransfer))
         .workDeskObjectDrag(
             coordinateSpace: coordinateSpace, isEnabled: isActive && !nativeNavigation,
             cancellationGeneration: cancellationGeneration,
@@ -260,24 +296,19 @@ struct WorkDeskCanvas<CardContent: View>: View {
         .position(x: frame.midX, y: frame.midY)
         .zIndex(session.layer(for: id) + (lifted ? WorkDeskCanvasGeometry.liftedLayer : 0))
         .transition(reduceMotion ? .opacity : .scale(scale: 0.86).combined(with: .opacity))
-        .accessibilityIdentifier("workdesk-project-\(project.id.uuidString)")
-    }
-
-    private func projectFace(_ project: WorkDeskCanvasProject) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Image(systemName: "folder.fill").font(.system(size: 23))
-                .foregroundStyle(AppColors.brandAmber)
-            Spacer(minLength: 0)
-            Text(verbatim: project.record.title).font(.system(size: 19, weight: .semibold))
-                .foregroundStyle(AppColors.textPrimary).lineLimit(2).multilineTextAlignment(.leading)
-            Text(WorkDeskCopy.materialCount(project.materialCount))
-                .font(.caption.monospacedDigit()).foregroundStyle(AppColors.textTertiary)
+        .contextMenu {
+            if let onEditProject {
+                Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
+                    onEditProject(project.record)
+                }
+            }
+            if let onDeleteProject {
+                Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {
+                    onDeleteProject(project.id)
+                }
+            }
         }
-        .padding(20)
-        .frame(width: WorkDeskCanvasGeometry.projectBodySize.width, height: WorkDeskCanvasGeometry.projectBodySize.height, alignment: .leading)
-        .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 13))
-        .overlay { RoundedRectangle(cornerRadius: 13).strokeBorder(AppColors.brandAmber.opacity(0.35), lineWidth: 1) }
-        .contentShape(Rectangle())
+        .accessibilityIdentifier("workdesk-project-\(project.id.uuidString)")
     }
 
     private func backgroundTapped(_ location: CGPoint) {
@@ -291,6 +322,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
         guard let id = WorkDeskCanvasGeometry.overviewTarget(at: location, candidates: candidates) else { return }
         activate(id)
         if isSelecting, case .material(let materialID) = id { onSelect(materialID) }
+        else if case .project(let projectID) = id { onOpenProject(projectID) }
         else { focus(id) }
     }
 
@@ -326,9 +358,43 @@ struct WorkDeskCanvas<CardContent: View>: View {
             return LocalizedStringResource("workdesk.canvas.holdToGroup", defaultValue: "Hold here to group")
         }
         if hover.target?.isProject == true {
-            return LocalizedStringResource("workdesk.canvas.releaseToAdd", defaultValue: "Release to add to project")
+            return LocalizedStringResource("workdesk.canvas.releaseToMove", defaultValue: "Release to move into project")
         }
         return LocalizedStringResource("workdesk.canvas.releaseToGroup", defaultValue: "Release to create project")
+    }
+
+    @ViewBuilder private var projectHoverPreview: some View {
+        if projectPreview.isReady, let target = projectPreview.target,
+           let project = projects.first(where: { $0.id == target.id }),
+           drag == nil, !nativeNavigation, transferCoordinator?.isDragging != true {
+            let bounds = WorkDeskCanvasGeometry.projectPreviewFrame(near: screenFrame(for: target),
+                viewport: viewport, itemCount: project.materialCount)
+            WorkDeskProjectHoverPreview(project: project)
+                .frame(width: bounds.width, height: bounds.height, alignment: .top)
+                .position(x: bounds.midX, y: bounds.midY)
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.97).combined(with: .opacity))
+                .allowsHitTesting(false)
+                .accessibilityIdentifier("workdesk-project-hover-preview")
+        }
+    }
+
+    private func updateProjectPreview(_ projectID: UUID, isHovered: Bool) {
+        guard isActive, drag == nil, !nativeNavigation, transferCoordinator?.isDragging != true else {
+            projectPreview.reset(); return
+        }
+        if isHovered { projectPreview.update(.project(projectID)) }
+        else if projectPreview.target == .project(projectID) {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { projectPreview.reset() }
+        }
+    }
+
+    private func showProjectPreviewAfterDwell() async {
+        guard projectPreview.target != nil else { return }
+        let generation = projectPreview.generation
+        do { try await Task.sleep(for: WorkDeskDropHover.dwellDuration) } catch { return }
+        guard !Task.isCancelled, isActive, drag == nil, !nativeNavigation,
+              transferCoordinator?.isDragging != true else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { projectPreview.arm(generation: generation) }
     }
 
     private var viewportControls: some View {
@@ -424,6 +490,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
         seedDefaultPositions(ids)
         if wasEmpty, !ids.isEmpty, session.isInitialized { revealDeskIfOffscreen() }
         if drag != nil { cacheDropCandidates(); updateDropTarget() }
+        registerTransferSurface()
     }
 
     private func seedDefaultPositions(_ ids: [WorkDeskCanvasItemID]) {
@@ -458,7 +525,9 @@ struct WorkDeskCanvas<CardContent: View>: View {
 
     private func updateDrag(id: WorkDeskCanvasItemID, translation: CGSize) {
         guard isActive, !nativeNavigation else { return }
+        if let active = transferCoordinator?.drag, active.sourceSurfaceID != viewportOwner { return }
         if drag == nil {
+            projectPreview.reset()
             dismissCaptureKeyboard()
             lastPanTranslation = .zero
             suppressPanUntilRelease = true
@@ -472,13 +541,14 @@ struct WorkDeskCanvas<CardContent: View>: View {
             drag = WorkDeskCanvasDrag(lead: id, origins: origins, startTransform: transform,
                 memberships: Dictionary(uniqueKeysWithValues: ids.filter { !$0.isProject }.map {
                     ($0.id, placements[$0.id]?.projectID)
-                }))
+                }), expectedLocationTokens: organization?.locationTokens(for: ids.filter { !$0.isProject }.map(\.id)))
             cacheDropCandidates()
             startEdgePanning()
         }
         guard drag?.lead == id else { return }
         drag?.translation = translation
         if let drag { livePositions = drag.positions(transform: transform) }
+        publishTransferDrag()
         updateDropTarget()
     }
 
@@ -495,6 +565,8 @@ struct WorkDeskCanvas<CardContent: View>: View {
 
     private func updateDropTarget() {
         guard let drag, !drag.lead.isProject, let point = livePositions[drag.lead] else { hover.reset(); return }
+        if let transferCoordinator, transferCoordinator.isDragging,
+           !transferCoordinator.isLocal(to: viewportOwner) { hover.reset(); return }
         let frame = WorkDeskCanvasGeometry.frame(at: point, bodySize: bodySize(for: drag.lead), scale: transform.scale)
         hover.update(WorkDeskCanvasGeometry.foregroundTarget(movingFrame: frame, candidates: dropCandidates))
     }
@@ -511,6 +583,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
         guard isActive, !nativeNavigation, drag?.lead == id else { cancelDrag(id: id); return }
         updateDrag(id: id, translation: translation)
         guard let finished = drag else { return }
+        let transferRelease = transferCoordinator?.release(sourceSurfaceID: viewportOwner) ?? .local
         let points = livePositions
         let target = hover.isReady && (hover.target?.isProject == true || onGroup != nil) ? hover.target : nil
         let materialIDs = finished.origins.keys.filter { !$0.isProject }.map(\.id).sorted { $0.uuidString < $1.uuidString }
@@ -519,6 +592,18 @@ struct WorkDeskCanvas<CardContent: View>: View {
         drag = nil
         dragPointer = nil
         hover.reset()
+        switch transferRelease {
+        case .transfer(let request):
+            withAnimation(motion) {
+                commitTransfer(request, origins: finished.origins)
+                livePositions = [:]
+            }
+            return
+        case .cancelled:
+            withAnimation(motion) { livePositions = [:] }
+            return
+        case .local: break
+        }
         if let target, !id.isProject {
             switch target {
             case .material(let value):
@@ -541,6 +626,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
         drag = nil
         dragPointer = nil
         hover.reset()
+        transferCoordinator?.cancel(sourceSurfaceID: viewportOwner)
         withAnimation(motion) { livePositions = [:] }
     }
 
@@ -589,6 +675,37 @@ struct WorkDeskCanvas<CardContent: View>: View {
         }
     }
 
+    private func commitTransfer(_ request: WorkDeskTransferRequest, origins: [WorkDeskCanvasItemID: WorkDeskPoint]) {
+        guard let onTransfer else { return }
+        let token = pending.begin(origins)
+        Task { @MainActor in
+            _ = await onTransfer(request)
+            withAnimation(motion) { _ = pending.finish(token: token) }
+        }
+    }
+
+    private func registerTransferSurface() {
+        guard isActive, let transferCoordinator else { return }
+        let items = visibleIDs.map { id in
+            WorkDeskTransferItemTarget(id: id, title: title(for: id),
+                frame: screenFrame(for: id).offsetBy(dx: globalFrame.minX, dy: globalFrame.minY),
+                layer: session.layer(for: id))
+        }.sorted { $0.id.sortKey < $1.id.sortKey }
+        transferCoordinator.register(WorkDeskTransferSurface(id: viewportOwner, location: transferLocation,
+            title: transferTitle, frame: globalFrame, transform: transform, priority: transferPriority,
+            items: items, exclusions: [controlsFrame.offsetBy(dx: globalFrame.minX, dy: globalFrame.minY)]))
+    }
+
+    private func publishTransferDrag() {
+        guard let transferCoordinator, onTransfer != nil, let drag, !drag.lead.isProject,
+              let pointer = dragPointer, let material = materials.first(where: { $0.id == drag.lead.id }) else { return }
+        transferCoordinator.update(sourceSurfaceID: viewportOwner, source: transferLocation,
+            leadMaterial: material, origins: Dictionary(uniqueKeysWithValues: drag.origins.map { ($0.key.id, $0.value) }),
+            pointer: CGPoint(x: pointer.x + globalFrame.minX, y: pointer.y + globalFrame.minY),
+            leadFrame: screenFrame(for: drag.lead).offsetBy(dx: globalFrame.minX, dy: globalFrame.minY),
+            expected: drag.expectedLocationTokens)
+    }
+
     private func nativeInteractionChanged(_ active: Bool) {
         guard isActive || !active else { return }
         nativeNavigation = active
@@ -601,12 +718,12 @@ struct WorkDeskCanvas<CardContent: View>: View {
     }
 
     private func panViewport(_ delta: CGSize) {
-        guard isActive, drag == nil else { return }
+        guard isActive, drag == nil, transferCoordinator?.isDragging != true else { return }
         withTransaction(Transaction(animation: nil)) { session.transform = WorkDeskCanvasGeometry.panned(transform, by: delta) }
     }
 
     private func zoomViewport(_ factor: CGFloat, _ anchor: CGPoint) {
-        guard isActive, drag == nil, factor.isFinite, factor > 0 else { return }
+        guard isActive, drag == nil, transferCoordinator?.isDragging != true, factor.isFinite, factor > 0 else { return }
         withTransaction(Transaction(animation: nil)) {
             session.transform = WorkDeskCanvasGeometry.zoomed(transform, to: transform.scale * factor, anchor: anchor)
         }
@@ -619,6 +736,9 @@ struct WorkDeskCanvas<CardContent: View>: View {
                 do { try await Task.sleep(for: .milliseconds(16)) } catch { break }
                 guard isActive, let drag, !nativeNavigation else { break }
                 guard let dragPointer else { continue }
+                guard CGRect(origin: .zero, size: viewport).contains(dragPointer) else { continue }
+                if let transferCoordinator, transferCoordinator.isDragging,
+                   !transferCoordinator.isLocal(to: viewportOwner) { continue }
                 let velocity = WorkDeskCanvasGeometry.edgePanVelocity(at: dragPointer, viewport: viewport)
                 guard velocity != .zero else { continue }
                 var next = WorkDeskCanvasGeometry.panned(transform, by: CGSize(width: velocity.width * 0.016, height: velocity.height * 0.016))
@@ -628,6 +748,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
                 withTransaction(Transaction(animation: nil)) {
                     session.transform = next
                     livePositions = drag.positions(transform: next)
+                    publishTransferDrag()
                     updateDropTarget()
                 }
             }
@@ -670,6 +791,8 @@ struct WorkDeskCanvas<CardContent: View>: View {
         dragPointer = nil
         livePositions = [:]
         hover.reset()
+        projectPreview.reset()
+        transferCoordinator?.cancel(sourceSurfaceID: viewportOwner)
         nativeNavigation = false
         lastPanTranslation = .zero
         suppressPanUntilRelease = false
@@ -691,6 +814,20 @@ struct WorkDeskCanvas<CardContent: View>: View {
 /// out of observation avoids rebuilding every card while the pointer moves.
 @MainActor private final class WorkDeskCanvasBackgroundPointer {
     var point: CGPoint?
+}
+
+private struct WorkDeskCanvasProjectNativeDrop: ViewModifier {
+    let projectID: UUID
+    let organization: WorkDeskOrganization?
+    let isEnabled: Bool
+    let onMoved: ([UUID]) -> Void
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let organization {
+            content.workDeskMaterialLocationDrop(location: .project(projectID), isEnabled: isEnabled,
+                organization: organization, onMoved: onMoved)
+        } else { content }
+    }
 }
 
 /// Camera movement changes the surrounding frame, not the preview's inputs.
