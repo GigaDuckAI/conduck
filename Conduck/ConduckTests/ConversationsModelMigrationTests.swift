@@ -1736,7 +1736,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
     /// The app must open the newest schema. A stale version pointer would
     /// omit the home coordinates its Work layout reads and writes, while the
     /// older models below remain available for inferred migration.
-    func testTheCurrentModelVersionIsV21() throws {
+    func testTheCurrentModelVersionIsV22() throws {
         let bundles = [Bundle.main, Bundle(for: Self.self)]
         let momd = try XCTUnwrap(
             bundles.compactMap { $0.url(forResource: "Conversations", withExtension: "momd") }.first,
@@ -1744,7 +1744,7 @@ final class ConversationsModelMigrationTests: XCTestCase {
         let plist = try XCTUnwrap(
             NSDictionary(contentsOf: momd.appendingPathComponent("VersionInfo.plist")),
             "a compiled momd always carries VersionInfo.plist")
-        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 21")
+        XCTAssertEqual(plist["NSManagedObjectModel_CurrentVersionName"] as? String, "Conversations 22")
     }
 
     /// THE SOURCE MODEL MUST STAY IN THE BUNDLE. Lightweight migration infers a

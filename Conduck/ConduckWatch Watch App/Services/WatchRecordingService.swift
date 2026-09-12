@@ -2439,6 +2439,7 @@ final class WatchRecordingService {
             // resolve that ref's gateway config (per-ref url/token/cert/model).
             // Decision B — an unconfigured / deleted bound ref surfaces the
             // not-configured error; NEVER silently reroute to the default.
+            await ProSubscriptionStore.shared.awaitInitialAccess()
             let (conversationID, ref, stampsQuickPointer) = try await resolveActiveConversationAndBackend(
                 consumeAskHint: consumeAskHint,
                 mintingInto: backendRef
@@ -2573,6 +2574,7 @@ final class WatchRecordingService {
             clearInFlight()
             let message = (error as? AppError)?.errorDescription
                 ?? (error as? WatchGatewayRefusal)?.message
+                ?? (error as? WorkProjectAccessError)?.errorDescription
                 ?? String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
             state = .error(message: message)
         }

@@ -26,6 +26,78 @@ final class WorkDeskMigrationTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testV22AddsOnlyOptionalArchiveDateAndEveryShippedModelCanUpgrade() throws {
+        let before = try model(version: 21), after = try model(version: 22)
+        XCTAssertEqual(Set(before.entitiesByName.keys), Set(after.entitiesByName.keys))
+        for (name, entity) in before.entitiesByName where name != "WorkDeskProject" {
+            XCTAssertEqual(after.entitiesByName[name]?.versionHash, entity.versionHash)
+        }
+        let project = try XCTUnwrap(after.entitiesByName["WorkDeskProject"])
+        let oldProject = try XCTUnwrap(before.entitiesByName["WorkDeskProject"])
+        XCTAssertEqual(Set(project.attributesByName.keys).subtracting(oldProject.attributesByName.keys), ["archivedAt"])
+        let attribute = try XCTUnwrap(project.attributesByName["archivedAt"])
+        XCTAssertTrue(attribute.isOptional)
+        XCTAssertNil(attribute.defaultValue)
+        XCTAssertEqual(attribute.attributeType, .dateAttributeType)
+        for version in 1...21 {
+            XCTAssertNoThrow(try NSMappingModel.inferredMappingModel(forSourceModel: model(version: version), destinationModel: after))
+        }
+    }
+
+    func testV21OverLimitProjectsMigrateRemainEditableAndArchiveReopens() async throws {
+        let ids = (0..<(Constants.maxActiveWorkProjects + 1)).map { _ in UUID() }
+        let materialID = UUID(), conversationID = UUID()
+        let old = try await container(version: 21)
+        let context = old.newBackgroundContext()
+        try await context.perform {
+            for (index, id) in ids.enumerated() {
+                let row = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
+                row.setValue(id, forKey: "id")
+                row.setValue("Existing \(index)", forKey: "title")
+                row.setValue("Preserved brief", forKey: "brief")
+                row.setValue(Date(), forKey: "updatedAt")
+            }
+            let material = NSEntityDescription.insertNewObject(forEntityName: "WorkMaterial", into: context)
+            material.setValue(materialID, forKey: "id")
+            material.setValue(Constants.workboardDeskItemID, forKey: "workItemID")
+            material.setValue("note", forKey: "kind")
+            material.setValue("Preserved words", forKey: "textContent")
+            let placement = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskPlacement", into: context)
+            placement.setValue(materialID, forKey: "materialID")
+            placement.setValue(ids[0], forKey: "projectID")
+            let conversation = NSEntityDescription.insertNewObject(forEntityName: "Conversation", into: context)
+            conversation.setValue(conversationID, forKey: "id")
+            conversation.setValue(ids[0], forKey: "projectID")
+            conversation.setValue("openrouter", forKey: "backend")
+            try context.save()
+        }
+        try unload(old)
+        let store = isolated.make(storeURL: coreURL)
+        let migrated = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(Set(migrated.projects.map(\.id)), Set(ids))
+        XCTAssertTrue(migrated.projects.allSatisfy { !$0.isArchived }, "Old rows remain active without truncation")
+        XCTAssertEqual(migrated.placements[materialID]?.projectID, ids[0])
+        let changed = try await store.applyWorkDeskMutation(.updateProject(id: ids[0], title: "Still editable",
+            brief: "Preserved brief", preferredGatewayRef: nil))
+        XCTAssertEqual(changed.projects.first { $0.id == ids[0] }?.title, "Still editable")
+        do {
+            try await store.applyWorkDeskMutation(.createProject(.init(title: "Extra"), materialIDs: []))
+            XCTFail("An old or imported over-limit collection cannot claim another slot")
+        } catch { XCTAssertEqual(error as? WorkDeskStoreError, .activeProjectLimitReached) }
+        try await store.applyWorkDeskMutation(.archiveProject(id: ids[0], isArchived: true))
+        try await store._unloadForTesting()
+        let reopened = isolated.make(storeURL: coreURL)
+        let preserved = try await reopened.fetchWorkDeskOrganization()
+        XCTAssertEqual(preserved.projects.count, ids.count)
+        XCTAssertEqual(preserved.projects.first { $0.id == ids[0] }?.isArchived, true)
+        XCTAssertEqual(preserved.placements, changed.placements)
+        let material = try await reopened.fetchWorkMaterial(id: materialID)
+        let history = try await reopened.fetchProjectConversations(projectID: ids[0])
+        XCTAssertEqual(material?.textContent, "Preserved words")
+        XCTAssertEqual(history.map(\.id), [conversationID])
+        try await reopened._unloadForTesting()
+    }
+
     func testV18AddsOnlyOptionalRelationshipFreeCoreMetadataEntities() throws {
         let before = try model(version: 17)
         let after = try model(version: 18)

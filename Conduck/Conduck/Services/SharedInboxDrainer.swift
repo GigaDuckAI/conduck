@@ -322,6 +322,7 @@ private struct LiveConverseDispatcher: ShareConverseDispatching {
         do {
             reply = try await RemoteAgentClient.shared.send(
                 backend: backend,
+                ref: ref,
                 url: url,
                 token: token,
                 authScheme: authScheme,

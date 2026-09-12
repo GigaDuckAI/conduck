@@ -64,8 +64,8 @@ final class RemoteAgentClientTests: XCTestCase {
             .init(role: "assistant", content: "first answer"),
         ]
 
-        let reply = try await RemoteAgentClient.shared.send(
-            backend: .openclaw,
+        let reply = try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+            backend: .openclaw, ref: .builtin(.openclaw),
             url: baseURL,
             token: token,
             priorTurns: prior,
@@ -121,8 +121,8 @@ final class RemoteAgentClientTests: XCTestCase {
             return (response, Data(payload.utf8))
         }
 
-        let reply = try await RemoteAgentClient.shared.send(
-            backend: .hermes,
+        let reply = try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+            backend: .hermes, ref: .builtin(.hermes),
             url: baseURL,
             token: token,
             priorTurns: [],
@@ -165,8 +165,8 @@ final class RemoteAgentClientTests: XCTestCase {
             .init(role: i.isMultiple(of: 2) ? "user" : "assistant", content: "turn \(i)")
         }
 
-        _ = try await RemoteAgentClient.shared.send(
-            backend: .openclaw,
+        _ = try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+            backend: .openclaw, ref: .builtin(.openclaw),
             url: baseURL,
             token: token,
             priorTurns: prior,
@@ -198,8 +198,8 @@ final class RemoteAgentClientTests: XCTestCase {
         }
 
         await assertThrowsAppError(.remoteAgentAuthFailed) {
-            try await RemoteAgentClient.shared.send(
-                backend: .openclaw, url: self.baseURL, token: self.token,
+            try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw), url: self.baseURL, token: self.token,
                 newUserText: "hi", fileServerReady: false,
                 transport: .unevaluated(session: self.session)
             )
@@ -213,8 +213,8 @@ final class RemoteAgentClientTests: XCTestCase {
         }
 
         await assertThrowsAppError(.remoteAgentServerError) {
-            try await RemoteAgentClient.shared.send(
-                backend: .openclaw, url: self.baseURL, token: self.token,
+            try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw), url: self.baseURL, token: self.token,
                 newUserText: "hi", fileServerReady: false,
                 transport: .unevaluated(session: self.session)
             )
@@ -229,8 +229,8 @@ final class RemoteAgentClientTests: XCTestCase {
         }
 
         await assertThrowsAppError(.remoteAgentInvalidResponse) {
-            try await RemoteAgentClient.shared.send(
-                backend: .openclaw, url: self.baseURL, token: self.token,
+            try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw), url: self.baseURL, token: self.token,
                 newUserText: "hi", fileServerReady: false,
                 transport: .unevaluated(session: self.session)
             )
@@ -254,8 +254,8 @@ final class RemoteAgentClientTests: XCTestCase {
         }
 
         do {
-            _ = try await RemoteAgentClient.shared.send(
-                backend: .openclaw, url: baseURL, token: token,
+            _ = try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw), url: baseURL, token: token,
                 newUserText: "hi", fileServerReady: false,
                 transport: .unevaluated(session: session)
             )
@@ -285,8 +285,8 @@ final class RemoteAgentClientTests: XCTestCase {
         // task checks `Task.isCancelled` inside its URLError catch, so a task
         // cancelled up front is exactly the shape a Stop tap produces.
         let task = Task {
-            try await RemoteAgentClient.shared.send(
-                backend: .openclaw, url: self.baseURL, token: self.token,
+            try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw), url: self.baseURL, token: self.token,
                 newUserText: "hi", fileServerReady: false,
                 transport: .unevaluated(session: self.session)
             )
@@ -619,8 +619,8 @@ final class RemoteAgentClientTests: XCTestCase {
         // `testGenericTLSFailureOnAPinnedSessionWithoutRejectionStaysRetryable`.
         MockURLProtocol.requestHandler = { _ in throw URLError(.secureConnectionFailed) }
         await assertThrowsAppError(.remoteAgentUnreachable) {
-            try await RemoteAgentClient.shared.send(
-                backend: .openclaw, url: self.baseURL, token: self.token,
+            try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw), url: self.baseURL, token: self.token,
                 newUserText: "hi", fileServerReady: false,
                 transport: .unevaluated(session: self.session)
             )
@@ -634,8 +634,8 @@ final class RemoteAgentClientTests: XCTestCase {
         // server-side remedy — never "update the pinned fingerprint".
         MockURLProtocol.requestHandler = { _ in throw URLError(.serverCertificateUntrusted) }
         await assertThrowsAppError(.remoteAgentCertUntrusted) {
-            try await RemoteAgentClient.shared.send(
-                backend: .openclaw, url: self.baseURL, token: self.token,
+            try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw), url: self.baseURL, token: self.token,
                 newUserText: "hi", fileServerReady: false,
                 transport: .unevaluated(session: self.session)
             )

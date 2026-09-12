@@ -93,6 +93,8 @@ actor SettingsManager {
 
     /// App Groups UserDefaults — shared between main app, Widget, and Watch
     /// targets so any reader sees the latest values without a round-trip.
+    private let proAccess: @Sendable () -> ProAccessSnapshot
+
     private let defaults: any DefaultsStore
 
     /// iCloud Key-Value Store for cross-device sync.
@@ -181,7 +183,9 @@ actor SettingsManager {
     ///   the KVS change feed. Production passes `.processDefault`; a test builds
     ///   an isolated `.inMemory()` bundle so nothing it writes can reach the
     ///   real App Group, iCloud KVS, or Keychain.
-    init(dependencies: SettingsDependencies = .processDefault) {
+    init(dependencies: SettingsDependencies = .processDefault,
+         proAccess: @escaping @Sendable () -> ProAccessSnapshot = { ProAccess.current }) {
+        self.proAccess = proAccess
         self.defaults = dependencies.defaults
         self.iCloudStore = dependencies.ubiquitous
         self.secrets = dependencies.secrets
@@ -4019,6 +4023,17 @@ actor SettingsManager {
         // treated as a live default.
         if let ref = stored, configured.contains(ref) { return .usable(ref) }
 
+        // A plan-inactive definition is still a saved gateway, including while
+        // StoreKit is verifying a cold launch. The availability filter must not
+        // make an otherwise healthy default look forgotten and permanently adopt
+        // OpenRouter (the exempt survivor), or clear its active conversation.
+        let activation = gatewayActivationState()
+        let hasInactiveSavedGateways = activation.savedRefs != activation.activeRefs
+        if let ref = stored, activation.savedRefs.contains(ref), !activation.permits(ref) {
+            return .defaultUnavailable(pointer: ref, candidates: configured,
+                                       pointerIsParked: pointerIsParked)
+        }
+
         if configured.isEmpty {
             return zeroConfiguredVerdict(
                 pointer: stored ?? .builtin(Constants.remoteAgentDefaultBackendDefault)
@@ -4036,7 +4051,8 @@ actor SettingsManager {
                hasStoredRemoteAgentEvidence(broken) {
                 return .readingUnreliable(pointer: broken)
             }
-            if configured.count == 1, let only = configured.first, keychainReadable,
+            if !hasInactiveSavedGateways,
+               configured.count == 1, let only = configured.first, keychainReadable,
                !hasPendingBearerCandidate(excluding: only) {
                 if repairing { adoptDefault(only, replacing: broken) }
                 return .adopted(ref: only, replacing: broken)
@@ -4050,7 +4066,8 @@ actor SettingsManager {
         // is handed back to the user: a pointer the device invented is
         // indistinguishable from one the user chose, and only the user can tell
         // them apart. PERSIST NOTHING on the `.selectionRequired` arm.
-        if configured.count == 1, let only = configured.first, keychainReadable,
+        if !hasInactiveSavedGateways,
+           configured.count == 1, let only = configured.first, keychainReadable,
            !hasPendingBearerCandidate(excluding: only) {
             if repairing {
                 defaults.set(only.rawString, forKey: Constants.remoteAgentDefaultBackendKVSKey)
@@ -4731,6 +4748,138 @@ actor SettingsManager {
         customGateways().count
     }
 
+    /// Live admission check. Reading never truncates or disables a roster that
+    /// came from an older build or concurrent iCloud edits. Only a new saved
+    /// definition consumes capacity; existing definitions can always be repaired.
+    func canConfigureRemoteAgent(_ ref: RemoteAgentRef) -> Bool {
+        if ref == .builtin(.openrouter) || proAccess().hasProAccess { return true }
+        let state = gatewayActivationState()
+        return state.savedRefs.contains(ref)
+            || (!state.requiresSelection && state.activeRefs.count < Constants.maxConfiguredGateways)
+    }
+
+    func gatewayFreeSelection() -> GatewayFreeSelection? {
+        let data = defaults.data(forKey: GatewayFreeSelection.storageKey)
+            ?? iCloudStore.data(forKey: GatewayFreeSelection.storageKey)
+        return data.flatMap { try? JSONDecoder().decode(GatewayFreeSelection.self, from: $0) }
+    }
+
+    func gatewayActivationState() -> GatewayActivationState {
+        GatewayActivationState.resolve(savedRefs: remoteAgentInventory().allowanceRefs,
+            selection: gatewayFreeSelection(), access: proAccess())
+    }
+
+    func isRemoteAgentActive(_ ref: RemoteAgentRef) -> Bool {
+        let access = proAccess()
+        if ref == .builtin(.openrouter) || access.hasProAccess { return true }
+        let state = gatewayActivationState()
+        // This answers plan access only; snapshot/auth validation separately
+        // rejects an unknown or unconfigured destination.
+        return state.savedRefs.count <= Constants.maxConfiguredGateways || state.permits(ref)
+    }
+
+    /// Selection never erases configurations, changes the default or reroutes an
+    /// existing conversation. Its bound ref is checked again before dispatch.
+    @discardableResult
+    func chooseActiveRemoteAgents(_ refs: Set<RemoteAgentRef>) -> Bool {
+        let saved = remoteAgentInventory().allowanceRefs
+        guard refs.count <= Constants.maxConfiguredGateways, refs.isSubset(of: saved) else { return false }
+        persistGatewayFreeSelection(GatewayFreeSelection(selectedRefs: Set(refs.map(\.rawString)),
+            reviewedRefs: Set(saved.map(\.rawString))))
+        return true
+    }
+
+    private func persistGatewayFreeSelection(_ selection: GatewayFreeSelection) {
+        guard let data = try? JSONEncoder().encode(selection) else { return }
+        defaults.set(data, forKey: GatewayFreeSelection.storageKey)
+        iCloudStore.set(data, forKey: GatewayFreeSelection.storageKey)
+        postSettingsDidChangeRemotely()
+    }
+
+    enum GatewayConfigurationCommitResult: Sendable, Equatable {
+        case committed(urlChanged: Bool)
+        case limitReached
+        case invalidConfiguration
+        case missingToken
+        case credentialWriteFailed
+    }
+
+    /// The manual editor and pairing importer commit through this single actor
+    /// turn. Capacity is checked before any write, including the Keychain; no
+    /// suspension can let another window claim the last slot between that check
+    /// and persistence. A credential write is the only fallible mutation and
+    /// happens first, so its failure leaves the previous definition intact.
+    /// Low-level setters remain uncapped for migration, sync and restoration.
+    func commitRemoteAgentConfiguration(
+        ref: RemoteAgentRef,
+        url: URL,
+        authScheme: RemoteAgentAuthScheme,
+        token: String?,
+        fingerprint: String?,
+        model: String?,
+        customGateway: CustomGateway?
+    ) -> GatewayConfigurationCommitResult {
+        guard canConfigureRemoteAgent(ref) else { return .limitReached }
+        let activationBefore = gatewayActivationState()
+        let isNew = ref != .builtin(.openrouter) && !activationBefore.savedRefs.contains(ref)
+        guard EndpointURLPolicy.isAdmissible(url),
+              !(fingerprint != nil && EndpointURLPolicy.pinCannotApply(to: url)) else {
+            return .invalidConfiguration
+        }
+        var roster = persistedCustomGateways()
+        if case .custom(let id) = ref {
+            guard let customGateway, customGateway.id == id else { return .invalidConfiguration }
+            if let index = roster.firstIndex(where: { $0.id == id }) {
+                roster[index] = customGateway
+            } else {
+                roster.append(customGateway)
+            }
+        }
+        let effectiveToken = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if authScheme.requiresToken {
+            if let effectiveToken, !effectiveToken.isEmpty {
+                do { try setRemoteAgentToken(effectiveToken, for: ref) }
+                catch { return .credentialWriteFailed }
+            } else if getRemoteAgentToken(for: ref)?.isEmpty != false {
+                return .missingToken
+            }
+        }
+        let urlChanged = getRemoteAgentURL(for: ref) != url
+        if case .custom = ref {
+            persistCustomGateways(roster)
+            pruneRetiredBadges(liveIDs: Set(roster.map(\.id)))
+        }
+        setRemoteAgentURL(url, for: ref)
+        setRemoteAgentAuthScheme(authScheme, for: ref)
+        if authScheme == .none { try? clearRemoteAgentToken(for: ref) }
+        setRemoteAgentCertFingerprint(fingerprint, for: ref)
+        if case .builtin(let backend) = ref,
+           RemoteAgentBackendRegistry.lookup(id: backend).showsModelField {
+            setRemoteAgentModel(model, for: ref)
+        }
+        let access = proAccess()
+        if isNew, !access.hasProAccess {
+            let saved = activationBefore.savedRefs.union([ref])
+            persistGatewayFreeSelection(GatewayFreeSelection(
+                selectedRefs: Set(activationBefore.activeRefs.union([ref]).map(\.rawString)),
+                reviewedRefs: Set(saved.map(\.rawString))))
+        }
+        return .committed(urlChanged: urlChanged)
+    }
+
+    /// Change decoration only if the row still exists. A check in the view model
+    /// followed by a separate upsert could resurrect a gateway forgotten between
+    /// those actor hops, or overwrite a concurrently edited name/model.
+    @discardableResult
+    func updateExistingCustomGatewayBadge(id: UUID, colorID: String?, monogram: String?) -> Bool {
+        var list = persistedCustomGateways()
+        guard let index = list.firstIndex(where: { $0.id == id }) else { return false }
+        list[index].colorID = colorID
+        list[index].monogram = monogram
+        persistCustomGateways(list)
+        return true
+    }
+
     /// Add or update a custom gateway's ROSTER fields (name / model / badge).
     /// URL / token / cert are persisted separately via the per-ref setters at
     /// the call site. ADD is capped at `Constants.maxCustomGateways` — returns
@@ -5142,14 +5291,11 @@ actor SettingsManager {
     /// order. `isRemoteAgentSendable` is the predicate — a resolvable URL, plus a
     /// required model, plus a readable token unless the ref is explicitly keyless.
     ///
-    /// Deliberately NOT a projection of `remoteAgentInventory()`: this is a warm
-    /// path (window appear, conversation open, menu-bar arm, CarPlay, share-target
-    /// snapshot) and only needs send-ability, whose reads short-circuit before the
-    /// Keychain for an untouched gateway. The inventory additionally classifies
-    /// evidence and removability, which can cost a `SecItem` query per ref — right
-    /// for Diagnostics and the Settings load, wasteful here. The two share
-    /// `isRemoteAgentSendable`, so they cannot disagree about what counts as
-    /// configured (locked by `testCheapConfiguredQueryMatchesTheInventory`).
+    /// This is a warm path (window appear, conversation open, menu-bar arm,
+    /// CarPlay and share-target snapshots). Send readiness short-circuits before
+    /// the Keychain for an untouched gateway. Free access additionally needs one
+    /// inventory pass so temporarily unreadable saved definitions still occupy
+    /// their slot; verified Pro skips that pass. Never perform it per candidate.
     func configuredRemoteAgentRefs() -> [RemoteAgentRef] {
         #if DEBUG
         if QAMode.isActive, !QAMode.gatewayOverrides.isEmpty || QAMode.customGatewayOverride != nil {
@@ -5164,10 +5310,14 @@ actor SettingsManager {
         #endif
         ensureKeychainMigrated()
         ensureRemoteAgentMigrated()
+        // One plan snapshot for the entire projection. Re-resolving it for each
+        // ref would scan every saved definition and its Keychain token N times
+        // after a Pro user returns to the free plan with a large retained roster.
+        let activation = proAccess().hasProAccess ? nil : gatewayActivationState()
         var refs = RemoteAgentBackend.allCases
             .map(RemoteAgentRef.builtin)
-            .filter { isRemoteAgentSendable($0) }
-        for gateway in customGateways() where isRemoteAgentSendable(.custom(gateway.id)) {
+            .filter { isRemoteAgentSendable($0) && (activation?.permits($0) ?? true) }
+        for gateway in customGateways() where isRemoteAgentSendable(.custom(gateway.id)) && (activation?.permits(.custom(gateway.id)) ?? true) {
             refs.append(.custom(gateway.id))
         }
         return refs
@@ -5292,6 +5442,13 @@ actor SettingsManager {
     /// active-conversation/session pointer is NOT per-backend; the bound backend
     /// is recovered from the resolved `Conversation.backend`.
     func remoteAgentSnapshot(for ref: RemoteAgentRef) -> RemoteAgentSnapshot? {
+        guard isRemoteAgentActive(ref) else { return nil }
+        return remoteAgentConfigurationSnapshot(for: ref)
+    }
+
+    /// Administrative configuration access, including inactive saved gateways.
+    /// Sending always uses the access-checked snapshot above.
+    func remoteAgentConfigurationSnapshot(for ref: RemoteAgentRef) -> RemoteAgentSnapshot? {
         #if DEBUG
         if QAMode.isActive, case .builtin(let backend) = ref, let override = QAMode.gatewayOverrides[backend] {
             return RemoteAgentSnapshot(
@@ -5708,7 +5865,8 @@ actor SettingsManager {
     /// each sub-envelope carries the same value, keeping it consistent with the
     /// single-envelope builder (which reads the same global slot).
     func currentRemoteAgentMultiEnvelope() -> RemoteAgentMultiBroadcastEnvelope? {
-        let configured = configuredRemoteAgentRefs()
+        let inventory = remoteAgentInventory()
+        let configured = inventory.configuredRefs
         guard !configured.isEmpty else {
             // Nothing is configured. That alone says NOTHING about whether the
             // user deleted anything — it is equally the reading on a restored /
@@ -5755,7 +5913,7 @@ actor SettingsManager {
         // a ref from a different verdict.
         let watchDefault = watchEffectiveDefault()
         let subEnvelopes: [RemoteAgentBroadcastEnvelope] = configured.compactMap { ref in
-            guard let snapshot = remoteAgentSnapshot(for: ref) else {
+            guard let snapshot = remoteAgentConfigurationSnapshot(for: ref) else {
                 return nil
             }
             // Built-ins pass nil for all four custom display fields; a custom
@@ -5836,7 +5994,10 @@ actor SettingsManager {
             // Sent only as `false`, and only when the iPhone has no chosen
             // default at all — without it the wrist reads the compatibility
             // fallback as a choice and sends there.
-            defaultBackendChosen: watchDefault.chosen ? nil : false
+            defaultBackendChosen: watchDefault.chosen ? nil : false,
+            knownGatewayRefs: Array(inventory.allowanceRefs.map(\.rawString)).sorted(),
+            freeGatewaySelection: gatewayFreeSelection(),
+            requiresFreeGatewaySelection: !proAccess().hasProAccess && proAccess().hasExpiredSubscription
         )
     }
 
@@ -7034,6 +7195,13 @@ actor SettingsManager {
             } else {
                 defaults.removeObject(forKey: Constants.appleOnDeviceEngineModeKVSKey)
             }
+            didChange = true
+        }
+
+        if changedKeys.contains(GatewayFreeSelection.storageKey) {
+            if let data = iCloudStore.data(forKey: GatewayFreeSelection.storageKey) {
+                defaults.set(data, forKey: GatewayFreeSelection.storageKey)
+            } else { defaults.removeObject(forKey: GatewayFreeSelection.storageKey) }
             didChange = true
         }
 

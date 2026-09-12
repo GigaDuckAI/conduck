@@ -24,16 +24,16 @@ final class IsolatedWorkStores {
     private var stores: [ConversationStore] = []
 
     /// An in-memory store whose vault this fixture will remove.
-    func make() -> ConversationStore {
-        let store = ConversationStore(inMemory: true)
+    func make(proAccessProvider: @escaping @Sendable () -> ProAccessSnapshot = { .init() }) -> ConversationStore {
+        let store = ConversationStore(inMemory: true, proAccessProvider: proAccessProvider)
         stores.append(store)
         return store
     }
 
     /// An on-disk store at `url` — the two-store topology cases need real
     /// sqlite files — whose vault this fixture will remove just the same.
-    func make(storeURL: URL) -> ConversationStore {
-        let store = ConversationStore(storeURL: storeURL)
+    func make(storeURL: URL, proAccessProvider: @escaping @Sendable () -> ProAccessSnapshot = { .init() }) -> ConversationStore {
+        let store = ConversationStore(storeURL: storeURL, proAccessProvider: proAccessProvider)
         stores.append(store)
         return store
     }

@@ -342,6 +342,8 @@ struct MacSettingsView: View {
 
             Divider().overlay(AppColors.border)
 
+            ProSettingsEntry().padding(.horizontal, 12).padding(.vertical, 10)
+            Divider().overlay(AppColors.border)
             HStack {
                 Spacer()
                 Button {

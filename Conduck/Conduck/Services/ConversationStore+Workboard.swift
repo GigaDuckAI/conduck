@@ -978,6 +978,9 @@ extension ConversationStore {
         resultSource: WorkDeskResultRecord? = nil,
         onProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> WorkMaterialRecord {
+        if projectID != nil, resultSource == nil, usesSharedProAccess {
+            await ProSubscriptionStore.shared.awaitInitialAccess()
+        }
         try await publishWorkMaterial(
             draft,
             sourceFileURL: sourceFileURL,
@@ -1631,7 +1634,8 @@ extension ConversationStore {
                 // material; a missing project follows the existing staged-byte
                 // rollback and gives the caller an explicit recovery outcome.
                 if let projectID {
-                    try Self.placeNewDeskCapture(draft.id, projectID: projectID, in: context)
+                    try Self.placeNewDeskCapture(draft.id, projectID: projectID,
+                        isVerifiedProjectResult: newResultSource != nil, access: self.proAccessProvider(), in: context)
                 }
                 if staged.storageMode == .syncedPayload, let contentHash = staged.contentHash {
                     // An earlier interrupted attempt at this same capture can

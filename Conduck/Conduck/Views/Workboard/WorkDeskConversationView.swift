@@ -90,6 +90,8 @@ struct WorkDeskConversationView: View {
     let viewModel: ConversationDetailViewModel
     @Bindable var session: WorkDeskConversationSession
     let settingsVM: SettingsViewModel
+    var allowsNewTurns = true
+    var newActivityMessage: String? = nil
     /// The host can forward this to its window visibility registry. The ID is
     /// always supplied, including on hide, to permit a conditional clear.
     var onVisibilityChanged: (UUID, Bool) -> Void = { _, _ in }
@@ -105,7 +107,7 @@ struct WorkDeskConversationView: View {
     }
     #if os(macOS)
     private var canAcceptDrop: Bool {
-        isActive && ref != nil && viewModel.boundGatewayAvailable
+        isActive && allowsNewTurns && ref != nil && viewModel.boundGatewayAvailable
             && !viewModel.isAwaitingReply && !viewModel.showsGatewayWaitIndicator
             && session.drops.canAccept
     }
@@ -117,6 +119,10 @@ struct WorkDeskConversationView: View {
             .background(AppColors.background)
             .onAppear { updatePresentation() }
             .onChange(of: destinationIsActive) { _, _ in updatePresentation() }
+            .onChange(of: allowsNewTurns) { _, allowed in
+                if allowed { updatePresentation() }
+                else { session.suspend(ifCurrent: presentationID) }
+            }
             .onChange(of: appearsActive) { _, _ in reportVisibility() }
             .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
                 // The VM's general settings observer refreshes file lanes. A
@@ -139,18 +145,27 @@ struct WorkDeskConversationView: View {
             viewModel: viewModel,
             settingsVM: settingsVM,
             contentMaxWidth: Constants.Layout.chatContentWidth,
-            emptyMascot: session.emptyMascot
+            emptyMascot: session.emptyMascot,
+            allowsNewAttempts: allowsNewTurns
         )
         .id(conversation.id)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                if let option = session.voiceRecovery {
+                if allowsNewTurns, let option = session.voiceRecovery {
                     VoiceRecoveryButton(option: option) { applyVoiceRecovery(option) }
                         .padding(.horizontal, 16)
                         .padding(.top, 8)
                 }
-                if let ref {
+                if !allowsNewTurns {
+                    if let newActivityMessage {
+                        Text(verbatim: newActivityMessage)
+                            .font(.callout)
+                            .foregroundStyle(AppColors.textSecondary)
+                            .padding(16)
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if let ref {
                     composer(ref: ref)
                         .disabled(!viewModel.boundGatewayAvailable)
                 } else {
@@ -230,7 +245,7 @@ struct WorkDeskConversationView: View {
     }
 
     private func send(_ dispatch: ComposerTurnDispatch, presentation token: UUID?) async -> Bool {
-        guard destinationIsActive,
+        guard destinationIsActive, allowsNewTurns,
               session.accepts(dispatch, conversation: conversation,
                               viewModelID: viewModel.conversationID,
                               presentation: token) else {
@@ -250,7 +265,7 @@ struct WorkDeskConversationView: View {
     }
 
     private func updatePresentation() {
-        if destinationIsActive {
+        if destinationIsActive && allowsNewTurns {
             if !session.isCurrentPresentation(presentationID) {
                 let token = session.resume()
                 presentationID = token

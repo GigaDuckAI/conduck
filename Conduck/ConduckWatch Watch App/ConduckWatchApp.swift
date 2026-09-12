@@ -56,6 +56,7 @@ private class WatchNotificationDelegate: NSObject, UNUserNotificationCenterDeleg
 
 @main
 struct ConduckWatchApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     private let notificationDelegate = WatchNotificationDelegate()
     @State private var hasIdentity: Bool
     @State private var showOnboarding: Bool
@@ -211,6 +212,10 @@ struct ConduckWatchApp: App {
                 } else {
                     WatchSetupView()
                 }
+            }
+            .task { ProSubscriptionStore.shared.start() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { Task { await ProSubscriptionStore.shared.refresh() } }
             }
             .task {
                 // Non-blocking background identity resolution

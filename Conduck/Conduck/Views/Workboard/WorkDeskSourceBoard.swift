@@ -33,7 +33,7 @@ struct WorkDeskSourceBoard: View {
         return workspace.organization.projects.filter { project in
             if !query.isEmpty { return project.title.localizedStandardContains(query) }
             switch workspace.scope {
-            case .all: return renderedLayout == .desk
+            case .all: return renderedLayout == .desk && !project.isArchived
             case .project: return false
             }
         }.map { WorkDeskCanvasProject(record: $0, materialCount: counts[$0.id] ?? 0) }

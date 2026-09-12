@@ -91,8 +91,8 @@
 //  guided branches. Hand-editing a URL/token stays reachable OUTSIDE the guide —
 //  the primer's "Set up manually" (`onPrimerManual`) and the Personal AI list's
 //  gateway rows / "+ Add custom gateway" — so the guide never competes with itself.
-//  The chooser's Custom card is hidden when `customLaneAvailable == false` (the
-//  caller is at the custom-gateway cap).
+//  Full gateway allowance disables new self-hosted/custom setup with a visible
+//  explanation. Existing built-ins remain editable and OpenRouter stays available.
 //
 //  Presentation is the CALLER's job: `.fullScreenCover` on iOS, a FULL-SCREEN
 //  overlay on macOS. This view only builds the content + provides Close/Done
@@ -107,6 +107,7 @@ struct GuidedGatewaySetupView: View {
     /// The LIVE Settings view-model — passed through to every step view so saves
     /// reflect in the Settings screen behind the sheet (never a fresh VM).
     @Bindable var viewModel: SettingsViewModel
+    @State private var planFlow = GatewayPlanFlow()
 
     /// Where to start. `nil`/`.later` opens the primer (when `showPrimer`) or the
     /// chooser; a concrete path jumps straight to that lane's first step (skipping
@@ -130,7 +131,7 @@ struct GuidedGatewaySetupView: View {
     let onPrimerManual: () -> Void
 
     /// Whether the custom lane is offered on the chooser. `false` when the caller
-    /// is at the custom-gateway cap — the chooser then hides the Custom card.
+    /// has filled the configured-gateway allowance. The disabled card explains it.
     let customLaneAvailable: Bool
 
     /// Which screen is showing. The primer (step 0) precedes the chooser for an
@@ -376,6 +377,7 @@ struct GuidedGatewaySetupView: View {
         // `SettingsViewModel.remoteAgentCommitEpoch` (bumped inside
         // `saveRemoteAgent`, so it covers this sheet AND the hosted-model step),
         // not from a callback this view would have to relay.
+        .gatewayPlanSheets(viewModel: viewModel, flow: planFlow)
         .sheet(isPresented: $showingPairingImport, onDismiss: {
             // Advance to success ONLY on a verified connection (`connectedRef`),
             // carrying the ref so the success screen names the gateway + its
@@ -420,12 +422,19 @@ struct GuidedGatewaySetupView: View {
         case .chooser:
             // The "where does your AI live?" fork. Full-agent / custom push that
             // lane's fork step IN this sheet; hosted pushes the hosted step. The
-            // Custom card is hidden when the caller is at the custom-gateway cap
-            // (`customLaneAvailable == false`). Bailing out is the sheet's
+            // Custom card is disabled when the configured allowance is full.
+            // The live snapshot also catches changes since presentation. Bailing out is the sheet's
             // top-trailing Close — the chooser carries no "set up later" link.
             GatewayChooserStepView(
-                onFullAgent: { goTo(.fork(.fullAgent)) },
-                onCustom: customLaneAvailable ? { goTo(.fork(.custom)) } : nil,
+                onFullAgent: {
+                    if viewModel.canConfigureRemoteAgent(.builtin(.openclaw))
+                        || viewModel.canConfigureRemoteAgent(.builtin(.hermes)) { goTo(.fork(.fullAgent)) }
+                    else { planFlow.showingUpgrade = true }
+                },
+                onCustom: {
+                    if viewModel.canAddConfiguredGateway { goTo(.fork(.custom)) }
+                    else { planFlow.showingUpgrade = true }
+                },
                 onHostedModel: { goTo(.hostedModel) }
             )
 

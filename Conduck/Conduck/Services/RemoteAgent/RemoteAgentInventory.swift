@@ -76,6 +76,16 @@ struct RemoteAgentInventory: Sendable, Equatable {
         entries.filter { $0.readiness == .configured }.map(\.ref)
     }
 
+    /// Saved definitions occupying the free allowance, regardless of whether
+    /// their token is readable here. OpenRouter never occupies a gateway slot;
+    /// unsaved drafts never enter this inventory. Incomplete synced definitions
+    /// retain their slot until explicitly forgotten.
+    var allowanceRefs: Set<RemoteAgentRef> {
+        Set(entries.filter {
+            $0.ref != .builtin(.openrouter) && $0.readiness != .untouched
+        }.map(\.ref))
+    }
+
     /// Gateways with setup evidence that cannot send as they stand.
     /// Disjoint from `configuredRefs` by construction — one classification pass
     /// produced both, so no ref can appear in each.
@@ -96,5 +106,46 @@ struct RemoteAgentInventory: Sendable, Equatable {
     /// never enumerated (a custom whose roster entry is gone).
     func readiness(for ref: RemoteAgentRef) -> RemoteAgentReadiness {
         entry(for: ref)?.readiness ?? .untouched
+    }
+}
+
+/// A deliberate free-plan choice. Remembering the reviewed roster prevents a
+/// later Pro expansion from silently reusing an old choice after expiry. This
+/// syncs identifiers only, never purchase status or credentials.
+nonisolated struct GatewayFreeSelection: Codable, Sendable, Equatable {
+    static let storageKey = "remoteAgent.freeGatewaySelection.v1"
+    let selectedRefs: Set<String>
+    let reviewedRefs: Set<String>
+}
+
+nonisolated struct GatewayActivationState: Sendable, Equatable {
+    let savedRefs: Set<RemoteAgentRef>
+    let activeRefs: Set<RemoteAgentRef>
+    let requiresSelection: Bool
+
+    static func resolve(savedRefs: Set<RemoteAgentRef>, selection: GatewayFreeSelection?,
+                        access: ProAccessSnapshot) -> Self {
+        guard !access.hasProAccess,
+              savedRefs.count > Constants.maxConfiguredGateways else {
+            return Self(savedRefs: savedRefs, activeRefs: savedRefs, requiresSelection: false)
+        }
+        let raw = Set(savedRefs.map(\.rawString))
+        guard let selection,
+              selection.selectedRefs.count <= Constants.maxConfiguredGateways,
+              selection.selectedRefs.isSubset(of: selection.reviewedRefs),
+              raw.isSubset(of: selection.reviewedRefs) else {
+            return Self(savedRefs: savedRefs, activeRefs: [], requiresSelection: true)
+        }
+        return Self(savedRefs: savedRefs,
+            activeRefs: Set(savedRefs.filter { selection.selectedRefs.contains($0.rawString) }),
+            requiresSelection: false)
+    }
+
+    static var inactiveMessage: String {
+        String(localized: "gateway.plan.inactive", defaultValue: "This gateway is inactive on your free plan. Choose active gateways in Personal AI settings, or renew Conduck Pro.")
+    }
+
+    func permits(_ ref: RemoteAgentRef) -> Bool {
+        ref == .builtin(.openrouter) || activeRefs.contains(ref)
     }
 }

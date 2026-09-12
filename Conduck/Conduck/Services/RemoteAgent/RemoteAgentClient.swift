@@ -114,7 +114,19 @@ actor RemoteAgentClient {
     // MARK: - Singleton
 
     static let shared = RemoteAgentClient()
-    private init() { }
+    private let isGatewayActive: @Sendable (RemoteAgentRef) async -> Bool
+
+    /// Tests inject an isolated access decision; production always checks the
+    /// selected gateway on the platform's authoritative settings owner.
+    init(isGatewayActive: @escaping @Sendable (RemoteAgentRef) async -> Bool = { ref in
+        #if os(watchOS)
+        return await MainActor.run { WatchSettingsReader.shared.isRemoteAgentActive(ref.rawString) }
+        #else
+        return await SettingsManager.shared.isRemoteAgentActive(ref)
+        #endif
+    }) {
+        self.isGatewayActive = isGatewayActive
+    }
 
     // MARK: - Transport (session + the evaluator that reads its verdict)
 
@@ -202,6 +214,7 @@ actor RemoteAgentClient {
     ///   `CancellationError` for a genuine user cancel.
     func send(
         backend: RemoteAgentBackend,
+        ref: RemoteAgentRef,
         url: URL,
         token: String,
         authScheme: RemoteAgentAuthScheme = .bearer,
@@ -243,6 +256,10 @@ actor RemoteAgentClient {
         outboxKey: String? = nil,
         transport: Transport
     ) async throws -> RemoteAgentReply {
+        await ProSubscriptionStore.shared.awaitInitialAccess()
+        guard await isGatewayActive(ref) else {
+            throw AppError.invalidRequest(message: GatewayActivationState.inactiveMessage)
+        }
         let request = Self.buildRequest(
             url: url,
             token: token,

@@ -15,6 +15,19 @@ import Observation
 @MainActor @Observable
 final class WorkDeskOrganization {
     private(set) var projects: [WorkDeskProjectRecord] = []
+    var activeProjects: [WorkDeskProjectRecord] { projects.filter { !$0.isArchived } }
+    var archivedProjects: [WorkDeskProjectRecord] { projects.filter(\.isArchived) }
+    var hasProAccess: Bool { proAccessProvider().hasProAccess }
+    var hasExpiredSubscription: Bool { proAccessProvider().hasExpiredSubscription }
+    var hasLoadedProAccess: Bool { accessLoadedProvider() }
+    var canPresentFreeProjectSelection: Bool { hasLoadedProAccess && requiresFreeProjectSelection }
+    var canCreateProject: Bool { hasProAccess || activeProjects.count < Constants.maxActiveWorkProjects }
+    var requiresFreeProjectSelection: Bool {
+        let access = proAccessProvider()
+        return !access.hasProAccess && activeProjects.count > Constants.maxActiveWorkProjects
+    }
+    var projectLimitRequested = false
+    var projectSelectionRequested = false
     private(set) var placements: [UUID: WorkDeskPlacementRecord] = [:]
     private(set) var isSaving = false
     var errorMessage: String?
@@ -23,12 +36,31 @@ final class WorkDeskOrganization {
     @ObservationIgnored private let fetch: @Sendable () async throws -> WorkDeskOrganizationSnapshot
     @ObservationIgnored private let apply: @Sendable (WorkDeskMutation) async throws -> WorkDeskOrganizationSnapshot
     @ObservationIgnored private let reviewDeletion: @Sendable (UUID) async throws -> WorkDeskProjectDeletionReview
+    @ObservationIgnored private let proAccessProvider: @MainActor () -> ProAccessSnapshot
+    @ObservationIgnored private let accessLoadedProvider: @MainActor () -> Bool
+    @ObservationIgnored private let awaitAccess: @MainActor () async -> Void
     @ObservationIgnored private var mutationTail: Task<Bool, Never>?
     @ObservationIgnored private var pendingMutationCount = 0
     @ObservationIgnored private var generation: UInt64 = 0
     @ObservationIgnored private var reloadPending = false
 
-    init(store: ConversationStore = .shared) {
+    init(store: ConversationStore = .shared, proAccessProvider: (@MainActor () -> ProAccessSnapshot)? = nil) {
+        if let proAccessProvider {
+            self.proAccessProvider = proAccessProvider
+            accessLoadedProvider = { true }
+            awaitAccess = { }
+        } else if store.usesSharedProAccess {
+            self.proAccessProvider = {
+                .init(hasProAccess: ProSubscriptionStore.shared.hasProAccess,
+                      hasExpiredSubscription: ProSubscriptionStore.shared.hasExpiredSubscription)
+            }
+            accessLoadedProvider = { ProSubscriptionStore.shared.hasLoadedAccess }
+            awaitAccess = { await ProSubscriptionStore.shared.awaitInitialAccess() }
+        } else {
+            self.proAccessProvider = { store.proAccessProvider() }
+            accessLoadedProvider = { true }
+            awaitAccess = { }
+        }
         fetch = { try await store.fetchWorkDeskOrganization() }
         apply = { try await store.applyWorkDeskMutation($0) }
         reviewDeletion = { try await store.reviewWorkDeskProjectDeletion(id: $0) }
@@ -39,8 +71,12 @@ final class WorkDeskOrganization {
     init(
         fetch: @escaping @Sendable () async throws -> WorkDeskOrganizationSnapshot,
         apply: @escaping @Sendable (WorkDeskMutation) async throws -> WorkDeskOrganizationSnapshot,
-        reviewDeletion: @escaping @Sendable (UUID) async throws -> WorkDeskProjectDeletionReview = { _ in throw WorkDeskStoreError.projectNotFound }
+        reviewDeletion: @escaping @Sendable (UUID) async throws -> WorkDeskProjectDeletionReview = { _ in throw WorkDeskStoreError.projectNotFound },
+        proAccessProvider: @escaping @MainActor () -> ProAccessSnapshot = { .init() }
     ) {
+        self.proAccessProvider = proAccessProvider
+        accessLoadedProvider = { true }
+        awaitAccess = { }
         self.fetch = fetch
         self.apply = apply
         self.reviewDeletion = reviewDeletion
@@ -53,6 +89,18 @@ final class WorkDeskOrganization {
     }
 
     func project(id: UUID) -> WorkDeskProjectRecord? { projectsByID[id] }
+
+    func requestProjectLimit() {
+        errorMessage = nil
+        projectLimitRequested = true
+    }
+
+    func awaitInitialProAccess() async { await awaitAccess() }
+
+    @discardableResult
+    func selectFreeProjects(keeping: Set<UUID>, expectedActiveProjectIDs: Set<UUID>) async -> Bool {
+        await enqueue(.selectFreeProjects(keeping: keeping, expectedActiveProjectIDs: expectedActiveProjectIDs))
+    }
 
     /// Count the visible capture groups in one pass. Project rails must not
     /// rescan every card and project for each row on a pointer-driven refresh.
@@ -84,6 +132,7 @@ final class WorkDeskOrganization {
     func createProject(
         title: String, brief: String = "", materialIDs: [UUID] = [], position: WorkDeskPoint? = nil
     ) async -> UUID? {
+        await awaitInitialProAccess()
         let project = WorkDeskProjectRecord(title: title, brief: brief, position: position)
         let saved = await enqueue(.createProject(project, materialIDs: materialIDs))
         return saved ? project.id : nil
@@ -97,6 +146,12 @@ final class WorkDeskOrganization {
 
     @discardableResult
     func deleteProject(id: UUID) async -> Bool { await enqueue(.deleteProject(id: id)) }
+
+    @discardableResult
+    func setProjectArchived(_ isArchived: Bool, id: UUID) async -> Bool {
+        if !isArchived { await awaitInitialProAccess() }
+        return await enqueue(.archiveProject(id: id, isArchived: isArchived))
+    }
 
     func reviewProjectDeletion(id: UUID) async -> WorkDeskProjectDeletionReview? {
         _ = await mutationTail?.value
@@ -208,6 +263,15 @@ final class WorkDeskOrganization {
     }
 
     private func report(_ error: Error) {
+        if error as? WorkDeskStoreError == .activeProjectLimitReached {
+            requestProjectLimit()
+            return
+        }
+        if error as? WorkDeskStoreError == .projectSelectionRequired {
+            errorMessage = nil
+            projectSelectionRequested = true
+            return
+        }
         errorMessage = (error as? WorkDeskStoreError)?.localizedDescription ?? String(
             localized: "workdesk.error.save",
             defaultValue: "The desk couldn’t save that change. Try again."

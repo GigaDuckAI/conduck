@@ -13,6 +13,9 @@
 // row is inserted or normalized, then save the positions as one transaction.
 // Initial capture placement reuses these metadata rows inside the material's
 // own transaction; it never adds another owner or another publication step.
+// Creation and restoration count canonical active projects inside the same
+// serialized/file-locked write as insertion. Sync may import extra projects;
+// they remain intact and usable, while subsequent slot-consuming writes fail.
 
 import Foundation
 import CoreData
@@ -25,18 +28,38 @@ extension ConversationStore {
     /// A placement imported ahead of its material is already user organization;
     /// preserve it just as a replay preserves the placement of an existing card.
     nonisolated static func placeNewDeskCapture(
-        _ materialID: UUID, projectID: UUID, in context: NSManagedObjectContext
+        _ materialID: UUID, projectID: UUID, isVerifiedProjectResult: Bool = false,
+        access: ProAccessSnapshot,
+        in context: NSManagedObjectContext
     ) throws {
         let placements = try deskRows("WorkDeskPlacement", key: "materialID", id: materialID, in: context)
         guard placements.isEmpty else { return }
-        _ = try liveDeskProjectRows(projectID, in: context)
+        if isVerifiedProjectResult {
+            // Only the publisher may set this after insertWorkDeskResult has
+            // verified the existing assistant attachment and its conversation
+            // in this same transaction. Archiving cannot suppress a late reply.
+            _ = try liveDeskProjectRows(projectID, in: context)
+        } else {
+            try requireActiveDeskProject(projectID, access: access, in: context)
+        }
         try assignDeskMaterials([materialID], projectID: projectID, in: context)
     }
 
     nonisolated static func validateProjectConversationDestination(
-        _ projectID: UUID, in context: NSManagedObjectContext
+        _ projectID: UUID, access: ProAccessSnapshot, in context: NSManagedObjectContext
     ) throws {
-        _ = try liveDeskProjectRows(projectID, in: context)
+        try requireActiveDeskProject(projectID, access: access, in: context)
+    }
+
+    /// Already-created conversations remain readable and accepted replies can
+    /// finish. A fresh user turn in an over-limit active project waits while
+    /// the person has not chosen their free active set or verified Pro access.
+    nonisolated static func validateWorkDeskProjectSelection(
+        _ projectID: UUID, access: ProAccessSnapshot, in context: NSManagedObjectContext
+    ) throws {
+        if try workDeskProjectSelectionIsRequired(projectID, access: access, in: context) {
+            throw WorkDeskStoreError.projectSelectionRequired
+        }
     }
 
     func fetchWorkDeskOrganization() async throws -> WorkDeskOrganizationSnapshot {
@@ -232,7 +255,13 @@ extension ConversationStore {
                 "WorkDeskPlacement", key: "materialID", id: materialID, in: context
             )
             guard placements.isEmpty else { return false }
-            return try Self.resolvedDeskProjectID(projectID, in: context) == nil
+            if try Self.resolvedDeskProjectID(projectID, in: context) == nil { return true }
+            if try Self.deskRows("WorkDeskProject", key: "id", id: projectID, in: context)
+                .first?.value(forKey: "archivedAt") != nil { return true }
+            do {
+                try Self.validateWorkDeskProjectSelection(projectID, access: self.proAccessProvider(), in: context)
+                return false
+            } catch WorkDeskStoreError.projectSelectionRequired { return true }
         }
     }
 
@@ -276,7 +305,7 @@ extension ConversationStore {
                 vaultKeys = try Self.applyReviewedProjectDeletion(review, deleteMaterials: deleteMaterials, in: context,
                     afterValidation: afterValidation)
             }
-            try Self.applyDeskMutation(mutation, in: context)
+            try Self.applyDeskMutation(mutation, access: self.proAccessProvider(), in: context)
             let changed = context.hasChanges
             if changed { try context.save() }
             return (try Self.deskOrganization(in: context), changed, vaultKeys)
@@ -301,7 +330,7 @@ extension ConversationStore {
     }
 
     private nonisolated static func applyDeskMutation(
-        _ mutation: WorkDeskMutation, in context: NSManagedObjectContext
+        _ mutation: WorkDeskMutation, access: ProAccessSnapshot = .init(), in context: NSManagedObjectContext
     ) throws {
         switch mutation {
         case .deleteReviewedProject:
@@ -313,6 +342,9 @@ extension ConversationStore {
             guard try deskRows("WorkDeskProject", key: "id", id: project.id, in: context).isEmpty else {
                 throw WorkDeskStoreError.identifierCollision
             }
+            // A caller cannot bypass the allowance by creating an archived
+            // record directly. Every new project starts active.
+            try requireAvailableDeskProjectSlot(access: access, in: context)
             let row = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
             row.setValue(project.id, forKey: "id")
             row.setValue(project.title.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "title")
@@ -323,6 +355,35 @@ extension ConversationStore {
             row.setValue(Date(), forKey: "updatedAt")
             setDeskPoint(project.position, on: row)
             try assignDeskMaterials(materialIDs, projectID: project.id, in: context)
+        case let .archiveProject(id, isArchived):
+            // Validate without normalizing duplicates: a refused restoration
+            // must not modify even an older physical duplicate row.
+            let rows = try deskRows("WorkDeskProject", key: "id", id: id, in: context)
+            guard !rows.isEmpty, !rows.contains(where: { $0.value(forKey: "deletedAt") != nil }),
+                  rows.contains(where: { $0.value(forKey: "title") as? String != nil }) else {
+                throw WorkDeskStoreError.projectNotFound
+            }
+            let archived = rows.first?.value(forKey: "archivedAt") != nil
+            guard archived != isArchived else { break }
+            if !isArchived { try requireAvailableDeskProjectSlot(access: access, in: context) }
+            normalizeDeskDuplicates(rows)
+            let archivedAt: Date? = isArchived ? Date() : nil
+            editDeskRows(rows) { $0.setValue(archivedAt, forKey: "archivedAt") }
+        case let .selectFreeProjects(keeping, expectedActiveProjectIDs):
+            let activeIDs = Set(try deskOrganization(in: context).projects.filter { !$0.isArchived }.map(\.id))
+            guard !access.hasProAccess,
+                  activeIDs.count > Constants.maxActiveWorkProjects,
+                  keeping.count <= Constants.maxActiveWorkProjects,
+                  keeping.isSubset(of: activeIDs), activeIDs == expectedActiveProjectIDs else {
+                throw WorkDeskStoreError.projectSelectionChanged
+            }
+            // Only the explicit confirmation reaches here. Zero selected is
+            // valid: the person may choose to archive all completed projects.
+            let archivedAt = Date()
+            for id in activeIDs.subtracting(keeping) {
+                let rows = try liveDeskProjectRows(id, in: context)
+                editDeskRows(rows) { $0.setValue(archivedAt, forKey: "archivedAt") }
+            }
         case let .updateProject(id, title, brief, preferredGatewayRef, expectedUpdatedAt):
             try validateDeskText(title: title, brief: brief)
             let rows = try liveDeskProjectRows(id, in: context)
@@ -342,7 +403,7 @@ extension ConversationStore {
                 row.setValue(row.value(forKey: "deletedAt") ?? Date(), forKey: "deletedAt")
                 // Keep only identity and dates. Deleted projects do not retain
                 // the person's brief or a destination they no longer need.
-                for key in ["title", "brief", "preferredGatewayRef", "positionX", "positionY", "isPinned"] {
+                for key in ["title", "brief", "preferredGatewayRef", "positionX", "positionY", "isPinned", "archivedAt"] {
                     row.setValue(nil, forKey: key)
                 }
             }
@@ -363,7 +424,7 @@ extension ConversationStore {
                 }
             }
         case let .assign(materialIDs, projectID):
-            if let projectID { _ = try liveDeskProjectRows(projectID, in: context) }
+            if let projectID { try requireActiveDeskProject(projectID, access: access, in: context) }
             try requireDeskMaterials(materialIDs, in: context)
             try assignDeskMaterials(materialIDs, projectID: projectID, in: context)
         case let .moveMaterial(id, position):
@@ -585,6 +646,26 @@ extension ConversationStore {
         return rows
     }
 
+    private nonisolated static func requireActiveDeskProject(
+        _ id: UUID, access: ProAccessSnapshot, in context: NSManagedObjectContext
+    ) throws {
+        let rows = try liveDeskProjectRows(id, in: context)
+        guard rows.first?.value(forKey: "archivedAt") == nil else {
+            throw WorkDeskStoreError.projectArchived
+        }
+        try validateWorkDeskProjectSelection(id, access: access, in: context)
+    }
+
+    private nonisolated static func requireAvailableDeskProjectSlot(access: ProAccessSnapshot, in context: NSManagedObjectContext) throws {
+        guard !access.hasProAccess else { return }
+        // Counting the resolved snapshot deduplicates CloudKit rows and honors
+        // tombstones. Archived projects still resolve their materials normally.
+        let activeCount = try deskOrganization(in: context).projects.filter { !$0.isArchived }.count
+        guard activeCount < Constants.maxActiveWorkProjects else {
+            throw WorkDeskStoreError.activeProjectLimitReached
+        }
+    }
+
     /// The membership the person sees. Missing or partially arrived projects
     /// and any tombstone resolve to the unfiled desk, without changing rows.
     private nonisolated static func resolvedDeskProjectID(
@@ -617,20 +698,6 @@ extension ConversationStore {
         let request = NSFetchRequest<NSManagedObject>(entityName: entity)
         request.predicate = NSPredicate(format: "%K == %@", key, id as CVarArg)
         return try context.fetch(request).sorted(by: deskRowPrecedes)
-    }
-
-    /// Equal write dates have a deterministic tie-break using synced values.
-    /// Object IDs are device-local and would let peers choose different rows.
-    private nonisolated static func deskRowPrecedes(_ lhs: NSManagedObject, _ rhs: NSManagedObject) -> Bool {
-        let leftDate = lhs.value(forKey: "updatedAt") as? Date ?? .distantPast
-        let rightDate = rhs.value(forKey: "updatedAt") as? Date ?? .distantPast
-        if leftDate != rightDate { return leftDate > rightDate }
-        for key in lhs.entity.attributesByName.keys.sorted() {
-            let left = lhs.value(forKey: key).map { String(describing: $0) } ?? ""
-            let right = rhs.value(forKey: key).map { String(describing: $0) } ?? ""
-            if left != right { return left > right }
-        }
-        return false
     }
 
     private nonisolated static func normalizeDeskDuplicates(_ rows: [NSManagedObject]) {
@@ -692,6 +759,7 @@ extension ConversationStore {
                 id: id, title: title, brief: row.value(forKey: "brief") as? String ?? "",
                 preferredGatewayRef: row.value(forKey: "preferredGatewayRef") as? String,
                 position: deskPoint(on: row), isPinned: row.value(forKey: "isPinned") as? Bool ?? false,
+                archivedAt: row.value(forKey: "archivedAt") as? Date,
                 createdAt: row.value(forKey: "createdAt") as? Date ?? .distantPast,
                 updatedAt: row.value(forKey: "updatedAt") as? Date ?? .distantPast
             ))

@@ -23,7 +23,7 @@ import Foundation
 /// Why a pairing import cannot proceed at the resolved target at all — the
 /// sheet surfaces these as terminal states (no retry at this target).
 enum PairingImportBlock: Equatable {
-    /// Custom payload + no free roster slot (`Constants.maxCustomGateways`).
+    /// No free configured-gateway slot (`Constants.maxConfiguredGateways`).
     case customGatewayCapReached
     /// The payload's kind doesn't match the locked target (e.g. the user
     /// opened "Set up Hermes" but scanned an OpenClaw / custom code).
@@ -53,6 +53,8 @@ enum PairingImportPlan: Equatable {
 /// such (never as "nothing saved": the user would retry into their own
 /// overwrite-confirm and the Settings list would contradict the error).
 enum PairingImportOutcome: Equatable {
+    /// Nothing persisted; the owner can present Pro without losing its review.
+    case upgradeRequired
     /// Everything in the payload persisted.
     case committed
     /// Gateway persisted; the file-server half was rolled back because its
@@ -142,12 +144,19 @@ extension SettingsViewModel {
             } else {
                 // Mint a fresh draft slot (in-memory only — nothing persists
                 // until `executePairingImport` runs `saveRemoteAgent`). Nil =
-                // the cap-of-`Constants.maxCustomGateways` is reached.
+                // the configured-gateway allowance is reached.
                 guard let id = newCustomGatewayDraftID() else {
                     return .blocked(.customGatewayCapReached)
                 }
                 target = .custom(id)
             }
+        }
+
+        // Recheck storage rather than the cached roster: either built-in can
+        // consume the final slot while an import sheet is already open.
+        guard await SettingsManager.shared.canConfigureRemoteAgent(target) else {
+            discardPairingDraft(target)
+            return .blocked(.customGatewayCapReached)
         }
 
         // Overwrite check AFTER resolution. A freshly minted draft has no
@@ -291,8 +300,8 @@ extension SettingsViewModel {
             }
         }
 
-        // Single commit point — roster upsert (custom) → URL → auth scheme →
-        // token (fail-closed) → cert pin → session/pointer hygiene.
+        // Shared commit point — live allowance check and the complete gateway
+        // tuple in one storage-actor turn, then session/pointer hygiene.
         // A payload token stages as `.typed`; none stages `.stored` (keeps any
         // already-saved token — e.g. re-importing a keyless payload's URL tweak).
         let stagedToken: StagedRemoteAgentToken = {
@@ -300,7 +309,7 @@ extension SettingsViewModel {
             return .typed(token)
         }()
         guard await saveRemoteAgent(ref: target, name: customName, stagedToken: stagedToken) else {
-            return .failed
+            return gatewayLimitBlockedRefs.contains(target) ? .upgradeRequired : .failed
         }
 
         // Transport hint — App-Group only (per-device guidance; nil removes,

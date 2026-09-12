@@ -1094,6 +1094,22 @@ final class RemoteChangeDebouncer {
     }
 }
 
+/// The Watch shares conversation persistence but has no Work project chooser.
+/// Its refusal points to a surface that can make the explicit retained choice.
+nonisolated enum WorkProjectAccessError: Error, Equatable, LocalizedError {
+    case archived
+    case selectionRequired
+
+    var errorDescription: String? {
+        switch self {
+        case .archived:
+            String(localized: "workdesk.error.projectArchived", defaultValue: "Restore this project before continuing its conversations or adding materials.")
+        case .selectionRequired:
+            String(localized: "workdesk.pro.selection.otherDevice", defaultValue: "Choose your active projects in Work on iPhone, iPad or Mac to continue.")
+        }
+    }
+}
+
 /// Actor wrapping `NSPersistentCloudKitContainer(name: "Conversations")`.
 /// All access is awaited from outside. CRUD accepts / returns only `Sendable`
 /// snapshot structs (`ConversationRecord` / `MessageRecord`) — an
@@ -1440,8 +1456,77 @@ actor ConversationStore {
 
     // MARK: - Init
 
+    /// The verified entitlement is read at each project write, after waits and
+    /// before insertion. Isolated stores inject their own access state so tests
+    /// never grant or revoke access on the process-wide subscription owner.
+    nonisolated let proAccessProvider: @Sendable () -> ProAccessSnapshot
+    nonisolated let usesSharedProAccess: Bool
+
+    /// Shared with Watch: mirror/import duplicates and project tombstones must
+    /// resolve identically to the main Work desk before deciding whether a new
+    /// user turn or explicit retry is allowed. Archiving pauses new activity
+    /// on every plan; accepted replies and duplicate delivery do not use this gate.
+    nonisolated static func workDeskProjectSelectionIsRequired(
+        _ projectID: UUID, access: ProAccessSnapshot, in context: NSManagedObjectContext
+    ) throws -> Bool {
+        try workDeskProjectActivityError(projectID, access: access, in: context) == .selectionRequired
+    }
+
+    nonisolated static func workDeskProjectActivityError(
+        _ projectID: UUID, access: ProAccessSnapshot, in context: NSManagedObjectContext
+    ) throws -> WorkProjectAccessError? {
+        let rows = try context.fetch(NSFetchRequest<NSManagedObject>(entityName: "WorkDeskProject"))
+            .sorted(by: deskRowPrecedes)
+        let deleted = Set(rows.filter { $0.value(forKey: "deletedAt") != nil }.compactMap { $0.value(forKey: "id") as? UUID })
+        var seen: Set<UUID> = []
+        var active: Set<UUID> = []
+        var archived: Set<UUID> = []
+        for row in rows {
+            guard let id = row.value(forKey: "id") as? UUID,
+                  !deleted.contains(id), !seen.contains(id), row.value(forKey: "title") as? String != nil else { continue }
+            seen.insert(id)
+            if row.value(forKey: "archivedAt") == nil { active.insert(id) }
+            else { archived.insert(id) }
+        }
+        if archived.contains(projectID) { return .archived }
+        if !access.hasProAccess, active.contains(projectID), active.count > Constants.maxActiveWorkProjects {
+            return .selectionRequired
+        }
+        return nil
+    }
+
+    nonisolated static func validateWorkProjectActivity(
+        _ projectID: UUID, access: ProAccessSnapshot, in context: NSManagedObjectContext
+    ) throws {
+        guard let error = try workDeskProjectActivityError(projectID, access: access, in: context) else { return }
+        #if os(watchOS)
+        throw error
+        #else
+        switch error {
+        case .archived: throw WorkDeskStoreError.projectArchived
+        case .selectionRequired: throw WorkDeskStoreError.projectSelectionRequired
+        }
+        #endif
+    }
+
+    /// Equal write dates have a deterministic tie-break using synced values.
+    /// Object IDs are device-local and would let peers choose different rows.
+    nonisolated static func deskRowPrecedes(_ lhs: NSManagedObject, _ rhs: NSManagedObject) -> Bool {
+        let leftDate = lhs.value(forKey: "updatedAt") as? Date ?? .distantPast
+        let rightDate = rhs.value(forKey: "updatedAt") as? Date ?? .distantPast
+        if leftDate != rightDate { return leftDate > rightDate }
+        for key in lhs.entity.attributesByName.keys.sorted() {
+            let left = lhs.value(forKey: key).map { String(describing: $0) } ?? ""
+            let right = rhs.value(forKey: key).map { String(describing: $0) } ?? ""
+            if left != right { return left > right }
+        }
+        return false
+    }
+
     /// Production init — App Group on-disk store.
     private init() {
+        self.proAccessProvider = { ProAccess.current }
+        self.usesSharedProAccess = true
         #if CONDUCK_TESTING
         self.isIsolatedTestStore = false
         #if !os(watchOS)
@@ -1557,8 +1642,11 @@ actor ConversationStore {
     init(
         inMemory: Bool = false,
         storeURL: URL? = nil,
-        contentSyncPreferenceStore: ContentSyncPreferenceStore? = nil
+        contentSyncPreferenceStore: ContentSyncPreferenceStore? = nil,
+        proAccessProvider: @escaping @Sendable () -> ProAccessSnapshot = { .init() }
     ) {
+        self.proAccessProvider = proAccessProvider
+        self.usesSharedProAccess = false
         self.contentSyncPreferenceStore = contentSyncPreferenceStore
         self.contentSyncCloudKitCapable = false
         #if CONDUCK_TESTING
@@ -2393,6 +2481,7 @@ actor ConversationStore {
     /// keys were minted against or that turn's first attachment lands in a
     /// folder no conversation owns.
     func createConversation(id: UUID = UUID(), backend: String, projectID: UUID? = nil, title: String? = nil) async throws -> ConversationRecord {
+        if projectID != nil, usesSharedProAccess { await ProSubscriptionStore.shared.awaitInitialAccess() }
         try await ensureLoaded()
         let contextLease = try await newWriteContextLease()
         defer { contextLease.finish() }
@@ -2409,7 +2498,7 @@ actor ConversationStore {
 
         try await context.perform { [context] in
             #if !os(watchOS)
-            if let projectID { try Self.validateProjectConversationDestination(projectID, in: context) }
+            if let projectID { try Self.validateProjectConversationDestination(projectID, access: self.proAccessProvider(), in: context) }
             #endif
             let conversation = NSEntityDescription.insertNewObject(
                 forEntityName: "Conversation", into: context
@@ -2542,7 +2631,7 @@ actor ConversationStore {
             var projectID: UUID?
             #if !os(watchOS)
             if let sourceProjectID = source.value(forKey: "projectID") as? UUID,
-               (try? Self.validateProjectConversationDestination(sourceProjectID, in: context)) != nil {
+               (try? Self.validateProjectConversationDestination(sourceProjectID, access: self.proAccessProvider(), in: context)) != nil {
                 projectID = sourceProjectID
             }
             #endif
@@ -3470,6 +3559,7 @@ actor ConversationStore {
         attachments: [AttachmentDraft] = [],
         workMaterialInputs: [WorkDeskMaterialInput]? = nil
     ) async throws -> MessageRecord {
+        if role == "user", usesSharedProAccess { await ProSubscriptionStore.shared.awaitInitialAccess() }
         try await ensureLoaded()
 
         let suppliedID = id
@@ -3550,6 +3640,10 @@ actor ConversationStore {
             convoRequest.fetchLimit = 1
             guard let conversation = try bgContext.fetch(convoRequest).first else {
                 throw StoreError.conversationNotFound
+            }
+
+            if role == "user", let projectID = conversation.value(forKey: "projectID") as? UUID {
+                try Self.validateWorkProjectActivity(projectID, access: self.proAccessProvider(), in: bgContext)
             }
 
             let now = Self.appendStamp(proposed: proposedNow, appendingTo: conversation)
@@ -4565,6 +4659,25 @@ actor ConversationStore {
         return false
     }
 
+    /// Re-read the project refusal for a rejected retry so its caller can show
+    /// the restore/selection remedy. The write-side check remains authoritative.
+    func validateConversationProjectActivity(conversationID: UUID) async throws {
+        if usesSharedProAccess { await ProSubscriptionStore.shared.awaitInitialAccess() }
+        try await ensureLoaded()
+        let lease = try await newReadContextLease()
+        defer { lease.finish() }
+        let context = lease.context
+        try await context.perform {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
+            request.predicate = NSPredicate(format: "id == %@", conversationID as CVarArg)
+            request.fetchLimit = 1
+            guard let conversation = try context.fetch(request).first else { throw StoreError.conversationNotFound }
+            if let projectID = conversation.value(forKey: "projectID") as? UUID {
+                try Self.validateWorkProjectActivity(projectID, access: self.proAccessProvider(), in: context)
+            }
+        }
+    }
+
     /// ATOMIC retry claim: compare-and-set `failed` → `sending` on one
     /// user turn. Returns false when the turn is not currently `failed` —
     /// i.e. a concurrent "Try again" / "Resend without photo" already claimed
@@ -4583,6 +4696,7 @@ actor ConversationStore {
     /// acknowledgement landing after a clear, silencing a live failure with no
     /// way for the user to get the mark back.
     func beginRetry(messageID: UUID) async -> Bool {
+        if usesSharedProAccess { await ProSubscriptionStore.shared.awaitInitialAccess() }
         guard retryClaims.insert(messageID).inserted else { return false }
         defer { retryClaims.remove(messageID) }
 
@@ -4598,6 +4712,11 @@ actor ConversationStore {
             )
             request.fetchLimit = 1
             guard let message = (try? context.fetch(request))?.first else { return false }
+            if let conversation = message.value(forKey: "conversation") as? NSManagedObject,
+               let projectID = conversation.value(forKey: "projectID") as? UUID {
+                do { try Self.validateWorkProjectActivity(projectID, access: self.proAccessProvider(), in: context) }
+                catch { return false }
+            }
             message.setValue("sending", forKey: "status")
             // New attempt, new identity — see the header. Nothing preserves the
             // old one: the acknowledgement that named it is now an

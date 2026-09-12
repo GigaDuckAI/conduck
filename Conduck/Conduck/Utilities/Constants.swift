@@ -1398,35 +1398,26 @@ enum Constants {
 
     // MARK: - Custom Gateways (user-defined, multi-gateway)
 
-    /// Cap on user-defined custom OpenAI-compatible gateways. UI/UX limit, not
-    /// a storage limit — the "+ Add custom gateway" affordance disables at this
-    /// count. Enforced ONLY on ADD (`upsertCustomGateway`); readers never
-    /// truncate, so a roster synced from a higher-cap build — or configured
-    /// under an earlier, higher cap — stays intact and editable. Each gateway
-    /// replicates to the Watch (roster entry + a token-bearing sub-envelope
-    /// over `WCSession.transferUserInfo` + a Watch Keychain slot), so a gateway
-    /// costs more than a voice endpoint.
-    ///
-    /// The value is a reserved product boundary, not a technical limit:
-    /// RAISING it is always safe (readers are cap-agnostic), but lowering a
-    /// cap users have lived under retroactively takes away shipped
-    /// functionality — don't. Raising past
-    /// `RemoteAgentBadgePalette.customPalette.count` forfeits the distinct
-    /// auto-assigned badge colour.
-    ///
-    /// DEBUG-only escape: a Debug build launched with
-    /// `-ConduckUncapCustomGateways` (pre-added unticked to the shared scheme's
-    /// Run ▸ Arguments, like every dev flag; also tabled in
-    /// `docs/qa/qa-mode.md`) lifts the cap to the badge-palette ceiling for
-    /// dev/QA-rig setups. Release builds contain no override path, and test
-    /// runs never see the argument (the scheme's TestAction keeps
-    /// `shouldUseLaunchSchemeArgsEnv = "NO"`).
-    static var maxCustomGateways: Int {
+    /// Free allowance for configured OpenClaw, Hermes and custom gateways
+    /// together. OpenRouter does not consume a slot. Admissions enforce the
+    /// allowance; reads and edits preserve existing or synced over-cap data.
+    /// The legacy DEBUG launch argument lifts this allowance for dev setups;
+    /// Release contains no override and tests do not inherit Run arguments.
+    static var maxConfiguredGateways: Int {
         #if DEBUG
         if uncapCustomGateways { return RemoteAgentBadgePalette.customPalette.count }
         #endif
         return 3
     }
+
+    /// The custom roster cannot exceed the overall gateway allowance on add.
+    /// Kept as the roster's ceiling; mixed built-in/custom admission also checks
+    /// how many configured gateways already occupy the shared allowance.
+    static var maxCustomGateways: Int { maxConfiguredGateways }
+
+    /// Only active projects consume a free slot. Archiving preserves the
+    /// project, its materials and its conversations; reactivation needs a slot.
+    static let maxActiveWorkProjects = 3
 
     #if DEBUG
     /// Read once per process, like every `DebugFlags` sibling — launch

@@ -389,7 +389,7 @@ Treating the two as interchangeable is the single most consequential mistake ava
 
 ### The published repository is the whole application
 
-The official build is this source plus private brand art, signing, and Apple's CarPlay entitlement; no functional code is held back. Community builds replace the identity and art and omit CarPlay.
+All functional code is public, including purchases and access policy. Official builds add private art, catalog identity, signing and CarPlay. Community builds replace these and cannot sell official subscriptions. The source license permits modified limits.
 
 ### The quick-capture trigger stays out of the app
 
@@ -422,6 +422,12 @@ The hard part is not sending it, it is knowing when not to. "No gateway is confi
 **Residual, accepted:** a forget performed on iPad or Mac does not reach the wrist, because the paired iPhone is the only courier and it never witnessed the intent.
 
 ---
+
+### Allowances govern new activity, never whether existing data can be read
+
+`Constants.maxConfiguredGateways` counts saved self-hosted/custom connections, including temporarily unreadable credentials; hosted models are exempt. `Constants.maxActiveWorkProjects` limits active projects. Apple-verified Pro lifts both; signed grace periods count, synced preferences never grant access.
+
+Above an allowance, free users explicitly choose active items. Confirmation archives other projects and retains inactive gateway configuration and credentials. Content remains readable/exportable; dispatched replies finish. Offline devices converge without destructive enforcement. Purchasing returns to the unchanged editor and never saves credentials or dispatches work.
 
 ## Work captures stay inert until an explicit project handoff
 

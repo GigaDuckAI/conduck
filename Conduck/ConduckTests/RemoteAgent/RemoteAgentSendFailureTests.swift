@@ -63,8 +63,8 @@ final class RemoteAgentSendFailureTests: XCTestCase {
     }
 
     private func send() async throws -> RemoteAgentReply {
-        try await RemoteAgentClient.shared.send(
-            backend: .openclaw,
+        try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+            backend: .openclaw, ref: .builtin(.openclaw),
             url: baseURL,
             token: token,
             newUserText: "hello",

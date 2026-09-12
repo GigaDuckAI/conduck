@@ -164,7 +164,7 @@ struct IpadSettingsView: View {
                 // (already selected underneath). The guided lanes carry no manual escape.
                 onPrimerManual: { guidedHost.dismiss() },
                 showPrimer: !SettingsManager.hasSeenGatewayPrimer() && !viewModel.hasAnyConfiguredRemoteAgent,
-                customLaneAvailable: viewModel.customGatewayCount < Constants.maxCustomGateways
+                customLaneAvailable: viewModel.canAddConfiguredGateway
             )
         }
         // A fresh presentation starts with no open editor — clear any stale flag
@@ -315,6 +315,8 @@ struct IpadSettingsView: View {
             Divider().overlay(AppColors.border)
 
             // macOS-style bottom Done bar (mirrors `MacSettingsView`).
+            ProSettingsEntry().padding(.horizontal, 16).padding(.vertical, 12)
+            Divider().overlay(AppColors.border)
             HStack {
                 Spacer()
                 Button {

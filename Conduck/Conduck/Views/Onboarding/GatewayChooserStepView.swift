@@ -21,8 +21,9 @@
 // ORDER (self-host first, hosted last) but never label a "recommended" winner.
 // The full-agent card leads with the concrete product names (OpenClaw / Hermes),
 // with "Runs on your own server" as its subtitle. `onCustom` is optional — when
-// the user is already at the custom-gateway cap the container passes `nil` and
-// the card is omitted (mirrors the list's disabled "Add custom gateway" row).
+// the user has filled the gateway allowance the container passes `nil` and
+// the card is disabled with a visible explanation. Existing built-ins can still
+// be reconfigured, and OpenRouter stays available.
 // The container owns routing; this view only reports the choice.
 
 import SwiftUI
@@ -34,16 +35,15 @@ struct GatewayChooserStepView: View {
     /// Self-hosted server branch (OpenClaw / Hermes) → the full-agent
     /// guided lane (readiness → helper → commands → scan/paste the
     /// `conduck-connect` setup code).
-    let onFullAgent: () -> Void
+    let onFullAgent: (() -> Void)?
     /// Custom model-server branch → the existing per-gateway editor (mint a
-    /// draft + deep-link). `nil` when at the custom-gateway cap; the card is
-    /// then hidden.
+    /// draft + deep-link). `nil` when the allowance is full; the card is disabled.
     let onCustom: (() -> Void)?
     /// Hosted-model branch (OpenRouter) → API key + model.
     let onHostedModel: () -> Void
 
     init(
-        onFullAgent: @escaping () -> Void,
+        onFullAgent: (() -> Void)?,
         onCustom: (() -> Void)? = nil,
         onHostedModel: @escaping () -> Void
     ) {
@@ -85,18 +85,22 @@ struct GatewayChooserStepView: View {
                             "onboarding.gatewayChooser.selfHosted.subtitle",
                             defaultValue: "Runs on your own server — tools and file access."
                         ),
-                        action: onFullAgent
+                        action: { onFullAgent?() }
                     )
+                    .disabled(onFullAgent == nil)
 
-                    // Hidden when the container is at the custom-gateway cap
-                    // (`onCustom == nil`), matching the list's disabled Add row.
-                    if let onCustom {
-                        OnboardingChoiceCard(
+                    OnboardingChoiceCard(
                             icon: "cpu",
                             title: "An AI you built — or a custom server", // xcstrings: gateway-chooser
                             subtitle: "Anything OpenAI-compatible: Ollama, LiteLLM, and the like.", // xcstrings: gateway-chooser
-                            action: onCustom
+                            action: { onCustom?() }
                         )
+                        .disabled(onCustom == nil)
+                    if onCustom == nil {
+                        Text(SettingsViewModel.gatewayLimitMessage)
+                            .font(.caption)
+                            .foregroundStyle(AppColors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 

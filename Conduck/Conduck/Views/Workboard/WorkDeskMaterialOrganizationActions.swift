@@ -16,13 +16,14 @@ struct WorkDeskMaterialOrganizationActions {
     var projectID: UUID? { workspace.organization.projectID(for: materialID) }
     var project: WorkDeskProjectRecord? { projectID.flatMap { workspace.organization.project(id: $0) } }
     var destinations: [WorkDeskProjectRecord] {
+        guard !workspace.organization.requiresFreeProjectSelection else { return [] }
         let current = projectID
-        return workspace.organization.projects.filter { $0.id != current }
+        return workspace.organization.activeProjects.filter { $0.id != current }
     }
     var showsLocation: Bool { workspace.isSearching || workspace.scope == .all }
     var canCreateProject: Bool { workspace.scope == .all }
     var conversationMaterialIDs: Set<UUID> {
-        guard !workspace.isSearching, let current = workspace.currentProject,
+        guard !workspace.isSearching, let current = workspace.currentProject, workspace.currentProjectAllowsNewActivity,
               current.id == projectID else { return [] }
         return workspace.selectedIDs.contains(materialID) ? workspace.selectedIDs : [materialID]
     }

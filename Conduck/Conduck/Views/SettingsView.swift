@@ -4,15 +4,13 @@
 // SettingsView.swift
 //
 // The iOS/iPadOS Settings screen. Deliberately excludes several sections:
-//   - subscription (no Pro tier in Conduck)
 //   - emoji / polish / vocabulary / custom-vocabulary (no per-tone
 //     personalization layer in V1)
 //   - notification-sound (deferred)
 //   - Smart-Context (macOS only)
 //   - keyboard-shortcut (macOS — re-enable when the MenuBar surface lands)
 //   - data-deletion alerts (BYO-server architecture has no remote data)
-//   - preview / upgrade / restore-purchases / mail-composer extras
-//     (no StoreKit — Conduck ships free, no in-app purchase)
+// A permanent Pro entry opens the shared native subscription sheet.
 // Includes:
 //   - STT API key section (paste / validate / clear / status)
 //   - Language hint section (single picker, optional)
@@ -30,7 +28,7 @@ import SwiftUI
 import MessageUI
 #endif
 
-/// Settings screen — Conduck BYO-key, no-subscription posture.
+/// Settings screen — device configuration and the optional Pro subscription.
 struct SettingsView: View {
     @Bindable var viewModel: SettingsViewModel
     @State private var showSetupGuide = false
@@ -120,7 +118,7 @@ struct SettingsView: View {
                 // hydration (the `.task`), and the manual connect-row lives on the
                 // load-gated Personal AI screen.
                 showPrimer: !SettingsManager.hasSeenGatewayPrimer() && !viewModel.hasAnyConfiguredRemoteAgent,
-                customLaneAvailable: viewModel.customGatewayCount < Constants.maxCustomGateways
+                customLaneAvailable: viewModel.canAddConfiguredGateway
             )
         }
         // Honor a deep-link (e.g. the mic-gate redirect → Voice) on first appear.
@@ -144,6 +142,7 @@ struct SettingsView: View {
     private var content: some View {
         Group {
             Form {
+                Section { ProSettingsEntry() }
                 // iOS / iPadOS: master-detail root. Each area is a summary row
                 // with trailing status that pushes its own sub-screen — first-
                 // open clarity for the 90% configure-once user.

@@ -923,7 +923,7 @@ final class WorkboardViewModel {
                     refreshed = try await dependencies.importMaterial(
                         current?.revision, contextualImport, progress
                     )
-                } catch WorkDeskStoreError.projectNotFound {
+                } catch let error as WorkDeskStoreError where error == .projectNotFound || error == .projectArchived || error == .projectSelectionRequired {
                     // The atomic write inserted nothing. A missing project is
                     // recoverable without losing input: save this same capture
                     // unfiled and keep the remaining batch unfiled too. The

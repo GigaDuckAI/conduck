@@ -204,6 +204,7 @@ struct RemoteAgentConfigBody: View {
     /// Appear-time keyless state, for Cancel's dirty check (mirrors the others).
     @State private var originalAuthKeyless: Bool = false
 
+    @State private var planFlow = GatewayPlanFlow()
     @Environment(\.dismiss) private var dismiss
 
     /// The zone tree in the adaptive settings container: a stack of hand-drawn
@@ -316,6 +317,7 @@ struct RemoteAgentConfigBody: View {
 
     var body: some View {
         formCore
+        .gatewayPlanSheets(viewModel: viewModel, flow: planFlow)
         .sheet(isPresented: $showingSecretSheet) {
             SecretEntrySheet(
                 title: secretSheetTitle,
@@ -554,6 +556,17 @@ struct RemoteAgentConfigBody: View {
     /// structure.
     @ViewBuilder
     private var editorSections: some View {
+        if !viewModel.isRemoteAgentActive(ref), viewModel.gatewayAllowanceRefs.contains(ref) {
+            Section { GatewayPlanControls(viewModel: viewModel, flow: planFlow) }
+        }
+        if !viewModel.canConfigureRemoteAgent(ref) {
+            Section {
+                Text(SettingsViewModel.gatewayLimitMessage)
+                    .font(.callout)
+                    .foregroundStyle(AppColors.textSecondary)
+                    .settingsCardPassiveRow()
+            }
+        }
         unavailableHereSection
         quickConnectSection
         connectionSection
@@ -1938,6 +1951,10 @@ struct RemoteAgentConfigBody: View {
         // same buffers. `canSave` reads this too, so the button greys for the
         // duration rather than merely ignoring the second tap.
         guard !saving else { return }
+        guard viewModel.canConfigureRemoteAgent(ref) else {
+            planFlow.showingUpgrade = true
+            return
+        }
         saving = true
         let staged = stagedToken
         let name = isCustom ? pendingName : nil
@@ -1967,7 +1984,10 @@ struct RemoteAgentConfigBody: View {
         Task {
             defer { saving = false }
             let ok = await viewModel.saveRemoteAgent(ref: ref, name: name, stagedToken: staged)
-            guard ok else { return }
+            guard ok else {
+                if viewModel.gatewayLimitBlockedRefs.contains(ref) { planFlow.showingUpgrade = true }
+                return
+            }
             // Connection committed — commit the buffered page edits with it
             // (one Save, everything lands; a failed save keeps them staged).
             if let imageHistoryToCommit {

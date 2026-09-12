@@ -32,6 +32,9 @@ final class WorkDeskLocalizationTests: XCTestCase {
         let expected = [
             "workdesk.all": "All materials",
             "workdesk.projects": "Projects",
+            "workdesk.projects.archived": "Archived",
+            "workdesk.project.archive": "Archive project",
+            "workdesk.project.restore": "Restore project",
             "workdesk.removeFromProject": "Remove from project",
             "workdesk.search": "Find an idea or file",
             "workdesk.select": "Select",
@@ -60,6 +63,16 @@ final class WorkDeskLocalizationTests: XCTestCase {
             let rendered = String(localized: label)
             XCTAssertEqual(rendered, count == 1 ? "1 material" : "\(count) materials")
         }
+    }
+
+    func testProjectAllowancePreservesBothCountsAndRecoveryInstructions() throws {
+        let bundle = try englishAppBundle()
+        XCTAssertEqual(compiledValue(for: "workdesk.projects.allowance", bundle: bundle), "%lld of %lld active projects")
+        XCTAssertEqual(compiledValue(for: "workdesk.error.projectLimit", bundle: bundle),
+            "The free plan includes %lld active projects. Archive a project to make room. Its materials and conversations stay available.")
+        let rendered = String(localized: "workdesk.projects.allowance",
+            defaultValue: "\(2) of \(Constants.maxActiveWorkProjects) active projects", bundle: bundle, locale: Locale(identifier: "en"))
+        XCTAssertEqual(rendered, "2 of \(Constants.maxActiveWorkProjects) active projects")
     }
 
     func testSelectionCountsKeepTheirMeaningAroundTheNumber() throws {

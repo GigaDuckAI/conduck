@@ -161,6 +161,32 @@ final class WorkVoiceContextualCaptureTests: XCTestCase {
         XCTAssertTrue(cleared)
     }
 
+    func testProjectArchivedDuringMicrophoneHopSavesWordsWithExplicitFallbackReceipt() async throws {
+        let store = isolated.make()
+        let project = WorkDeskProjectRecord(title: "Completed")
+        _ = try await store.applyWorkDeskMutation(.createProject(project, materialIDs: []))
+        let (recorder, queue, _) = try makeRecorder(store: store, destination: .project(project.id, title: project.title))
+        recorder.transcriptionHopForTesting = { _ in
+            _ = try? await store.applyWorkDeskMutation(.archiveProject(id: project.id, isArchived: true))
+            return .success("Keep the words spoken before archiving")
+        }
+        let result = await recorder._finishCaptureForTesting()
+        XCTAssertEqual(try result.get(), "Keep the words spoken before archiving")
+        XCTAssertTrue(recorder.workCaptureSavedInAllMaterials)
+        let materialID = try XCTUnwrap(recorder.workRecordingMaterialID)
+        let material = try await store.fetchWorkMaterial(id: materialID)
+        let snapshot = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(material?.textContent, "Keep the words spoken before archiving")
+        XCTAssertNil(snapshot.placements[materialID])
+        XCTAssertEqual(snapshot.projects.first?.isArchived, true)
+        let replay = try await WorkVoiceCaptureCoordinator.publishTranscript(
+            "Keep the words spoken before archiving", forCapture: materialID, createdAt: Date(),
+            projectID: project.id, store: store)
+        XCTAssertEqual(replay, .wordsPublishedInAllMaterials(materialID: materialID))
+        let pending = await queue.load()
+        XCTAssertTrue(pending.isEmpty)
+    }
+
     func testProjectDeletedDuringMicrophoneHopSavesWordsWithExplicitFallbackReceipt() async throws {
         let store = isolated.make()
         let project = WorkDeskProjectRecord(title: "Temporary")

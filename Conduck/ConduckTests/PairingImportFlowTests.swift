@@ -707,4 +707,50 @@ final class PairingImportFlowTests: XCTestCase {
         XCTAssertEqual(RecipeAnchor.certUntrusted.rawValue, "cert-untrusted",
                        "The section the card derives from this block.")
     }
+    func testUpgradeAfterBlockedScanResumesReviewWithoutNetworkOrPersistence() async throws {
+        env.planResult = .blocked(.customGatewayCapReached)
+        let flow = makeFlow()
+        flow.handleCode(try code(kind: "custom", name: "Retained draft"))
+        await settle(until: { flow.showingProPaywall }, "cap should offer Pro")
+        let beforeCancel = env.calls
+        flow.resumeAfterUpgrade(hasProAccess: false)
+        XCTAssertEqual(env.calls, beforeCancel, "Dismissing purchase does not retry a blocked action")
+        env.planResult = .ready(target: customTarget)
+        flow.resumeAfterUpgrade(hasProAccess: true)
+        await settle(until: { flow.phase == .review }, "verified purchase should rebuild the retained review")
+        XCTAssertEqual(flow.reviewContext?.target, customTarget)
+        XCTAssertFalse(env.didTouchTheNetwork)
+        XCTAssertFalse(env.didPersist)
+    }
+
+    func testLateCapacityFailureReturnsToReviewAndPurchaseNeverReconnectsAutomatically() async throws {
+        env.executeResult = .upgradeRequired
+        let flow = makeFlow()
+        try await scanIntoReview(flow)
+        flow.connect()
+        await settle(until: { flow.showingProPaywall && flow.phase == .review }, "late cap must preserve review")
+        XCTAssertEqual(flow.reviewContext?.target, openclaw)
+        XCTAssertFalse(env.calls.contains(.gatewayTest))
+        let beforePurchase = env.calls
+        env.executeResult = .committed
+        flow.resumeAfterUpgrade(hasProAccess: true)
+        XCTAssertEqual(env.calls, beforePurchase, "Purchase is not another Connect consent")
+        flow.connect()
+        await settle(until: { flow.phase == .done }, "the user's next Connect may complete")
+        XCTAssertTrue(env.calls.contains(.gatewayTest))
+    }
+
+    func testCancelledBlockedImportCannotResumeAfterLatePurchase() async throws {
+        env.planResult = .blocked(.customGatewayCapReached)
+        let flow = makeFlow()
+        flow.handleCode(try code(kind: "custom", name: "Abandoned"))
+        await settle(until: { flow.showingProPaywall }, "cap should offer Pro")
+        flow.invalidatePendingImport()
+        let before = env.calls
+        env.planResult = .ready(target: customTarget)
+        flow.resumeAfterUpgrade(hasProAccess: true)
+        XCTAssertEqual(env.calls, before)
+        XCTAssertNil(flow.reviewContext)
+    }
+
 }

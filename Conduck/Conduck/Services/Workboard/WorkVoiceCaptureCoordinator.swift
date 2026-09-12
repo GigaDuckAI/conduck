@@ -359,7 +359,7 @@ enum WorkVoiceCaptureCoordinator {
                     projectID: projectID
                 )
                 return .wordsPublished(materialID: record.id)
-            } catch WorkDeskStoreError.projectNotFound {
+            } catch let error as WorkDeskStoreError where error == .projectNotFound || error == .projectArchived || error == .projectSelectionRequired {
                 // The transaction inserted nothing. Preserve the spoken words
                 // with the same deterministic capture id, just as imports keep
                 // a deleted destination's capture in All materials. A failure

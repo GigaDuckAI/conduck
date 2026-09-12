@@ -26,6 +26,26 @@ final class WorkboardContextualCaptureTests: XCTestCase {
             openMaterial: { _ in }).makeDependencies()
     }
 
+    func testProjectArchivedBeforeThoughtCommitsKeepsInputWithExplicitLocationNotice() async throws {
+        let store = isolated.make()
+        let organization = WorkDeskOrganization(store: store)
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        let projectIDValue = await organization.createProject(title: "Completed")
+        let projectID = try XCTUnwrap(projectIDValue)
+        workspace.selectScope(.project(projectID))
+        let target = WorkboardCaptureDestination(workspace: workspace)
+        let model = WorkboardViewModel(dependencies: dependencies(store: store), deskWorkspace: workspace)
+        _ = await organization.setProjectArchived(true, id: projectID)
+        let saved = await model.addThought("Keep this pending thought", projectID: target.projectID)
+        XCTAssertTrue(saved, "A successful fallback consumes the draft exactly once")
+        let card = try XCTUnwrap(model.desk?.materials.first)
+        XCTAssertNil(organization.projectID(for: card.id))
+        XCTAssertNotNil(model.notice)
+        let persisted = try await store.fetchWorkMaterial(id: card.id)
+        XCTAssertEqual(persisted?.textContent, "Keep this pending thought")
+        XCTAssertEqual(organization.project(id: projectID)?.isArchived, true)
+    }
+
     func testProjectThoughtRemainsCanonicalAndVisibleInAllMaterials() async throws {
         let store = isolated.make()
         let organization = WorkDeskOrganization(store: store)

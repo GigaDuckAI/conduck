@@ -65,8 +65,8 @@ final class RemoteAgentTransportPairingTests: XCTestCase {
         MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
 
         do {
-            _ = try await RemoteAgentClient.shared.send(
-                backend: .openclaw,
+            _ = try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw),
                 url: baseURL,
                 token: "test-token",
                 newUserText: "hello",
@@ -98,8 +98,8 @@ final class RemoteAgentTransportPairingTests: XCTestCase {
         MockURLProtocol.requestHandler = { _ in throw URLError(.cancelled) }
 
         do {
-            _ = try await RemoteAgentClient.shared.send(
-                backend: .openclaw,
+            _ = try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw),
                 url: baseURL,
                 token: "test-token",
                 newUserText: "hello",
@@ -148,4 +148,26 @@ final class RemoteAgentTransportPairingTests: XCTestCase {
         XCTAssertEqual(status, errSecSuccess, "SecTrustCreateWithCertificates failed (\(status))")
         return try XCTUnwrap(trust)
     }
+    func testInactiveCustomGatewayRefusesBeforeNetworkEvenWithAnEarlierSnapshot() async {
+        let ref = RemoteAgentRef.custom(UUID())
+        let client = RemoteAgentClient(isGatewayActive: { requested in
+            XCTAssertEqual(requested, ref, "Access is keyed by the true custom ref, not its built-in status carrier")
+            return false
+        })
+        MockURLProtocol.requestHandler = { _ in
+            XCTFail("Inactive gateway must not receive a request or bearer token")
+            throw URLError(.badServerResponse)
+        }
+        do {
+            _ = try await client.send(backend: .openclaw, ref: ref, url: baseURL,
+                token: "stale-snapshot-token", newUserText: "Kept locally", fileServerReady: false,
+                transport: .unevaluated(session: session))
+            XCTFail("An inactive gateway must refuse the send")
+        } catch let error as AppError {
+            XCTAssertEqual(error.errorDescription, GatewayActivationState.inactiveMessage)
+        } catch {
+            XCTFail("Expected the local inactive-gateway error")
+        }
+    }
+
 }

@@ -229,6 +229,7 @@ struct ConverseIntent: AppIntent {
     // MARK: - Perform
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        await ProSubscriptionStore.shared.awaitInitialAccess()
         // Notification auth (plan D4 — headless converse dispatch). This is THE
         // path notifications exist for: a fire-and-forget Action-Button/Shortcut
         // ask whose reply/failure has no other feedback channel. The in-app +

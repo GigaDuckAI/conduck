@@ -9,6 +9,8 @@
 // deletion leaves an identity-only tombstone so an offline placement arriving
 // later cannot bring a deleted project back. Desk positions extend in every
 // direction from the origin, with finite bounds for malformed imported values.
+// Archiving keeps every project link and byte; only active projects consume a
+// free-plan slot. Older rows omit archivedAt and therefore remain active.
 
 import Foundation
 
@@ -40,18 +42,22 @@ nonisolated struct WorkDeskProjectRecord: Identifiable, Hashable, Sendable {
     var preferredGatewayRef: String?
     var position: WorkDeskPoint?
     var isPinned: Bool
+    var archivedAt: Date?
+    var isArchived: Bool { archivedAt != nil }
     let createdAt: Date
     var updatedAt: Date
 
     init(id: UUID = UUID(), title: String, brief: String = "",
          preferredGatewayRef: String? = nil, position: WorkDeskPoint? = nil,
-         isPinned: Bool = false, createdAt: Date = Date(), updatedAt: Date = Date()) {
+         isPinned: Bool = false, archivedAt: Date? = nil,
+         createdAt: Date = Date(), updatedAt: Date = Date()) {
         self.id = id
         self.title = title
         self.brief = brief
         self.preferredGatewayRef = preferredGatewayRef
         self.position = position
         self.isPinned = isPinned
+        self.archivedAt = archivedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -124,6 +130,11 @@ nonisolated struct WorkDeskProjectDeletionReview: Identifiable, Sendable, Equata
 nonisolated enum WorkDeskMutation: Sendable {
     case createProject(WorkDeskProjectRecord, materialIDs: [UUID])
     case updateProject(id: UUID, title: String, brief: String, preferredGatewayRef: String?, expectedUpdatedAt: Date? = nil)
+    case archiveProject(id: UUID, isArchived: Bool)
+    /// Confirming a free-plan choice archives only the active set reviewed by
+    /// the person. Newly synced projects invalidate it rather than joining an
+    /// unreviewed bulk archive.
+    case selectFreeProjects(keeping: Set<UUID>, expectedActiveProjectIDs: Set<UUID>)
     case deleteProject(id: UUID)
     case deleteReviewedProject(WorkDeskProjectDeletionReview, deleteMaterials: Bool)
     case assign(materialIDs: [UUID], projectID: UUID?)
@@ -142,6 +153,10 @@ nonisolated enum WorkDeskMutation: Sendable {
 
 nonisolated enum WorkDeskStoreError: Error, Equatable, LocalizedError {
     case projectNotFound
+    case projectArchived
+    case activeProjectLimitReached
+    case projectSelectionRequired
+    case projectSelectionChanged
     case materialNotFound
     case materialMoved
     case invalidTitle
@@ -154,6 +169,14 @@ nonisolated enum WorkDeskStoreError: Error, Equatable, LocalizedError {
         switch self {
         case .projectNotFound:
             String(localized: "workdesk.error.projectMissing", defaultValue: "That project is no longer available.")
+        case .projectArchived:
+            String(localized: "workdesk.error.projectArchived", defaultValue: "Restore this project before continuing its conversations or adding materials.")
+        case .activeProjectLimitReached:
+            String(localized: "workdesk.error.projectLimit", defaultValue: "The free plan includes \(Constants.maxActiveWorkProjects) active projects. Archive a project to make room. Its materials and conversations stay available.")
+        case .projectSelectionRequired:
+            String(localized: "workdesk.error.projectSelectionRequired", defaultValue: "Choose up to \(Constants.maxActiveWorkProjects) active projects to continue on the free plan. Your materials and conversations stay available.")
+        case .projectSelectionChanged:
+            String(localized: "workdesk.error.projectSelectionChanged", defaultValue: "Your projects or plan changed. Review the active projects again before confirming.")
         case .materialNotFound:
             String(localized: "workdesk.error.materialMissing", defaultValue: "An item has changed or been removed. Refresh the desk and try again.")
         case .materialMoved:

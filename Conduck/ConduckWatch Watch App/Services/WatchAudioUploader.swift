@@ -547,6 +547,10 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         inputMode: GatewayInputMode,
         stampsActiveConversation: Bool
     ) async throws {
+        await ProSubscriptionStore.shared.awaitInitialAccess()
+        guard WatchSettingsReader.shared.isRemoteAgentActive(ref) else {
+            throw AppError.invalidRequest(message: GatewayActivationState.inactiveMessage)
+        }
         let endpoint = url.appending(path: "v1/chat/completions")
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"

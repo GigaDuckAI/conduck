@@ -1,6 +1,589 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "pro.store.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subscriptions are unavailable right now. Please try again later."
+          }
+        }
+      }
+    },
+    "pro.restore.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your subscription could not be checked. Please try again."
+          }
+        }
+      }
+    },
+    "pro.restore.none" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No active Conduck Pro subscription was found for this Apple Account."
+          }
+        }
+      }
+    },
+    "pro.restore.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Purchases could not be restored. Please try again."
+          }
+        }
+      }
+    },
+    "pro.purchase.unverified" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple could not verify this purchase. Try Restore Purchases before purchasing again."
+          }
+        }
+      }
+    },
+    "pro.purchase.checking" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your purchase is being checked. Try Restore Purchases if access does not appear."
+          }
+        }
+      }
+    },
+    "pro.purchase.pending" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your purchase is awaiting approval. Pro will become available when Apple confirms it."
+          }
+        }
+      }
+    },
+    "pro.purchase.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The purchase could not be completed. Please try again."
+          }
+        }
+      }
+    },
+    "pro.title.manual" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "More room for your work."
+          }
+        }
+      }
+    },
+    "pro.title.project" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Make room for another project."
+          }
+        }
+      }
+    },
+    "pro.title.gateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect another gateway."
+          }
+        }
+      }
+    },
+    "pro.body.manual" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The free plan includes three active projects and three configured gateways. Go further with Pro."
+          }
+        }
+      }
+    },
+    "pro.body.project" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You have three active projects. Keep every project moving with Pro, or archive a project to free a slot."
+          }
+        }
+      }
+    },
+    "pro.body.gateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your three configured gateway slots are in use. OpenRouter is always available."
+          }
+        }
+      }
+    },
+    "pro.manage.gateways" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manage gateways"
+          }
+        }
+      }
+    },
+    "pro.manage.projects" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manage projects"
+          }
+        }
+      }
+    },
+    "pro.close" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close Conduck Pro"
+          }
+        }
+      }
+    },
+    "pro.active" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck Pro is active"
+          }
+        }
+      }
+    },
+    "pro.subscription.manage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manage subscription"
+          }
+        }
+      }
+    },
+    "pro.store.community" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subscriptions are not available in this build."
+          }
+        }
+      }
+    },
+    "pro.store.retry" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Try again"
+          }
+        }
+      }
+    },
+    "pro.title.active" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Room for all your work."
+          }
+        }
+      }
+    },
+    "pro.benefit.projects" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unlimited active projects"
+          }
+        }
+      }
+    },
+    "pro.benefit.gateways" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unlimited configured gateways"
+          }
+        }
+      }
+    },
+    "pro.provider.cost" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI and speech usage are billed separately by your providers."
+          }
+        }
+      }
+    },
+    "pro.restore" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restore Purchases"
+          }
+        }
+      }
+    },
+    "pro.settings.subtitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unlimited projects and gateways"
+          }
+        }
+      }
+    },
+    "workdesk.error.projectSelectionRequired" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose up to %lld active projects to continue on the free plan. Your materials and conversations stay available."
+          }
+        }
+      }
+    },
+    "workdesk.error.projectSelectionChanged" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your projects or plan changed. Review the active projects again before confirming."
+          }
+        }
+      }
+    },
+    "workdesk.pro.expired.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your Pro subscription ended. Choose which projects stay active on the free plan."
+          }
+        }
+      }
+    },
+    "workdesk.pro.chooseProjects" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose projects"
+          }
+        }
+      }
+    },
+    "workdesk.projects.proCount" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld active projects · Pro"
+          }
+        }
+      }
+    },
+    "workdesk.pro.selection.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep up to %lld projects active. The others will be archived, with all their materials and conversations preserved."
+          }
+        }
+      }
+    },
+    "workdesk.pro.selection.summary" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld will stay active. %lld will be archived."
+          }
+        }
+      }
+    },
+    "workdesk.pro.selection.reviewAgain" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Review projects again"
+          }
+        }
+      }
+    },
+    "workdesk.pro.selection.archiveAll" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archive all projects"
+          }
+        }
+      }
+    },
+    "workdesk.pro.selection.confirm" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep selected projects active"
+          }
+        }
+      }
+    },
+    "workdesk.pro.selection.otherDevice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose your active projects in Work on iPhone, iPad or Mac to continue."
+          }
+        }
+      }
+    },
+    "workdesk.pro.selection.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose which projects stay active on the free plan. All your materials and conversations remain available."
+          }
+        }
+      }
+    },
+    "gateway.plan.choose.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose up to three active gateways for your free plan. Your other configurations and conversations stay saved."
+          }
+        }
+      }
+    },
+    "gateway.plan.choose.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose active gateways"
+          }
+        }
+      }
+    },
+    "gateway.plan.renew" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Get unlimited gateways with Pro"
+          }
+        }
+      }
+    },
+    "gateway.plan.choose.openrouter" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenRouter is always available and does not count toward this selection."
+          }
+        }
+      }
+    },
+    "gateway.plan.choose.changed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your gateways changed. Choose up to three saved gateways and try again."
+          }
+        }
+      }
+    },
+    "gateway.plan.inactive" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This gateway is inactive on your free plan. Choose active gateways in Personal AI settings, or renew Conduck Pro."
+          }
+        }
+      }
+    },
+    "workdesk.error.projectArchived" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restore this project before continuing its conversations or adding materials."
+          }
+        }
+      }
+    },
+    "workdesk.error.projectLimit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The free plan includes %lld active projects. Archive a project to make room. Its materials and conversations stay available."
+          }
+        }
+      }
+    },
+    "workdesk.project.archive" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archive project"
+          }
+        }
+      }
+    },
+    "workdesk.project.archived.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archived. Restore this project to add materials or start a new conversation."
+          }
+        }
+      }
+    },
+    "workdesk.project.restore" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restore project"
+          }
+        }
+      }
+    },
+    "workdesk.projects.allowance" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld of %lld active projects"
+          }
+        }
+      }
+    },
+    "workdesk.projects.archived" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archived"
+          }
+        }
+      }
+    },
+    "settings.remoteAgent.freeLimit.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your free plan includes three active gateways. Upgrade to Pro for unlimited gateways, or manage your free selection. OpenRouter is always available."
+          }
+        }
+      }
+    },
     "" : {
 
     },
@@ -12977,8 +13560,8 @@
       "localizations" : {
         "en" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Set up a custom server (limit reached)"
+            "state" : "translated",
+            "value" : "Set up a custom server with Pro"
           }
         }
       }

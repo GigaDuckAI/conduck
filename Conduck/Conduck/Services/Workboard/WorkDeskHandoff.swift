@@ -399,6 +399,7 @@ final class WorkDeskHandoff {
         // Arbitrary provider/file-system diagnostics may contain endpoints.
         // Only controlled domain errors reach this preparation surface.
         if let known = error as? WorkDeskHandoffError { return known.localizedDescription }
+        if let known = error as? WorkDeskStoreError { return known.localizedDescription }
         if error is WorkMaterialExportError { return WorkDeskHandoffError.bytesUnavailable.localizedDescription }
         return String(localized: "workdesk.handoff.failed", defaultValue: "The handoff could not finish. Your project is unchanged. Review it again to try once more.")
     }
