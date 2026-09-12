@@ -17,6 +17,31 @@ struct WorkDeskReadableDropTarget: Equatable {
     let materialID: UUID
     let placement: WorkboardReorderPlacement
     var isTrailing = false
+    // Captured only at release; hover targets stay independent of pointer
+    // movement so insertion feedback does not needlessly redraw on every tick.
+    var globalPoint: CGPoint? = nil
+}
+
+/// Native delegates report points local to their receiving card. A preview's
+/// occlusion is registered globally, so both readable cards and scaled canvas
+/// folders translate through measured geometry before accepting a destination.
+nonisolated struct WorkDeskNativeDropGeometry: Equatable, Sendable {
+    var localSize: CGSize = .zero
+    var globalFrame: CGRect = .zero
+
+    func globalPoint(for point: CGPoint) -> CGPoint? {
+        guard point.x.isFinite, point.y.isFinite,
+              localSize.width.isFinite, localSize.height.isFinite,
+              localSize.width > 0, localSize.height > 0,
+              globalFrame.minX.isFinite, globalFrame.minY.isFinite,
+              globalFrame.width.isFinite, globalFrame.height.isFinite,
+              globalFrame.width > 0, globalFrame.height > 0,
+              point.x >= 0, point.y >= 0,
+              point.x <= localSize.width, point.y <= localSize.height else { return nil }
+        let globalPoint = CGPoint(x: globalFrame.minX + point.x / localSize.width * globalFrame.width,
+                                  y: globalFrame.minY + point.y / localSize.height * globalFrame.height)
+        return globalPoint.x.isFinite && globalPoint.y.isFinite ? globalPoint : nil
+    }
 }
 
 struct WorkDeskReadableReorderContext: Equatable {
@@ -139,26 +164,32 @@ struct WorkDeskReadableReorderCard: ViewModifier {
     let reorder: WorkDeskReadableReorder
     let onBegin: () -> NSItemProvider
     let onDrop: (NSItemProvider, WorkDeskReadableDropTarget) -> Bool
+    var acceptsPoint: (CGPoint) -> Bool = { _ in true }
     @Environment(\.layoutDirection) private var layoutDirection
-    @State private var size: CGSize = .zero
+    @State private var geometry = WorkDeskNativeDropGeometry()
 
     func body(content: Content) -> some View {
         content
             .contentShape(Rectangle())
-            .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            .onGeometryChange(for: WorkDeskNativeDropGeometry.self) {
+                .init(localSize: $0.size, globalFrame: $0.frame(in: .global))
+            } action: { geometry = $0 }
             .onDrag { isEnabled ? onBegin() : NSItemProvider() }
             .onDrop(of: [.conduckWorkboardMaterial], delegate: WorkboardReorderDropDelegate(
                 isEnabled: isEnabled && !reorder.isResolving,
                 onLocation: { point in
-                    guard let point, let placement = placement(at: point) else {
+                    guard let point, let globalPoint = geometry.globalPoint(for: point),
+                          acceptsPoint(globalPoint), let placement = placement(at: point) else {
                         reorder.leave(materialID: materialID)
                         return
                     }
                     reorder.hover(.init(materialID: materialID, placement: placement))
                 },
                 onDrop: { provider, point in
-                    guard let placement = placement(at: point) else { return false }
-                    return onDrop(provider, .init(materialID: materialID, placement: placement))
+                    guard let globalPoint = geometry.globalPoint(for: point), acceptsPoint(globalPoint),
+                          let placement = placement(at: point) else { return false }
+                    return onDrop(provider, .init(materialID: materialID, placement: placement,
+                                                 globalPoint: globalPoint))
                 }
             ))
             .overlay(alignment: insertionAlignment) {
@@ -175,7 +206,8 @@ struct WorkDeskReadableReorderCard: ViewModifier {
     }
 
     private func placement(at point: CGPoint) -> WorkboardReorderPlacement? {
-        WorkDeskReadableReorder.placement(at: point, size: size, layout: layout, direction: layoutDirection)
+        WorkDeskReadableReorder.placement(at: point, size: geometry.localSize,
+                                         layout: layout, direction: layoutDirection)
     }
 
     private var insertionAlignment: Alignment {

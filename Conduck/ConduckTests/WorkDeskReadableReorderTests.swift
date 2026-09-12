@@ -46,6 +46,48 @@ final class WorkDeskReadableReorderTests: XCTestCase {
         XCTAssertNil(placement(x: 1, y: 1, size: .init(width: 100, height: 100), layout: .desk))
     }
 
+    func testNativeDropPointsRespectGlobalOriginAndCanvasScale() throws {
+        let geometry = WorkDeskNativeDropGeometry(localSize: .init(width: 300, height: 200),
+            globalFrame: .init(x: 500, y: 250, width: 150, height: 100))
+        XCTAssertEqual(geometry.globalPoint(for: .zero), CGPoint(x: 500, y: 250))
+        XCTAssertEqual(geometry.globalPoint(for: .init(x: 300, y: 200)), CGPoint(x: 650, y: 350))
+        let center = try XCTUnwrap(geometry.globalPoint(for: .init(x: 150, y: 100)))
+        XCTAssertEqual(center, .init(x: 575, y: 300))
+
+        let coordinator = WorkDeskTransferCoordinator()
+        coordinator.registerOcclusion(id: UUID(), frame: .init(x: 570, y: 290, width: 100, height: 100), priority: 10)
+        XCTAssertTrue(coordinator.isOccluded(at: center),
+            "The local point is outside this rectangle; only its global point reveals the preview covering the folder.")
+        XCTAssertFalse(coordinator.isOccluded(at: try XCTUnwrap(geometry.globalPoint(for: .zero))))
+    }
+
+    func testNativeDropGeometryRefusesUnmeasuredNonFiniteAndOutsidePoints() {
+        XCTAssertNil(WorkDeskNativeDropGeometry().globalPoint(for: .zero))
+        let geometry = WorkDeskNativeDropGeometry(localSize: .init(width: 300, height: 200),
+            globalFrame: .init(x: 500, y: 250, width: 300, height: 200))
+        for point in [CGPoint(x: CGFloat.nan, y: 0), .init(x: 0, y: CGFloat.infinity),
+                      .init(x: -1, y: 20), .init(x: 301, y: 20),
+                      .init(x: 20, y: -1), .init(x: 20, y: 201)] {
+            XCTAssertNil(geometry.globalPoint(for: point))
+        }
+        var unmeasured = geometry
+        unmeasured.localSize.width = .infinity
+        XCTAssertNil(unmeasured.globalPoint(for: .zero))
+        unmeasured = geometry
+        unmeasured.globalFrame = .init(x: CGFloat.nan, y: 0, width: 300, height: 200)
+        XCTAssertNil(unmeasured.globalPoint(for: .zero))
+    }
+
+    func testReleasedGlobalPointSurvivesProviderResolution() throws {
+        let release = WorkDeskReadableDropTarget(materialID: second, placement: .after,
+                                                 globalPoint: .init(x: 640, y: 320))
+        let reorder = WorkDeskReadableReorder()
+        let token = try XCTUnwrap(reorder.accept(release, context: context()))
+        let resolved = try XCTUnwrap(reorder.resolve(payload, token: token, current: context(), isEnabled: true))
+        XCTAssertEqual(resolved.globalPoint, release.globalPoint,
+            "Deferred completion must recheck the release position even if rows have since reflowed.")
+    }
+
     func testHoverAndCancellationCreateNoPendingMove() {
         let reorder = WorkDeskReadableReorder()
         reorder.begin(first)

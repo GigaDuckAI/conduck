@@ -21,9 +21,7 @@ struct WorkDeskToolbarTitle: View {
         if workspace.isSearching {
             return String(localized: LocalizedStringResource("workdesk.search.results", defaultValue: "Search results"))
         }
-        // A project tray floats over Home and owns its own title/actions.
-        // A project conversation replaces Home and uses the window title.
-        if let project = workspace.currentProject, !workspace.isProjectTrayPresented {
+        if let project = workspace.currentProject {
             return project.title
         }
         return String(localized: LocalizedStringResource("workdesk.all", defaultValue: "Home"))
@@ -52,11 +50,32 @@ struct WorkDeskToolbarTitle: View {
 
     private var projectControl: some View {
         Group {
-            if let project = workspace.currentProject, !workspace.isSearching, !workspace.isProjectTrayPresented {
+            if let project = workspace.currentProject, !workspace.isSearching {
                 Menu {
+                    Button(WorkDeskCopy.projectBriefState(hasBrief: !project.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+                           systemImage: "text.alignleft") {
+                        workspace.editingContextProjectID = project.id
+                    }
+                    .accessibilityIdentifier("workdesk-project-context")
+                    if !workspace.conversations(in: project.id).isEmpty {
+                        Menu {
+                            ForEach(workspace.conversations(in: project.id)) { conversation in
+                                Button {
+                                    workspace.selectConversation(conversation.id, projectID: project.id)
+                                } label: {
+                                    Text(verbatim: conversation.displayTitle)
+                                }
+                            }
+                        } label: {
+                            Label(LocalizedStringResource("workdesk.project.conversations", defaultValue: "Conversations"),
+                                  systemImage: "bubble.left.and.bubble.right")
+                        }
+                    }
+                    Divider()
                     Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
                         workspace.editProject(project)
                     }
+                    WorkDeskProjectColorMenu(project: project, organization: workspace.organization)
                     Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {
                         workspace.requestProjectDeletion(project.id)
                     }
@@ -68,7 +87,7 @@ struct WorkDeskToolbarTitle: View {
                 .pointerIconButton(shape: .capsule)
                 #endif
                 .accessibilityLabel(Text(verbatim: title))
-                .accessibilityHint(Text(LocalizedStringResource("workdesk.options", defaultValue: "Desk options")))
+                .accessibilityHint(Text(LocalizedStringResource("workdesk.project.actions", defaultValue: "Project actions")))
                 #if os(iOS)
                 .simultaneousGesture(TapGesture().onEnded {
                     phoneWorkbenchRouter?.dismissPhoneSection(for: .work)

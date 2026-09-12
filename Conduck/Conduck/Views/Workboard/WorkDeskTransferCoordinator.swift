@@ -66,33 +66,13 @@ enum WorkDeskTransferRelease {
 
 @MainActor @Observable
 final class WorkDeskTransferCoordinator {
-    private(set) var projectPeek: WorkDeskProjectPeek?
     private(set) var drag: WorkDeskTransferDrag?
     private(set) var destination: WorkDeskTransferDestination?
     private(set) var geometryRevision = 0
-    @ObservationIgnored private var peekRequests: [UUID: UUID] = [:]
     @ObservationIgnored private var surfaces: [UUID: WorkDeskTransferSurface] = [:]
     @ObservationIgnored private var occlusions: [UUID: (frame: CGRect, priority: Int)] = [:]
 
     var isDragging: Bool { drag != nil }
-
-    func beginProjectPeek(ownerID: UUID) -> UUID? {
-        guard drag == nil, surfaces[ownerID] != nil else { return nil }
-        let requestID = UUID()
-        peekRequests[ownerID] = requestID
-        return requestID
-    }
-
-    func showProjectPeek(ownerID: UUID, requestID: UUID, project: WorkDeskCanvasProject, frame: CGRect) {
-        guard drag == nil, peekRequests[ownerID] == requestID,
-              surfaces[ownerID]?.frame == frame, frame.isFiniteAndPositive else { return }
-        projectPeek = WorkDeskProjectPeek(ownerID: ownerID, project: project, frame: frame)
-    }
-
-    func hideProjectPeek(ownerID: UUID) {
-        peekRequests.removeValue(forKey: ownerID)
-        if projectPeek?.ownerID == ownerID { projectPeek = nil }
-    }
 
     func projectFrame(id: UUID) -> CGRect? {
         _ = geometryRevision
@@ -113,14 +93,12 @@ final class WorkDeskTransferCoordinator {
     func register(_ surface: WorkDeskTransferSurface) {
         guard surface.frame.isFiniteAndPositive else { removeSurface(id: surface.id); return }
         guard surfaces[surface.id] != surface else { return }
-        hideProjectPeek(ownerID: surface.id)
         surfaces[surface.id] = surface
         geometryRevision &+= 1
         resolveDrag()
     }
 
     func removeSurface(id: UUID) {
-        hideProjectPeek(ownerID: id)
         guard surfaces.removeValue(forKey: id) != nil else { return }
         geometryRevision &+= 1
         if drag?.sourceSurfaceID == id { cancel() }
@@ -180,8 +158,6 @@ final class WorkDeskTransferCoordinator {
                 expected: WorkDeskLocationTokens? = nil) {
         guard pointer.x.isFinite, pointer.y.isFinite, leadFrame.isFiniteAndPositive,
               origins[leadMaterial.id] != nil, surfaces[sourceSurfaceID] != nil else { return }
-        projectPeek = nil
-        peekRequests.removeAll()
         if let active = drag {
             guard active.sourceSurfaceID == sourceSurfaceID else { return }
             drag?.pointer = pointer
@@ -224,8 +200,6 @@ final class WorkDeskTransferCoordinator {
         if let sourceSurfaceID, drag?.sourceSurfaceID != sourceSurfaceID { return }
         drag = nil
         destination = nil
-        projectPeek = nil
-        peekRequests.removeAll()
     }
 
     private func resolveDrag() {

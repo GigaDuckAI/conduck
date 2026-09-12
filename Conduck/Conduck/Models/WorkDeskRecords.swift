@@ -81,23 +81,42 @@ nonisolated struct WorkDeskPoint: Codable, Hashable, Sendable {
     }
 }
 
+/// Stable metadata identifiers, shared with capture-only targets that do not
+/// import SwiftUI. Legacy projects receive a palette color when read; newer,
+/// unknown stored colors display as Amber without rewriting their identifier.
+nonisolated enum WorkDeskProjectColor: String, CaseIterable, Sendable {
+    case amber, sage, blue, lavender, coral, slate
+
+    /// Stable ties follow the palette order, spreading new projects before reuse.
+    static func leastUsed(in colors: [Self]) -> Self {
+        let counts = Dictionary(grouping: colors, by: { $0 }).mapValues(\.count)
+        return allCases.min { counts[$0, default: 0] < counts[$1, default: 0] } ?? .amber
+    }
+
+    init(storedID: String?) {
+        self = storedID.flatMap(Self.init(rawValue:)) ?? .amber
+    }
+}
+
 nonisolated struct WorkDeskProjectRecord: Identifiable, Hashable, Sendable {
     let id: UUID
     var title: String
     var brief: String
     var preferredGatewayRef: String?
+    var color: WorkDeskProjectColor
     var position: WorkDeskPoint?
     var isPinned: Bool
     let createdAt: Date
     var updatedAt: Date
 
     init(id: UUID = UUID(), title: String, brief: String = "",
-         preferredGatewayRef: String? = nil, position: WorkDeskPoint? = nil,
+         preferredGatewayRef: String? = nil, color: WorkDeskProjectColor = .amber, position: WorkDeskPoint? = nil,
          isPinned: Bool = false, createdAt: Date = Date(), updatedAt: Date = Date()) {
         self.id = id
         self.title = title
         self.brief = brief
         self.preferredGatewayRef = preferredGatewayRef
+        self.color = color
         self.position = position
         self.isPinned = isPinned
         self.createdAt = createdAt
@@ -190,10 +209,11 @@ nonisolated struct WorkDeskProjectDeletionReview: Identifiable, Sendable, Equata
 /// Intent-specific writes change only the fields the person acted on. Moving
 /// a card must not write an old copy of its project membership or pin state.
 nonisolated enum WorkDeskMutation: Sendable {
-    case createProject(WorkDeskProjectRecord, materialIDs: [UUID])
+    case createProject(WorkDeskProjectRecord, materialIDs: [UUID], automaticallyAssignColor: Bool = false)
     case createProjectFrom(WorkDeskProjectRecord, materialIDs: [UUID], source: WorkDeskLocation,
-                           expected: WorkDeskLocationTokens?)
+                           expected: WorkDeskLocationTokens?, automaticallyAssignColor: Bool = false)
     case updateProject(id: UUID, title: String, brief: String, preferredGatewayRef: String?, expectedUpdatedAt: Date? = nil)
+    case setProjectColor(id: UUID, color: WorkDeskProjectColor, expectedUpdatedAt: Date? = nil)
     case deleteProject(id: UUID)
     case deleteReviewedProject(WorkDeskProjectDeletionReview, deleteMaterials: Bool)
     case assign(materialIDs: [UUID], projectID: UUID?)

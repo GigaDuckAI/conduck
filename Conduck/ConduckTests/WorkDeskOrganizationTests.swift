@@ -324,7 +324,7 @@ private actor DelayedDeskRead {
     }
 
     func apply(_ mutation: WorkDeskMutation) -> WorkDeskOrganizationSnapshot {
-        if case let .createProject(project, _) = mutation { snapshot.projects.append(project) }
+        if case let .createProject(project, _, _) = mutation { snapshot.projects.append(project) }
         return snapshot
     }
 }

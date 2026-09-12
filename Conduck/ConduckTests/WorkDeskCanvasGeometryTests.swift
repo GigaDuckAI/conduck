@@ -148,32 +148,4 @@ final class WorkDeskCanvasGeometryTests: XCTestCase {
         XCTAssertEqual(WorkDeskCanvasGeometry.overviewTarget(at: CGPoint(x: 8, y: 8), candidates: candidates.reversed()), b)
         XCTAssertNil(WorkDeskCanvasGeometry.overviewTarget(at: CGPoint(x: 100, y: 100), candidates: candidates))
     }
-
-    func testProjectHoverPreviewRemainsReadableAndInsideViewportAtEveryEdge() {
-        let viewport = CGSize(width: 1_000, height: 700)
-        for origin in [CGPoint(x: 0, y: 0), CGPoint(x: 950, y: 0), CGPoint(x: 0, y: 660), CGPoint(x: 950, y: 660)] {
-            let frame = WorkDeskCanvasGeometry.projectPreviewFrame(near: CGRect(origin: origin, size: CGSize(width: 30, height: 20)),
-                viewport: viewport, itemCount: 10)
-            XCTAssertEqual(frame.width, 310)
-            XCTAssertTrue(CGRect(origin: .zero, size: viewport).contains(frame))
-        }
-    }
-
-    func testProjectPreviewFlipsLeftNearRightEdgeWithoutMovingItsFolder() {
-        let folder = CGRect(x: 700, y: 100, width: 150, height: 110)
-        let preview = WorkDeskCanvasGeometry.projectPreviewFrame(near: folder, viewport: CGSize(width: 1_000, height: 700), itemCount: 3)
-        XCTAssertLessThan(preview.maxX, folder.minX)
-        XCTAssertEqual(preview.minY, folder.minY)
-    }
-
-    func testProjectPreviewHandlesNarrowAndInvalidViewports() {
-        let viewport = CGSize(width: 220, height: 180)
-        let frame = WorkDeskCanvasGeometry.projectPreviewFrame(near: CGRect(x: 180, y: 100, width: 30, height: 20),
-            viewport: viewport, itemCount: 50)
-        XCTAssertTrue(CGRect(origin: .zero, size: viewport).contains(frame))
-        XCTAssertEqual(WorkDeskCanvasGeometry.projectPreviewFrame(near: .zero, viewport: .zero, itemCount: 1), .zero)
-        XCTAssertEqual(WorkDeskCanvasGeometry.projectPreviewFrame(near: .zero,
-            viewport: CGSize(width: CGFloat.nan, height: 100), itemCount: 1), .zero)
-    }
-
 }
