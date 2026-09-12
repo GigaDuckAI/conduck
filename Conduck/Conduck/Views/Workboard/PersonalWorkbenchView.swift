@@ -246,7 +246,7 @@ struct WorkbenchSectionToolbarItem: ToolbarContent {
     ) -> Binding<PersonalWorkbenchRouter.Destination> {
         Binding(
             get: { router.destination },
-            set: { router.destination = $0 }
+            set: { router.selectDestination($0) }
         )
     }
 
@@ -422,6 +422,7 @@ final class PersonalWorkbenchRouter {
     var destination: Destination = .chats {
         didSet {
             guard destination != oldValue else { return }
+            tutorialSession?.setDestinationActive(destination == .work)
             #if os(iOS)
             dismissPhoneSection()
             #endif
@@ -436,6 +437,17 @@ final class PersonalWorkbenchRouter {
             share.cancelPendingShare()
             if previewNotice != nil { previewNotice = nil }
         }
+    }
+
+    @ObservationIgnored var tutorialSession: WorkboardTutorialSession?
+
+    /// Only the person's section control can introduce Work. Capture routes
+    /// and deep links set the destination directly and never request a tour.
+    func selectDestination(_ selection: Destination) {
+        if destination == .chats && selection == .work {
+            tutorialSession?.beginChatToWorkTransition()
+        }
+        destination = selection
     }
 
     #if os(iOS)
@@ -466,7 +478,7 @@ final class PersonalWorkbenchRouter {
     func selectPhoneSection(_ selection: Destination) {
         guard isPhoneSectionExpanded(for: destination) else { return }
         dismissPhoneSection()
-        destination = selection
+        selectDestination(selection)
     }
     #endif
     var materialPresentation: MaterialPresentation?
@@ -1054,6 +1066,7 @@ final class PersonalWorkbenchModel {
         self.repository = repository
         self.workboardViewModel = workboardViewModel
         self.refreshCoordinator = refreshCoordinator
+        router.tutorialSession = workboardViewModel.tutorialSession
 
         // The gallery's other pages. Weak and read at tap time: the board is the
         // view model's to own, so the router asks for it rather than holding a
@@ -1424,7 +1437,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
             // The bar's brand amber arrives through `WorkbenchTabBarTint`,
             // never through a `.tint` written here — that type carries why the
             // difference decides whether the colour stays inside the bar.
-            TabView(selection: $model.router.destination) {
+            TabView(selection: WorkbenchSectionToolbarItem.selectionBinding(for: model.router)) {
                 Tab(
                     String(localized: LocalizedStringResource("workbench.chats", defaultValue: "Chats")),
                     systemImage: "bubble.left.and.bubble.right",

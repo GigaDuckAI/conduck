@@ -265,10 +265,6 @@ struct WorkboardExperience: View {
             }
             .sharedBackgroundVisibility(.hidden)
 
-            ToolbarItem(placement: .topBarTrailing) {
-                WorkboardTutorialHelpButton(session: viewModel.tutorialSession)
-            }
-
             if showsProjectNavigation {
                 ToolbarItem(placement: .topBarLeading) {
                     WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)
@@ -326,15 +322,12 @@ struct WorkboardPresentationModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .task(id: tutorialGate) {
-                await evaluateTutorialGate()
-            }
             .appReviewBusy(tutorial.isPresented(tutorialAvailability))
             .sheet(isPresented: tutorialIsPresented) {
                 WorkboardTutorialView(session: tutorial, onDone: acknowledgeTutorial)
+                    .onAppear { tutorial.didPresent() }
             }
             .onChange(of: isActive, initial: true) { _, active in
-                tutorial.setDestinationActive(active)
                 guard !active else { return }
                 dismissTransientPresentations()
             }
@@ -402,38 +395,11 @@ struct WorkboardPresentationModifier: ViewModifier {
         )
     }
 
-    private struct WorkboardTutorialGate: Equatable {
-        let availability: WorkboardTutorialAvailability
-        let hasPresentationBlockers: Bool
-        let hasAutomaticBlockers: Bool
-        let isDeferred: Bool
-    }
-
-    private var tutorialGate: WorkboardTutorialGate {
-        WorkboardTutorialGate(availability: tutorialAvailability,
-            hasPresentationBlockers: tutorial.hasPresentationBlockers,
-            hasAutomaticBlockers: tutorial.hasAutomaticBlockers,
-            isDeferred: tutorial.isDeferredForVisit)
-    }
-
-    private func evaluateTutorialGate() async {
-        guard tutorial.canEvaluateAutomatically(tutorialAvailability) else { return }
-        // Let child appearance handlers publish capture/picker ownership before
-        // reading settings. Recheck again after the actor hop: neither an early
-        // mount nor a late read may displace the person's intended operation.
-        await Task.yield()
-        guard !Task.isCancelled, tutorial.canEvaluateAutomatically(tutorialAvailability) else { return }
-        let shouldShow = await SettingsManager.shared.shouldShowWorkboardTutorial()
-        guard !Task.isCancelled else { return }
-        tutorial.resolveAutomaticDecision(shouldShow, availability: tutorialAvailability)
-    }
-
     /// Go to Work and Skip close only the tour. They never navigate, focus the
-    /// composer, record or create sample data. Hidden/blocked binding echoes
-    /// cannot mark an unseen or suspended tour acknowledged.
+    /// composer, record or create sample data. The device flag was consumed
+    /// before presentation, so leaving halfway through never repeats the tour.
     private func acknowledgeTutorial() {
         guard tutorial.acknowledge(tutorialAvailability) else { return }
-        Task { await SettingsManager.shared.markWorkboardTutorialSeen() }
     }
 
     private var tutorialIsPresented: Binding<Bool> {

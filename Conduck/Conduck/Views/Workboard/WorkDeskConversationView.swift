@@ -9,8 +9,8 @@
 // existing registry; this view never creates a competing network owner.
 // Navigation invalidates unfinished composer work before an asynchronous send
 // can claim it. An explicitly accepted send continues under that retained VM.
-// Its recorder and attachment work also block the Work tour, including Help
-// replay; an ordinary saved draft never prevents the person opening the guide.
+// Its recorder and attachment work hold the Work introduction aside until
+// those interactions finish.
 
 #if !os(watchOS)
 import SwiftUI

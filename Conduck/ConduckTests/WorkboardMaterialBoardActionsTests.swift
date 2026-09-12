@@ -283,8 +283,8 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
 
     // MARK: - One-time tutorial flag
 
-    func testTutorialFlagFlipsOnAcknowledgementAndNeverOnAppearance() async {
-        let defaults = InMemoryDefaultsStore()
+    func testPreviouslySeenTutorialFlagPreventsTheNewIntroduction() async {
+        let defaults = InMemoryDefaultsStore(seed: [Constants.workboardTutorialSeenKey: true])
         let manager = SettingsManager(dependencies: .inMemory(
             defaults: defaults,
             ubiquitous: InMemoryUbiquitousStore(),
@@ -292,18 +292,8 @@ final class WorkboardMaterialBoardActionsTests: XCTestCase {
             cloudAvailable: true
         ))
 
-        var shouldShow = await manager.shouldShowWorkboardTutorial()
-        XCTAssertTrue(shouldShow, "an unseen tutorial shows on the first Work visit")
-
-        // Reading the gate is not acknowledgement: a tutorial that never got
-        // looked at still gets its turn.
-        shouldShow = await manager.shouldShowWorkboardTutorial()
-        XCTAssertTrue(shouldShow)
-
-        await manager.markWorkboardTutorialSeen()
-
-        shouldShow = await manager.shouldShowWorkboardTutorial()
-        XCTAssertFalse(shouldShow)
+        let claimed = await manager.claimWorkboardTutorial()
+        XCTAssertFalse(claimed, "People who saw the previous tutorial must not get a new introduction")
         XCTAssertTrue(defaults.bool(forKey: Constants.workboardTutorialSeenKey))
     }
 

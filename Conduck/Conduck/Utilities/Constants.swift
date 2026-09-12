@@ -266,13 +266,10 @@ enum Constants {
     /// `onboardingCompletedKey` / `screenshotAskTipSeenKey`).
     static let gatewayPrimerSeenKey = "gateway_primer_seen"
 
-    /// Device-local: whether the one-time Work board tutorial
-    /// (`WorkboardTutorialView`) has been acknowledged. App Groups UserDefaults,
-    /// NOT iCloud-synced (a per-machine "you've seen this screen" flag, mirroring
-    /// `gatewayPrimerSeenKey` / `screenshotAskTipSeenKey`). Device-local is the
-    /// right posture even though briefs sync: the tutorial teaches the board's
-    /// drag / resize / drop affordances, which differ per input device, so a
-    /// first visit on a second device earns its own showing.
+    /// Device-local claim for the introduction on the first Chats → Work
+    /// selection. App-Group defaults only: each device has different capture
+    /// controls and gets its own introduction. Existing acknowledgments of an
+    /// older guide also suppress it. Never reset or include in iCloud sync.
     static let workboardTutorialSeenKey = "workboard_tutorial_seen"
 
     /// Device-local board presentation; card order continues to sync normally.

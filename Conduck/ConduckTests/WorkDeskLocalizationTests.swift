@@ -65,14 +65,10 @@ final class WorkDeskLocalizationTests: XCTestCase {
         }
     }
 
-    func testProjectAllowancePreservesBothCountsAndRecoveryInstructions() throws {
+    func testProjectLimitPreservesItsCountAndRecoveryInstructions() throws {
         let bundle = try englishAppBundle()
-        XCTAssertEqual(compiledValue(for: "workdesk.projects.allowance", bundle: bundle), "%lld of %lld active projects")
         XCTAssertEqual(compiledValue(for: "workdesk.error.projectLimit", bundle: bundle),
             "The free plan includes %lld active projects. Archive a project to make room. Its materials and conversations stay available.")
-        let rendered = String(localized: "workdesk.projects.allowance",
-            defaultValue: "\(2) of \(Constants.maxActiveWorkProjects) active projects", bundle: bundle, locale: Locale(identifier: "en"))
-        XCTAssertEqual(rendered, "2 of \(Constants.maxActiveWorkProjects) active projects")
     }
 
     func testSelectionCountsKeepTheirMeaningAroundTheNumber() throws {
@@ -108,8 +104,8 @@ final class WorkDeskLocalizationTests: XCTestCase {
     func testWorkTourDescribesArrangementAndEndsWithoutStartingCapture() throws {
         let bundle = try englishAppBundle()
         XCTAssertEqual(
-            compiledValue(for: "workdesk.tour.project.arrange", bundle: bundle),
-            "Hold one card over another to create a project, or use Select. Open the folder to work with its materials."
+            compiledValue(for: "workdesk.tour.project.subtitle", bundle: bundle),
+            "Use Select to group related materials in a project. Open its folder to see them together."
         )
         XCTAssertEqual(
             compiledValue(for: "workdesk.tour.done", bundle: bundle),

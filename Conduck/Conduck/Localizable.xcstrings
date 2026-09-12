@@ -1,6 +1,39 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "workdesk.tour.capture.mac.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Capture to Work…"
+          }
+        }
+      }
+    },
+    "workdesk.tour.capture.mac.brief" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Right-click the menu-bar duck and choose Capture to Work. Save a screenshot, a thought, or both."
+          }
+        }
+      }
+    },
+    "workdesk.tour.capture.phone.brief" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In another app, choose Share → Conduck → Add to Work. It will be waiting on Home."
+          }
+        }
+      }
+    },
     "workdesk.tour.back" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8,259 +41,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Previous step"
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.audio" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "For audio files, use the attachment button or drag-and-drop inside Work."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.car" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "In CarPlay, tap the AI name to open the destination chooser, then choose Add to Work. Without a connected AI, Add to Work is on the main screen. Record one note and organize it later on iPhone, iPad or Mac."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.chat" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "From a chat, choose Save message to Work on a useful message."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.mac.menu" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose Capture to Work…"
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.mac.menu.detail" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Right-click the menu-bar duck, or use your Work shortcut."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.mac.region" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose a screen region, if useful"
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.mac.region.detail" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Press Return to skip the screenshot."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.mac.save" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Speak or type your thought"
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.mac.save.detail" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "For voice, click the menu-bar duck or press your Work shortcut again to save. For text, choose Add to Work."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.mac.shortcut" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your Work shortcut: %@"
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.more" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "More ways to add"
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.phone.conduck" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose Conduck"
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.phone.conduck.detail" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add a note if you’d like."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.phone.missing" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Can’t see Conduck in Share?"
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.phone.missing.detail" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Swipe along the app row and choose More. Find Conduck there, or use Edit to add it to your favorites."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.phone.save" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tap Add to Work"
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.phone.save.detail" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Save it for later, without starting a conversation."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.phone.share" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open Share in another app"
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.phone.share.detail" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A webpage, photo, screenshot, file or selected text."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.route" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Capture route"
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.shortcuts" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "In Shortcuts, use Add to Work for text, Add Files to Work for files, or Record a Note to Work to open the recorder. You can include these actions in your own shortcuts and run them with Siri."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.subtitle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Save something to Work while you’re in another app. It will be waiting on Home."
-          }
-        }
-      }
-    },
-    "workdesk.tour.capture.sync" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "With content sync on, your desk follows you through your private iCloud. Very large files stay on their capture device."
           }
         }
       }
@@ -276,35 +56,13 @@
         }
       }
     },
-    "workdesk.tour.capture.watch" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open Conduck on Apple Watch → Ask → Add to Work. Speak your note, then tap to stop. Your paired iPhone receives it for Work."
-          }
-        }
-      }
-    },
-    "workdesk.tour.collect.boundary" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Adding to Work doesn’t send it to your AI."
-          }
-        }
-      }
-    },
     "workdesk.tour.collect.subtitle" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Collect thoughts, pictures, links and files. Decide what to do with them when you’re ready."
+            "value" : "Type or speak a thought, or add links, screenshots and files. Adding to Work doesn’t send them to your AI."
           }
         }
       }
@@ -320,72 +78,6 @@
         }
       }
     },
-    "workdesk.tour.collect.voice" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Spoken notes become editable text using your chosen speech provider."
-          }
-        }
-      }
-    },
-    "workdesk.tour.continue.files.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Returned attachments can join their project. A file still on its gateway may need downloading and adding to Work before you can reuse it."
-          }
-        }
-      }
-    },
-    "workdesk.tour.continue.files.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "About returned files"
-          }
-        }
-      }
-    },
-    "workdesk.tour.continue.snapshot" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Starting a conversation keeps the materials you reviewed. Later edits don’t change its earlier messages."
-          }
-        }
-      }
-    },
-    "workdesk.tour.continue.subtitle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Continue a conversation, or use selected materials to start a new task."
-          }
-        }
-      }
-    },
-    "workdesk.tour.continue.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Keep the work moving"
-          }
-        }
-      }
-    },
     "workdesk.tour.done" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -393,17 +85,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Go to Work"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Example"
           }
         }
       }
@@ -419,182 +100,6 @@
         }
       }
     },
-    "workdesk.tour.example.assistant" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "My assistant"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.attach" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Attach"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.composer" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add to Home…"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.composer.accessibility" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Work composer: attach material, type in Add to Home, record a spoken note, or add the thought."
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.context" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "For independent consultants. Keep it friendly."
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.context.label" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Project context · optional"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.continue.chat" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Keep talking in the project"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.continue.chat.detail" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open its conversation to read the reply or ask a follow-up."
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.continue.reuse" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Use the next useful piece"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.continue.reuse.detail" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Save a message to Work, or select returned files for another task."
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.home" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Home"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.idea" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Homepage idea"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.material.excluded" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Left out"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.material.included" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Included"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.material.toggle.hint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Include or leave out this material in the example request."
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.materials" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Materials · %lld included"
-          }
-        }
-      }
-    },
     "workdesk.tour.example.project" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -602,17 +107,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Website refresh"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.project.action.hint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Changes only this example. Your own materials stay as they are."
           }
         }
       }
@@ -628,149 +122,6 @@
         }
       }
     },
-    "workdesk.tour.example.project.create" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Select → Create project"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.project.home" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Back to Home"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.project.open" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open project"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.request.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New conversation"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.research" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Research link"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.review" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Review"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.review.back" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Back to example request"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.review.title" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Review conversation"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.screenshot" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Homepage screenshot"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.send" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Send to My assistant"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.send.accessibility" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Example final confirmation: Send to My assistant. Nothing is sent from this tour."
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.share.accessibility" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Share offers separate Add to Work and Send to My assistant actions. Choose Add to Work to collect for later."
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.speak" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Speak"
-          }
-        }
-      }
-    },
     "workdesk.tour.example.task" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -778,61 +129,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Draft a clearer homepage."
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.task.label" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "What would you like to do?"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.thought" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Thought"
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.thought.body" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Make the homepage clearer."
-          }
-        }
-      }
-    },
-    "workdesk.tour.example.type" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Type"
-          }
-        }
-      }
-    },
-    "workdesk.tour.help" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Work tour"
           }
         }
       }
@@ -854,7 +150,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld of 5"
+            "value" : "%lld of 4"
           }
         }
       }
@@ -865,62 +161,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Step %lld of 5"
-          }
-        }
-      }
-    },
-    "workdesk.tour.project.arrange" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hold one card over another to create a project, or use Select. Open the folder to work with its materials."
-          }
-        }
-      }
-    },
-    "workdesk.tour.project.layouts" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Arrange cards freely on the Desk, or use Tiles and List for an ordered view."
-          }
-        }
-      }
-    },
-    "workdesk.tour.project.locations" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Home holds loose materials and project folders. Filing moves a material into its project. New captures inside that project land there too."
-          }
-        }
-      }
-    },
-    "workdesk.tour.project.more" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "How projects keep materials"
-          }
-        }
-      }
-    },
-    "workdesk.tour.project.shared" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add to another project keeps both appearances, with shared edits. Moving replaces only the location you move from."
+            "value" : "Step %lld of 4"
           }
         }
       }
@@ -931,7 +172,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gather a few materials in a folder. Open it to see everything for that project."
+            "value" : "Use Select to group related materials in a project. Open its folder to see them together."
           }
         }
       }
@@ -942,40 +183,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Give related ideas a project"
-          }
-        }
-      }
-    },
-    "workdesk.tour.request.boundary" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Review first. Only Send to your chosen AI starts the conversation."
-          }
-        }
-      }
-    },
-    "workdesk.tour.request.context" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Project context is reusable background. The task is what you want this time. You can also start with a task alone."
-          }
-        }
-      }
-    },
-    "workdesk.tour.request.more" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "What does a conversation need?"
+            "value" : "Bring related ideas together"
           }
         }
       }
@@ -986,7 +194,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Open a project and choose New conversation. Add a task and the materials you choose."
+            "value" : "Start a new conversation in your project. Choose materials, write a task, then review and send to your chosen AI."
           }
         }
       }
@@ -998,72 +206,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Give your AI the right context"
-          }
-        }
-      }
-    },
-    "workdesk.tour.request.unconfigured" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "You can collect and organize before connecting an AI. When you’re ready to send, connect yours in Settings → Personal AI."
-          }
-        }
-      }
-    },
-    "workdesk.tour.route.car" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "CarPlay"
-          }
-        }
-      }
-    },
-    "workdesk.tour.route.mac" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mac · Menu bar"
-          }
-        }
-      }
-    },
-    "workdesk.tour.route.phone" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iPhone and iPad · Share"
-          }
-        }
-      }
-    },
-    "workdesk.tour.route.shortcuts" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Siri and Shortcuts"
-          }
-        }
-      }
-    },
-    "workdesk.tour.route.watch" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Apple Watch"
           }
         }
       }

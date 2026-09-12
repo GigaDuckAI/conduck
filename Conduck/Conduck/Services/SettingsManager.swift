@@ -295,26 +295,15 @@ actor SettingsManager {
 
     // MARK: - Work board tutorial one-time flag (device-local)
 
-    /// Whether the Work tour should still appear automatically. Replays do not
-    /// consult or reset this flag, so people who dismissed an earlier guide are
-    /// not interrupted by an upgraded one. Device-local (App Groups, NOT iCloud-synced), mirroring
-    /// `shouldShowScreenshotAskTip`.
-    ///
-    /// ASYNC instance pair, not the synchronous `static` shape
-    /// `hasSeenGatewayPrimer` uses: the presentation site is
-    /// `WorkboardPresentationModifier`, which reads this from a `.task` (it can
-    /// await the actor) and latches the result in its retained tour session, so
-    /// a hidden workspace keeps progress and a replay cannot race acknowledgement.
-    func shouldShowWorkboardTutorial() -> Bool {
-        return !defaults.bool(forKey: Constants.workboardTutorialSeenKey)
-    }
-
-    /// Mark the Work board tutorial acknowledged so it never shows again. Called
-    /// on ACKNOWLEDGEMENT — its CTA, or a user dismissal of the sheet — NEVER on
-    /// appearance, so a tutorial that never actually got looked at still gets its
-    /// turn.
-    func markWorkboardTutorialSeen() {
+    /// Atomically claim the introduction for the first explicit Chats → Work
+    /// switch on this device. Consume before presenting: another window or an
+    /// interrupted tour must not repeat it. The existing local flag also keeps
+    /// people who saw an earlier tutorial from being introduced again.
+    /// App-Group defaults only; this preference never enters iCloud sync.
+    func claimWorkboardTutorial() -> Bool {
+        guard !defaults.bool(forKey: Constants.workboardTutorialSeenKey) else { return false }
         defaults.set(true, forKey: Constants.workboardTutorialSeenKey)
+        return true
     }
 
     // MARK: - Show in Dock (macOS, device-local)

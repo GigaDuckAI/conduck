@@ -8,17 +8,13 @@
 // `defaultValue:` at runtime, so a guard that resolves the string proves
 // nothing about the row that ships.
 //
-// Seven rules. The first six each held false copy in front of a user before
-// they existed; the seventh is preventive, and says why in its own paragraph:
+// Six rules. The first five each held false copy in front of a user before
+// they existed; the sixth is preventive, and says why in its own paragraph:
 //
 // (1) CAPTURE VOCABULARY. The workboard-prefixed capture controls collect
 // without dispatch. The separate workdesk-prefixed preparation flow may
 // describe a brief and explicit send; it cannot change capture semantics.
-// (2) THE SYNC PROMISE. `WorkMaterialStoragePolicy` keeps a payload over
-// `Constants.workboardSyncCeilingBytes` in the device-local vault behind a
-// reattach, so the tutorial's sync line must name that lane instead of
-// promising every byte on every device.
-// (3) TWO SURFACES WHOSE COPY IS ONLY TRUE KEY BY KEY. The voice sheet is the
+// (2) TWO SURFACES WHOSE COPY IS ONLY TRUE KEY BY KEY. The voice sheet is the
 // one Work surface with an outbound destination — the speech provider the
 // person configured — so it must name it instead of denying it, and it may not
 // deny that the destination is an AI either: several selectable providers ARE
@@ -26,25 +22,25 @@
 // that the audio is transcribed and never becomes part of a conversation. The
 // desk's sync banner speaks about cards, because the shared Chat rows it would
 // otherwise borrow speak about conversations.
-// (4) BOTH DIRECTIONS OF THE CATALOG. A key referenced in source with no row
+// (3) BOTH DIRECTIONS OF THE CATALOG. A key referenced in source with no row
 // renders from its `defaultValue:` and can never be translated; a row no
 // source references is dead weight that outlives the surface it was written
 // for. Neither is visible in a diff.
-// (5) THE DISCARD IS THE ONE DESTRUCTIVE AFFORDANCE ON A WORK SURFACE. Nothing
+// (4) THE DISCARD IS THE ONE DESTRUCTIVE AFFORDANCE ON A WORK SURFACE. Nothing
 // reclaims a Work capture the desk never accepted, so the retry card's discard
 // deletes the only copy of what somebody said; its confirmation has to name
 // the device the bytes are on and say they do not come back.
-// (6) THAT SENTENCE IS FALSE ONCE THE WORDS ARE ON THE DESK. The entry is then
+// (5) THAT SENTENCE IS FALSE ONCE THE WORDS ARE ON THE DESK. The entry is then
 // holding a leftover — the recording, when a death landed between the words
 // card and the clear, or the screenshot, when the recording was retired the
 // moment the words landed — so the confirmation shown there is a DIFFERENT row
-// that may not borrow either of rule (5)'s claims: a dialog that tells someone
+// that may not borrow either of rule (4)'s claims: a dialog that tells someone
 // what they said cannot be recovered, when it is already a card on their desk,
 // stops them tidying up a queue they are entitled to empty. Nor may that row
 // reassure them that the RECORDING is in Work. A Work voice note reaches the
 // desk as words alone, so no recording is ever on it, and the sentence would
 // point at a card that does not exist.
-// (7) AN INTENT'S NAME IS SYSTEM COPY, AND THE SYSTEM SHOWS IT EVERYWHERE. A
+// (6) AN INTENT'S NAME IS SYSTEM COPY, AND THE SYSTEM SHOWS IT EVERYWHERE. A
 // title or description written for the surface its author had open — "Record a
 // note on iPhone" — is read on the Mac's Shortcuts editor, in the Watch's
 // Shortcuts list, in Spotlight and in a Siri suggestion on whichever device is
@@ -54,13 +50,13 @@
 // all. UI copy is deliberately out of scope: a screen belongs to the device
 // rendering it, and the wrist's own strings already name the iPhone.
 //
-// Rules (1) to (3) are scoped to `workboard.*`. Rules (4) to (6) also cover
+// Rules (1) to (2) are scoped to `workboard.*`. Rules (3) to (5) also cover
 // `pendingRetry.*`, the retry card's own keys: the card is a Work surface, but
 // its queue serves Chat as well, so those rows may legitimately say *sent* and
 // are deliberately kept out of the vocabulary scan. `intent.workboardCapture.*`
 // is Shortcut-facing identity whose copy legitimately says "without sending it
 // to an AI", and it is declared twice (app and Watch) so the one-target scan
-// below cannot see both halves. Rule (7) is the one rule scoped to `intent.*`,
+// below cannot see both halves. Rule (6) is the one rule scoped to `intent.*`,
 // and to the two rows the system renders as an action's identity — a title and
 // a description, never a parameter value or an error.
 
@@ -70,7 +66,7 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
 
     private static let keyPrefix = "workboard."
 
-    /// The prefixes rule (4) walks in both directions. `pendingRetry.*` joins
+    /// The prefixes rule (3) walks in both directions. `pendingRetry.*` joins
     /// `workboard.*` because the retry card is a Work surface: the keys carry
     /// the other prefix only because the queue behind them also holds Chat
     /// captures, and a row nobody references would be just as invisible there.
@@ -126,7 +122,7 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
         "workboard.sync.banner.quotaExceeded"
     ]
 
-    /// Rule (7)'s scope: the two row kinds the system renders as an action's
+    /// Rule (6)'s scope: the two row kinds the system renders as an action's
     /// identity. `intent.converse.destination*` and the error rows are left
     /// out — a parameter value or a failure message is read in the context of
     /// the device the person is holding, and only the identity travels.
@@ -312,35 +308,7 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
         }
     }
 
-    // MARK: - (2) The sync promise
-
-    func testTheTutorialSyncLineNamesTheDeviceLocalLane() throws {
-        let strings = try catalogStrings()
-        let value = try XCTUnwrap(
-            englishValue(try XCTUnwrap(strings["workdesk.tour.capture.sync"])),
-            "the tour's sync explanation must carry an English value"
-        )
-        let lowered = value.lowercased()
-
-        XCTAssertTrue(lowered.contains("with content sync on"),
-                      "the tutorial must make cloud delivery conditional on the user's choice: \(value)")
-
-        XCTAssertTrue(
-            lowered.contains("icloud"),
-            "the line still has to teach that the desk syncs: \(value)"
-        )
-        XCTAssertFalse(
-            lowered.contains("everything"),
-            "a payload over Constants.workboardSyncCeilingBytes never leaves the device "
-                + "that captured it, so the line may not promise everything: \(value)"
-        )
-        XCTAssertFalse(
-            lowered.contains("all your devices"),
-            "an oversized payload reaches no other device until it is reattached there: \(value)"
-        )
-    }
-
-    // MARK: - (4) Both directions of the catalog
+    // MARK: - (3) Both directions of the catalog
 
     func testEveryWorkKeyInSourceHasACatalogRow() throws {
         let strings = try catalogStrings()
@@ -371,7 +339,7 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
         }
     }
 
-    // MARK: - (5) The one destructive affordance
+    // MARK: - (4) The one destructive affordance
 
     /// The retry card's discard deletes bytes nothing else will ever reclaim,
     /// so its confirmation carries two claims rather than one: WHERE the
@@ -407,13 +375,13 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
     /// been reduced to a leftover — the recording, when a death landed between
     /// the words card and the clear, or the screenshot, when the recording was
     /// retired the moment the words landed. So it is guarded on the COMPLEMENT
-    /// of rule (5): it has to say the words are safe, and it may not carry
+    /// of rule (4): it has to say the words are safe, and it may not carry
     /// either claim the other row exists to make.
     ///
     /// It may not say the recording is in Work either. No recording is ever on
     /// the desk, so the row's old reassurance — "already in Work and stays
     /// there" — would now point somebody at a card that does not exist, which
-    /// is the same failure as rule (5)'s in the opposite direction.
+    /// is the same failure as rule (4)'s in the opposite direction.
     func testThePublishedDiscardConfirmationSaysTheWordsAreAlreadySaved() throws {
         let strings = try catalogStrings()
         let body = try XCTUnwrap(
@@ -496,7 +464,7 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
         XCTAssertTrue(other.contains("recordings"), "the plural category reads as a singular: \(other)")
     }
 
-    // MARK: - (7) An intent's identity travels to every device
+    // MARK: - (6) An intent's identity travels to every device
 
     /// One App Intent is offered on iPhone, iPad, Mac, Watch and CarPlay from
     /// a single declaration, so its title and description are read on devices

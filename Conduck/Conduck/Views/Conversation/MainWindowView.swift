@@ -470,7 +470,7 @@ struct MainWindowView: View {
         WorkbenchSectionControl(
             selection: Binding(
                 get: { model.router.destination },
-                set: { model.router.destination = $0 }
+                set: { model.router.selectDestination($0) }
             )
         )
     }
@@ -605,13 +605,6 @@ struct MainWindowView: View {
                 Color.clear
                     .frame(width: 0, height: 0)
                     .toolbar {
-                        if workDestinationIsActive && !showingSettings {
-                            ToolbarItem(placement: .primaryAction) {
-                                WorkboardTutorialHelpButton(
-                                    session: personalWorkbenchModel.workboardViewModel.tutorialSession
-                                )
-                            }
-                        }
                         ToolbarItem(placement: .primaryAction) {
                             workbenchSectionPicker(for: personalWorkbenchModel)
                         }

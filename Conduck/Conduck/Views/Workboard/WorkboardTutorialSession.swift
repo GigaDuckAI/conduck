@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// A Work tour belongs to the retained workspace, not its presented sheet.
-// Dismissing acknowledges it; hiding Work or prioritizing a capture parks it
-// with its page and example choices intact. The examples own no real material,
-// conversation, recorder, navigation or composer state.
+// The short Work introduction is armed only by the first explicit Chats → Work
+// selection. Launches and capture routes cannot arm it. Its device-local flag
+// is claimed before presentation, so closing or interrupting it never repeats it.
+// The retained session keeps its page during temporary presentation blockers;
+// leaving Work or starting a directed capture closes it for good.
 //
-// Private capture views publish blockers under their own identities. A source
-// board disappearing must never clear a recorder or picker owned by another
-// mounted surface. Draft/focus blockers defer the automatic introduction only;
-// an explicit Help request can still explain Work without clearing that draft.
+// Private capture views publish blockers under their own identities so one
+// surface disappearing cannot clear another surface's recorder or picker.
 
 import SwiftUI
 import Observation
@@ -22,46 +21,62 @@ struct WorkboardTutorialAvailability: Equatable {
 
 @Observable @MainActor
 final class WorkboardTutorialSession {
-    static let stepCount = 5
+    static let stepCount = 4
 
     private(set) var currentStep = 0
-    var projectStage = 0
-    var includesResearch = false
-    var reviewsRequest = false
 
     private(set) var isRequested = false
-    private(set) var hasEvaluatedAutomatic = false
+    private var hasPresented = false
     private(set) var isDeferredForVisit = false
+    private(set) var isEligibleVisit = false
+    private var hasEnteredFromChats = false
     private var destinationIsActive = false
     private var presentationBlockers: Set<UUID> = []
     private var automaticBlockers: Set<UUID> = []
+    @ObservationIgnored private let claimIntroduction: @MainActor () async -> Bool
+
+    init(claimIntroduction: @escaping @MainActor () async -> Bool = {
+        await SettingsManager.shared.claimWorkboardTutorial()
+    }) {
+        self.claimIntroduction = claimIntroduction
+    }
 
     func advance() { currentStep = min(currentStep + 1, Self.stepCount - 1) }
     func goBack() { currentStep = max(currentStep - 1, 0) }
 
-    func reset() {
-        currentStep = 0
-        projectStage = 0
-        includesResearch = false
-        reviewsRequest = false
-    }
-
-    func requestReplay() {
-        reset()
+    /// Claim on the user action, even if loading or another presenter needs
+    /// time to finish. The task belongs to the transition, not a view task whose
+    /// cancellation could discard a successful device-wide claim.
+    @discardableResult
+    func beginChatToWorkTransition() -> Task<Void, Never>? {
+        guard !hasEnteredFromChats else { return nil }
+        hasEnteredFromChats = true
+        isEligibleVisit = true
         isDeferredForVisit = false
-        isRequested = true
+        return Task { @MainActor [weak self, claimIntroduction] in
+            let claimed = await claimIntroduction()
+            guard let self, self.isEligibleVisit, !self.isDeferredForVisit else { return }
+            self.isRequested = claimed
+        }
     }
 
-    /// Called with Work/Chats visibility, not scene activity. A backgrounded
-    /// capture must not become an ordinary visit merely by foregrounding again.
+    /// Navigation is reported synchronously by the router. Scene activity and
+    /// initial view mounting are not navigation and cannot request a tour.
     func setDestinationActive(_ active: Bool) {
-        if destinationIsActive && !active { isDeferredForVisit = false }
+        if destinationIsActive && !active {
+            isEligibleVisit = false
+            isRequested = false
+            isDeferredForVisit = false
+        }
         destinationIsActive = active
     }
 
-    /// A requested capture/open wins for this whole visit, including the gap
-    /// after its one-shot route has been consumed and before its sheet appears.
-    func deferAutomaticForVisit() { isDeferredForVisit = true }
+    /// A capture, share or deep link takes priority for the rest of this visit.
+    func deferAutomaticForVisit() {
+        isDeferredForVisit = true
+        isEligibleVisit = false
+        isRequested = false
+    }
 
     func setInteraction(owner: UUID, isBlocking: Bool, blocksAutomatic: Bool) {
         if isBlocking { presentationBlockers.insert(owner) }
@@ -75,38 +90,24 @@ final class WorkboardTutorialSession {
         automaticBlockers.remove(owner)
     }
 
-    func canEvaluateAutomatically(_ availability: WorkboardTutorialAvailability) -> Bool {
-        !hasEvaluatedAutomatic && !isRequested && !isDeferredForVisit
-            && availability.isActive && availability.isReady && !availability.isBlocked
-            && !availability.blocksAutomatic
-            && presentationBlockers.isEmpty && automaticBlockers.isEmpty
-    }
-
-    /// Rechecks current availability after the settings actor hop. A late
-    /// response cannot present above a capture that started while awaiting it.
-    func resolveAutomaticDecision(_ shouldShow: Bool, availability: WorkboardTutorialAvailability) {
-        guard canEvaluateAutomatically(availability) else { return }
-        hasEvaluatedAutomatic = true
-        isRequested = shouldShow
-    }
-
     func isPresented(_ availability: WorkboardTutorialAvailability) -> Bool {
-        isRequested && availability.isActive && !availability.isBlocked
+        let canBegin = availability.isReady && !availability.blocksAutomatic
+            && automaticBlockers.isEmpty
+        return isRequested && availability.isActive && !availability.isBlocked
             && !isDeferredForVisit && presentationBlockers.isEmpty
+            && (hasPresented || canBegin)
     }
 
-    /// A programmatic dismissal caused by a hidden/blocked presenter is not
-    /// acknowledgement. Only a currently presentable tour may consume its flag.
+    func didPresent() { hasPresented = true }
+
+    /// Ignore dismissal echoes from a temporarily blocked presenter.
     @discardableResult
     func acknowledge(_ availability: WorkboardTutorialAvailability) -> Bool {
         guard isPresented(availability) else { return false }
         isRequested = false
-        hasEvaluatedAutomatic = true
         return true
     }
 
-    /// Included in the presenter's task identity so releasing the last local
-    /// blocker retries an introduction whose settings flag was never consumed.
     var hasPresentationBlockers: Bool { !presentationBlockers.isEmpty }
     var hasAutomaticBlockers: Bool { !automaticBlockers.isEmpty }
 }
@@ -137,20 +138,5 @@ extension View {
                               blocksAutomatic: Bool = false) -> some View {
         modifier(WorkboardTutorialBusyModifier(session: session, isBlocking: isBlocking,
                                               blocksAutomatic: blocksAutomatic))
-    }
-}
-
-/// Declared inside each platform's existing native toolbar, so a retained Work
-/// layer cannot contribute Help to Chats or lose it outside a navigation host.
-struct WorkboardTutorialHelpButton: View {
-    let session: WorkboardTutorialSession
-
-    var body: some View {
-        Button { session.requestReplay() } label: {
-            Image(systemName: "questionmark.circle")
-        }
-        .help(String(localized: "workdesk.tour.help", defaultValue: "Work tour"))
-        .accessibilityLabel(Text(LocalizedStringResource("workdesk.tour.help", defaultValue: "Work tour")))
-        .accessibilityIdentifier("workboard-tour-help")
     }
 }
