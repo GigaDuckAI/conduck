@@ -9,6 +9,8 @@
 // existing registry; this view never creates a competing network owner.
 // Navigation invalidates unfinished composer work before an asynchronous send
 // can claim it. An explicitly accepted send continues under that retained VM.
+// Its recorder and attachment work also block the Work tour, including Help
+// replay; an ordinary saved draft never prevents the person opening the guide.
 
 #if !os(watchOS)
 import SwiftUI
@@ -90,6 +92,7 @@ struct WorkDeskConversationView: View {
     let viewModel: ConversationDetailViewModel
     @Bindable var session: WorkDeskConversationSession
     let settingsVM: SettingsViewModel
+    var tutorialSession: WorkboardTutorialSession? = nil
     var allowsNewTurns = true
     var newActivityMessage: String? = nil
     /// The host can forward this to its window visibility registry. The ID is
@@ -105,6 +108,25 @@ struct WorkDeskConversationView: View {
     private var isActive: Bool {
         destinationIsActive && session.isCurrentPresentation(presentationID)
     }
+
+    private var tutorialPresentationIsBlocking: Bool {
+        guard destinationIsActive else { return false }
+        switch session.recorder.state {
+        case .recording, .processing, .preparingVoice: return true
+        case .idle, .error: break
+        }
+        if showingVoiceSettings { return true }
+        #if os(iOS)
+        let attachments = session.attachments
+        return attachments.showingPhotosPicker || attachments.showingFileImporter
+            || attachments.showingCamera || attachments.showingCameraDeniedAlert
+            || attachments.pendingLargeFile != nil || attachments.isPreparingAttachments
+            || attachments.staged.hasLoadingItem || attachments.staged.hasUploadingItem
+        #elseif os(macOS)
+        return session.drops.isTargeted || session.drops.isResolving
+            || session.drops.dispatchingIdentity != nil
+        #endif
+    }
     #if os(macOS)
     private var canAcceptDrop: Bool {
         isActive && allowsNewTurns && ref != nil && viewModel.boundGatewayAvailable
@@ -117,6 +139,10 @@ struct WorkDeskConversationView: View {
         threadAndComposer
             .environment(\.workbenchDestinationIsActive, isActive)
             .background(AppColors.background)
+            .workboardTutorialBusy(
+                session: tutorialSession,
+                isBlocking: tutorialPresentationIsBlocking
+            )
             .onAppear { updatePresentation() }
             .onChange(of: destinationIsActive) { _, _ in updatePresentation() }
             .onChange(of: allowsNewTurns) { _, allowed in

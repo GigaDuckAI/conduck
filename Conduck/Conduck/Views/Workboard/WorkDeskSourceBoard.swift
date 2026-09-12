@@ -9,6 +9,8 @@
 // Each location keeps its own readable order as well as spatial positions.
 // Whole-card native drags preview an insertion edge; a cross-location release
 // files and orders atomically, outside the external-file import lane.
+// Removal confirmation and live reorder/transfer work keep the Work tour from
+// taking the surface; a native drag's remembered source alone is not live work.
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -87,6 +89,15 @@ struct WorkDeskSourceBoard: View {
                 readableBoard
             }
         }
+        .workboardTutorialBusy(
+            session: viewModel.tutorialSession,
+            isBlocking: workbenchDestinationIsActive && (
+                pendingRemoval != nil || pendingReadableOrder != nil
+                    || readableReorder.isResolving || readableReorder.target != nil
+                    || workspace.transferCoordinator.isDragging
+            ),
+            blocksAutomatic: false
+        )
         // Populated readable layouts own precise card/append targets. A second
         // pane-wide receiver would outline the window and compete for the drop.
         .workDeskMaterialLocationDrop(location: boardScope.location,

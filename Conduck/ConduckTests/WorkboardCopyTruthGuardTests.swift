@@ -317,8 +317,8 @@ final class WorkboardCopyTruthGuardTests: XCTestCase {
     func testTheTutorialSyncLineNamesTheDeviceLocalLane() throws {
         let strings = try catalogStrings()
         let value = try XCTUnwrap(
-            englishValue(try XCTUnwrap(strings["workboard.tutorial.point.review.optionalSync"])),
-            "the tutorial's third line must carry an English value"
+            englishValue(try XCTUnwrap(strings["workdesk.tour.capture.sync"])),
+            "the tour's sync explanation must carry an English value"
         )
         let lowered = value.lowercased()
 

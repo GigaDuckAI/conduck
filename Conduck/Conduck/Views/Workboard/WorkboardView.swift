@@ -265,6 +265,10 @@ struct WorkboardExperience: View {
             }
             .sharedBackgroundVisibility(.hidden)
 
+            ToolbarItem(placement: .topBarTrailing) {
+                WorkboardTutorialHelpButton(session: viewModel.tutorialSession)
+            }
+
             if showsProjectNavigation {
                 ToolbarItem(placement: .topBarLeading) {
                     WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)
@@ -316,21 +320,21 @@ struct WorkboardPresentationModifier: ViewModifier {
     let isActive: Bool
     let reduceMotion: Bool
 
-    /// The one-time board tutorial. `hasEvaluatedTutorial` latches only once the
-    /// gate has actually been READ, so a first activation that arrives while
-    /// another Work sheet is up gets a later turn instead of being consumed.
-    @State private var showsTutorial = false
-    @State private var hasEvaluatedTutorial = false
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var tutorial: WorkboardTutorialSession { viewModel.tutorialSession }
 
     func body(content: Content) -> some View {
         content
             .task(id: tutorialGate) {
                 await evaluateTutorialGate()
             }
+            .appReviewBusy(tutorial.isPresented(tutorialAvailability))
             .sheet(isPresented: tutorialIsPresented) {
-                WorkboardTutorialView(onDone: acknowledgeTutorial)
+                WorkboardTutorialView(session: tutorial, onDone: acknowledgeTutorial)
             }
-            .onChange(of: isActive) { _, active in
+            .onChange(of: isActive, initial: true) { _, active in
+                tutorial.setDestinationActive(active)
                 guard !active else { return }
                 dismissTransientPresentations()
             }
@@ -382,56 +386,61 @@ struct WorkboardPresentationModifier: ViewModifier {
             }
     }
 
-    // MARK: - One-time board tutorial
+    // MARK: - Retained tour presentation
 
-    /// SwiftUI drops the second of two concurrent presentations, so the tutorial
-    /// waits until Work owns no other sheet, alert or confirmation. Both inputs
-    /// key the `.task`, which is what gives it a later turn.
-    private struct WorkboardTutorialGate: Hashable {
-        let isActive: Bool
-        let isBlocked: Bool
-    }
-
-    private var tutorialGate: WorkboardTutorialGate {
-        WorkboardTutorialGate(
+    private var tutorialAvailability: WorkboardTutorialAvailability {
+        let workspace = viewModel.deskWorkspace
+        return WorkboardTutorialAvailability(
             isActive: isActive,
-            isBlocked: viewModel.notice != nil
+            isReady: viewModel.hasLoadedDesk && !viewModel.isLoading && scenePhase == .active,
+            isBlocked: (!viewModel.hasLoadedDesk && viewModel.isLoading) || viewModel.isCapturingIntoDesk
+                || viewModel.notice != nil || workspace.blocksWorkTourPresentation
+                || WorkVoiceCaptureLaunchRoute.shared.isPending,
+            blocksAutomatic: workspace.isShowingConversation || workspace.isSearching
+                || workspace.isSelecting || workspace.scope != .all
+                || viewModel.hasComposerDraft || workspace.materialRevealRequest != nil
         )
     }
 
-    private func evaluateTutorialGate() async {
-        guard !hasEvaluatedTutorial else { return }
-        let gate = tutorialGate
-        guard gate.isActive, !gate.isBlocked else { return }
-        hasEvaluatedTutorial = true
-        let shouldShow = await SettingsManager.shared.shouldShowWorkboardTutorial()
-        // A sheet or alert can open across the actor hop, which restarts the
-        // `.task`. Release the latch when that happened so the tutorial gets a
-        // later turn instead of presenting into an occupied slot.
-        let resolved = tutorialGate
-        guard !Task.isCancelled, resolved.isActive, !resolved.isBlocked else {
-            hasEvaluatedTutorial = false
-            return
-        }
-        guard shouldShow else { return }
-        showsTutorial = true
+    private struct WorkboardTutorialGate: Equatable {
+        let availability: WorkboardTutorialAvailability
+        let hasPresentationBlockers: Bool
+        let hasAutomaticBlockers: Bool
+        let isDeferred: Bool
     }
 
-    /// "Seen" means acknowledged, so the write happens here and nowhere else:
-    /// the CTA calls this directly, and a swipe-down or Escape reaches it
-    /// through the binding's setter. Leaving Work parks the sheet instead —
-    /// the flag is untouched and the tutorial returns on the next visit.
+    private var tutorialGate: WorkboardTutorialGate {
+        WorkboardTutorialGate(availability: tutorialAvailability,
+            hasPresentationBlockers: tutorial.hasPresentationBlockers,
+            hasAutomaticBlockers: tutorial.hasAutomaticBlockers,
+            isDeferred: tutorial.isDeferredForVisit)
+    }
+
+    private func evaluateTutorialGate() async {
+        guard tutorial.canEvaluateAutomatically(tutorialAvailability) else { return }
+        // Let child appearance handlers publish capture/picker ownership before
+        // reading settings. Recheck again after the actor hop: neither an early
+        // mount nor a late read may displace the person's intended operation.
+        await Task.yield()
+        guard !Task.isCancelled, tutorial.canEvaluateAutomatically(tutorialAvailability) else { return }
+        let shouldShow = await SettingsManager.shared.shouldShowWorkboardTutorial()
+        guard !Task.isCancelled else { return }
+        tutorial.resolveAutomaticDecision(shouldShow, availability: tutorialAvailability)
+    }
+
+    /// Go to Work and Skip close only the tour. They never navigate, focus the
+    /// composer, record or create sample data. Hidden/blocked binding echoes
+    /// cannot mark an unseen or suspended tour acknowledged.
     private func acknowledgeTutorial() {
-        guard showsTutorial else { return }
-        showsTutorial = false
+        guard tutorial.acknowledge(tutorialAvailability) else { return }
         Task { await SettingsManager.shared.markWorkboardTutorialSeen() }
     }
 
     private var tutorialIsPresented: Binding<Bool> {
         Binding(
-            get: { isActive && showsTutorial },
+            get: { tutorial.isPresented(tutorialAvailability) },
             set: { isPresented in
-                guard !isPresented, isActive else { return }
+                guard !isPresented else { return }
                 acknowledgeTutorial()
             }
         )

@@ -71,6 +71,18 @@ final class WorkDeskWorkspaceState {
     var projectDeletionReview: WorkDeskProjectDeletionReview?
     var materialUsePickerID: UUID?
     var materialRevealRequest: WorkDeskMaterialRevealRequest?
+
+    /// The automatic tour waits for the existing workspace presenters. This
+    /// includes queued editors so one sheet's dismissal cannot open the tour
+    /// before the next editor takes over the same presentation slot.
+    var blocksWorkTourPresentation: Bool {
+        showsProjectPicker || projectEditor != nil || pendingProjectEditor != nil
+            || preparingProjectID != nil || conversationSelectionRequest != nil
+            || editingContextProjectID != nil || deletingProjectID != nil
+            || projectDeletionReview != nil || materialUsePickerID != nil
+            || projectPreview.request != nil || organization.projectLimitRequested
+            || organization.projectSelectionRequested || organization.errorMessage != nil
+    }
     private(set) var projectConversations: [ConversationRecord] = []
     private(set) var results: [UUID: WorkDeskResultRecord] = [:]
     private(set) var materialUses: [UUID: [WorkDeskMaterialUseRecord]] = [:]

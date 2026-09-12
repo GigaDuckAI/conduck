@@ -105,15 +105,15 @@ final class WorkDeskLocalizationTests: XCTestCase {
         }
     }
 
-    func testUpdatedTutorialDescribesArrangementAndReviewedHandoff() throws {
+    func testWorkTourDescribesArrangementAndEndsWithoutStartingCapture() throws {
         let bundle = try englishAppBundle()
         XCTAssertEqual(
-            compiledValue(for: "workboard.tutorial.point.arrange", bundle: bundle),
-            "Drag anywhere on a card to arrange it. Hold it over another idea to create a project, or use Select."
+            compiledValue(for: "workdesk.tour.project.arrange", bundle: bundle),
+            "Hold one card over another to create a project, or use Select. Open the folder to work with its materials."
         )
         XCTAssertEqual(
-            compiledValue(for: "workdesk.tutorial.prepare", bundle: bundle),
-            "Shape a project brief, choose your AI, then review before sending."
+            compiledValue(for: "workdesk.tour.done", bundle: bundle),
+            "Go to Work"
         )
     }
 

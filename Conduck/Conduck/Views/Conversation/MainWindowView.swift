@@ -17,6 +17,8 @@
 // `splitView`, giving the dense setup screens the whole resizable window. Evolved
 // from the retired `ConversationsWindowView` — the VM-binding invariant below is
 // copied VERBATIM and is load-bearing.
+// Settings, guided setup and live window operations block the retained Work
+// tour too, so its first-visit presentation cannot cover another task.
 //
 // WORK / CHATS: one persistent split view owns the window, and the two
 // sections swap pixels inside its columns rather than swapping the split
@@ -603,6 +605,13 @@ struct MainWindowView: View {
                 Color.clear
                     .frame(width: 0, height: 0)
                     .toolbar {
+                        if workDestinationIsActive && !showingSettings {
+                            ToolbarItem(placement: .primaryAction) {
+                                WorkboardTutorialHelpButton(
+                                    session: personalWorkbenchModel.workboardViewModel.tutorialSession
+                                )
+                            }
+                        }
                         ToolbarItem(placement: .primaryAction) {
                             workbenchSectionPicker(for: personalWorkbenchModel)
                         }
@@ -815,6 +824,14 @@ struct MainWindowView: View {
             || showDeleteAllConfirmation || !sidebarSearch.isEmpty
             || coordinator.dictationService.state == .recording
             || coordinator.dictationService.state == .processing)
+        .workboardTutorialBusy(
+            session: personalWorkbenchModel?.workboardViewModel.tutorialSession,
+            isBlocking: showingSettings || guidedHost.presentation != nil
+                || showDeleteAllConfirmation || isDropResolving || isDropTargeted
+                || coordinator.dictationService.state == .recording
+                || coordinator.dictationService.state == .processing,
+            blocksAutomatic: !sidebarSearch.isEmpty
+        )
         .onReceive(NotificationCenter.default.publisher(for: .openConversationDeepLink)) { note in
             activateChatsForToolbarAction()
             consumeConversationDeepLink(note)

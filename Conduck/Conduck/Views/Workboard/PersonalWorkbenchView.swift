@@ -12,6 +12,8 @@
 // during a section change so the dissolve happens at the destination's width.
 // Chat stays mounted across the switch; Mac retains Work after its first visit
 // so both keep their scroll views and view-owned composition state.
+// Work's local previews, sharing and Settings hold its tour aside. Explicit
+// Work routes defer automatic teaching before they change the visible surface.
 
 #if !os(watchOS)
 
@@ -1176,7 +1178,10 @@ struct PersonalWorkbenchView<Chats: View>: View {
             #if os(iOS)
             // This presenter stays above the regular/compact shell branches, so
             // resizing an iPad cannot destroy a Settings editor opened in Work.
-            .modifier(WorkSettingsPresentationModifier(router: model.router))
+            .modifier(WorkSettingsPresentationModifier(
+                router: model.router,
+                tutorialSession: model.workboardViewModel.tutorialSession
+            ))
             #endif
             // The window view the system's share UI pops out of. It has to be a
             // real platform view in a real window: `NSSharingServicePicker`
@@ -1191,6 +1196,19 @@ struct PersonalWorkbenchView<Chats: View>: View {
                     || model.router.previewNotice != nil
                     || model.router.share.isPreparing
             )
+            .workboardTutorialBusy(
+                session: model.workboardViewModel.tutorialSession,
+                isBlocking: model.router.materialPresentation != nil
+                    || model.router.filePreview.previewURL != nil
+                    || model.router.previewNotice != nil
+                    || model.router.share.isPreparing,
+                blocksAutomatic: false
+            )
+            .onChange(of: model.router.share.isPreparing, initial: true) { _, isPreparing in
+                // Preparation ends just before the system share UI opens.
+                // Keep the automatic tour deferred across that presentation gap.
+                if isPreparing { model.workboardViewModel.tutorialSession.deferAutomaticForVisit() }
+            }
             .requestAppReviewAfterActiveDays(anchor: model.router.share.anchor)
             .overlay(alignment: .top) { sharePreparingBanner }
             // ONE failure, rendered by whichever surface is on top. A gallery
@@ -1247,6 +1265,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 #endif
             }
             .onReceive(NotificationCenter.default.publisher(for: .openWorkboardDeepLink)) { _ in
+                model.workboardViewModel.tutorialSession.deferAutomaticForVisit()
                 workboardDeepLinkRoute.open()
             }
             .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
@@ -1255,6 +1274,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 #endif
             }
             .onReceive(NotificationCenter.default.publisher(for: .showWorkboard)) { _ in
+                model.workboardViewModel.tutorialSession.deferAutomaticForVisit()
                 model.router.destination = .work
             }
             .onReceive(NotificationCenter.default.publisher(for: .showChats)) { _ in
@@ -1506,6 +1526,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
 /// with the requested conversation selected underneath, as on macOS.
 private struct WorkSettingsPresentationModifier: ViewModifier {
     let router: PersonalWorkbenchRouter
+    let tutorialSession: WorkboardTutorialSession
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var settingsViewModel = SettingsViewModel()
     @State private var presentation: Presentation?
@@ -1534,6 +1555,11 @@ private struct WorkSettingsPresentationModifier: ViewModifier {
                 presentation = nil
             }
             .appReviewBusy(presentation != nil)
+            .workboardTutorialBusy(
+                session: tutorialSession,
+                isBlocking: presentation != nil,
+                blocksAutomatic: false
+            )
     }
 
     private func openSettings() {

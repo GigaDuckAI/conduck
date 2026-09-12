@@ -295,16 +295,16 @@ actor SettingsManager {
 
     // MARK: - Work board tutorial one-time flag (device-local)
 
-    /// Whether the one-time Work board tutorial (`WorkboardTutorialView` — the
-    /// duck beat that replaces the board surface's removed explainer text) should
-    /// still show. Device-local (App Groups, NOT iCloud-synced), mirroring
+    /// Whether the Work tour should still appear automatically. Replays do not
+    /// consult or reset this flag, so people who dismissed an earlier guide are
+    /// not interrupted by an upgraded one. Device-local (App Groups, NOT iCloud-synced), mirroring
     /// `shouldShowScreenshotAskTip`.
     ///
     /// ASYNC instance pair, not the synchronous `static` shape
     /// `hasSeenGatewayPrimer` uses: the presentation site is
     /// `WorkboardPresentationModifier`, which reads this from a `.task` (it can
-    /// await the actor) and latches the result in its own `@State`, so the gate is
-    /// evaluated once per process and no reopen can race the mark-seen write.
+    /// await the actor) and latches the result in its retained tour session, so
+    /// a hidden workspace keeps progress and a replay cannot race acknowledgement.
     func shouldShowWorkboardTutorial() -> Bool {
         return !defaults.bool(forKey: Constants.workboardTutorialSeenKey)
     }

@@ -722,6 +722,8 @@ final class WorkboardViewModel {
 
     var notice: WorkboardNotice?
     var workspaceStatus: WorkboardTransientStatus?
+    /// Retains tour progress independently of the sheet and Work/Chats pixels.
+    let tutorialSession = WorkboardTutorialSession()
 
     /// True while a capture mutation holds the serialized lane.
     private(set) var isMutatingDesk = false
@@ -1400,6 +1402,9 @@ final class WorkboardViewModel {
     }
 
     func shareMaterial(_ material: WorkboardMaterialSnapshot) {
+        // Note/link preparation can finish before an observer sees its busy
+        // pulse. Defer here before the native share UI is allowed to appear.
+        tutorialSession.deferAutomaticForVisit()
         dependencies.shareMaterial(material)
     }
 

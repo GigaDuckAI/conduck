@@ -58,6 +58,7 @@ struct WorkDeskWorkspaceView: View {
                 WorkDeskConversationView(conversation: conversation, viewModel: model,
                     session: workspace.conversationSession(for: conversation.id),
                     settingsVM: workspace.conversationSettings,
+                    tutorialSession: viewModel.tutorialSession,
                     allowsNewTurns: workspace.currentProjectAllowsNewActivity,
                     newActivityMessage: workspace.currentProject?.isArchived == true
                         ? WorkDeskStoreError.projectArchived.localizedDescription

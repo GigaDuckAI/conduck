@@ -6,6 +6,8 @@
 // The desk's capture surface. A typed thought, picker result, or drop is
 // persisted as inert Work and nothing else: this view has no transport
 // dependency of any kind, so capture can never become a send.
+// Capture presentations and imports hold the Work tour aside. A pending voice
+// route defers its automatic arrival before the recorder consumes that request.
 
 import PhotosUI
 import SwiftUI
@@ -119,6 +121,16 @@ struct WorkboardCaptureCanvas: View {
         viewModel.isCapturingIntoDesk
     }
 
+    private var tutorialPresentationIsBlocking: Bool {
+        var isBlocking = isAddingThought || isImporting
+            || showsPhotoPicker || showsFileImporter || showsVoiceCapture
+            || showsLinkComposer || largeImportConfirmation != nil
+        #if os(iOS)
+        isBlocking = isBlocking || showsCamera || showsCameraDeniedAlert
+        #endif
+        return workbenchDestinationIsActive && isBlocking
+    }
+
     var body: some View {
         Group {
             if mode == .composer {
@@ -139,6 +151,11 @@ struct WorkboardCaptureCanvas: View {
                 || showsPhotoPicker || showsFileImporter || showsVoiceCapture
                 || showsLinkComposer || largeImportConfirmation != nil
         ))
+        .workboardTutorialBusy(
+            session: viewModel.tutorialSession,
+            isBlocking: tutorialPresentationIsBlocking,
+            blocksAutomatic: workbenchDestinationIsActive && (composerFocused || !cleanComposerText.isEmpty)
+        )
         .fileImporter(
             isPresented: activeFileImporterIsPresented,
             allowedContentTypes: [.item],
@@ -263,6 +280,9 @@ struct WorkboardCaptureCanvas: View {
         guard mode == .composer else { return }
         guard workbenchDestinationIsActive else { return }
         guard !showsVoiceCapture else { return }
+        if WorkVoiceCaptureLaunchRoute.shared.isPending {
+            viewModel.tutorialSession.deferAutomaticForVisit()
+        }
         guard WorkVoiceCaptureLaunchRoute.shared.consume() else { return }
         // A Shortcut opens this sheet but supplies no visible project context.
         // It must never inherit whichever project another window left open.
@@ -897,6 +917,12 @@ private struct WorkboardPaneDropModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .contentShape(Rectangle())
+            .workboardTutorialBusy(
+                session: viewModel.tutorialSession,
+                isBlocking: workbenchDestinationIsActive
+                    && (isImporting || isDropTargeted || largeImportConfirmation != nil),
+                blocksAutomatic: false
+            )
             .overlay {
                 if isDropTargeted, !isImporting {
                     dropOverlay
