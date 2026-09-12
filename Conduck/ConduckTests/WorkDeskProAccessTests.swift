@@ -32,6 +32,38 @@ final class WorkDeskProAccessTests: XCTestCase {
         XCTAssertEqual(preserved, restored)
     }
 
+    func testColorEditsPreserveArchiveAndUnresolvedFreeSelection() async throws {
+        let access = ProjectAccessFixture(.init(hasProAccess: true))
+        let store = isolated.make(proAccessProvider: { access.value })
+        let projects = try await createProjects(5, store: store)
+        let archived = try await store.applyWorkDeskMutation(.archiveProject(id: projects[0].id, isArchived: true))
+        access.set(.init(hasExpiredSubscription: true))
+
+        for (id, color) in [(projects[0].id, WorkDeskProjectColor.sage), (projects[1].id, .blue)] {
+            let before = try await store.fetchWorkDeskOrganization()
+            let changed = try await store.applyWorkDeskMutation(.setProjectColor(id: id, color: color))
+            for old in before.projects {
+                let after = try XCTUnwrap(changed.projects.first { $0.id == old.id })
+                var expected = old
+                if old.id == id {
+                    expected.color = color
+                    expected.updatedAt = after.updatedAt
+                }
+                XCTAssertEqual(after, expected, "Color metadata cannot reactivate or select projects")
+            }
+            XCTAssertEqual(changed.projects.filter { !$0.isArchived }.count, 4)
+            XCTAssertEqual(changed.projects.first { $0.id == projects[0].id }?.archivedAt,
+                           archived.projects.first { $0.id == projects[0].id }?.archivedAt)
+        }
+        let beforeRestore = try await store.fetchWorkDeskOrganization()
+        do {
+            try await store.applyWorkDeskMutation(.archiveProject(id: projects[0].id, isArchived: false))
+            XCTFail("Editing a color must not grant another active slot")
+        } catch { XCTAssertEqual(error as? WorkDeskStoreError, .activeProjectLimitReached) }
+        let afterRestore = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(afterRestore, beforeRestore)
+    }
+
     func testExpiredSubscriberExplicitlyChoosesThreeWithoutLosingMaterialsOrHistory() async throws {
         let access = ProjectAccessFixture(.init(hasProAccess: true))
         let store = isolated.make(proAccessProvider: { access.value })

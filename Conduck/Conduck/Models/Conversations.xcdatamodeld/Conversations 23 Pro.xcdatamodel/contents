@@ -159,7 +159,7 @@
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
     </entity>
     <entity name="WorkDeskProject" representedClassName="WorkDeskProject" syncable="YES" codeGenerationType="class">
-        <attribute name="colorID" optional="YES" attributeType="String"/>
+        <attribute name="archivedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="title" optional="YES" attributeType="String"/>
         <attribute name="brief" optional="YES" attributeType="String"/>

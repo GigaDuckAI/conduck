@@ -252,22 +252,6 @@ nonisolated enum WorkDeskCanvasGeometry {
         return CGRect(origin: CGPoint(x: x, y: y), size: size)
     }
 
-    /// Hover previews stay at a readable screen size even when their folder is
-    /// tiny. Position them beside the folder, flipping at the window's edge.
-    static func projectPreviewFrame(near frame: CGRect, viewport: CGSize, itemCount: Int) -> CGRect {
-        guard viewport.width.isFinite, viewport.height.isFinite, viewport.width > 0, viewport.height > 0,
-              frame.minX.isFinite, frame.minY.isFinite, frame.maxX.isFinite, frame.maxY.isFinite else { return .zero }
-        let inset = min(12, min(viewport.width, viewport.height) / 4)
-        let width = min(310, max(1, viewport.width - inset * 2))
-        let height = min(CGFloat(92 + min(3, max(0, itemCount)) * 54 + (itemCount > 3 ? 22 : 0)),
-                         max(1, viewport.height - inset * 2))
-        let right = frame.maxX + 14
-        let preferredX = right + width <= viewport.width - inset ? right : frame.minX - width - 14
-        let x = min(max(inset, preferredX), max(inset, viewport.width - width - inset))
-        let y = min(max(inset, frame.minY), max(inset, viewport.height - height - inset))
-        return CGRect(x: x, y: y, width: width, height: height)
-    }
-
     static func edgePanVelocity(at point: CGPoint, viewport: CGSize) -> CGSize {
         guard viewport.width > 120, viewport.height > 160 else { return .zero }
         let margin: CGFloat = 48

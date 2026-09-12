@@ -572,14 +572,7 @@ struct MainWindowView: View {
             if let personalWorkbenchModel {
                 if mountsWorkLayer {
                     workboardExperience(for: personalWorkbenchModel).detailColumn
-                        .environment(\.workDeskConversationResolver, WorkDeskConversationResolver(
-                            resolve: { [coordinator] in coordinator.viewModel(for: $0) },
-                            reportVisible: { [coordinator, workVisibilityOwnerID] id, visible in
-                                if visible { coordinator.setWindowVisibleConversation(id, ownerID: workVisibilityOwnerID) }
-                                else { coordinator.clearWindowVisibleConversation(ifCurrent: id, ownerID: workVisibilityOwnerID) }
-                            },
-                            retain: { [coordinator] id, owner in coordinator.retainWorkViewModel(for: id, ownerID: owner) },
-                            release: { [coordinator] owner in coordinator.releaseWorkViewModel(ownerID: owner) }))
+                        .environment(\.workDeskConversationResolver, workConversationResolver)
                         .environment(\.workDeskSidebarIsHosted, true)
                         .environment(\.workDeskNavigationIsExternal, true)
                         .environment(\.workbenchDestinationIsActive, workDestinationIsActive)
@@ -932,6 +925,19 @@ struct MainWindowView: View {
 
     // MARK: - Gateway picker
 
+    /// Both the toolbar and detail resolve through this window's registry.
+    /// The toolbar is a sibling of the detail, so it cannot inherit its environment.
+    private var workConversationResolver: WorkDeskConversationResolver {
+        WorkDeskConversationResolver(
+            resolve: { [coordinator] in coordinator.viewModel(for: $0) },
+            reportVisible: { [coordinator, workVisibilityOwnerID] id, visible in
+                if visible { coordinator.setWindowVisibleConversation(id, ownerID: workVisibilityOwnerID) }
+                else { coordinator.clearWindowVisibleConversation(ifCurrent: id, ownerID: workVisibilityOwnerID) }
+            },
+            retain: { [coordinator] id, owner in coordinator.retainWorkViewModel(for: id, ownerID: owner) },
+            release: { [coordinator] owner in coordinator.releaseWorkViewModel(ownerID: owner) })
+    }
+
     /// Shared gateway chooser; the window keeps its dot outside every
     /// picker/clone/read-only state so the title-bar mark never jumps.
     private var gatewayPickerMenu: some View {
@@ -1003,6 +1009,7 @@ struct MainWindowView: View {
     private var gatewayToolbarContent: some View {
         if workDestinationIsActive, let personalWorkbenchModel {
             WorkDeskToolbarTitle(workspace: personalWorkbenchModel.workboardViewModel.deskWorkspace)
+                .environment(\.workDeskConversationResolver, workConversationResolver)
         } else if !coordinator.hasAnyConfiguredGateway {
             Color.clear
                 .frame(width: 1, height: 1)

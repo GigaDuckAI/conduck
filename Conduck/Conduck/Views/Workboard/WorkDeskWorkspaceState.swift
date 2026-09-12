@@ -31,10 +31,13 @@ enum WorkDeskScope: Hashable, Sendable {
 final class WorkDeskWorkspaceState {
     let organization: WorkDeskOrganization
     let transferCoordinator = WorkDeskTransferCoordinator()
+    let projectPreview = WorkDeskProjectPreviewState()
+    let organizationUndo = WorkDeskOrganizationUndoController()
     var scope: WorkDeskScope = .all
     var isActive = false
     var search = "" {
         didSet {
+            if search != oldValue { projectPreview.dismiss(force: true) }
             let searching = !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             if isSearching != searching { isSearching = searching }
             if searching {
@@ -124,7 +127,11 @@ final class WorkDeskWorkspaceState {
         }
     }
 
-    var composerScope: WorkDeskScope { isSearching ? .all : scope }
+    /// Navigation remembers the selected project during global search. The
+    /// visible board, layout controls and capture destination agree on Home
+    /// for that temporary aggregate surface.
+    var displayedScope: WorkDeskScope { isSearching ? .all : scope }
+    var composerScope: WorkDeskScope { displayedScope }
 
     func composerSession(for scope: WorkDeskScope) -> WorkDeskComposerSession {
         if WorkboardLayoutMode.isDeleted(scope) { return WorkDeskComposerSession() }
@@ -197,12 +204,30 @@ final class WorkDeskWorkspaceState {
         return organization.project(id: id)
     }
 
-    var currentProjectAllowsNewActivity: Bool {
-        currentProject?.isArchived == false && !organization.requiresFreeProjectSelection
+    /// One native presenter owns a free-project choice, including a contents
+    /// preview that is itself a sheet on compact devices. Closing a preview
+    /// changes presentation ownership without changing the requested choice.
+    enum ProjectSelectionPresenter: Equatable {
+        case workspace, picker, preview(UUID)
     }
 
-    var isProjectTrayPresented: Bool {
-        currentProject != nil && !isSearching && !isShowingConversation
+    var projectSelectionPresenter: ProjectSelectionPresenter? {
+        guard isActive, organization.projectSelectionRequested,
+              organization.canPresentFreeProjectSelection else { return nil }
+        if let request = projectPreview.request { return .preview(request.id) }
+        if showsProjectPicker { return .picker }
+        guard projectEditor == nil, preparingProjectID == nil,
+              editingContextProjectID == nil, projectDeletionReview == nil,
+              materialUsePickerID == nil else { return nil }
+        return .workspace
+    }
+
+    var showsProjectAccessRecovery: Bool {
+        organization.canPresentFreeProjectSelection || (currentProject?.isArchived == true && !isSearching)
+    }
+
+    var currentProjectAllowsNewActivity: Bool {
+        currentProject?.isArchived == false && !organization.requiresFreeProjectSelection
     }
 
     var currentConversation: ConversationRecord? {
@@ -241,6 +266,7 @@ final class WorkDeskWorkspaceState {
     }
 
     func selectConversation(_ id: UUID, projectID: UUID) {
+        projectPreview.dismiss(force: true)
         suspendConversation()
         conversationSelectionRequest = nil
         scope = .project(projectID)
@@ -404,6 +430,7 @@ final class WorkDeskWorkspaceState {
     }
 
     func selectScope(_ scope: WorkDeskScope) {
+        projectPreview.dismiss(force: true)
         transferCoordinator.cancel()
         suspendConversation()
         selectedConversationID = nil
@@ -417,6 +444,13 @@ final class WorkDeskWorkspaceState {
         showsProjectPicker = false
     }
 
+    /// Search results belong to an aggregate display, not a navigation change.
+    /// Selecting one must preserve the query and the project to return to.
+    func selectMaterial(_ id: UUID, in boardScope: WorkDeskScope) {
+        if !isSearching, scope != boardScope { selectScope(boardScope) }
+        toggleSelection(id)
+    }
+
     func toggleSelection(_ id: UUID) {
         isSelecting = true
         if selectedIDs.contains(id) { selectedIDs.remove(id) }
@@ -424,6 +458,9 @@ final class WorkDeskWorkspaceState {
     }
 
     func reconcile(materials: [WorkboardMaterialSnapshot]) {
+        if let request = projectPreview.request, organization.project(id: request.projectID) == nil {
+            projectPreview.dismiss(force: true)
+        }
         materialGroupIDs = Dictionary(uniqueKeysWithValues: materials.map {
             ($0.id, Set([$0.id] + ($0.companion.map { [$0.id] } ?? [])))
         })
@@ -488,7 +525,7 @@ final class WorkDeskWorkspaceState {
         organization.projectLimitRequested = false
     }
 
-    /// Both the project tray and the detail header use this admission check.
+    /// The project detail header uses this admission check.
     /// Opening never resets a retained request or starts a gateway operation.
     @discardableResult
     func beginConversation(resolver: WorkDeskConversationResolver) -> Bool {
@@ -597,6 +634,7 @@ final class WorkDeskWorkspaceState {
     }
 
     func suspend() {
+        projectPreview.dismiss(force: true)
         transferCoordinator.cancel()
         setRefreshActive(false)
         deletingProjectID = nil

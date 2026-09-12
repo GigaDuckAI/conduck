@@ -41,6 +41,16 @@ it.
 
 ## Running the tests
 
+Choose verification for the changed behavior. The full-suite commands below are
+recipes, not a requirement for every edit. Prefer affected tests and one relevant
+build; skip unrelated platforms and targets. Review docs, copy and styling with
+lightweight checks. Consolidate fixes before expensive builds, reuse passing
+results, and rerun only affected checks after a correction. Independent reviewers
+should use existing test evidence and investigate specific gaps instead of
+repeating the same suite. Full suites and multiple Release builds belong to
+explicit release gates or concrete broad regression risks. Stop once the chosen
+checks pass and actionable findings are resolved.
+
 Two simulator suites, both run from the repository root.
 [`CONTRIBUTING.md`](CONTRIBUTING.md#running-tests) covers the same ground for a
 human contributor and adds the one suite these commands do not reach; the

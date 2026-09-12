@@ -169,7 +169,7 @@ final class WorkDeskOrganization {
     ) async -> UUID? {
         await awaitInitialProAccess()
         let project = WorkDeskProjectRecord(title: title, brief: brief, position: position)
-        let saved = await enqueue(.createProject(project, materialIDs: materialIDs))
+        let saved = await enqueue(.createProject(project, materialIDs: materialIDs, automaticallyAssignColor: true))
         return saved ? project.id : nil
     }
 
@@ -178,7 +178,7 @@ final class WorkDeskOrganization {
                        from source: WorkDeskLocation, expected: WorkDeskLocationTokens? = nil) async -> UUID? {
         await awaitInitialProAccess()
         let project = WorkDeskProjectRecord(title: title, brief: brief, position: position)
-        let saved = await enqueue(.createProjectFrom(project, materialIDs: materialIDs, source: source, expected: expected))
+        let saved = await enqueue(.createProjectFrom(project, materialIDs: materialIDs, source: source, expected: expected, automaticallyAssignColor: true))
         return saved ? project.id : nil
     }
 
@@ -186,6 +186,11 @@ final class WorkDeskOrganization {
     func updateProject(id: UUID, title: String, brief: String, preferredGatewayRef: String?, expectedUpdatedAt: Date? = nil) async -> Bool {
         await enqueue(.updateProject(id: id, title: title, brief: brief, preferredGatewayRef: preferredGatewayRef,
                                      expectedUpdatedAt: expectedUpdatedAt))
+    }
+
+    @discardableResult
+    func setProjectColor(id: UUID, color: WorkDeskProjectColor, expectedUpdatedAt: Date? = nil) async -> Bool {
+        await enqueue(.setProjectColor(id: id, color: color, expectedUpdatedAt: expectedUpdatedAt))
     }
 
     @discardableResult

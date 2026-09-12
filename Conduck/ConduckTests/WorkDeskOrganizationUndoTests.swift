@@ -286,6 +286,63 @@ final class WorkDeskOrganizationUndoTests: XCTestCase {
         XCTAssertTrue(manager.canRedo, "Touch Undo preserves the same Redo as the keyboard command.")
     }
 
+    func testWorkspaceAndPreviewShareOneReceiptAndTouchUndoCannotReplayFromNativeHistory() async throws {
+        let fixture = Fixture()
+        let store = DeferredRestoreStore(snapshot: fixture.afterSnapshot)
+        let organization = WorkDeskOrganization(fetch: { await store.snapshot }, apply: { try await store.apply($0) })
+        await organization.reload()
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        let parentController = workspace.organizationUndo
+        let previewController = workspace.organizationUndo
+        XCTAssertTrue(parentController === previewController)
+        let manager = UndoManager()
+        manager.groupsByEvent = false
+        // Parent and compact sheet can observe the same publication in separate
+        // updates. Each delivery must still represent a single user action.
+        for controller in [parentController, previewController] {
+            manager.beginUndoGrouping()
+            controller.receive(fixture.receipt, organization: organization, manager: manager)
+            manager.endUndoGrouping()
+        }
+        let editor = EditorTarget()
+        manager.beginUndoGrouping()
+        manager.registerUndo(withTarget: editor) { $0.restoreCount += 1 }
+        manager.setActionName("Edit text")
+        manager.endUndoGrouping()
+
+        let touchUndo = Task { await previewController.undoLatest(organization: organization, manager: manager) }
+        try await waitUntil { await store.startedCount == 1 }
+        XCTAssertTrue(parentController.isApplying, "Both presentations must disable Undo while the same write runs")
+        XCTAssertFalse(parentController.showsUndo)
+        XCTAssertEqual(editor.restoreCount, 0)
+        await store.completeNext()
+        await touchUndo.value
+        assertSameAppearances(organization.locationTokens(for: [fixture.material]), fixture.receipt.before)
+        let restoration = try XCTUnwrap(organization.lastLocationUndo)
+        for controller in [parentController, previewController] {
+            controller.receive(restoration, organization: organization, manager: manager)
+            controller.receive(fixture.receipt, organization: organization, manager: manager)
+        }
+        XCTAssertFalse(parentController.showsUndo, "Delayed sheet delivery cannot revive an already consumed receipt")
+        XCTAssertEqual(manager.undoActionName, "Edit text")
+        manager.undo()
+        XCTAssertEqual(editor.restoreCount, 1)
+        // Explicit grouping retains an empty group for the deduplicated sheet
+        // delivery. Exhaust remaining native history to prove none of those
+        // groups can replay a stale filing action; canUndo alone cannot tell.
+        for _ in 0..<4 where manager.canUndo {
+            manager.undo()
+            XCTAssertFalse(parentController.isApplying, "An empty group cannot enqueue another restoration")
+        }
+        XCTAssertFalse(manager.canUndo, "The bounded history must be exhausted")
+        await Task.yield()
+        XCTAssertEqual(editor.restoreCount, 1)
+        XCTAssertFalse(parentController.isApplying)
+        let attempts = await store.startedCount
+        XCTAssertEqual(attempts, 1)
+        XCTAssertNil(organization.errorMessage)
+    }
+
     private func assertSameAppearances(_ actual: WorkDeskLocationTokens, _ expected: WorkDeskLocationTokens,
                                        file: StaticString = #filePath, line: UInt = #line) {
         struct Appearance: Equatable {
