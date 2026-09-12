@@ -10,6 +10,7 @@ import SwiftUI
 struct WorkDeskSidebarView: View {
     @Bindable var viewModel: WorkboardViewModel
     @Environment(\.workbenchDestinationIsActive) private var isActive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var workspace: WorkDeskWorkspaceState { viewModel.deskWorkspace }
     private var materials: [WorkboardMaterialSnapshot] { viewModel.desk?.materials ?? [] }
@@ -69,7 +70,8 @@ struct WorkDeskSidebarView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    railRow(title: String(localized: LocalizedStringResource("workdesk.all", defaultValue: "All materials")), symbol: "tray.full", scope: .all, count: materials.count)
+                    railRow(title: String(localized: LocalizedStringResource("workdesk.all", defaultValue: "Home")), symbol: "tray.full", scope: .all,
+                        count: workspace.visibleMaterials(in: materials, scope: .all, search: "").count)
                     HStack {
                         Text(LocalizedStringResource("workdesk.projects", defaultValue: "Projects"))
                             .font(.caption.weight(.semibold)).foregroundStyle(AppColors.textTertiary)
@@ -145,7 +147,9 @@ struct WorkDeskSidebarView: View {
     }
 
     private func railRow(title: String, symbol: String, scope: WorkDeskScope, count: Int) -> some View {
-        Button { workspace.selectScope(scope) } label: {
+        Button {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.28)) { workspace.selectScope(scope) }
+        } label: {
             HStack(spacing: 10) {
                 Image(systemName: symbol).frame(width: 20).foregroundStyle(workspace.scope == scope && !workspace.isShowingConversation && !workspace.isSearching ? AppColors.accent : AppColors.textSecondary)
                 Text(verbatim: title).font(.subheadline.weight(.medium)).lineLimit(2)
@@ -157,5 +161,7 @@ struct WorkDeskSidebarView: View {
         }
         .choiceCardButton(cornerRadius: 12)
         .accessibilityAddTraits(workspace.scope == scope && !workspace.isShowingConversation && !workspace.isSearching ? .isSelected : [])
+        .modifier(WorkDeskRailDropTarget(workspace: workspace, scope: scope, title: title,
+            isEnabled: isActive && navigationIsAvailable))
     }
 }

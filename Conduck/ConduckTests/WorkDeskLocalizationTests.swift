@@ -30,9 +30,9 @@ final class WorkDeskLocalizationTests: XCTestCase {
     func testNavigationAndProjectWorkflowHaveTheirEnglishLabels() throws {
         let bundle = try englishAppBundle()
         let expected = [
-            "workdesk.all": "All materials",
+            "workdesk.all": "Home",
             "workdesk.projects": "Projects",
-            "workdesk.removeFromProject": "Remove from project",
+            "workdesk.removeFromThisProject": "Remove from this project",
             "workdesk.search": "Find an idea or file",
             "workdesk.select": "Select",
             "workdesk.select.all": "Select all",
@@ -106,7 +106,7 @@ final class WorkDeskLocalizationTests: XCTestCase {
 
     func testProjectCaptureNamesItsActualDestinationInTheCompiledBundle() throws {
         let bundle = try englishAppBundle()
-        XCTAssertEqual(compiledValue(for: "workdesk.capture.all.prompt", bundle: bundle), "Add to All materials…")
+        XCTAssertEqual(compiledValue(for: "workdesk.capture.all.prompt", bundle: bundle), "Add to Home…")
         XCTAssertEqual(compiledValue(for: "workdesk.capture.project.prompt", bundle: bundle), "Add to %@…")
         for title in ["Research", "Notes %@ 100%", "旅行"] {
             var label = WorkboardCaptureDestination.project(UUID(), title: title).composerPrompt
@@ -115,14 +115,14 @@ final class WorkDeskLocalizationTests: XCTestCase {
         }
         XCTAssertEqual(compiledValue(for: "workdesk.project.empty.title", bundle: bundle), "This project is ready for ideas")
         XCTAssertEqual(compiledValue(for: "workdesk.all.empty.message", bundle: bundle),
-            "Capture a thought or add a file below. Everything you collect appears here, including materials in projects.")
+            "Capture a thought or add a file below. Move related materials into projects to make room on your desk.")
     }
 
     /// Both drop titles name the frozen destination; the shared caption keeps
     /// the capture-only promise without contradicting project membership.
     func testTheDropOverlayNamesItsActualDestination() throws {
         let bundle = try englishAppBundle()
-        XCTAssertEqual(compiledValue(for: "workdesk.capture.all.drop", bundle: bundle), "Drop into All materials")
+        XCTAssertEqual(compiledValue(for: "workdesk.capture.all.drop", bundle: bundle), "Drop into Home")
         XCTAssertEqual(compiledValue(for: "workdesk.capture.project.drop", bundle: bundle), "Drop into %@")
         for title in ["Research", "Notes %@ 100%", "旅行"] {
             var label = WorkboardCaptureDestination.project(UUID(), title: title).dropTitle
@@ -135,11 +135,11 @@ final class WorkDeskLocalizationTests: XCTestCase {
         )
     }
 
-    func testTheSpatialLayoutLabelIsDistinctFromTheAllMaterialsScope() throws {
+    func testTheSpatialLayoutLabelIsDistinctFromTheHomeScope() throws {
         let bundle = try englishAppBundle()
         let scope = compiledValue(for: "workdesk.all", bundle: bundle)
         let layout = compiledValue(for: "workdesk.layout.desk", bundle: bundle)
-        XCTAssertEqual(scope, "All materials")
+        XCTAssertEqual(scope, "Home")
         XCTAssertEqual(layout, "Desk")
         XCTAssertNotEqual(layout, scope)
     }

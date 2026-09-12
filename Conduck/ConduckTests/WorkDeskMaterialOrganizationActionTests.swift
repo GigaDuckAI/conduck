@@ -28,17 +28,20 @@ final class WorkDeskMaterialOrganizationActionTests: XCTestCase {
         await organization.reload()
         let workspace = WorkDeskWorkspaceState(organization: organization)
         workspace.selectedIDs = [material.id]
-        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id)
+        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id, sourceLocation: .project(source.id))
         XCTAssertEqual(actions.destinations.map(\.id), [destination.id])
         let moved = await actions.move(to: destination.id)
         XCTAssertTrue(moved)
         XCTAssertEqual(actions.projectID, destination.id)
-        XCTAssertEqual(actions.destinations.map(\.id), [source.id])
+        XCTAssertFalse(actions.canMove, "The old source appearance no longer owns this action.")
         XCTAssertTrue(workspace.selectedIDs.isEmpty)
-        let returned = await actions.move(to: nil)
+        let destinationActions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id,
+                                                                    sourceLocation: .project(destination.id))
+        let returned = await destinationActions.move(to: nil)
         XCTAssertTrue(returned)
         XCTAssertNil(actions.project)
-        XCTAssertEqual(Set(actions.destinations.map(\.id)), [source.id, destination.id])
+        let homeActions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id, sourceLocation: .home)
+        XCTAssertEqual(Set(homeActions.destinations.map(\.id)), [source.id, destination.id])
         let preserved = try await store.fetchWorkMaterial(id: material.id)
         XCTAssertEqual(preserved, material)
     }
@@ -54,7 +57,7 @@ final class WorkDeskMaterialOrganizationActionTests: XCTestCase {
         await organization.reload()
         let workspace = WorkDeskWorkspaceState(organization: organization)
         workspace.selectedIDs = [material.id]
-        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id)
+        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id, sourceLocation: .project(source.id))
         // Another presentation removed the target after this menu was opened.
         try await store.applyWorkDeskMutation(.deleteProject(id: destination.id))
         let moved = await actions.move(to: destination.id)
@@ -75,7 +78,13 @@ final class WorkDeskMaterialOrganizationActionTests: XCTestCase {
         let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id)
         actions.createProject()
         XCTAssertEqual(workspace.projectEditor?.materialIDs, [material.id])
-        XCTAssertEqual(workspace.projectEditor?.position, WorkDeskPoint(x: point.x, y: point.y - 188))
+        let proposed = try XCTUnwrap(workspace.projectEditor?.position)
+        let folder = WorkDeskCanvasGeometry.frame(at: proposed, bodySize: WorkDeskCanvasGeometry.projectBodySize, scale: 1)
+        let card = WorkDeskCanvasGeometry.frame(at: point, bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: 1)
+        XCTAssertFalse(folder.intersects(card), "The editor's folder must not cover its source material")
+        XCTAssertLessThanOrEqual(hypot(proposed.x - point.x, proposed.y - point.y),
+            Double(max(WorkDeskCanvasGeometry.projectBodySize.width, WorkDeskCanvasGeometry.projectBodySize.height)),
+            "Creating from a material must retain that material's part of the desk")
         XCTAssertTrue(organization.projects.isEmpty, "menu activation must not create an unnamed project")
         actions.select()
         XCTAssertTrue(workspace.isSelecting)
@@ -103,10 +112,12 @@ final class WorkDeskMaterialOrganizationActionTests: XCTestCase {
         await organization.reload()
         XCTAssertTrue(flag.didChange, "the menu must invalidate below an unchanged cached material preview")
         XCTAssertEqual(actions.project?.title, "Renamed elsewhere")
-        XCTAssertTrue(actions.destinations.isEmpty)
+        XCTAssertTrue(actions.additionalDestinations.isEmpty)
         actions.openProject()
         XCTAssertEqual(workspace.scope, .project(project.id))
-        XCTAssertFalse(actions.showsLocation)
+        let openedActions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id,
+                                                               sourceLocation: .project(project.id))
+        XCTAssertFalse(openedActions.showsLocation)
         workspace.search = "Renamed"
         XCTAssertTrue(actions.showsLocation)
     }
@@ -154,7 +165,7 @@ final class WorkDeskMaterialOrganizationActionTests: XCTestCase {
         XCTAssertNil(workspace.conversationSelectionRequest)
         XCTAssertFalse(actions.canCreateProject)
         workspace.selectScope(.all)
-        XCTAssertTrue(actions.canCreateProject)
+        XCTAssertFalse(actions.canCreateProject, "A retained project card must not borrow a newly selected Home context.")
         XCTAssertFalse(actions.canStartConversation)
     }
 
@@ -187,6 +198,126 @@ final class WorkDeskMaterialOrganizationActionTests: XCTestCase {
         try await store.deleteConversation(id: second.id)
         await workspace.reloadProjectActivity()
         XCTAssertEqual(actions.uses.map(\.conversationID), [first.id])
+    }
+
+    func testSharedMaterialMoveAndRemovalChangeOnlyTheVisibleLocation() async throws {
+        let store = isolated.make()
+        let material = try await capture(in: store)
+        let first = WorkDeskProjectRecord(title: "First")
+        let second = WorkDeskProjectRecord(title: "Second")
+        let third = WorkDeskProjectRecord(title: "Third")
+        try await store.applyWorkDeskMutation(.createProject(first, materialIDs: [material.id]))
+        try await store.applyWorkDeskMutation(.createProject(second, materialIDs: []))
+        try await store.applyWorkDeskMutation(.createProject(third, materialIDs: []))
+        let organization = WorkDeskOrganization(store: store)
+        await organization.reload()
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        let firstActions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id,
+                                                              sourceLocation: .project(first.id))
+        let added = await firstActions.add(to: second.id)
+        XCTAssertTrue(added)
+        XCTAssertEqual(Set(firstActions.projects.map(\.id)), [first.id, second.id])
+        XCTAssertEqual(firstActions.additionalDestinations.map(\.id), [third.id])
+        let moved = await firstActions.move(to: third.id)
+        XCTAssertTrue(moved)
+        XCTAssertFalse(organization.contains(materialID: material.id, at: .project(first.id)))
+        XCTAssertTrue(organization.contains(materialID: material.id, at: .project(second.id)))
+        XCTAssertTrue(organization.contains(materialID: material.id, at: .project(third.id)))
+        let thirdActions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id,
+                                                              sourceLocation: .project(third.id))
+        let returned = await thirdActions.move(to: nil)
+        XCTAssertTrue(returned)
+        XCTAssertTrue(organization.contains(materialID: material.id, at: .home))
+        XCTAssertTrue(organization.contains(materialID: material.id, at: .project(second.id)))
+        XCTAssertFalse(organization.contains(materialID: material.id, at: .project(third.id)))
+        let secondActions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id,
+                                                               sourceLocation: .project(second.id))
+        let removed = await secondActions.removeFromProject()
+        XCTAssertTrue(removed)
+        XCTAssertTrue(organization.contains(materialID: material.id, at: .home))
+        XCTAssertTrue(secondActions.projects.isEmpty)
+        let preserved = try await store.fetchWorkMaterial(id: material.id)
+        XCTAssertEqual(preserved, material, "Filing never creates or edits another payload.")
+    }
+
+    func testSearchCanAddWithoutInventingAMoveSource() async throws {
+        let store = isolated.make()
+        let material = try await capture(in: store)
+        let project = WorkDeskProjectRecord(title: "Project")
+        try await store.applyWorkDeskMutation(.createProject(project, materialIDs: []))
+        let organization = WorkDeskOrganization(store: store)
+        await organization.reload()
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        workspace.search = "Thought"
+        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id, sourceLocation: nil)
+        XCTAssertFalse(actions.canMove)
+        XCTAssertFalse(actions.canCreateProject)
+        let moved = await actions.move(to: project.id)
+        XCTAssertFalse(moved)
+        let added = await actions.add(to: project.id)
+        XCTAssertTrue(added)
+        XCTAssertTrue(organization.contains(materialID: material.id, at: .home))
+        XCTAssertTrue(organization.contains(materialID: material.id, at: .project(project.id)))
+        let addedAgain = await actions.add(to: project.id)
+        XCTAssertTrue(addedAgain)
+        XCTAssertEqual(actions.projects.count, 1)
+    }
+
+    func testBackgroundHomeCardCannotBorrowTrayProjectForSelectionOrConversation() async throws {
+        let store = isolated.make()
+        let material = try await capture(in: store)
+        let project = WorkDeskProjectRecord(title: "Open tray")
+        try await store.applyWorkDeskMutation(.createProject(project, materialIDs: []))
+        let organization = WorkDeskOrganization(store: store)
+        await organization.reload()
+        let added = await organization.add(materialIDs: [material.id], to: .project(project.id))
+        XCTAssertTrue(added)
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        workspace.selectScope(.project(project.id))
+        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id, sourceLocation: .home)
+        XCTAssertFalse(actions.canStartConversation)
+        actions.startConversation()
+        XCTAssertNil(workspace.conversationSelectionRequest)
+        actions.select()
+        XCTAssertEqual(workspace.scope, .all)
+        XCTAssertEqual(workspace.selectedIDs, [material.id])
+    }
+
+    func testSelectingAnotherCardInSameLocationPreservesTheExistingSelection() async throws {
+        let store = isolated.make()
+        let first = try await capture(in: store)
+        let second = try await capture(in: store)
+        let organization = WorkDeskOrganization(store: store)
+        await organization.reload()
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        workspace.selectedIDs = [first.id]
+        workspace.isSelecting = true
+        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: second.id, sourceLocation: .home)
+        actions.select()
+        XCTAssertEqual(workspace.selectedIDs, [first.id, second.id])
+        actions.select()
+        XCTAssertEqual(workspace.selectedIDs, [first.id])
+    }
+
+    func testAStaleMenuNeverMovesANewerAppearance() async throws {
+        let store = isolated.make()
+        let material = try await capture(in: store)
+        let first = WorkDeskProjectRecord(title: "First")
+        let second = WorkDeskProjectRecord(title: "Second")
+        try await store.applyWorkDeskMutation(.createProject(first, materialIDs: [material.id]))
+        try await store.applyWorkDeskMutation(.createProject(second, materialIDs: []))
+        let organization = WorkDeskOrganization(store: store)
+        await organization.reload()
+        let workspace = WorkDeskWorkspaceState(organization: organization)
+        workspace.selectedIDs = [material.id]
+        let stale = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id, sourceLocation: .project(first.id))
+        let movedElsewhere = await organization.move(materialIDs: [material.id], from: .project(first.id), to: .project(second.id))
+        XCTAssertTrue(movedElsewhere)
+        let staleMove = await stale.move(to: nil)
+        XCTAssertFalse(staleMove)
+        XCTAssertTrue(organization.contains(materialID: material.id, at: .project(second.id)))
+        XCTAssertFalse(organization.contains(materialID: material.id, at: .home))
+        XCTAssertEqual(workspace.selectedIDs, [material.id])
     }
 
     private func capture(in store: ConversationStore) async throws -> WorkMaterialRecord {

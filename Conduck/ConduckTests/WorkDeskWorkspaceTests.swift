@@ -193,18 +193,18 @@ final class WorkDeskWorkspaceTests: XCTestCase {
         XCTAssertNil(workspace.pendingProjectEditor)
     }
 
-    func testAllMaterialsKeepsFiledUnfiledAndDanglingMembersVisible() async {
+    func testHomeKeepsLooseAndDanglingMaterialsWhileProjectHoldsFiledMaterials() async {
         let a = material("A"), b = material("B"), c = material("C")
         let project = WorkDeskProjectRecord(title: "Project")
         let workspace = await makeWorkspace(.init(projects: [project], placements: [
             b.id: .init(materialID: b.id, projectID: project.id),
             c.id: .init(materialID: c.id, projectID: UUID())
         ]))
-        XCTAssertEqual(workspace.visibleMaterials(in: [a, b, c]).map(\.id), [a.id, b.id, c.id])
+        XCTAssertEqual(workspace.visibleMaterials(in: [a, b, c]).map(\.id), [a.id, c.id])
         workspace.selectScope(.project(project.id))
         XCTAssertEqual(workspace.visibleMaterials(in: [a, b, c]).map(\.id), [b.id])
         workspace.selectScope(.all)
-        XCTAssertEqual(workspace.visibleMaterials(in: [a, b, c]).map(\.id), [a.id, b.id, c.id])
+        XCTAssertEqual(workspace.visibleMaterials(in: [a, b, c]).map(\.id), [a.id, c.id])
     }
 
     func testHomeSearchIncludesVoiceWordsWithoutChangingMembership() async {
@@ -430,7 +430,10 @@ final class WorkDeskWorkspaceTests: XCTestCase {
     private actor MutationRecorder {
         var assignedIDs: [UUID] = []
         func record(_ mutation: WorkDeskMutation) {
-            if case .assign(let ids, _) = mutation { assignedIDs = ids }
+            switch mutation {
+            case .assign(let ids, _), .addLocations(let ids, _, _, _), .moveLocations(let ids, _, _, _, _): assignedIDs = ids
+            default: break
+            }
         }
     }
 }

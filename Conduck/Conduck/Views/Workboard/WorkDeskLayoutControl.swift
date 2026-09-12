@@ -23,12 +23,13 @@ struct WorkDeskLayoutControl: View {
     @Bindable var viewModel: WorkboardViewModel
     let supportsSpatialLayout: Bool
     var compact = false
+    var scope: WorkDeskScope? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.workbenchDestinationIsActive) private var isActive
 
     private var renderedMode: WorkboardLayoutMode {
         WorkDeskLayoutPresentation.resolved(
-            preference: viewModel.layoutMode,
+            preference: scope.map { viewModel.deskWorkspace.layoutSession(for: $0).mode } ?? viewModel.layoutMode,
             supportsSpatialLayout: supportsSpatialLayout,
             requiresAccessibleList: dynamicTypeSize.isAccessibilitySize
         )
@@ -38,7 +39,12 @@ struct WorkDeskLayoutControl: View {
         Menu {
             Picker(selection: Binding(
                 get: { renderedMode },
-                set: { viewModel.layoutMode = $0 }
+                set: { mode in
+                    if let scope {
+                        viewModel.deskWorkspace.layoutSession(for: scope).mode = mode
+                        mode.save(for: scope)
+                    } else { viewModel.layoutMode = mode }
+                }
             )) {
                 ForEach(WorkboardLayoutMode.allCases, id: \.self) { mode in
                     Label(mode.title, systemImage: mode.symbol)

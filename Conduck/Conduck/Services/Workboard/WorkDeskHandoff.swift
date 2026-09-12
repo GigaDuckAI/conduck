@@ -138,6 +138,9 @@ struct WorkDeskPreparedHandoff: Identifiable, Sendable {
     let id: UUID
     var projectID: UUID? = nil
     var taskTitle: String? = nil
+    /// Review reads the same frozen inputs used to assemble the outgoing prompt.
+    var task: String = ""
+    var projectContext: String = ""
     let prompt: String
     let materials: [WorkboardMaterialSnapshot]
     let connection: WorkDeskGatewayConnection
@@ -233,6 +236,12 @@ final class WorkDeskHandoff {
     private(set) var isPreparing = false
     private(set) var isSending = false
     private(set) var acceptedConversationID: UUID?
+    /// The request owner retires its local draft even after its sheet departs.
+    var onAccepted: (@MainActor () -> Void)?
+    /// Persist recovery identity before any upload or conversation side effect.
+    var onWillSend: (@MainActor (UUID) -> Bool)?
+    /// A refusal proves this attempt did not reach local conversation acceptance.
+    var onSendRefused: (@MainActor (UUID) -> Void)?
     var errorMessage: String?
     private var claimedPackets = Set<UUID>()
     private var preparationGeneration = UUID()
@@ -302,6 +311,8 @@ final class WorkDeskHandoff {
             try Task.checkCancellation()
             prepared = WorkDeskPreparedHandoff(id: conversationID, projectID: projectID,
                 taskTitle: ReplySanitizer.displayLine(brief, maxLength: 100, fallback: title),
+                task: brief.trimmingCharacters(in: .whitespacesAndNewlines),
+                projectContext: projectContext.trimmingCharacters(in: .whitespacesAndNewlines),
                 prompt: WorkDeskHandoffPolicy.prompt(title: title, brief: brief, materials: materials, projectContext: projectContext),
                 materials: materials, connection: connection, files: files)
         } catch {
@@ -314,7 +325,9 @@ final class WorkDeskHandoff {
     /// Once accepted this controller can only open that same conversation.
     func send() async -> UUID? {
         guard !isSending, let packet = prepared, acceptedConversationID == nil,
-              claimedPackets.insert(packet.id).inserted else { return nil }
+              !claimedPackets.contains(packet.id) else { return nil }
+        guard onWillSend?(packet.id) != false else { return nil }
+        claimedPackets.insert(packet.id)
         isSending = true
         errorMessage = nil
         var uploaded: [String] = []
@@ -348,6 +361,7 @@ final class WorkDeskHandoff {
             let accepted = await dependencies.submit(packet.id, packet.prompt, attachments, packet.connection.option.ref, packet.connection.files?.durableLaneID, packet.connection.agent, packet.materialInputs)
             guard accepted else { throw WorkDeskHandoffError.submissionRefused }
             acceptedConversationID = packet.id
+            onAccepted?()
             packet.reclaim()
             prepared = nil
             return packet.id
@@ -359,6 +373,7 @@ final class WorkDeskHandoff {
             packet.reclaim()
             prepared = nil
             errorMessage = Self.message(for: error)
+            onSendRefused?(packet.id)
             return nil
         }
     }

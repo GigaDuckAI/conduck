@@ -16,6 +16,8 @@ import Observation
 final class WorkDeskOrganization {
     private(set) var projects: [WorkDeskProjectRecord] = []
     private(set) var placements: [UUID: WorkDeskPlacementRecord] = [:]
+    private(set) var materialLocations: WorkDeskLocationTokens = [:]
+    private(set) var lastLocationUndo: WorkDeskLocationUndo?
     private(set) var isSaving = false
     var errorMessage: String?
     private var projectsByID: [UUID: WorkDeskProjectRecord] = [:]
@@ -54,12 +56,42 @@ final class WorkDeskOrganization {
 
     func project(id: UUID) -> WorkDeskProjectRecord? { projectsByID[id] }
 
+    func locations(for materialID: UUID) -> [WorkDeskLocationRecord] {
+        snapshot.locations(for: materialID)
+    }
+
+    func contains(materialID: UUID, at location: WorkDeskLocation) -> Bool {
+        locations(for: materialID).contains { $0.location == location }
+    }
+
+    func locationTokens(for materialIDs: [UUID]) -> WorkDeskLocationTokens {
+        Dictionary(uniqueKeysWithValues: Set(materialIDs).map { ($0, locations(for: $0)) })
+    }
+
+    /// Existing card rendering accepts one placement per material. Resolve only
+    /// the requested location so a different project's coordinates never leak.
+    func placements(at location: WorkDeskLocation) -> [UUID: WorkDeskPlacementRecord] {
+        let ids = Set(placements.keys).union(materialLocations.keys)
+        return ids.reduce(into: [:]) { result, id in
+            guard let record = locations(for: id).first(where: { $0.location == location }) else { return }
+            result[id] = .init(materialID: id, projectID: location.projectID, position: record.position,
+                               homePosition: location == .home ? record.position : placements[id]?.homePosition,
+                               isPinned: placements[id]?.isPinned ?? false, updatedAt: record.updatedAt)
+        }
+    }
+
+    private var snapshot: WorkDeskOrganizationSnapshot {
+        .init(projects: projects, placements: placements, materialLocations: materialLocations)
+    }
+
     /// Count the visible capture groups in one pass. Project rails must not
     /// rescan every card and project for each row on a pointer-driven refresh.
     /// A missing project's cards belong to the loose desk, just as in the canvas.
     func materialCounts(in materials: [WorkboardMaterialSnapshot]) -> [UUID?: Int] {
         var counts: [UUID?: Int] = [:]
-        for material in materials { counts[projectID(for: material.id), default: 0] += 1 }
+        for material in materials {
+            for location in locations(for: material.id) { counts[location.location.projectID, default: 0] += 1 }
+        }
         return counts
     }
 
@@ -86,6 +118,14 @@ final class WorkDeskOrganization {
     ) async -> UUID? {
         let project = WorkDeskProjectRecord(title: title, brief: brief, position: position)
         let saved = await enqueue(.createProject(project, materialIDs: materialIDs))
+        return saved ? project.id : nil
+    }
+
+    @discardableResult
+    func createProject(title: String, brief: String = "", materialIDs: [UUID], position: WorkDeskPoint? = nil,
+                       from source: WorkDeskLocation, expected: WorkDeskLocationTokens? = nil) async -> UUID? {
+        let project = WorkDeskProjectRecord(title: title, brief: brief, position: position)
+        let saved = await enqueue(.createProjectFrom(project, materialIDs: materialIDs, source: source, expected: expected))
         return saved ? project.id : nil
     }
 
@@ -118,6 +158,61 @@ final class WorkDeskOrganization {
     @discardableResult
     func assign(materialIDs: [UUID], to projectID: UUID?) async -> Bool {
         await enqueue(.assign(materialIDs: materialIDs, projectID: projectID))
+    }
+
+    @discardableResult
+    func move(materialIDs: [UUID], from source: WorkDeskLocation, to destination: WorkDeskLocation,
+              positions: [UUID: WorkDeskPoint] = [:], expected: WorkDeskLocationTokens? = nil) async -> Bool {
+        await enqueue(.moveLocations(materialIDs: materialIDs, from: source, to: destination,
+                                     positions: positions, expected: expected))
+    }
+
+    @discardableResult
+    func add(materialIDs: [UUID], to destination: WorkDeskLocation, positions: [UUID: WorkDeskPoint] = [:],
+             expected: WorkDeskLocationTokens? = nil) async -> Bool {
+        await enqueue(.addLocations(materialIDs: materialIDs, to: destination, positions: positions, expected: expected))
+    }
+
+    @discardableResult
+    func remove(materialIDs: [UUID], from source: WorkDeskLocation,
+                expected: WorkDeskLocationTokens? = nil) async -> Bool {
+        await enqueue(.removeLocations(materialIDs: materialIDs, from: source, expected: expected))
+    }
+
+    @discardableResult
+    func moveLocations(positions: [UUID: WorkDeskPoint], at location: WorkDeskLocation,
+                       expected: WorkDeskLocationTokens? = nil) async -> Bool {
+        await enqueue(.positionLocations(positions: positions, at: location, expected: expected))
+    }
+
+    @discardableResult
+    func restoreLocations(_ saved: WorkDeskLocationTokens, expected: WorkDeskLocationTokens) async -> Bool {
+        await enqueue(.restoreLocations(saved, expected: expected))
+    }
+
+    @discardableResult
+    func undo(_ change: WorkDeskLocationUndo) async -> Bool {
+        await restoreLocations(change.before, expected: change.after)
+    }
+
+    func clearLastLocationUndo() { lastLocationUndo = nil }
+
+    @discardableResult
+    func reorder(materialID: UUID, relativeTo targetID: UUID, placement: WorkboardReorderPlacement,
+                 at location: WorkDeskLocation, orderedMaterialIDs: [UUID],
+                 expected: WorkDeskLocationTokens? = nil) async -> Bool {
+        await enqueue(.reorderLocations(materialID: materialID, relativeTo: targetID, placement: placement,
+                                         at: location, orderedMaterialIDs: orderedMaterialIDs,
+                                         expected: expected ?? locationTokens(for: orderedMaterialIDs)))
+    }
+
+    @discardableResult
+    func moveAndReorder(materialIDs: [UUID], from source: WorkDeskLocation, to destination: WorkDeskLocation,
+                        relativeTo targetID: UUID, placement: WorkboardReorderPlacement,
+                        orderedMaterialIDs: [UUID], expected: WorkDeskLocationTokens? = nil) async -> Bool {
+        await enqueue(.moveAndReorderLocations(materialIDs: materialIDs, from: source, to: destination,
+            relativeTo: targetID, placement: placement, orderedMaterialIDs: orderedMaterialIDs,
+            expected: expected ?? locationTokens(for: materialIDs + orderedMaterialIDs)))
     }
 
     @discardableResult
@@ -168,8 +263,15 @@ final class WorkDeskOrganization {
             let saved: Bool
             do {
                 let snapshot = try await apply(mutation)
-                publish(snapshot)
                 errorMessage = nil
+                // Publishing can report a local draft cleanup failure after
+                // the organization mutation succeeds. Keep that remedy visible.
+                publish(snapshot)
+                switch mutation {
+                case .moveLocations, .addLocations, .removeLocations, .positionLocations, .restoreLocations, .reorderLocations, .moveAndReorderLocations:
+                    lastLocationUndo = snapshot.locationUndo
+                default: break
+                }
                 saved = true
             } catch {
                 report(error)
@@ -198,6 +300,9 @@ final class WorkDeskOrganization {
         // failed reads never write, and unseen deletions still reclaim slots.
         // The process-wide pruner handles each ID once across all windows.
         WorkboardLayoutMode.pruneProjectPreferences(deletedProjectIDs: snapshot.deletedProjectIDs)
+        // Retry local request cleanup on every confirmed tombstone snapshot.
+        // The preference pruner itself deliberately runs once per project.
+        WorkDeskWorkspaceState.pruneProjectSessions(deletedProjectIDs: snapshot.deletedProjectIDs)
         // A position seed often finds that all its slots are already saved.
         // Publishing identical arrays still invalidates the whole desk's views.
         if projects != snapshot.projects {
@@ -205,6 +310,7 @@ final class WorkDeskOrganization {
             projectsByID = snapshot.projects.reduce(into: [:]) { $0[$1.id] = $1 }
         }
         if placements != snapshot.placements { placements = snapshot.placements }
+        if materialLocations != snapshot.materialLocations { materialLocations = snapshot.materialLocations }
     }
 
     private func report(_ error: Error) {

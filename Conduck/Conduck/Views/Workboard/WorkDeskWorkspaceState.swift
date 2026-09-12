@@ -4,18 +4,33 @@
 // every capture stays on the canonical desk, and projects refer to its cards.
 // Active selection is intersected with the visible snapshot before every
 // operation. Search parks hidden selections until those cards are visible again.
-// Composer sessions follow their destination, including All materials during
+// Composer sessions follow their destination, including Home during
 // global search, so looking elsewhere never silently redirects unfinished work.
 
 import SwiftUI
 
-enum WorkDeskScope: Hashable {
+enum WorkDeskScope: Hashable, Sendable {
     case all, project(UUID)
+
+    var location: WorkDeskLocation {
+        switch self {
+        case .all: .home
+        case .project(let id): .project(id)
+        }
+    }
+
+    init(location: WorkDeskLocation) {
+        switch location {
+        case .home: self = .all
+        case .project(let id): self = .project(id)
+        }
+    }
 }
 
 @Observable @MainActor
 final class WorkDeskWorkspaceState {
     let organization: WorkDeskOrganization
+    let transferCoordinator = WorkDeskTransferCoordinator()
     var scope: WorkDeskScope = .all
     var isActive = false
     var search = "" {
@@ -23,6 +38,7 @@ final class WorkDeskWorkspaceState {
             let searching = !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             if isSearching != searching { isSearching = searching }
             if searching {
+                transferCoordinator.cancel()
                 suspendConversation()
                 conversationSelectionRequest = nil
             }
@@ -64,6 +80,7 @@ final class WorkDeskWorkspaceState {
     @ObservationIgnored private var conversationSessions: [UUID: WorkDeskConversationSession] = [:]
     @ObservationIgnored private var conversationReloadGeneration = 0
     @ObservationIgnored private let conversationStore: ConversationStore
+    @ObservationIgnored private let draftStore: WorkDeskBriefDraftStore
     @ObservationIgnored private var canvasSessions: [WorkDeskScope: WorkDeskCanvasSession] = [:]
     @ObservationIgnored private var composerSessions: [WorkDeskScope: WorkDeskComposerSession] = [:]
     @ObservationIgnored private var layoutSessions: [WorkDeskScope: WorkDeskLayoutSession] = [:]
@@ -80,9 +97,20 @@ final class WorkDeskWorkspaceState {
     /// A tombstone learned in any window releases sessions in every live window.
     /// Weak registration does not keep a closed window or its drafts alive.
     static func pruneProjectSessions(deletedProjectIDs: Set<UUID>) {
+        guard !deletedProjectIDs.isEmpty else { return }
         liveWorkspaces.removeAll { $0.value == nil }
+        // Include requests that have never been opened in this process.
+        try? WorkDeskBriefDraftStore.shared.deleteProjects(deletedProjectIDs)
         for workspace in liveWorkspaces.compactMap(\.value) {
+            do { try workspace.draftStore.deleteProjects(deletedProjectIDs) }
+            catch {
+                workspace.organization.errorMessage = String(localized: "workdesk.draft.clearFailed",
+                    defaultValue: "This draft couldn’t be removed from this device. Try again.")
+            }
             for id in deletedProjectIDs {
+                workspace.briefDrafts.removeValue(forKey: id)
+                workspace.briefRevisions.removeValue(forKey: id)
+                if workspace.preparingProjectID == id { workspace.preparingProjectID = nil }
                 let scope = WorkDeskScope.project(id)
                 workspace.composerSessions.removeValue(forKey: scope)?.setText("")
                 // Invalidate a view that still observes the old session while
@@ -118,9 +146,11 @@ final class WorkDeskWorkspaceState {
         return session
     }
 
-    init(organization: WorkDeskOrganization? = nil, conversationStore: ConversationStore = .shared) {
+    init(organization: WorkDeskOrganization? = nil, conversationStore: ConversationStore = .shared,
+         draftStore: WorkDeskBriefDraftStore = .shared) {
         self.organization = organization ?? WorkDeskOrganization()
         self.conversationStore = conversationStore
+        self.draftStore = draftStore
         Self.liveWorkspaces.removeAll { $0.value == nil }
         Self.liveWorkspaces.append(WeakWorkspace(self))
     }
@@ -162,6 +192,10 @@ final class WorkDeskWorkspaceState {
     var currentProject: WorkDeskProjectRecord? {
         guard case .project(let id) = scope else { return nil }
         return organization.project(id: id)
+    }
+
+    var isProjectTrayPresented: Bool {
+        currentProject != nil && !isSearching && !isShowingConversation
     }
 
     var currentConversation: ConversationRecord? {
@@ -274,8 +308,8 @@ final class WorkDeskWorkspaceState {
             projectConversations = conversations.filter { $0.projectID != nil }
             let arrivingResults = Set(sources.keys).subtracting(results.keys)
             for draft in briefDrafts.values {
-                draft.excludedIDs.formUnion(arrivingResults)
-                draft.projectResultIDs = Set(sources.keys).union(resultMaterialIDs)
+                draft.excludedIDs.formUnion(arrivingResults.subtracting(draft.projectResultIDs))
+                draft.projectResultIDs.formUnion(Set(sources.keys).union(resultMaterialIDs))
                 draft.remoteResultIDs = Set(sources.values.filter(\.isRemoteReference).map(\.materialID)).union(remoteResultMaterialIDs)
             }
             results = sources
@@ -292,26 +326,36 @@ final class WorkDeskWorkspaceState {
         }
     }
 
-    func visibleMaterials(in materials: [WorkboardMaterialSnapshot]) -> [WorkboardMaterialSnapshot] {
-        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+    func visibleMaterials(in materials: [WorkboardMaterialSnapshot], scope requestedScope: WorkDeskScope? = nil,
+                          search requestedSearch: String? = nil) -> [WorkboardMaterialSnapshot] {
+        let resolvedScope = requestedScope ?? scope
+        let query = (requestedSearch ?? search).trimmingCharacters(in: .whitespacesAndNewlines)
         let matchingProjects = Set(organization.projects.lazy.filter {
             !query.isEmpty && $0.title.localizedStandardContains(query)
         }.map(\.id))
-        return materials.filter { material in
-            let projectID = organization.projectID(for: material.id)
+        let visible = materials.filter { material in
             // Search is a way back to anything on the desk, including a note
             // filed in a project. Clearing it restores the person's scope.
             if !query.isEmpty {
-                if let projectID, matchingProjects.contains(projectID) { return true }
+                if matchingProjects.contains(where: { organization.contains(materialID: material.id, at: .project($0)) }) { return true }
                 return [material.name, material.textContent ?? "", material.detail ?? "",
                         material.annotation ?? "", material.companion?.textContent ?? "",
                         material.companion?.annotation ?? ""]
                     .contains { $0.localizedStandardContains(query) }
             }
-            switch scope {
-            case .all: return true
-            case .project(let id): return projectID == id
-            }
+            return organization.contains(materialID: material.id, at: resolvedScope.location)
+        }
+        guard query.isEmpty else { return visible }
+        let indices = Dictionary(visible.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        let ranks = Dictionary(uniqueKeysWithValues: visible.compactMap { material -> (UUID, Double)? in
+            guard let rank = organization.locations(for: material.id).first(where: { $0.location == resolvedScope.location })?.sortRank,
+                  rank.isFinite else { return nil }
+            return (material.id, rank)
+        })
+        return visible.sorted {
+            let lhs = ranks[$0.id] ?? .greatestFiniteMagnitude
+            let rhs = ranks[$1.id] ?? .greatestFiniteMagnitude
+            return lhs == rhs ? (indices[$0.id] ?? 0) < (indices[$1.id] ?? 0) : lhs < rhs
         }
     }
 
@@ -353,6 +397,7 @@ final class WorkDeskWorkspaceState {
     }
 
     func selectScope(_ scope: WorkDeskScope) {
+        transferCoordinator.cancel()
         suspendConversation()
         selectedConversationID = nil
         conversationSelectionRequest = nil
@@ -380,8 +425,8 @@ final class WorkDeskWorkspaceState {
         resultMaterialIDs = materialResults
         remoteResultMaterialIDs = Set(materials.filter(\.isRemoteProjectResult).map(\.id))
         for draft in briefDrafts.values {
-            draft.excludedIDs.formUnion(newResults)
-            draft.projectResultIDs = Set(results.keys).union(materialResults)
+            draft.excludedIDs.formUnion(newResults.subtracting(draft.projectResultIDs))
+            draft.projectResultIDs.formUnion(Set(results.keys).union(materialResults))
             draft.remoteResultIDs.formUnion(remoteResultMaterialIDs)
         }
         if case .project(let id) = scope,
@@ -485,7 +530,7 @@ final class WorkDeskWorkspaceState {
         deletingProjectID = nil
         selectScope(.all)
         guard keptMaterials else { return }
-        selectedIDs = Set(review.visibleMaterialIDs).intersection(materials.map(\.id))
+        selectedIDs = Set(review.visibleMaterialIDs).intersection(visibleMaterials(in: materials, scope: .all, search: "").map(\.id))
         isSelecting = !selectedIDs.isEmpty
         materialRevealRequest = review.visibleMaterialIDs.first(where: { selectedIDs.contains($0) })
             .map { WorkDeskMaterialRevealRequest(materialID: $0) }
@@ -499,6 +544,7 @@ final class WorkDeskWorkspaceState {
     }
 
     func suspend() {
+        transferCoordinator.cancel()
         setRefreshActive(false)
         deletingProjectID = nil
         projectDeletionReview = nil
@@ -515,15 +561,17 @@ final class WorkDeskWorkspaceState {
     }
 
     func briefDraft(for project: WorkDeskProjectRecord, resolver: WorkDeskConversationResolver) -> WorkDeskBriefDraft {
-        if let existing = briefDrafts[project.id] {
+        if let existing = briefDrafts[project.id], !existing.persistedRequestWasRemoved {
             existing.refreshProjectContext(project.brief)
             briefRevisions[project.id] = project.updatedAt
             return existing
         }
-        let draft = WorkDeskBriefDraft(brief: project.brief, preferredGatewayRef: project.preferredGatewayRef, conversationResolver: resolver)
+        let draft = WorkDeskBriefDraft(brief: project.brief, preferredGatewayRef: project.preferredGatewayRef, conversationResolver: resolver,
+                                      projectID: project.id, persistence: draftStore)
         // A result joining the project is not permission to send it elsewhere.
-        draft.excludedIDs = Set(results.keys).union(resultMaterialIDs)
-        draft.projectResultIDs = draft.excludedIDs
+        let currentResults = Set(results.keys).union(resultMaterialIDs)
+        draft.excludedIDs.formUnion(currentResults.subtracting(draft.projectResultIDs))
+        draft.projectResultIDs.formUnion(currentResults)
         draft.remoteResultIDs = Set(results.values.filter(\.isRemoteReference).map(\.materialID)).union(remoteResultMaterialIDs)
         briefDrafts[project.id] = draft
         briefRevisions[project.id] = project.updatedAt
@@ -531,6 +579,7 @@ final class WorkDeskWorkspaceState {
     }
 
     func finishConversationDraft(projectID: UUID) {
+        guard briefDrafts[projectID]?.clearPersistedRequest() != false else { return }
         briefDrafts.removeValue(forKey: projectID)
         briefRevisions.removeValue(forKey: projectID)
     }
@@ -556,10 +605,27 @@ final class WorkDeskWorkspaceState {
     func assignSelection(to projectID: UUID?, materials: [WorkboardMaterialSnapshot]) async {
         let ids = visibleMaterials(in: materials).map(\.id).filter { selectedIDs.contains($0) }
         guard !ids.isEmpty else { return }
-        if await organization.assign(materialIDs: ids, to: projectID) {
+        let target: WorkDeskLocation = projectID.map(WorkDeskLocation.project) ?? .home
+        // Search is a complete collection, so it names no source location to
+        // remove. Its organization action deliberately adds an appearance.
+        let saved = isSearching
+            ? await organization.add(materialIDs: ids, to: target, positions: [:])
+            : await organization.move(materialIDs: ids, from: scope.location, to: target, positions: [:])
+        if saved {
             selectedIDs = []
             isSelecting = false
         }
+    }
+
+    @discardableResult
+    func transfer(_ request: WorkDeskTransferRequest, materials: [WorkboardMaterialSnapshot]) async -> Bool {
+        guard isActive else { return false }
+        let available = Set(materials.map(\.id))
+        guard !request.materialIDs.isEmpty, Set(request.materialIDs).isSubset(of: available) else { return false }
+        let saved = await organization.move(materialIDs: request.materialIDs, from: request.source,
+            to: request.destination, positions: request.positions, expected: request.expected)
+        if saved { reconcile(materials: materials) }
+        return saved
     }
 }
 

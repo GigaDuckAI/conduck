@@ -18,8 +18,12 @@ struct WorkDeskToolbarTitle: View {
         if workspace.isSearching {
             return String(localized: LocalizedStringResource("workdesk.search.results", defaultValue: "Search results"))
         }
-        return workspace.currentProject?.title
-            ?? String(localized: LocalizedStringResource("workdesk.all", defaultValue: "All materials"))
+        // A project tray floats over Home and owns its own title/actions.
+        // A project conversation replaces Home and uses the window title.
+        if let project = workspace.currentProject, !workspace.isProjectTrayPresented {
+            return project.title
+        }
+        return String(localized: LocalizedStringResource("workdesk.all", defaultValue: "Home"))
     }
 
     private var maximumWidth: CGFloat {
@@ -32,7 +36,7 @@ struct WorkDeskToolbarTitle: View {
 
     var body: some View {
         Group {
-            if let project = workspace.currentProject, !workspace.isSearching {
+            if let project = workspace.currentProject, !workspace.isSearching, !workspace.isProjectTrayPresented {
                 Menu {
                     Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
                         workspace.editProject(project)

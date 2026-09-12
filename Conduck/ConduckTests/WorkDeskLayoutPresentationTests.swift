@@ -45,7 +45,8 @@ final class WorkDeskLayoutPresentationTests: XCTestCase {
         XCTAssertTrue(actions.contains("WorkDeskLayoutControl("))
         let control = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskLayoutControl.swift")
         XCTAssertTrue(control.contains("Text(renderedMode.title)"), "An icon-only menu hides the new desk again.")
-        XCTAssertTrue(control.contains("viewModel.layoutMode = $0"))
+        XCTAssertTrue(control.contains("viewModel.layoutMode = mode"))
+        XCTAssertTrue(control.contains("mode.save(for: scope)"), "Each mounted board changes only its own layout preference")
         let board = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskSourceBoard.swift")
         XCTAssertTrue(board.contains("WorkDeskLayoutPresentation.resolved("))
     }
