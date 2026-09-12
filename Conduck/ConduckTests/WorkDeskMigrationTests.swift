@@ -26,8 +26,8 @@ final class WorkDeskMigrationTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testV22AddsOnlyOptionalArchiveDateAndEveryShippedModelCanUpgrade() throws {
-        let before = try model(version: 21), after = try model(version: 22)
+    func testProV22AddsOnlyOptionalArchiveDateAndEveryShippedModelCanUpgrade() throws {
+        let before = try model(version: 21), after = try model(named: "Conversations 22 Pro")
         XCTAssertEqual(Set(before.entitiesByName.keys), Set(after.entitiesByName.keys))
         for (name, entity) in before.entitiesByName where name != "WorkDeskProject" {
             XCTAssertEqual(after.entitiesByName[name]?.versionHash, entity.versionHash)
@@ -42,6 +42,150 @@ final class WorkDeskMigrationTests: XCTestCase {
         for version in 1...21 {
             XCTAssertNoThrow(try NSMappingModel.inferredMappingModel(forSourceModel: model(version: version), destinationModel: after))
         }
+    }
+
+    func testV23CombinesBothV22HistoriesWithoutChangingOtherEntityHashes() throws {
+        let locations = try model(version: 22)
+        let archive = try model(named: "Conversations 22 Pro")
+        let current = try model(version: 23)
+        XCTAssertEqual(Set(current.entitiesByName.keys), Set(locations.entitiesByName.keys))
+        XCTAssertEqual(Set(current.entitiesByName.keys).subtracting(archive.entitiesByName.keys), ["WorkDeskLocation"])
+        for (name, entity) in locations.entitiesByName where name != "WorkDeskProject" {
+            XCTAssertEqual(current.entitiesByName[name]?.versionHash, entity.versionHash,
+                           "The merge must preserve main's existing \(name) fields")
+        }
+        for (name, entity) in archive.entitiesByName where name != "WorkDeskPlacement" {
+            XCTAssertEqual(current.entitiesByName[name]?.versionHash, entity.versionHash,
+                           "The merge must preserve Pro's existing \(name) fields")
+        }
+        let project = try XCTUnwrap(current.entitiesByName["WorkDeskProject"])
+        let mainProject = try XCTUnwrap(locations.entitiesByName["WorkDeskProject"])
+        XCTAssertEqual(Set(project.attributesByName.keys).subtracting(mainProject.attributesByName.keys), ["archivedAt"])
+        XCTAssertNotEqual(mainProject.versionHash, archive.entitiesByName["WorkDeskProject"]?.versionHash)
+        let archiveDate = try XCTUnwrap(project.attributesByName["archivedAt"])
+        XCTAssertEqual(archiveDate.attributeType, .dateAttributeType)
+        XCTAssertTrue(archiveDate.isOptional)
+        XCTAssertNil(archiveDate.defaultValue)
+        for name in ["Core", "Blobs"] {
+            XCTAssertEqual(Set(current.entities(forConfigurationName: name)!.compactMap(\.name)),
+                           Set(locations.entities(forConfigurationName: name)!.compactMap(\.name)))
+        }
+        for version in 1...22 {
+            XCTAssertNoThrow(try NSMappingModel.inferredMappingModel(forSourceModel: model(version: version),
+                                                                    destinationModel: current))
+        }
+        XCTAssertNoThrow(try NSMappingModel.inferredMappingModel(forSourceModel: archive, destinationModel: current))
+    }
+
+    func testMainV22SQLiteRetainsLocationsPositionsAndPayloadWhenOpeningV23() async throws {
+        try await assertHistoricalV22SQLiteRetained(modelName: "Conversations 22", hasLocations: true)
+    }
+
+    func testProV22SQLiteRetainsArchiveHistoryAndPayloadWhenOpeningV23() async throws {
+        try await assertHistoricalV22SQLiteRetained(modelName: "Conversations 22 Pro", hasLocations: false)
+    }
+
+    private func assertHistoricalV22SQLiteRetained(modelName: String, hasLocations: Bool) async throws {
+        let projectID = UUID(), secondProjectID = UUID(), materialID = UUID(), conversationID = UUID()
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let bytes = Data("Captured before the model histories merged".utf8)
+        let old = try await container(model: model(named: modelName))
+        let context = old.newBackgroundContext()
+        try await context.perform {
+            let item = NSEntityDescription.insertNewObject(forEntityName: "WorkItem", into: context)
+            item.setValue(Constants.workboardDeskItemID, forKey: "id")
+            item.setValue(stamp, forKey: "createdAt")
+            item.setValue(stamp, forKey: "updatedAt")
+            for id in [projectID, secondProjectID] {
+                let project = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
+                project.setValue(id, forKey: "id")
+                project.setValue(id == projectID ? "Historical project" : "Second project", forKey: "title")
+                project.setValue("Keep this brief", forKey: "brief")
+                project.setValue(stamp, forKey: "updatedAt")
+                if !hasLocations, id == projectID { project.setValue(stamp, forKey: "archivedAt") }
+            }
+            let material = NSEntityDescription.insertNewObject(forEntityName: "WorkMaterial", into: context)
+            material.setValue(materialID, forKey: "id")
+            material.setValue(Constants.workboardDeskItemID, forKey: "workItemID")
+            material.setValue("file", forKey: "kind")
+            material.setValue("Historical capture", forKey: "title")
+            material.setValue("old.txt", forKey: "filename")
+            material.setValue("text/plain", forKey: "mimeType")
+            material.setValue("syncedPayload", forKey: "storageMode")
+            material.setValue("migration-fixture", forKey: "contentHash")
+            material.setValue(Int64(bytes.count), forKey: "byteSize")
+            material.setValue(stamp, forKey: "createdAt")
+            material.setValue(stamp, forKey: "updatedAt")
+            let blob = NSEntityDescription.insertNewObject(forEntityName: "WorkMaterialBlob", into: context)
+            blob.setValue(materialID, forKey: "materialID")
+            blob.setValue(bytes, forKey: "payload")
+            blob.setValue(Int64(bytes.count), forKey: "byteSize")
+            blob.setValue("migration-fixture", forKey: "contentHash")
+            blob.setValue(stamp, forKey: "createdAt")
+            blob.setValue(stamp, forKey: "updatedAt")
+            let placement = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskPlacement", into: context)
+            placement.setValue(materialID, forKey: "materialID")
+            placement.setValue(projectID, forKey: "projectID")
+            placement.setValue(80.0, forKey: "positionX")
+            placement.setValue(90.0, forKey: "positionY")
+            placement.setValue(stamp, forKey: "updatedAt")
+            if hasLocations {
+                placement.setValue(stamp, forKey: "locationsProjectedAt")
+                placement.setValue(projectID, forKey: "locationsProjectID")
+                for (rank, id) in [nil, projectID, secondProjectID].enumerated() {
+                    let location = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskLocation", into: context)
+                    location.setValue(materialID, forKey: "materialID")
+                    location.setValue(id, forKey: "projectID")
+                    location.setValue(true, forKey: "isPresent")
+                    location.setValue(Double(rank + 100), forKey: "positionX")
+                    location.setValue(Double(rank + 200), forKey: "positionY")
+                    location.setValue(Double(rank), forKey: "sortRank")
+                    location.setValue(true, forKey: "positionWasSeeded")
+                    location.setValue(stamp, forKey: "updatedAt")
+                    location.setValue(UUID(), forKey: "revision")
+                }
+            }
+            let conversation = NSEntityDescription.insertNewObject(forEntityName: "Conversation", into: context)
+            conversation.setValue(conversationID, forKey: "id")
+            conversation.setValue(projectID, forKey: "projectID")
+            conversation.setValue("openrouter", forKey: "backend")
+            try context.save()
+        }
+        try unload(old)
+
+        // Open the actual current app store rather than supplying v23 manually:
+        // this also proves the bundle can discover either historical source.
+        let store = isolated.make(storeURL: coreURL)
+        let migrated = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(Set(migrated.projects.map(\.id)), [projectID, secondProjectID])
+        XCTAssertEqual(migrated.projects.first { $0.id == projectID }?.archivedAt, hasLocations ? nil : stamp)
+        XCTAssertEqual(migrated.projects.first { $0.id == projectID }?.brief, "Keep this brief")
+        let memberships = migrated.locations(for: materialID)
+        if hasLocations {
+            XCTAssertEqual(Set(memberships.map(\.location)), [.home, .project(projectID), .project(secondProjectID)])
+            for (rank, location) in [WorkDeskLocation.home, .project(projectID), .project(secondProjectID)].enumerated() {
+                let saved = try XCTUnwrap(memberships.first { $0.location == location })
+                XCTAssertEqual(saved.position, .init(x: Double(rank + 100), y: Double(rank + 200)))
+                XCTAssertEqual(saved.sortRank, Double(rank))
+                XCTAssertTrue(saved.positionWasSeeded)
+            }
+        } else {
+            XCTAssertEqual(memberships.map(\.location), [.project(projectID)])
+            XCTAssertEqual(memberships.first?.position, .init(x: 80, y: 90))
+        }
+        let payload = try await store.loadWorkMaterialPayload(id: materialID)
+        let material = try await store.fetchWorkMaterial(id: materialID)
+        let history = try await store.fetchProjectConversations(projectID: projectID)
+        XCTAssertEqual(payload, bytes)
+        XCTAssertEqual(material?.title, "Historical capture")
+        XCTAssertEqual(material?.updatedAt, stamp)
+        XCTAssertEqual(history.map(\.id), [conversationID])
+        try await store._unloadForTesting()
+        let reopened = isolated.make(storeURL: coreURL)
+        let preserved = try await reopened.fetchWorkDeskOrganization()
+        XCTAssertEqual(preserved.projects, migrated.projects)
+        XCTAssertEqual(preserved.materialLocations, migrated.materialLocations)
+        try await reopened._unloadForTesting()
     }
 
     func testV21OverLimitProjectsMigrateRemainEditableAndArchiveReopens() async throws {
@@ -121,6 +265,70 @@ final class WorkDeskMigrationTests: XCTestCase {
             Set(before.entities(forConfigurationName: "Core")!.compactMap(\.name)).union(additions)
         )
         XCTAssertEqual(after.entities(forConfigurationName: "Blobs")?.compactMap(\.name), ["WorkMaterialBlob"])
+    }
+
+    func testV22AddsOptionalLocationMetadataAndEveryShippedModelCanUpgrade() throws {
+        let before = try model(version: 21), after = try model(version: 22)
+        XCTAssertEqual(Set(after.entitiesByName.keys).subtracting(before.entitiesByName.keys), ["WorkDeskLocation"])
+        for (name, entity) in before.entitiesByName where name != "WorkDeskPlacement" {
+            XCTAssertEqual(after.entitiesByName[name]?.versionHash, entity.versionHash,
+                           "Adding references must not change captured content or payload models")
+        }
+        let old = try XCTUnwrap(before.entitiesByName["WorkDeskPlacement"])
+        let legacy = try XCTUnwrap(after.entitiesByName["WorkDeskPlacement"])
+        XCTAssertEqual(Set(legacy.attributesByName.keys).subtracting(old.attributesByName.keys),
+                       ["locationsProjectedAt", "locationsProjectID"])
+        let locations = try XCTUnwrap(after.entitiesByName["WorkDeskLocation"])
+        XCTAssertTrue(locations.relationshipsByName.isEmpty)
+        XCTAssertTrue(locations.uniquenessConstraints.isEmpty)
+        for attribute in locations.attributesByName.values {
+            XCTAssertTrue(attribute.isOptional)
+            XCTAssertNil(attribute.defaultValue)
+        }
+        XCTAssertTrue(after.entities(forConfigurationName: "Core")!.contains { $0.name == "WorkDeskLocation" })
+        XCTAssertEqual(after.entities(forConfigurationName: "Blobs")?.compactMap(\.name), ["WorkMaterialBlob"])
+        for version in 1...21 {
+            XCTAssertNoThrow(try NSMappingModel.inferredMappingModel(forSourceModel: model(version: version), destinationModel: after))
+        }
+    }
+
+    func testV21SQLiteAdoptsFiledMaterialOnlyInsideProjectAndKeepsLooseHome() async throws {
+        let looseID = UUID(), filedID = UUID(), projectID = UUID()
+        let old = try await container(version: 21)
+        let context = old.newBackgroundContext()
+        try await context.perform {
+            let project = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
+            project.setValue(projectID, forKey: "id")
+            project.setValue("Existing", forKey: "title")
+            for id in [looseID, filedID] {
+                let material = NSEntityDescription.insertNewObject(forEntityName: "WorkMaterial", into: context)
+                material.setValue(id, forKey: "id")
+                material.setValue(Constants.workboardDeskItemID, forKey: "workItemID")
+                material.setValue("note", forKey: "kind")
+                material.setValue("Original", forKey: "title")
+                let placement = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskPlacement", into: context)
+                placement.setValue(id, forKey: "materialID")
+                placement.setValue(id == filedID ? projectID : nil, forKey: "projectID")
+                placement.setValue(80.0, forKey: "positionX")
+                placement.setValue(90.0, forKey: "positionY")
+                placement.setValue(700.0, forKey: "homePositionX")
+                placement.setValue(800.0, forKey: "homePositionY")
+            }
+            try context.save()
+        }
+        try unload(old)
+        let store = isolated.make(storeURL: coreURL)
+        let migrated = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(migrated.locations(for: filedID).map(\.location), [.project(projectID)])
+        XCTAssertEqual(migrated.locations(for: filedID).first?.position, .init(x: 80, y: 90))
+        XCTAssertEqual(migrated.locations(for: looseID).map(\.location), [.home])
+        XCTAssertEqual(migrated.locations(for: looseID).first?.position, .init(x: 700, y: 800))
+        let added = try await store.applyWorkDeskMutation(.addLocations(materialIDs: [filedID], to: .home,
+            positions: [filedID: .init(x: 100, y: 200)], expected: nil))
+        XCTAssertEqual(Set(added.locations(for: filedID).map(\.location)), [.home, .project(projectID)])
+        let reopened = isolated.make(storeURL: coreURL)
+        let persisted = try await reopened.fetchWorkDeskOrganization()
+        XCTAssertEqual(persisted.materialLocations, added.materialLocations)
     }
 
     func testEveryShippedVersionCanInferAnUpgradeToV18() throws {
@@ -316,7 +524,11 @@ final class WorkDeskMigrationTests: XCTestCase {
     private var coreURL: URL { directory.appendingPathComponent("Conversations.sqlite") }
 
     private func model(version: Int) throws -> NSManagedObjectModel {
-        let filename = version == 1 ? "Conversations.mom" : "Conversations \(version).mom"
+        try model(named: version == 1 ? "Conversations" : "Conversations \(version)")
+    }
+
+    private func model(named name: String) throws -> NSManagedObjectModel {
+        let filename = "\(name).mom"
         let bundles = [Bundle.main, Bundle(for: Self.self)]
         return try XCTUnwrap(bundles.lazy.compactMap { bundle in
             bundle.url(forResource: "Conversations", withExtension: "momd")
@@ -325,7 +537,11 @@ final class WorkDeskMigrationTests: XCTestCase {
     }
 
     private func container(version: Int) async throws -> NSPersistentContainer {
-        let container = NSPersistentContainer(name: "Conversations", managedObjectModel: try model(version: version))
+        try await container(model: model(version: version))
+    }
+
+    private func container(model: NSManagedObjectModel) async throws -> NSPersistentContainer {
+        let container = NSPersistentContainer(name: "Conversations", managedObjectModel: model)
         let core = NSPersistentStoreDescription(url: coreURL)
         core.configuration = "Core"
         let blobs = NSPersistentStoreDescription(url: directory.appendingPathComponent("Conversations-Blobs.sqlite"))

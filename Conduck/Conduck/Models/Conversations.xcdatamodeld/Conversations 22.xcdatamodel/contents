@@ -159,7 +159,6 @@
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
     </entity>
     <entity name="WorkDeskProject" representedClassName="WorkDeskProject" syncable="YES" codeGenerationType="class">
-        <attribute name="archivedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="title" optional="YES" attributeType="String"/>
         <attribute name="brief" optional="YES" attributeType="String"/>
@@ -172,6 +171,8 @@
         <attribute name="deletedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
     </entity>
     <entity name="WorkDeskPlacement" representedClassName="WorkDeskPlacement" syncable="YES" codeGenerationType="class">
+        <attribute name="locationsProjectedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="locationsProjectID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="homePositionX" optional="YES" attributeType="Double" usesScalarValueType="NO"/>
         <attribute name="homePositionY" optional="YES" attributeType="Double" usesScalarValueType="NO"/>
         <attribute name="materialID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
@@ -192,6 +193,17 @@
         <attribute name="fileLaneID" optional="YES" attributeType="String"/>
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
     </entity>
+    <entity name="WorkDeskLocation" representedClassName="WorkDeskLocationEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="positionWasSeeded" optional="YES" attributeType="Boolean" usesScalarValueType="NO"/>
+        <attribute name="sortRank" optional="YES" attributeType="Double" usesScalarValueType="NO"/>
+        <attribute name="materialID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="projectID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="isPresent" optional="YES" attributeType="Boolean" usesScalarValueType="NO"/>
+        <attribute name="positionX" optional="YES" attributeType="Double" usesScalarValueType="NO"/>
+        <attribute name="positionY" optional="YES" attributeType="Double" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="revision" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+    </entity>
     <configuration name="Core" usedWithCloudKit="YES">
         <memberEntity name="Attachment"/>
         <memberEntity name="Conversation"/>
@@ -200,6 +212,7 @@
         <memberEntity name="WorkDispatch"/>
         <memberEntity name="WorkDeskProject"/>
         <memberEntity name="WorkDeskPlacement"/>
+        <memberEntity name="WorkDeskLocation"/>
         <memberEntity name="WorkDeskResult"/>
         <memberEntity name="WorkItem"/>
         <memberEntity name="WorkMaterial"/>

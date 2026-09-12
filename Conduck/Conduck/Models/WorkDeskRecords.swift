@@ -4,8 +4,9 @@
 // WorkDeskRecords.swift
 //
 // Organization is metadata over the existing capture desk. A project never
-// owns a material or its bytes; each material's placement is an independently
-// mirrored row. Missing projects therefore cannot hide captured work. Project
+// owns a material or its bytes; each material/location pair is an independently
+// mirrored row. A drag replaces its source location; adding another reference
+// preserves all existing locations. Missing projects cannot hide captured work. Project
 // deletion leaves an identity-only tombstone so an offline placement arriving
 // later cannot bring a deleted project back. Desk positions extend in every
 // direction from the origin, with finite bounds for malformed imported values.
@@ -13,6 +14,53 @@
 // free-plan slot. Older rows omit archivedAt and therefore remain active.
 
 import Foundation
+
+/// Home is an explicit location, equal to any project. It is also the safe
+/// presentation fallback when no live location has arrived with a material.
+nonisolated enum WorkDeskLocation: Codable, Hashable, Sendable {
+    case home
+    case project(UUID)
+
+    var projectID: UUID? {
+        if case .project(let id) = self { return id }
+        return nil
+    }
+
+    var sortKey: String { projectID?.uuidString ?? "" }
+}
+
+/// The same material can appear in several locations, with independent camera
+/// coordinates. Revision and date are opaque stale-operation tokens, not a
+/// second content revision; organization never modifies a material's payload.
+nonisolated struct WorkDeskLocationRecord: Codable, Hashable, Sendable {
+    let materialID: UUID
+    let location: WorkDeskLocation
+    var position: WorkDeskPoint?
+    var sortRank: Double? = nil
+    var positionWasSeeded = false
+    var updatedAt: Date = .distantPast
+    var revision: UUID? = nil
+
+    /// The only permitted stale-looking undo token is a first automatic layout
+    /// filling an unset position without changing this location's revision.
+    func matchesForUndo(_ earlier: Self) -> Bool {
+        if self == earlier { return true }
+        return materialID == earlier.materialID && location == earlier.location
+            && earlier.position == nil && position != nil && positionWasSeeded
+            && revision == earlier.revision && sortRank == earlier.sortRank
+    }
+}
+
+typealias WorkDeskLocationTokens = [UUID: [WorkDeskLocationRecord]]
+
+/// Undo restores only the reviewed material locations, and refuses if any of
+/// those locations changed since the original action committed.
+nonisolated struct WorkDeskLocationUndo: Identifiable, Sendable, Equatable {
+    let id = UUID()
+    let before: WorkDeskLocationTokens
+    let after: WorkDeskLocationTokens
+    var isRestoration = false
+}
 
 nonisolated struct WorkDeskPoint: Codable, Hashable, Sendable {
     static let coordinateLimit: Double = 20_000
@@ -94,6 +142,24 @@ nonisolated struct WorkDeskOrganizationSnapshot: Sendable, Equatable {
     // Absence from a snapshot can mean another window just created a project.
     // Only durable deletion evidence may erase process-wide preferences.
     var deletedProjectIDs: Set<UUID> = []
+    var materialLocations: WorkDeskLocationTokens = [:]
+    /// Transient result of this transaction, never persisted or reconstructed
+    /// by comparing a stale presentation against a later complete snapshot.
+    var locationUndo: WorkDeskLocationUndo? = nil
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.projects == rhs.projects && lhs.placements == rhs.placements
+            && lhs.deletedProjectIDs == rhs.deletedProjectIDs && lhs.materialLocations == rhs.materialLocations
+    }
+
+    func locations(for materialID: UUID) -> [WorkDeskLocationRecord] {
+        if let records = materialLocations[materialID], !records.isEmpty { return records }
+        let placement = placements[materialID]
+        let project = placement?.projectID.flatMap { id in projects.contains(where: { $0.id == id }) ? id : nil }
+        return [.init(materialID: materialID, location: project.map(WorkDeskLocation.project) ?? .home,
+                      position: project == nil ? placement?.resolvedHomePosition : placement?.position,
+                      updatedAt: placement?.updatedAt ?? .distantPast)]
+    }
 }
 
 /// A generated slot belongs to the project scope that generated it. A late
@@ -123,12 +189,16 @@ nonisolated struct WorkDeskProjectDeletionReview: Identifiable, Sendable, Equata
     let assignedMaterialIDs: Set<UUID>
     let placementTokens: [UUID: WorkDeskPlacementRecord]
     let materialTokens: [UUID: WorkMaterialCanonicalOrder]
+    var locationTokens: WorkDeskLocationTokens = [:]
+    var sharedMaterialIDs: Set<UUID> = []
 }
 
 /// Intent-specific writes change only the fields the person acted on. Moving
 /// a card must not write an old copy of its project membership or pin state.
 nonisolated enum WorkDeskMutation: Sendable {
     case createProject(WorkDeskProjectRecord, materialIDs: [UUID])
+    case createProjectFrom(WorkDeskProjectRecord, materialIDs: [UUID], source: WorkDeskLocation,
+                           expected: WorkDeskLocationTokens?)
     case updateProject(id: UUID, title: String, brief: String, preferredGatewayRef: String?, expectedUpdatedAt: Date? = nil)
     case archiveProject(id: UUID, isArchived: Bool)
     /// Confirming a free-plan choice archives only the active set reviewed by
@@ -138,6 +208,18 @@ nonisolated enum WorkDeskMutation: Sendable {
     case deleteProject(id: UUID)
     case deleteReviewedProject(WorkDeskProjectDeletionReview, deleteMaterials: Bool)
     case assign(materialIDs: [UUID], projectID: UUID?)
+    case moveLocations(materialIDs: [UUID], from: WorkDeskLocation, to: WorkDeskLocation,
+                       positions: [UUID: WorkDeskPoint], expected: WorkDeskLocationTokens?)
+    case addLocations(materialIDs: [UUID], to: WorkDeskLocation, positions: [UUID: WorkDeskPoint],
+                      expected: WorkDeskLocationTokens?)
+    case removeLocations(materialIDs: [UUID], from: WorkDeskLocation, expected: WorkDeskLocationTokens?)
+    case positionLocations(positions: [UUID: WorkDeskPoint], at: WorkDeskLocation, expected: WorkDeskLocationTokens?)
+    case restoreLocations(WorkDeskLocationTokens, expected: WorkDeskLocationTokens)
+    case reorderLocations(materialID: UUID, relativeTo: UUID, placement: WorkboardReorderPlacement,
+                          at: WorkDeskLocation, orderedMaterialIDs: [UUID], expected: WorkDeskLocationTokens?)
+    case moveAndReorderLocations(materialIDs: [UUID], from: WorkDeskLocation, to: WorkDeskLocation,
+                                 relativeTo: UUID, placement: WorkboardReorderPlacement,
+                                 orderedMaterialIDs: [UUID], expected: WorkDeskLocationTokens?)
     case moveMaterial(id: UUID, position: WorkDeskPoint?)
     /// A selected group moves only while every member still belongs to the
     /// scope where its drag began. One stale member refuses the whole move.

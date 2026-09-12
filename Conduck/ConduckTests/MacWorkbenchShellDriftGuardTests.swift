@@ -6,16 +6,14 @@
 //
 // Four facts about that window are load-bearing, invisible in a diff, and
 // verifiable only by eye on a signed Mac — this suite is the cheap half of that
-// check. (1) Work owns a project rail inside its workspace, so the native Chat
-// sidebar stays COLLAPSED while Work is active.
-// (2) Chat's own collapse state has to survive a round trip through Work, which
-// means the forced collapse must never be written back into it — including by
-// AppKit, which revises the visibility binding on its own when the window is
-// resized past the two-column floor. (3) The Work/Chats section control is
+// check. (1) Work and Chats share one native sidebar and Settings footer, with
+// retained navigation content in each mode. (2) Each mode remembers its own
+// collapse state; native writes update only the active mode.
+// (3) The Work/Chats section control is
 // declared LAST on the detail side because toolbar items are collected in
 // view-tree order: anything declared after it slides it sideways whenever that
-// item comes or goes. (4) The centred principal item must keep a zero-area
-// placeholder while Work is active — a principal item with empty content
+// item comes or goes. (4) The centred principal item keeps the workspace
+// identity in Work and a placeholder without a gateway — empty principal content
 // produces no `NSToolbarItem`, and the flexible spaces AppKit puts around one
 // are the only thing holding the section control against the trailing edge.
 //
@@ -75,19 +73,20 @@ final class MacWorkbenchShellDriftGuardTests: XCTestCase {
         XCTAssertTrue(modifier.contains(".accessibilityHidden(!isActive)"))
     }
 
-    func testWorkReplacesOnlyTheDefaultToggleWithoutReplacingTheSplitView() throws {
+    func testBothDestinationsUseTheNativeToggleAndOnePersistentSplitView() throws {
         let source = try shellSource()
         let split = try RefusalLaneSource.trailingClosure(
             after: "private var persistentSplitView: some View", in: source, path: Self.path
         )
         XCTAssertEqual(split.components(separatedBy: "NavigationSplitView(columnVisibility:").count - 1, 1)
-        XCTAssertTrue(split.contains(".toolbar(removing: workDestinationIsActive ? .sidebarToggle : nil)"),
-                      "Only Work removes the native Chat toggle; nil restores the platform control in Chats")
+        XCTAssertFalse(split.contains(".toolbar(removing:"))
+        XCTAssertFalse(split.contains("WorkDeskSidebarToolbarButton("))
         let sidebar = try RefusalLaneSource.trailingClosure(
-            after: "NavigationSplitView(columnVisibility: splitColumnVisibility)", in: split, path: Self.path
+            after: "private var mountedSidebarDestinations: some View", in: source, path: Self.path
         )
-        XCTAssertTrue(sidebar.contains(".toolbar(removing: workDestinationIsActive ? .sidebarToggle : nil)"),
-                      "Default sidebar removal must be attached to the sidebar column that owns it")
+        XCTAssertTrue(sidebar.contains("WorkDeskSidebarView(viewModel: personalWorkbenchModel.workboardViewModel)"))
+        XCTAssertEqual(sidebar.components(separatedBy: "identityFooter").count - 1, 1)
+        XCTAssertTrue(sidebar.contains(".environment(\\.workbenchDestinationIsActive, workDestinationIsActive)"))
     }
 
     func testChatToolbarActionsAreHiddenAndRefuseStaleWorkTaps() throws {
@@ -108,31 +107,22 @@ final class MacWorkbenchShellDriftGuardTests: XCTestCase {
         XCTAssertLessThan(guardAt, actionAt)
         XCTAssertFalse(compose.contains("activateChatsForToolbarAction"),
                        "A stale Work toolbar tap must not bridge itself into Chats")
-        let work = try RefusalLaneSource.trailingClosure(
-            after: "if workDestinationIsActive, let personalWorkbenchModel", in: split, path: Self.path
-        )
-        XCTAssertTrue(work.contains("WorkDeskSidebarToolbarButton("))
-        XCTAssertFalse(work.contains("LeadingToolbarChrome"))
-        XCTAssertFalse(work.contains("startNewConversation"))
+        XCTAssertFalse(split.contains("WorkDeskSidebarToolbarButton("),
+                       "Work uses the same native sidebar toggle; it must not add another control")
     }
 
-    func testWorkToolbarUsesTheSameCachedProjectNavigationAsItsDesk() throws {
+    func testWorkNativeSidebarKeepsTheComposerInTheDetailColumn() throws {
         let source = try shellSource()
-        XCTAssertTrue(source.contains("workspace: personalWorkbenchModel.workboardViewModel.deskWorkspace"))
         XCTAssertTrue(source.contains(".environment(\\.workDeskSidebarIsHosted, true)"))
-        let path = "Conduck/Views/Workboard/WorkboardView.swift"
-        let workSource = try RefusalLaneSource.source(at: path)
-        let buttonStart = try XCTUnwrap(workSource.range(of: "struct WorkDeskSidebarToolbarButton"))
-        let button = try RefusalLaneSource.trailingClosure(
-            after: "var body: some View", in: String(workSource[buttonStart.lowerBound...]), path: path
+        XCTAssertTrue(source.contains(".environment(\\.workDeskNavigationIsExternal, true)"))
+        let path = "Conduck/Views/Workboard/WorkDeskWorkspaceView.swift"
+        let workspace = try RefusalLaneSource.source(at: path)
+        let layout = try RefusalLaneSource.trailingClosure(
+            after: "private var workspaceLayout: some View", in: workspace, path: path
         )
-        XCTAssertTrue(button.contains("guard isActive else { return }"))
-        XCTAssertTrue(button.contains("workspace.toggleProjectNavigation()"))
-        XCTAssertTrue(button.contains(".disabled(!isActive)"))
-        XCTAssertFalse(button.contains("chatColumnVisibility"))
-        XCTAssertFalse(button.contains("startNewConversation"))
-        XCTAssertFalse(button.contains(".pointerIconButton"),
-                       "The system toolbar must keep its native button style")
+        XCTAssertFalse(layout.contains("WorkDeskSidebarView("),
+                       "An internal rail would end above the composer's full-width inset again")
+        XCTAssertTrue(layout.contains("workspace.updateSidebarLayout(isInline: external)"))
     }
 
     func testIPadComposeAlreadyUsesItsActiveDestinationGateAndRejectsHiddenActions() throws {
@@ -147,37 +137,16 @@ final class MacWorkbenchShellDriftGuardTests: XCTestCase {
         XCTAssertTrue(action.contains("guard workbenchDestinationIsActive else { return }"))
     }
 
-    /// The split view is driven by the DERIVED visibility, and that derivation
-    /// collapses the column while Work is active.
-    func testWorkCollapsesTheSidebarColumn() throws {
+    /// Native visibility follows the active destination's remembered choice.
+    func testWorkVisibilityComesFromItsOwnRememberedSidebarState() throws {
         let source = try shellSource()
-
-        XCTAssertTrue(
-            source.contains("NavigationSplitView(columnVisibility: splitColumnVisibility)"),
-            "The split view no longer reads the derived visibility, so nothing collapses the sidebar "
-            + "column for Work and the desk shares the window with an empty column."
-        )
-
         let derivation = try RefusalLaneSource.trailingClosure(
             after: "private var effectiveColumnVisibility: NavigationSplitViewVisibility",
-            in: source,
-            path: Self.path
+            in: source, path: Self.path
         )
-        XCTAssertTrue(
-            derivation.contains("workDestinationIsActive"),
-            "`effectiveColumnVisibility` no longer depends on the destination, so Work cannot collapse "
-            + "the column it has nothing to put in."
-        )
-        XCTAssertTrue(
-            derivation.contains(".detailOnly"),
-            "`effectiveColumnVisibility` no longer resolves to `.detailOnly`, so Work stops collapsing "
-            + "the sidebar column."
-        )
-        XCTAssertTrue(
-            derivation.contains("chatColumnVisibility"),
-            "`effectiveColumnVisibility` no longer falls back to Chat's own state, so returning from "
-            + "Work forces the column open over whatever the user chose."
-        )
+        XCTAssertTrue(derivation.contains("workDestinationIsActive"))
+        XCTAssertTrue(derivation.contains("deskWorkspace.showsSidebar ? .all : .detailOnly"))
+        XCTAssertTrue(derivation.contains("return chatColumnVisibility"))
     }
 
     /// Nothing that happens while Work is on screen may rewrite the state Chat
@@ -186,24 +155,16 @@ final class MacWorkbenchShellDriftGuardTests: XCTestCase {
         let source = try shellSource()
         let binding = try RefusalLaneSource.trailingClosure(
             after: "private var splitColumnVisibility: Binding<NavigationSplitViewVisibility>",
-            in: source,
-            path: Self.path
+            in: source, path: Self.path
         )
-
-        let guardAt = try XCTUnwrap(
-            binding.range(of: "guard !workDestinationIsActive")?.lowerBound,
-            "`splitColumnVisibility` accepts writes while Work is active. The section has no sidebar to "
-            + "describe, so an AppKit write-back there silently becomes Chat's remembered state."
+        let work = try RefusalLaneSource.trailingClosure(
+            after: "if workDestinationIsActive, let personalWorkbenchModel", in: binding, path: Self.path
         )
-        let writeAt = try XCTUnwrap(
-            binding.range(of: "chatColumnVisibility = newValue")?.lowerBound,
-            "`splitColumnVisibility` no longer records Chat's own collapse state, so a column the user "
-            + "collapsed by hand reopens on the next section switch."
-        )
-        XCTAssertLessThan(
-            guardAt, writeAt,
-            "The write happens before the guard, which guards nothing."
-        )
+        XCTAssertTrue(work.contains("deskWorkspace.showsSidebar = newValue != .detailOnly"))
+        XCTAssertFalse(work.contains("chatColumnVisibility ="))
+        let chat = try RefusalLaneSource.trailingClosure(after: "else", in: binding, path: Self.path)
+        XCTAssertTrue(chat.contains("chatColumnVisibility = newValue"))
+        XCTAssertFalse(chat.contains("deskWorkspace.showsSidebar ="))
     }
 
     /// The section control keeps its measured trailing-most slot: declared after
@@ -238,27 +199,24 @@ final class MacWorkbenchShellDriftGuardTests: XCTestCase {
         )
     }
 
-    /// Work's principal slot stays occupied by a zero-area placeholder.
-    func testPrincipalSlotKeepsAZeroAreaPlaceholderWhileWorkIsActive() throws {
+    /// Work's title and the no-gateway placeholder both preserve the slot.
+    func testPrincipalSlotKeepsWorkIdentityAndNoGatewayPlaceholder() throws {
         let source = try shellSource()
         let content = try RefusalLaneSource.trailingClosure(
             after: "private var gatewayToolbarContent: some View",
             in: source,
             path: Self.path
         )
-        let branches = try XCTUnwrap(
-            RefusalLaneSource.branches(
-                ofIf: "if !chatDestinationIsActive || !coordinator.hasAnyConfiguredGateway {",
-                in: content
-            ),
-            "`gatewayToolbarContent` no longer opens with the branch that covers Work and the "
-            + "no-gateway case. If the condition legitimately changed, update this token."
+        let work = try RefusalLaneSource.trailingClosure(
+            after: "if workDestinationIsActive, let personalWorkbenchModel",
+            in: content, path: Self.path
         )
-        XCTAssertTrue(
-            branches.then.contains("Color.clear"),
-            "The Work branch of the principal item no longer resolves to a placeholder. Empty content "
-            + "produces no toolbar item at all, and the section control drops to the leading edge of "
-            + "the content region the moment Work is shown."
+        XCTAssertTrue(work.contains("WorkDeskToolbarTitle(workspace: personalWorkbenchModel.workboardViewModel.deskWorkspace)"))
+        let placeholder = try RefusalLaneSource.trailingClosure(
+            after: "else if !coordinator.hasAnyConfiguredGateway",
+            in: content, path: Self.path
         )
+        XCTAssertTrue(placeholder.contains("Color.clear"))
+        XCTAssertTrue(placeholder.contains(".frame(width: 1, height: 1)"))
     }
 }

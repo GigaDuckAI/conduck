@@ -39,7 +39,7 @@ enum WorkboardCaptureDestination: Equatable, Sendable {
     var composerPrompt: LocalizedStringResource {
         switch self {
         case .all:
-            LocalizedStringResource("workdesk.capture.all.prompt", defaultValue: "Add to All materials…")
+            LocalizedStringResource("workdesk.capture.all.prompt", defaultValue: "Add to Home…")
         case .project(_, let title):
             LocalizedStringResource("workdesk.capture.project.prompt", defaultValue: "Add to \(title)…")
         }
@@ -48,7 +48,7 @@ enum WorkboardCaptureDestination: Equatable, Sendable {
     var dropTitle: LocalizedStringResource {
         switch self {
         case .all:
-            LocalizedStringResource("workdesk.capture.all.drop", defaultValue: "Drop into All materials")
+            LocalizedStringResource("workdesk.capture.all.drop", defaultValue: "Drop into Home")
         case .project(_, let title):
             LocalizedStringResource("workdesk.capture.project.drop", defaultValue: "Drop into \(title)")
         }
@@ -379,7 +379,7 @@ struct WorkboardCaptureCanvas: View {
             deskSyncBanner
             importProgress
             if let deskWorkspace {
-                WorkDeskSourceBoard(
+                WorkDeskProjectSurface(
                     viewModel: viewModel, item: item, workspace: deskWorkspace,
                     onOpen: openMaterial, onShare: shareMaterial, onReattach: beginReattachment
                 )
@@ -876,8 +876,10 @@ private struct WorkboardPaneDropModifier: ViewModifier {
     @Bindable var viewModel: WorkboardViewModel
 
     private var destination: WorkboardCaptureDestination {
-        WorkboardCaptureDestination(workspace: viewModel.deskWorkspace)
+        hoveredDestination ?? WorkboardCaptureDestination(workspace: viewModel.deskWorkspace)
     }
+    @State private var globalFrame: CGRect = .zero
+    @State private var hoveredDestination: WorkboardCaptureDestination?
     @State private var sessionDestination: WorkboardCaptureDestination = .all
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -901,11 +903,15 @@ private struct WorkboardPaneDropModifier: ViewModifier {
                         .transition(.opacity)
                 }
             }
-            .onDrop(
-                of: [.fileURL, .image, .url, .utf8PlainText],
-                isTargeted: $isDropTargeted,
-                perform: handleDrop
-            )
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { globalFrame = $0 }
+            .onDrop(of: [.fileURL, .image, .url, .utf8PlainText], delegate: WorkboardPaneCaptureDropDelegate(
+                isEnabled: workbenchDestinationIsActive && !isImporting && !viewModel.deskWorkspace.isShowingConversation,
+                onLocation: { point in
+                    hoveredDestination = point.flatMap(captureDestination(at:))
+                    isDropTargeted = hoveredDestination != nil
+                },
+                onDrop: { providers, point in handleDrop(providers, at: point) }
+            ))
             .workboardLargeImportAlert(
                 item: activeLargeImportConfirmation,
                 onConfirm: { confirmation in
@@ -968,10 +974,29 @@ private struct WorkboardPaneDropModifier: ViewModifier {
         .accessibilityAddTraits(.isStaticText)
     }
 
-    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+    private func captureDestination(at point: CGPoint) -> WorkboardCaptureDestination? {
+        let global = CGPoint(x: globalFrame.minX + point.x, y: globalFrame.minY + point.y)
+        let coordinator = viewModel.deskWorkspace.transferCoordinator
+        if let target = coordinator.destination(at: global) {
+            switch target.location {
+            case .home: return .all
+            case .project(let id):
+                guard let project = viewModel.deskWorkspace.organization.project(id: id) else { return nil }
+                return .project(id, title: project.title)
+            }
+        }
+        guard !coordinator.isOccluded(at: global), !coordinator.containsSurface(at: global) else { return nil }
+        // The composer is outside the registered boards and visibly names its
+        // destination. A drop there follows that name, frozen before decoding.
+        return WorkboardCaptureDestination(workspace: viewModel.deskWorkspace)
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider], at point: CGPoint) -> Bool {
         guard workbenchDestinationIsActive, !viewModel.deskWorkspace.isShowingConversation,
-              !isImporting, dropSession == nil else { return false }
-        guard viewModel.deskWorkspace.isSearching || viewModel.deskWorkspace.currentProject == nil || viewModel.deskWorkspace.currentProjectAllowsNewActivity else {
+              !isImporting, dropSession == nil, let target = captureDestination(at: point) else { return false }
+        if case .project(let projectID, _) = target,
+           let project = viewModel.deskWorkspace.organization.project(id: projectID),
+           project.isArchived || viewModel.deskWorkspace.organization.requiresFreeProjectSelection {
             if viewModel.deskWorkspace.organization.requiresFreeProjectSelection {
                 viewModel.deskWorkspace.organization.projectSelectionRequested = true
             } else {
@@ -994,7 +1019,7 @@ private struct WorkboardPaneDropModifier: ViewModifier {
             count: routed.count,
             initialFailureCount: providers.count - routed.count
         )
-        sessionDestination = destination
+        sessionDestination = target
         dropSession = session
         for (index, entry) in routed.enumerated() {
             startDropLoad(entry.0, route: entry.1, index: index, session: session)
@@ -1321,10 +1346,7 @@ private struct WorkboardMaterialBoard: View {
             presenting: materialPendingRemoval
         ) { material in
             Button(
-                LocalizedStringResource(
-                    "workboard.material.remove.action",
-                    defaultValue: "Remove Material"
-                ),
+                LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material"),
                 role: .destructive
             ) {
                 materialPendingRemoval = nil
@@ -3296,10 +3318,9 @@ struct WorkboardSourceCard: View {
             Divider()
             Button(role: .destructive, action: onRemove) {
                 Label(
-                    LocalizedStringResource(
-                        "workboard.material.remove.action",
-                        defaultValue: "Remove Material"
-                    ),
+                    organizationActions != nil
+                        ? LocalizedStringResource("workdesk.material.delete.everywhere", defaultValue: "Delete Everywhere")
+                        : LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material"),
                     systemImage: "trash"
                 )
             }
@@ -3352,10 +3373,9 @@ struct WorkboardSourceCard: View {
         }
         if let onRemove {
             Button(
-                LocalizedStringResource(
-                    "workboard.material.remove.action",
-                    defaultValue: "Remove Material"
-                ),
+                organizationActions != nil
+                    ? LocalizedStringResource("workdesk.material.delete.everywhere", defaultValue: "Delete Everywhere")
+                    : LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material"),
                 action: onRemove
             )
         }
@@ -3756,5 +3776,33 @@ enum WorkboardImportMapping {
 
     static func reclaim(_ batch: WorkboardResolvedImportBatch) {
         for url in batch.appOwnedURLs { try? FileManager.default.removeItem(at: url) }
+    }
+}
+
+/// The pane retains one external import owner, while pointer geometry chooses
+/// Home or the open/closed project under the release. Internal organization
+/// payloads never enter this file/text import lane.
+private struct WorkboardPaneCaptureDropDelegate: DropDelegate {
+    let isEnabled: Bool
+    let onLocation: (CGPoint?) -> Void
+    let onDrop: ([NSItemProvider], CGPoint) -> Bool
+    private let types: [UTType] = [.fileURL, .image, .url, .utf8PlainText]
+
+    func validateDrop(info: DropInfo) -> Bool {
+        isEnabled && info.hasItemsConforming(to: types)
+            && !info.hasItemsConforming(to: [.conduckWorkboardMaterial])
+    }
+
+    func dropEntered(info: DropInfo) { if validateDrop(info: info) { onLocation(info.location) } }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard validateDrop(info: info) else { onLocation(nil); return DropProposal(operation: .cancel) }
+        onLocation(info.location)
+        return DropProposal(operation: .copy)
+    }
+    func dropExited(info: DropInfo) { onLocation(nil) }
+    func performDrop(info: DropInfo) -> Bool {
+        defer { onLocation(nil) }
+        guard validateDrop(info: info) else { return false }
+        return onDrop(info.itemProviders(for: types), info.location)
     }
 }

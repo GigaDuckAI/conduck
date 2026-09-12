@@ -8,7 +8,9 @@
 // and submit a normal conversation turn. The reviewed packet owns immutable
 // copies, the selected connection, and one attempt. A failure before local
 // acceptance leaves the project intact; an accepted turn belongs to Chat's
-// existing delivery and retry machinery, never a second Work send.
+// existing delivery and retry machinery, never a second Work send. Project
+// admission is checked before each file leaves the device and again before
+// creating a conversation; archiving or losing access stops the remaining work.
 
 #if !os(watchOS)
 import Foundation
@@ -138,6 +140,9 @@ struct WorkDeskPreparedHandoff: Identifiable, Sendable {
     let id: UUID
     var projectID: UUID? = nil
     var taskTitle: String? = nil
+    /// Review reads the same frozen inputs used to assemble the outgoing prompt.
+    var task: String = ""
+    var projectContext: String = ""
     let prompt: String
     let materials: [WorkboardMaterialSnapshot]
     let connection: WorkDeskGatewayConnection
@@ -174,6 +179,7 @@ final class WorkDeskHandoff {
         var createConversation: @MainActor (UUID, RemoteAgentRef, UUID?, String?) async throws -> Void
         var removeConversation: @MainActor (UUID) async -> Void
         var submit: @MainActor (UUID, String, [PendingAttachment], RemoteAgentRef, String?, SettingsManager.RemoteAgentSnapshot, [WorkDeskMaterialInput]) async -> Bool
+        var validateProjectActivity: @MainActor (UUID) async throws -> Void
         var defaultGateway: @MainActor () async -> RemoteAgentRef? = { nil }
 
         static func live(conversationResolver: WorkDeskConversationResolver) -> Self {
@@ -220,6 +226,7 @@ final class WorkDeskHandoff {
                     #endif
                     return await viewModel.submitUserTurnAwaitingLocalAcceptance(prompt, attachments: attachments, expectedRef: ref, expectedFileLaneID: laneID, expectedGatewaySnapshot: agent, workMaterialInputs: materialInputs)
                 },
+                validateProjectActivity: { try await ConversationStore.shared.validateWorkDeskProjectActivity(projectID: $0) },
                 defaultGateway: { await SettingsManager.shared.defaultRemoteAgentRefIfSendable() }
             )
         }
@@ -233,6 +240,12 @@ final class WorkDeskHandoff {
     private(set) var isPreparing = false
     private(set) var isSending = false
     private(set) var acceptedConversationID: UUID?
+    /// The request owner retires its local draft even after its sheet departs.
+    var onAccepted: (@MainActor () -> Void)?
+    /// Persist recovery identity before any upload or conversation side effect.
+    var onWillSend: (@MainActor (UUID) -> Bool)?
+    /// A refusal proves this attempt did not reach local conversation acceptance.
+    var onSendRefused: (@MainActor (UUID) -> Void)?
     var errorMessage: String?
     private var claimedPackets = Set<UUID>()
     private var preparationGeneration = UUID()
@@ -302,6 +315,8 @@ final class WorkDeskHandoff {
             try Task.checkCancellation()
             prepared = WorkDeskPreparedHandoff(id: conversationID, projectID: projectID,
                 taskTitle: ReplySanitizer.displayLine(brief, maxLength: 100, fallback: title),
+                task: brief.trimmingCharacters(in: .whitespacesAndNewlines),
+                projectContext: projectContext.trimmingCharacters(in: .whitespacesAndNewlines),
                 prompt: WorkDeskHandoffPolicy.prompt(title: title, brief: brief, materials: materials, projectContext: projectContext),
                 materials: materials, connection: connection, files: files)
         } catch {
@@ -314,7 +329,9 @@ final class WorkDeskHandoff {
     /// Once accepted this controller can only open that same conversation.
     func send() async -> UUID? {
         guard !isSending, let packet = prepared, acceptedConversationID == nil,
-              claimedPackets.insert(packet.id).inserted else { return nil }
+              !claimedPackets.contains(packet.id) else { return nil }
+        guard onWillSend?(packet.id) != false else { return nil }
+        claimedPackets.insert(packet.id)
         isSending = true
         errorMessage = nil
         var uploaded: [String] = []
@@ -327,6 +344,7 @@ final class WorkDeskHandoff {
                 if let key = file.storedKey, let lane = packet.connection.files {
                     // Revalidate before EVERY egress, not just the first file.
                     try await validateConnection(packet.connection)
+                    try await validateProjectActivity(packet.projectID)
                     // A transport failure may follow a landed PUT, so include
                     // the attempted key in cleanup before starting its upload.
                     uploaded.append(key)
@@ -343,11 +361,13 @@ final class WorkDeskHandoff {
                 }
             }
             try await validateConnection(packet.connection)
+            try await validateProjectActivity(packet.projectID)
             try await dependencies.createConversation(packet.id, packet.connection.option.ref, packet.projectID, packet.taskTitle)
             conversationCreated = true
             let accepted = await dependencies.submit(packet.id, packet.prompt, attachments, packet.connection.option.ref, packet.connection.files?.durableLaneID, packet.connection.agent, packet.materialInputs)
             guard accepted else { throw WorkDeskHandoffError.submissionRefused }
             acceptedConversationID = packet.id
+            onAccepted?()
             packet.reclaim()
             prepared = nil
             return packet.id
@@ -359,6 +379,7 @@ final class WorkDeskHandoff {
             packet.reclaim()
             prepared = nil
             errorMessage = Self.message(for: error)
+            onSendRefused?(packet.id)
             return nil
         }
     }
@@ -372,6 +393,11 @@ final class WorkDeskHandoff {
     private func validate(_ packet: WorkDeskPreparedHandoff) async throws {
         try await validateConnection(packet.connection)
         for material in packet.materials { try await validate(material) }
+    }
+
+    private func validateProjectActivity(_ projectID: UUID?) async throws {
+        guard let projectID else { return }
+        try await dependencies.validateProjectActivity(projectID)
     }
 
     private func validateConnection(_ expected: WorkDeskGatewayConnection) async throws {

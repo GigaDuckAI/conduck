@@ -285,6 +285,69 @@ final class WorkDeskProAccessTests: XCTestCase {
         }
     }
 
+    func testCreatingProjectFromMaterialsCarriesVerifiedAccessAndRefusesFreeOverflowAtomically() async throws {
+        let access = ProjectAccessFixture(.init(hasProAccess: true))
+        let store = isolated.make(proAccessProvider: { access.value })
+        _ = try await createProjects(3, store: store)
+        let material = try await store.upsertDeskMaterial(.init(kind: .note, title: "Move into the fourth project"))
+        let fourth = WorkDeskProjectRecord(title: "Paid fourth project")
+        let saved = try await store.applyWorkDeskMutation(.createProjectFrom(fourth,
+            materialIDs: [material.id], source: .home, expected: nil))
+        XCTAssertEqual(saved.projects.filter { !$0.isArchived }.count, 4)
+        XCTAssertEqual(saved.locations(for: material.id).map(\.location), [.project(fourth.id)])
+        let loose = try await store.upsertDeskMaterial(.init(kind: .note, title: "Keep on Home"))
+        let before = try await store.fetchWorkDeskOrganization()
+        access.set(.init())
+        do {
+            _ = try await store.applyWorkDeskMutation(.createProjectFrom(.init(title: "Refused fifth"),
+                materialIDs: [loose.id], source: .home, expected: nil))
+            XCTFail("Source-aware creation must use the same free allowance")
+        } catch { XCTAssertEqual(error as? WorkDeskStoreError, .activeProjectLimitReached) }
+        let after = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(after, before, "Refused creation must leave both the project roster and Home membership intact")
+    }
+
+    func testLocationTransfersAndUndoCannotAddMembershipToPausedProjects() async throws {
+        for (archived, remainsPro) in [(true, false), (true, true), (false, false)] {
+            let access = ProjectAccessFixture(.init(hasProAccess: true))
+            let store = isolated.make(proAccessProvider: { access.value })
+            let projects = try await createProjects(4, store: store)
+            let target = projects[0].id
+            let existing = try await store.upsertDeskMaterial(.init(kind: .note, title: "Already filed"), projectID: target)
+            let incoming = try await store.upsertDeskMaterial(.init(kind: .note, title: "Keep this loose"))
+            if archived { try await store.applyWorkDeskMutation(.archiveProject(id: target, isArchived: true)) }
+            access.set(.init(hasProAccess: remainsPro))
+            let before = try await store.fetchWorkDeskOrganization()
+            let mutations: [WorkDeskMutation] = [
+                .addLocations(materialIDs: [incoming.id], to: .project(target), positions: [:], expected: nil),
+                .moveLocations(materialIDs: [incoming.id], from: .home, to: .project(target), positions: [:], expected: nil),
+                .moveAndReorderLocations(materialIDs: [incoming.id], from: .home, to: .project(target),
+                    relativeTo: existing.id, placement: .before, orderedMaterialIDs: [existing.id], expected: nil),
+                .restoreLocations([incoming.id: [.init(materialID: incoming.id, location: .project(target), position: nil)]],
+                    expected: [incoming.id: before.locations(for: incoming.id)])
+            ]
+            for mutation in mutations {
+                do {
+                    _ = try await store.applyWorkDeskMutation(mutation)
+                    XCTFail("Every new target membership must honor project admission")
+                } catch {
+                    XCTAssertEqual(error as? WorkDeskStoreError, archived ? .projectArchived : .projectSelectionRequired)
+                }
+                let after = try await store.fetchWorkDeskOrganization()
+                XCTAssertEqual(after, before)
+            }
+            let stillOwned = try await store.applyWorkDeskMutation(.addLocations(materialIDs: [existing.id],
+                to: .project(target), positions: [:], expected: nil))
+            XCTAssertEqual(stillOwned.locations(for: existing.id).map(\.location), [.project(target)])
+            let positioned = try await store.applyWorkDeskMutation(.positionLocations(positions: [existing.id: .init(x: 21, y: 34)],
+                at: .project(target), expected: nil))
+            XCTAssertEqual(positioned.locations(for: existing.id).first?.position, .init(x: 21, y: 34))
+            let removed = try await store.applyWorkDeskMutation(.removeLocations(materialIDs: [existing.id],
+                from: .project(target), expected: nil))
+            XCTAssertEqual(removed.locations(for: existing.id).map(\.location), [.home])
+        }
+    }
+
     private func createProjects(_ count: Int, store: ConversationStore) async throws -> [WorkDeskProjectRecord] {
         let projects = (0..<count).map { WorkDeskProjectRecord(title: "Project \($0)") }
         for project in projects { try await store.applyWorkDeskMutation(.createProject(project, materialIDs: [])) }

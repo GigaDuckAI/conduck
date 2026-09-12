@@ -6,9 +6,9 @@
 // removal retains the capture store's exact parent/companion confirmation.
 // Every layout draws the material's own surface and menu. Selection overlays
 // that surface; it never adds a second card or a permanent organization bar.
-// Readable layouts share the desk's stored order. Whole-card native drags
-// preview an insertion edge and commit only on release; they never file a
-// material, create a project or enter the external-file import lane.
+// Each location keeps its own readable order as well as spatial positions.
+// Whole-card native drags preview an insertion edge; a cross-location release
+// files and orders atomically, outside the external-file import lane.
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -20,32 +20,58 @@ struct WorkDeskSourceBoard: View {
     let onOpen: (WorkboardMaterialSnapshot) -> Void
     let onShare: (WorkboardMaterialSnapshot) -> Void
     let onReattach: (WorkboardMaterialSnapshot) -> Void
+    var scopeOverride: WorkDeskScope? = nil
+    var transferPriority = 0
+    @State private var boardGlobalFrame: CGRect = .zero
+    @State private var readableSurfaceID = UUID()
     @State private var pendingRemoval: WorkboardMaterialSnapshot?
     @State private var readableReorder = WorkDeskReadableReorder()
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
-    private var materials: [WorkboardMaterialSnapshot] { workspace.visibleMaterials(in: item.materials) }
+    private var boardScope: WorkDeskScope { scopeOverride ?? workspace.scope }
+    private var boardSearch: String { boardScope == .all ? workspace.search : "" }
+    private var isSearching: Bool { !boardSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var isBoardSelecting: Bool { workspace.isSelecting && (workspace.scope == boardScope || isSearching) }
+    private var materials: [WorkboardMaterialSnapshot] {
+        workspace.visibleMaterials(in: item.materials, scope: boardScope, search: boardSearch)
+    }
+    private var sourceLocation: WorkDeskLocation? { isSearching ? nil : boardScope.location }
+    private var project: WorkDeskProjectRecord? {
+        guard case .project(let id) = boardScope else { return nil }
+        return workspace.organization.project(id: id)
+    }
+    private var selectedIDs: Set<UUID> { isBoardSelecting ? workspace.selectedIDs : [] }
+    private func selectMaterial(_ id: UUID) {
+        if workspace.scope != boardScope { workspace.selectScope(boardScope) }
+        workspace.toggleSelection(id)
+    }
 
     private var projects: [WorkDeskCanvasProject] {
-        let query = workspace.search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = boardSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let counts = workspace.organization.materialCounts(in: item.materials)
         return workspace.organization.projects.filter { project in
             if !query.isEmpty { return project.title.localizedStandardContains(query) }
-            switch workspace.scope {
-            case .all: return renderedLayout == .desk && !project.isArchived
+            switch boardScope {
+            case .all: return !project.isArchived
             case .project: return false
             }
-        }.map { WorkDeskCanvasProject(record: $0, materialCount: counts[$0.id] ?? 0) }
+        }.map { record in
+            WorkDeskCanvasProject(record: record, materialCount: counts[record.id] ?? 0,
+                previewMaterials: Array(item.materials.filter {
+                    workspace.organization.contains(materialID: $0.id, at: .project(record.id))
+                }.prefix(3)))
+        }
     }
 
     private var renderedLayout: WorkboardLayoutMode {
-        WorkDeskLayoutPresentation.resolved(preference: viewModel.layoutMode,
-            supportsSpatialLayout: workspace.supportsSpatialLayout,
+        WorkDeskLayoutPresentation.resolved(preference: workspace.layoutSession(for: boardScope).mode,
+            supportsSpatialLayout: !isSearching,
             requiresAccessibleList: dynamicTypeSize.isAccessibilitySize)
     }
 
     var body: some View {
+        let dropTransform = workspace.canvasSession(for: boardScope).transform
         Group {
             if renderedLayout == .desk {
                 spatialBoard
@@ -60,12 +86,28 @@ struct WorkDeskSourceBoard: View {
                 readableBoard
             }
         }
+        .workDeskMaterialLocationDrop(location: boardScope.location,
+            isEnabled: workbenchDestinationIsActive && !isSearching,
+            organization: workspace.organization,
+            acceptsPoint: { point in
+                let global = CGPoint(x: boardGlobalFrame.minX + point.x, y: boardGlobalFrame.minY + point.y)
+                return workspace.transferCoordinator.destination(at: global)?.location == boardScope.location
+            },
+            positions: { payload, point in
+                guard renderedLayout == .desk else { return [:] }
+                return [payload.materialID: WorkDeskCanvasGeometry.worldPoint(point, transform: dropTransform)]
+            }, onMoved: { _ in workspace.reconcile(materials: viewModel.desk?.materials ?? item.materials) })
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+            boardGlobalFrame = frame
+            updateReadableSurface()
+        }
+        .onChange(of: renderedLayout) { _, _ in updateReadableSurface() }
         .confirmationDialog(
-            Text(LocalizedStringResource("workboard.material.remove.confirm.title", defaultValue: "Remove this material?")),
+            Text(LocalizedStringResource("workdesk.material.delete.title", defaultValue: "Delete this material everywhere?")),
             isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
             titleVisibility: .visible, presenting: pendingRemoval
         ) { material in
-            Button(LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material"), role: .destructive) {
+            Button(LocalizedStringResource("workdesk.material.delete.everywhere", defaultValue: "Delete Everywhere"), role: .destructive) {
                 pendingRemoval = nil
                 Task {
                     if let child = material.companion {
@@ -75,8 +117,8 @@ struct WorkDeskSourceBoard: View {
             }
         } message: { material in
             Text(material.companion == nil
-                ? LocalizedStringResource("workdesk.material.delete.message", defaultValue: "This material will be removed from Work and its project.")
-                : LocalizedStringResource("workdesk.material.delete.pair", defaultValue: "This picture and the voice note inside it will be removed from Work and its project."))
+                ? LocalizedStringResource("workdesk.material.delete.message", defaultValue: "This material will be deleted from Home and every project that contains it.")
+                : LocalizedStringResource("workdesk.material.delete.pair", defaultValue: "This picture and its voice note will be deleted from Home and every project that contains them."))
         }
         .onChange(of: workspace.scope) { _, _ in readableReorder.cancel() }
         .onChange(of: workspace.search) { _, _ in readableReorder.cancel() }
@@ -84,44 +126,36 @@ struct WorkDeskSourceBoard: View {
         .onChange(of: workspace.isSelecting) { _, _ in readableReorder.cancel() }
         .onChange(of: workbenchDestinationIsActive) { _, active in
             if !active { readableReorder.cancel() }
+            updateReadableSurface()
         }
-        .onDisappear { readableReorder.cancel() }
+        .onDisappear { readableReorder.cancel(); workspace.transferCoordinator.removeSurface(id: readableSurfaceID) }
     }
 
     private var spatialBoard: some View {
         let visible = materials
         let visibleIDs = visible.map(\.id)
         let indices = Dictionary(visible.enumerated().map { ($0.element.id, $0.offset + 1) }, uniquingKeysWith: { first, _ in first })
-        let projectID = workspace.currentProject?.id
-        let isHome = workspace.scope == .all
-        let placements = workspace.organization.placements.mapValues { placement in
-            var displayed = placement
-            if isHome { displayed.position = placement.resolvedHomePosition }
-            return displayed
-        }
+        let projectID = project?.id
+        let isHome = boardScope == .all
+        let placements = workspace.organization.placements(at: boardScope.location)
         return WorkDeskCanvas(
             materials: visible,
             placements: placements,
             projects: projects,
-            session: workspace.canvasSession(for: workspace.scope),
-            selectedIDs: workspace.selectedIDs,
-            isSelecting: workspace.isSelecting,
-            onMoveMaterials: { positions, memberships in
-                if isHome {
-                    return await workspace.organization.moveHomeMaterials(positions.map { id, point in
-                        .init(materialID: id, projectID: memberships[id] ?? nil, position: point, isHome: true)
-                    })
-                }
-                return await workspace.organization.moveMaterials(positions: positions, expectedProjectID: projectID)
+            session: workspace.canvasSession(for: boardScope),
+            selectedIDs: selectedIDs,
+            isSelecting: isBoardSelecting,
+            onMoveMaterials: { positions, _ in
+                await workspace.organization.moveLocations(positions: positions, at: boardScope.location)
             },
             onMoveProject: { id, point in await workspace.organization.moveProject(id: id, to: point) },
             onGroup: isHome ? { ids, point in workspace.beginProject(materialIDs: ids, position: point) } : nil,
             onAssign: { ids, projectID in
-                let saved = await workspace.organization.assign(materialIDs: ids, to: projectID)
+                let saved = await workspace.organization.move(materialIDs: ids, from: boardScope.location, to: .project(projectID), positions: [:])
                 if saved { workspace.selectedIDs.subtract(ids) }
                 return saved
             },
-            onSelect: workspace.toggleSelection,
+            onSelect: selectMaterial,
             onOpenProject: { workspace.selectScope(.project($0)) },
             onSeedPositions: { materials, projects in
                 await workspace.organization.seedPositions(materials: materials.map { seed in
@@ -130,14 +164,25 @@ struct WorkDeskSourceBoard: View {
                     return scoped
                 }, projects: projects)
             },
-            onCreateProject: workspace.scope == .all ? { point in
+            onCreateProject: boardScope == .all ? { point in
                 workspace.beginProject(position: point)
-            } : nil
+            } : nil,
+            transferCoordinator: workspace.transferCoordinator,
+            transferLocation: boardScope.location,
+            transferTitle: project?.title ?? String(localized: "workdesk.all", defaultValue: "Home"),
+            transferPriority: transferPriority,
+            onTransfer: { request in
+                await workspace.transfer(request, materials: viewModel.desk?.materials ?? item.materials)
+            },
+            organization: workspace.organization,
+            onNativeTransfer: { _ in workspace.reconcile(materials: viewModel.desk?.materials ?? item.materials) },
+            onEditProject: workspace.editProject,
+            onDeleteProject: workspace.requestProjectDeletion
         ) { material, size in
             sourceCard(material, spatial: true, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
                 .frame(width: size.width, height: size.height)
         }
-        .id(workspace.scope)
+        .id(boardScope)
     }
 
     private var readableBoard: some View {
@@ -147,18 +192,19 @@ struct WorkDeskSourceBoard: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 12) {
-                    ForEach(projects) { project in
-                        Button { workspace.selectScope(.project(project.record.id)) } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "folder.fill").foregroundStyle(AppColors.accent)
-                                Text(verbatim: project.record.title).font(.headline)
-                                Spacer()
-                                Text(verbatim: String(project.materialCount)).foregroundStyle(AppColors.textSecondary)
-                                Image(systemName: "chevron.right").font(.caption)
+                    if !projects.isEmpty {
+                        if renderedLayout == .tiles {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190, maximum: 290), spacing: 16)], spacing: 16) {
+                                ForEach(projects) { project in projectButton(project, row: false) }
                             }
-                            .padding(18).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 14))
-                        }.choiceCardButton(cornerRadius: 14)
+                        } else {
+                            ForEach(projects) { project in projectButton(project, row: true) }
+                        }
+                        if !visible.isEmpty {
+                            Text(LocalizedStringResource("workdesk.home.loose", defaultValue: "On Home"))
+                                .font(.caption.weight(.semibold)).foregroundStyle(AppColors.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 12)
+                        }
                     }
                     if renderedLayout == .tiles {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 250), spacing: 16)], spacing: 16) {
@@ -166,7 +212,7 @@ struct WorkDeskSourceBoard: View {
                                 sourceCard(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
                                     .id(material.id)
                                     .frame(height: WorkDeskCanvasGeometry.cardBodySize.height)
-                                    .overlay(RoundedRectangle(cornerRadius: 13).stroke(workspace.selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2)
+                                    .overlay(RoundedRectangle(cornerRadius: 13).stroke(selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2)
                                         .allowsHitTesting(false))
                                     .overlay(alignment: .topLeading) { selectionIndicator(material) }
                                     .modifier(readableReorderCard(material))
@@ -176,7 +222,7 @@ struct WorkDeskSourceBoard: View {
                         ForEach(visible) { material in
                             sourceRow(material, position: indices[material.id] ?? 1, visibleIDs: visibleIDs)
                                 .id(material.id)
-                                .overlay(RoundedRectangle(cornerRadius: 13).stroke(workspace.selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2)
+                                .overlay(RoundedRectangle(cornerRadius: 13).stroke(selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2)
                                     .allowsHitTesting(false))
                                 .overlay(alignment: .topLeading) { selectionIndicator(material) }
                                 .modifier(readableReorderCard(material))
@@ -197,24 +243,46 @@ struct WorkDeskSourceBoard: View {
         }
     }
 
+    private func updateReadableSurface() {
+        guard workbenchDestinationIsActive, renderedLayout != .desk, !isSearching else {
+            workspace.transferCoordinator.removeSurface(id: readableSurfaceID)
+            return
+        }
+        workspace.transferCoordinator.register(WorkDeskTransferSurface(id: readableSurfaceID,
+            location: boardScope.location,
+            title: project?.title ?? String(localized: "workdesk.all", defaultValue: "Home"),
+            frame: boardGlobalFrame, priority: transferPriority, isSpatial: false))
+    }
+
+    private func projectButton(_ project: WorkDeskCanvasProject, row: Bool) -> some View {
+        WorkDeskReadableProject(project: project, row: row, workspace: workspace,
+            priority: transferPriority + 1)
+    }
+
     private var canReorderReadableMaterials: Bool {
-        workbenchDestinationIsActive && !workspace.isSelecting
+        workbenchDestinationIsActive && !isBoardSelecting
             && !viewModel.isCapturingIntoDesk && renderedLayout != .desk
     }
 
     private var readableReorderContext: WorkDeskReadableReorderContext {
-        let live = workspace.visibleMaterials(in: viewModel.desk?.materials ?? item.materials)
-        return .init(scope: workspace.scope, search: workspace.search, layout: renderedLayout,
+        let live = workspace.visibleMaterials(in: viewModel.desk?.materials ?? item.materials, scope: boardScope, search: boardSearch)
+        return .init(scope: boardScope, search: boardSearch, layout: renderedLayout,
                      visibleIDs: live.map(\.id), projectIDs: Dictionary(live.compactMap { material in
                          workspace.organization.projectID(for: material.id).map { (material.id, $0) }
-                     }, uniquingKeysWith: { first, _ in first }))
+                     }, uniquingKeysWith: { first, _ in first }),
+                     locationTokens: workspace.organization.locationTokens(for: live.map(\.id)))
     }
 
     private func readableReorderCard(_ material: WorkboardMaterialSnapshot) -> WorkDeskReadableReorderCard {
         .init(materialID: material.id, layout: renderedLayout, isEnabled: canReorderReadableMaterials,
               reorder: readableReorder, onBegin: {
                   guard canReorderReadableMaterials else { return NSItemProvider() }
+                  workspace.transferCoordinator.cancel()
                   readableReorder.begin(material.id)
+                  if let sourceLocation, let payload = WorkMaterialDragPayload.deskMaterial(materialID: material.id,
+                      materialIDs: [material.id], source: sourceLocation, organization: workspace.organization) {
+                      return payload.itemProvider()
+                  }
                   return WorkMaterialDragPayload(itemID: Constants.workboardDeskItemID, materialID: material.id).itemProvider()
               }, onDrop: dropReadableMaterial)
     }
@@ -249,11 +317,25 @@ struct WorkDeskSourceBoard: View {
         provider.loadDataRepresentation(forTypeIdentifier: UTType.conduckWorkboardMaterial.identifier) { data, _ in
             let payload = data.flatMap { try? JSONDecoder().decode(WorkMaterialDragPayload.self, from: $0) }
             Task { @MainActor in
-                guard let target = readableReorder.resolve(payload, token: token,
-                    current: readableReorderContext, isEnabled: canReorderReadableMaterials),
+                guard let operation = readableReorder.resolveOperation(payload, token: token,
+                    current: readableReorderContext, isEnabled: canReorderReadableMaterials,
+                    locations: workspace.organization.locationTokens(for: payload?.materialIDs ?? [])),
                       let payload else { return }
-                _ = await viewModel.reorderMaterial(payload.materialID, relativeTo: target.materialID,
-                                                   placement: target.placement)
+                switch operation {
+                case .reorder(let target):
+                    _ = await reorderMaterial(payload.materialID, relativeTo: target.materialID,
+                                                       placement: target.placement)
+                case .move(let target, let move):
+                    let ordered = readableReorderContext.visibleIDs
+                    var expected = workspace.organization.locationTokens(for: ordered)
+                    expected.merge(move.expected, uniquingKeysWith: { _, source in source })
+                    let saved = await workspace.organization.moveAndReorder(materialIDs: move.materialIDs,
+                        from: move.source, to: move.destination, relativeTo: target.materialID,
+                        placement: target.placement, orderedMaterialIDs: ordered, expected: expected)
+                    if saved { workspace.reconcile(materials: viewModel.desk?.materials ?? item.materials) }
+
+                }
+
             }
         }
         return true
@@ -261,8 +343,8 @@ struct WorkDeskSourceBoard: View {
 
     @ViewBuilder
     private func selectionIndicator(_ material: WorkboardMaterialSnapshot) -> some View {
-        if workspace.isSelecting {
-            Image(systemName: workspace.selectedIDs.contains(material.id) ? "checkmark.circle.fill" : "circle")
+        if isBoardSelecting {
+            Image(systemName: selectedIDs.contains(material.id) ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(AppColors.accent)
                 .padding(6)
@@ -278,7 +360,7 @@ struct WorkDeskSourceBoard: View {
             material: material,
             boardPosition: position,
             boardCount: visibleIDs.count,
-            onOpen: { if workspace.isSelecting { workspace.toggleSelection(material.id) } else { onOpen(material) } },
+            onOpen: { if isBoardSelecting { selectMaterial(material.id) } else { onOpen(material) } },
             onShare: { onShare(material) },
             onReattach: { onReattach(material) },
             onMoveEarlier: spatial ? nil : moveAction(material, direction: .earlier, position: position, visibleIDs: visibleIDs),
@@ -287,10 +369,10 @@ struct WorkDeskSourceBoard: View {
             onOpenCompanion: material.companion.map { companion in { onOpen(companion.material) } },
             onShareCompanion: material.companion.map { companion in { onShare(companion.material) } },
             onReattachCompanion: material.companion.map { companion in { onReattach(companion.material) } },
-            organizationActions: .init(workspace: workspace, materialID: material.id)
+            organizationActions: .init(workspace: workspace, materialID: material.id, sourceLocation: sourceLocation)
         )
-        .allowsHitTesting(!workspace.isSelecting)
-        .overlay { if workspace.isSelecting { selectionShield(material) } }
+        .allowsHitTesting(!isBoardSelecting)
+        .overlay { if isBoardSelecting { selectionShield(material) } }
     }
 
     private func sourceRow(_ material: WorkboardMaterialSnapshot, position: Int, visibleIDs: [UUID]) -> some View {
@@ -298,7 +380,7 @@ struct WorkDeskSourceBoard: View {
             material: material,
             boardPosition: position,
             boardCount: visibleIDs.count,
-            onOpen: { if workspace.isSelecting { workspace.toggleSelection(material.id) } else { onOpen(material) } },
+            onOpen: { if isBoardSelecting { selectMaterial(material.id) } else { onOpen(material) } },
             onShare: { onShare(material) },
             onReattach: { onReattach(material) },
             onMoveEarlier: moveAction(material, direction: .earlier, position: position, visibleIDs: visibleIDs),
@@ -307,30 +389,30 @@ struct WorkDeskSourceBoard: View {
             onOpenCompanion: material.companion.map { companion in { onOpen(companion.material) } },
             onShareCompanion: material.companion.map { companion in { onShare(companion.material) } },
             onReattachCompanion: material.companion.map { companion in { onReattach(companion.material) } },
-            organizationActions: .init(workspace: workspace, materialID: material.id)
+            organizationActions: .init(workspace: workspace, materialID: material.id, sourceLocation: sourceLocation)
         )
-        .allowsHitTesting(!workspace.isSelecting)
-        .overlay { if workspace.isSelecting { selectionShield(material) } }
+        .allowsHitTesting(!isBoardSelecting)
+        .overlay { if isBoardSelecting { selectionShield(material) } }
     }
 
     private func selectionShield(_ material: WorkboardMaterialSnapshot) -> some View {
-        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id)
-        return Button { workspace.toggleSelection(material.id) } label: {
+        let actions = WorkDeskMaterialOrganizationActions(workspace: workspace, materialID: material.id, sourceLocation: sourceLocation)
+        return Button { selectMaterial(material.id) } label: {
             Color.clear.contentShape(Rectangle())
         }
         .choiceCardButton(cornerRadius: 14)
         .accessibilityLabel(Text(LocalizedStringResource("workdesk.material.select", defaultValue: "Select material")))
         .accessibilityValue(Text(verbatim: material.name))
-        .accessibilityAddTraits(workspace.selectedIDs.contains(material.id) ? .isSelected : [])
+        .accessibilityAddTraits(selectedIDs.contains(material.id) ? .isSelected : [])
         .contextMenu {
-            if workspace.selectedIDs.contains(material.id), actions.canStartConversation {
+            if selectedIDs.contains(material.id), actions.canStartConversation {
                 Button(actions.conversationTitle, systemImage: "bubble.left.and.bubble.right") {
                     actions.startConversation()
                 }
             }
         }
         .accessibilityActions {
-            if workspace.selectedIDs.contains(material.id), actions.canStartConversation {
+            if selectedIDs.contains(material.id), actions.canStartConversation {
                 Button(actions.conversationTitle) { actions.startConversation() }
             }
         }
@@ -342,28 +424,38 @@ struct WorkDeskSourceBoard: View {
         let target = visibleIDs[targetIndex]
         return {
             Task {
-                _ = await viewModel.reorderMaterial(material.id, relativeTo: target,
+                _ = await reorderMaterial(material.id, relativeTo: target,
                     placement: direction == .earlier ? .before : .after)
             }
         }
     }
 
+    private func reorderMaterial(_ materialID: UUID, relativeTo targetID: UUID,
+                                 placement: WorkboardReorderPlacement) async -> Bool {
+        if isSearching { return await viewModel.reorderMaterial(materialID, relativeTo: targetID, placement: placement) }
+        let current = workspace.visibleMaterials(in: viewModel.desk?.materials ?? item.materials,
+            scope: boardScope, search: boardSearch).map(\.id)
+        return await workspace.organization.reorder(materialID: materialID, relativeTo: targetID,
+            placement: placement, at: boardScope.location, orderedMaterialIDs: current,
+            expected: workspace.organization.locationTokens(for: current))
+    }
+
     private var emptyState: some View {
         VStack(spacing: 14) {
-            Image(systemName: !workspace.isSearching ? "square.stack.3d.up" : "magnifyingglass")
+            Image(systemName: !isSearching ? "square.stack.3d.up" : "magnifyingglass")
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(AppColors.accent)
-            Text(workspace.isSearching
+            Text(isSearching
                  ? LocalizedStringResource("workdesk.search.empty.title", defaultValue: "Nothing found")
-                 : workspace.currentProject != nil
+                 : project != nil
                     ? LocalizedStringResource("workdesk.project.empty.title", defaultValue: "This project is ready for ideas")
                     : LocalizedStringResource("workdesk.empty.title", defaultValue: "Room to think"))
                 .font(.title2.weight(.semibold))
-            Text(workspace.isSearching
+            Text(isSearching
                 ? LocalizedStringResource("workdesk.search.empty", defaultValue: "No ideas, files or projects match this search. Try another word.")
-                : workspace.currentProject != nil
-                    ? LocalizedStringResource("workdesk.project.empty.message", defaultValue: "Capture a thought below, or move materials into this project from All materials.")
-                    : LocalizedStringResource("workdesk.all.empty.message", defaultValue: "Capture a thought or add a file below. Everything you collect appears here, including materials in projects."))
+                : project != nil
+                    ? LocalizedStringResource("workdesk.project.empty.message", defaultValue: "Capture a thought below, or move materials here from Home or another project.")
+                    : LocalizedStringResource("workdesk.all.empty.message", defaultValue: "Capture a thought or add a file below. Move related materials into projects to make room on your desk."))
                 .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 340)
         }
@@ -371,4 +463,75 @@ struct WorkDeskSourceBoard: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .dismissesKeyboardOnEmptySpaceInteraction()
     }
+}
+
+/// Readable layouts keep projects as explicit containers. Registering their
+/// visible bounds lets a card from a spatial project land in a Tiles/List
+/// folder without replacing the native reorder path of readable material cards.
+private struct WorkDeskReadableProject: View {
+    let project: WorkDeskCanvasProject
+    let row: Bool
+    let workspace: WorkDeskWorkspaceState
+    let priority: Int
+    @State private var targetID = UUID()
+    @State private var targetFrame: CGRect = .zero
+    @State private var hovered = false
+    @Environment(\.workbenchDestinationIsActive) private var isActive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var highlighted: Bool {
+        workspace.transferCoordinator.isDragging
+            && workspace.transferCoordinator.destination?.location == .project(project.id)
+    }
+
+    var body: some View {
+        Button {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.28)) { workspace.selectScope(.project(project.id)) }
+        } label: {
+            WorkDeskProjectFolder(project: project, style: row ? .row : .tile, isTargeted: highlighted)
+                .frame(minHeight: row ? nil : 214)
+        }
+        .choiceCardButton(cornerRadius: 14)
+        .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project")))
+        .accessibilityIdentifier("workdesk-project-\(project.id.uuidString)")
+        .workDeskMaterialLocationDrop(location: .project(project.id), isEnabled: isActive,
+            organization: workspace.organization)
+        .contextMenu {
+            Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
+                workspace.editProject(project.record)
+            }
+            WorkDeskProjectArchiveButton(project: project.record, organization: workspace.organization)
+            Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {
+                workspace.requestProjectDeletion(project.id)
+            }
+        }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+            if targetFrame != frame { workspace.transferCoordinator.hideProjectPeek(ownerID: targetID) }
+            targetFrame = frame
+            updateTarget()
+        }
+        .onHover { hovered = $0 }
+        .task(id: hovered && isActive && !workspace.transferCoordinator.isDragging) {
+            workspace.transferCoordinator.hideProjectPeek(ownerID: targetID)
+            guard hovered, isActive, !workspace.transferCoordinator.isDragging,
+                  let requestID = workspace.transferCoordinator.beginProjectPeek(ownerID: targetID) else { return }
+            do { try await Task.sleep(for: .milliseconds(450)) } catch { return }
+            guard !Task.isCancelled else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
+                workspace.transferCoordinator.showProjectPeek(ownerID: targetID, requestID: requestID, project: project, frame: targetFrame)
+            }
+        }
+        .onChange(of: isActive) { _, active in
+            if !active { hovered = false }
+            updateTarget()
+        }
+        .onDisappear { workspace.transferCoordinator.removeSurface(id: targetID) }
+    }
+    private func updateTarget() {
+        guard isActive else { workspace.transferCoordinator.removeSurface(id: targetID); return }
+        workspace.transferCoordinator.register(WorkDeskTransferSurface(id: targetID,
+            location: .project(project.id), title: project.record.title, frame: targetFrame,
+            priority: priority, isSpatial: false))
+    }
+
 }

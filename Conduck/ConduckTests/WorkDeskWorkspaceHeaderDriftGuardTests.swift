@@ -80,7 +80,7 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
             header: try RefusalLaneSource.body(ofFunction: "header", in: source, path: Self.path),
             collection: try property("materialControls"),
             actions: try property("materialActions"),
-            menu: try RefusalLaneSource.body(ofFunction: "workspaceMenu", in: source, path: Self.path),
+            menu: try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskToolbarTitle.swift"),
             primary: try property("newConversationButton"),
             layout: try RefusalLaneSource.source(at: Self.layoutPath),
             selection: try property("selectionBar")

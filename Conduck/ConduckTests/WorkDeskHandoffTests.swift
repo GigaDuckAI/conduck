@@ -520,6 +520,109 @@ final class WorkDeskHandoffTests: XCTestCase {
         XCTAssertEqual(fixture.submittedLaneID, fixture.connections[0].files?.durableLaneID)
     }
 
+    func testPausedProjectAfterReviewRefusesFilesAndTextBeforeAnyEgress() async {
+        for refusal in [WorkDeskStoreError.projectArchived, .projectSelectionRequired] {
+            for includesFile in [false, true] {
+                let fixture = Fixture(files: true)
+                let file = fixture.add(kind: .file, name: "Private.pdf", data: Data([0, 255]), mime: "application/pdf")
+                let projectID = UUID()
+                var paused = false
+                var dependencies = fixture.dependencies
+                dependencies.validateProjectActivity = { id in
+                    XCTAssertEqual(id, projectID)
+                    if paused { throw refusal }
+                }
+                let handoff = WorkDeskHandoff(dependencies: dependencies)
+                let draft = WorkDeskBriefDraft(brief: "Standing context", preferredGatewayRef: gatewayRef.rawString,
+                    task: "Keep this request", handoff: handoff)
+                await handoff.prepare(title: "Project", brief: draft.brief, cards: includesFile ? [file] : [],
+                    ref: gatewayRef, projectID: projectID)
+                XCTAssertNotNil(handoff.prepared)
+                paused = true
+                let result = await handoff.send()
+                XCTAssertNil(result)
+                XCTAssertTrue(fixture.events.isEmpty, "A paused project must not upload, create or submit")
+                XCTAssertEqual(handoff.errorMessage, refusal.localizedDescription)
+                XCTAssertEqual(draft.brief, "Keep this request")
+                XCTAssertNil(handoff.acceptedConversationID)
+                XCTAssertTrue(fixture.exported.allSatisfy { !FileManager.default.fileExists(atPath: $0.url.path) })
+            }
+        }
+    }
+
+    func testProjectPauseDuringMultipleUploadsStopsRemainingFilesAndCleansAttempt() async {
+        for refusal in [WorkDeskStoreError.projectArchived, .projectSelectionRequired] {
+            let fixture = Fixture(files: true)
+            let first = fixture.add(kind: .file, name: "First.pdf", data: Data([0, 255]), mime: "application/pdf")
+            let second = fixture.add(kind: .file, name: "Second.pdf", data: Data([0, 255]), mime: "application/pdf")
+            var paused = false
+            var checks = 0
+            var dependencies = fixture.dependencies
+            let upload = dependencies.upload
+            dependencies.upload = { url, key, lane in
+                try await upload(url, key, lane)
+                paused = true
+            }
+            dependencies.validateProjectActivity = { _ in
+                checks += 1
+                if paused { throw refusal }
+            }
+            let handoff = WorkDeskHandoff(dependencies: dependencies)
+            await handoff.prepare(title: "Project", brief: "Review both", cards: [first, second],
+                ref: gatewayRef, projectID: UUID())
+            let result = await handoff.send()
+            XCTAssertNil(result)
+            XCTAssertEqual(checks, 2, "Each outbound file needs current admission")
+            XCTAssertEqual(fixture.events, ["upload", "remove-upload"])
+            XCTAssertEqual(handoff.errorMessage, refusal.localizedDescription)
+            XCTAssertNil(handoff.acceptedConversationID)
+            XCTAssertTrue(fixture.exported.allSatisfy { !FileManager.default.fileExists(atPath: $0.url.path) })
+        }
+    }
+
+    func testProjectPauseAfterFinalUploadRefusesConversationAndCleansUploadedFile() async {
+        let fixture = Fixture(files: true)
+        let file = fixture.add(kind: .file, name: "Last.pdf", data: Data([0, 255]), mime: "application/pdf")
+        var paused = false
+        var dependencies = fixture.dependencies
+        let upload = dependencies.upload
+        dependencies.upload = { url, key, lane in
+            try await upload(url, key, lane)
+            paused = true
+        }
+        dependencies.validateProjectActivity = { _ in
+            if paused { throw WorkDeskStoreError.projectArchived }
+        }
+        let handoff = WorkDeskHandoff(dependencies: dependencies)
+        await handoff.prepare(title: "Project", brief: "Review", cards: [file], ref: gatewayRef, projectID: UUID())
+        let result = await handoff.send()
+        XCTAssertNil(result)
+        XCTAssertEqual(fixture.events, ["upload", "remove-upload"])
+        XCTAssertEqual(handoff.errorMessage, WorkDeskStoreError.projectArchived.localizedDescription)
+    }
+
+    func testProjectPauseAfterAcceptancePreservesAcceptedConversationAndNeverResends() async {
+        let fixture = Fixture()
+        var paused = false
+        var dependencies = fixture.dependencies
+        dependencies.validateProjectActivity = { _ in
+            if paused { throw WorkDeskStoreError.projectArchived }
+        }
+        let handoff = WorkDeskHandoff(dependencies: dependencies)
+        var acceptedCount = 0
+        handoff.onAccepted = { acceptedCount += 1 }
+        await handoff.prepare(title: "Project", brief: "Accepted request", cards: [], ref: gatewayRef, projectID: UUID())
+        let accepted = await handoff.send()
+        XCTAssertNotNil(accepted)
+        paused = true
+        let repeated = await handoff.send()
+        XCTAssertNil(repeated)
+        XCTAssertEqual(handoff.acceptedConversationID, accepted)
+        XCTAssertEqual(fixture.events, ["create", "submit"])
+        XCTAssertEqual(acceptedCount, 1)
+        XCTAssertNil(handoff.errorMessage)
+    }
+
     func testUploadFailureCleansAllAttemptedKeysAndNeverCreatesConversation() async {
         let fixture = Fixture(files: true)
         fixture.failUpload = true
@@ -695,6 +798,120 @@ final class WorkDeskHandoffTests: XCTestCase {
         XCTAssertTrue(draft.excludedIDs.isEmpty)
     }
 
+    func testReviewSummaryKeepsThePreparedTaskAndContextWhenDraftChanges() async throws {
+        let fixture = Fixture()
+        let handoff = WorkDeskHandoff(dependencies: fixture.dependencies)
+        let draft = WorkDeskBriefDraft(brief: " Original context ", preferredGatewayRef: gatewayRef.rawString,
+                                      task: " Original task ", handoff: handoff)
+        await handoff.prepare(title: "Project", brief: draft.brief, cards: [], ref: gatewayRef,
+                              projectContext: draft.projectContext)
+        let packet = try XCTUnwrap(handoff.prepared)
+        draft.brief = "Later task"
+        draft.projectContext = "Later context"
+        XCTAssertEqual(packet.task, "Original task")
+        XCTAssertEqual(packet.projectContext, "Original context")
+        XCTAssertTrue(packet.prompt.contains(packet.task))
+        XCTAssertTrue(packet.prompt.contains(packet.projectContext))
+        XCTAssertFalse(packet.prompt.contains("Later"))
+        XCTAssertTrue(fixture.events.isEmpty, "Review must not upload or submit.")
+    }
+
+    func testRequestRetirementFiresOnceOnlyAfterLocalAcceptance() async {
+        let fixture = Fixture()
+        let handoff = WorkDeskHandoff(dependencies: fixture.dependencies)
+        var retirements = 0
+        handoff.onAccepted = { retirements += 1 }
+        fixture.accepts = false
+        await handoff.prepare(title: "Project", brief: "Task", cards: [], ref: gatewayRef)
+        _ = await handoff.send()
+        XCTAssertEqual(retirements, 0, "A refused handoff must keep its request.")
+        fixture.accepts = true
+        await handoff.prepare(title: "Project", brief: "Task", cards: [], ref: gatewayRef)
+        _ = await handoff.send()
+        _ = await handoff.send()
+        XCTAssertEqual(retirements, 1)
+    }
+
+    func testFailedRecoveryIdentityWriteBlocksSendWithoutConsumingTheReview() async {
+        let fixture = Fixture()
+        let handoff = WorkDeskHandoff(dependencies: fixture.dependencies)
+        await handoff.prepare(title: "Project", brief: "Task", cards: [], ref: gatewayRef)
+        handoff.onWillSend = { _ in false }
+        let blocked = await handoff.send()
+        XCTAssertNil(blocked)
+        XCTAssertTrue(fixture.events.isEmpty, "No upload, conversation or submit precedes durable recovery identity.")
+        XCTAssertNotNil(handoff.prepared)
+        handoff.onWillSend = { _ in true }
+        let accepted = await handoff.send()
+        XCTAssertNotNil(accepted)
+        XCTAssertEqual(fixture.events, ["create", "submit"])
+    }
+
+    func testRefusedSendReportsThatTheRecoveryMarkerCanBeCleared() async {
+        let fixture = Fixture()
+        fixture.accepts = false
+        let handoff = WorkDeskHandoff(dependencies: fixture.dependencies)
+        var attempted: UUID?
+        var refused: UUID?
+        handoff.onWillSend = { attempted = $0; return true }
+        handoff.onSendRefused = { refused = $0 }
+        await handoff.prepare(title: "Project", brief: "Task", cards: [], ref: gatewayRef)
+        _ = await handoff.send()
+        XCTAssertNotNil(attempted)
+        XCTAssertEqual(refused, attempted)
+        XCTAssertNil(handoff.acceptedConversationID)
+    }
+
+    func testAcceptedSendRetiresDurableDraftAfterItsPresentationLeaves() async throws {
+        let fixture = Fixture()
+        fixture.holdSubmission = true
+        let storage = InMemoryWorkDeskBriefDraftStorage()
+        let store = WorkDeskBriefDraftStore(storage: storage)
+        let projectID = UUID()
+        let handoff = WorkDeskHandoff(dependencies: fixture.dependencies)
+        let draft = WorkDeskBriefDraft(brief: "Project context", preferredGatewayRef: gatewayRef.rawString,
+                                      handoff: handoff, projectID: projectID, persistence: store)
+        draft.brief = "Keep until accepted"
+        XCTAssertNotNil(storage.records[projectID])
+        await handoff.prepare(title: "Project", brief: draft.brief, cards: [], ref: gatewayRef)
+        let sending = Task { await handoff.send() }
+        while fixture.submissionContinuation == nil { await Task.yield() }
+        draft.suspendPresentation()
+        XCTAssertNotNil(storage.records[projectID], "A send in flight still needs its request.")
+        fixture.submissionContinuation?.resume(returning: true)
+        let accepted = await sending.value
+        XCTAssertNotNil(accepted)
+        XCTAssertNil(storage.records[projectID])
+        draft.brief = "A late editor callback"
+        XCTAssertNil(storage.records[projectID], "A late write cannot resurrect an accepted request.")
+        let reopened = WorkDeskBriefDraft(brief: "Project context", preferredGatewayRef: gatewayRef.rawString,
+                                         projectID: projectID, persistence: store)
+        XCTAssertTrue(reopened.brief.isEmpty)
+    }
+
+    func testAcceptedSendWithFailedDraftRemovalRestoresAsInterruptedRatherThanUnsent() async throws {
+        let fixture = Fixture()
+        let storage = FailingDraftRemovalStorage()
+        let store = WorkDeskBriefDraftStore(storage: storage)
+        let projectID = UUID()
+        let handoff = WorkDeskHandoff(dependencies: fixture.dependencies)
+        let draft = WorkDeskBriefDraft(brief: "Context", preferredGatewayRef: gatewayRef.rawString,
+                                      handoff: handoff, projectID: projectID, persistence: store)
+        draft.brief = "This request is already in a conversation"
+        storage.failRemove = true
+        await handoff.prepare(title: "Project", brief: draft.brief, cards: [], ref: gatewayRef)
+        let result = await handoff.send()
+        let accepted = try XCTUnwrap(result)
+        XCTAssertNotNil(draft.persistenceError)
+        let restored = WorkDeskBriefDraft(brief: "Context", preferredGatewayRef: gatewayRef.rawString,
+            projectID: projectID, persistence: WorkDeskBriefDraftStore(storage: storage))
+        XCTAssertEqual(restored.interruptedHandoffID, accepted)
+        XCTAssertEqual(restored.brief, draft.brief)
+        XCTAssertFalse(restored.markHandoffStarting(conversationID: UUID()),
+                       "Restored uncertainty cannot silently become permission for another send.")
+        XCTAssertEqual(fixture.events, ["create", "submit"])
+    }
+
     func testProjectContextDoesNotSeedAConversationTask() {
         let fixture = Fixture()
         let draft = WorkDeskBriefDraft(brief: "Build our launch website", preferredGatewayRef: nil,
@@ -760,6 +977,19 @@ final class WorkDeskHandoffTests: XCTestCase {
         XCTAssertFalse(WorkDeskHandoffPolicy.hasSameContent(original, moved))
     }
 
+    @MainActor private final class FailingDraftRemovalStorage: WorkDeskBriefDraftStorage {
+        enum Failure: Error { case refused }
+        let memory = InMemoryWorkDeskBriefDraftStorage()
+        var failRemove = false
+        func read(projectID: UUID) throws -> Data? { try memory.read(projectID: projectID) }
+        func write(_ data: Data, projectID: UUID) throws { try memory.write(data, projectID: projectID) }
+        func remove(projectID: UUID) throws {
+            if failRemove { throw Failure.refused }
+            try memory.remove(projectID: projectID)
+        }
+        func eraseAll() throws { try memory.eraseAll() }
+    }
+
     @MainActor private final class Fixture {
         var connections: [WorkDeskGatewayConnection]
         var materials: [UUID: WorkboardMaterialSnapshot] = [:]
@@ -823,7 +1053,8 @@ final class WorkDeskHandoffTests: XCTestCase {
                         return await withCheckedContinuation { submissionContinuation = $0 }
                     }
                     return accepts
-                }
+                },
+                validateProjectActivity: { _ in }
             )
         }
     }

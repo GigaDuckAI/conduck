@@ -4,8 +4,10 @@
 // WorkDeskBriefView.swift
 //
 // A conversation task, its project's standing context, and an explicit AI handoff.
-// Closing retains the task locally; only context and the preferred gateway save
-// to the project. Materials can be left out
+// Closing retains the request locally; only context and the preferred gateway
+// save to the project. An explicit header keeps the same Chat gateway picker
+// visible on every surface. One footer owns both actions, above the keyboard.
+// Materials can be left out
 // for this send without moving or deleting the source cards. Review prepares
 // local copies; the final named Send is the first operation allowed to upload.
 // Dismissal saves through the caller's revision-aware organization boundary.
@@ -13,194 +15,6 @@
 #if !os(watchOS)
 import SwiftUI
 import Observation
-
-/// Unsaved project work survives Work being hidden or its macOS layer being
-/// unmounted. The host creates this once per editing session and retains it;
-/// reopening a sheet must not seed over the person's edits from synced rows.
-@Observable @MainActor
-final class WorkDeskBriefDraft {
-    var projectContext: String
-    /// The task for this conversation, never the project's standing context.
-    var brief: String
-    var selectedGateway: RemoteAgentRef?
-    var excludedIDs: Set<UUID> = []
-    /// A selected-material request is an explicit whitelist. Newly synced
-    /// cards stay unchecked until the person includes them in this request.
-    private(set) var selectedMaterialIDs: Set<UUID>?
-    private var selectedCompanionIDs: [UUID: UUID] = [:]
-    private(set) var additionalMaterialIDs: Set<UUID> = []
-    var remoteResultIDs: Set<UUID> = []
-    var projectResultIDs: Set<UUID> = []
-    let handoff: WorkDeskHandoff
-    var isSaving = false
-    var saveError: String?
-    private var savedProjectContext: String
-    private var savedGateway: RemoteAgentRef?
-    private var activePresentationID: UUID?
-
-    init(brief: String, preferredGatewayRef: String?, task: String = "", conversationResolver: WorkDeskConversationResolver = .init(), handoff: WorkDeskHandoff? = nil) {
-        let gateway = preferredGatewayRef.flatMap { RemoteAgentRef(rawString: $0) }
-        self.projectContext = brief
-        self.brief = task
-        self.selectedGateway = gateway
-        self.savedProjectContext = brief
-        self.savedGateway = gateway
-        self.handoff = handoff ?? WorkDeskHandoff(conversationResolver: conversationResolver)
-    }
-
-    func beginPresentation() -> UUID {
-        let id = UUID()
-        activePresentationID = id
-        return id
-    }
-
-    func endPresentation(_ id: UUID) {
-        guard activePresentationID == id else { return }
-        suspendPresentation()
-    }
-
-    /// Called by the host at destination change, before the sheet's dismissal
-    /// animation reaches onDisappear. Old asynchronous completions lose their
-    /// navigation authority immediately while an explicitly started send lives.
-    func suspendPresentation() {
-        activePresentationID = nil
-        // The handoff invalidates unfinished preparation and releases local
-        // review copies. Its own send claim keeps an explicit live send intact.
-        handoff.discardPreparation()
-    }
-
-    func isCurrentPresentation(_ id: UUID?) -> Bool {
-        guard let id else { return false }
-        return activePresentationID == id
-    }
-
-    func markSaved(projectContext: String, selectedGateway: RemoteAgentRef?) {
-        savedProjectContext = projectContext
-        savedGateway = selectedGateway
-    }
-
-    /// Suggest a destination only while the draft has none. This never changes
-    /// the device default or replaces a retained/project choice, even when that
-    /// gateway disappears. Review and the named Send still authorize dispatch.
-    func prefillGateway(availableRefs: [RemoteAgentRef], defaultRef: RemoteAgentRef?) {
-        guard selectedGateway == nil, !isSaving, !handoff.isPreparing,
-              !handoff.isSending, handoff.prepared == nil,
-              handoff.acceptedConversationID == nil else { return }
-        if let defaultRef, availableRefs.contains(defaultRef) {
-            selectedGateway = defaultRef
-        } else if availableRefs.count == 1 {
-            selectedGateway = availableRefs.first
-        }
-    }
-
-    /// Refresh only standing context after an explicit edit or a reopened
-    /// sheet. Task text and the chosen destination remain this draft's own.
-    func refreshProjectContext(_ context: String) {
-        projectContext = context
-        savedProjectContext = context
-        handoff.discardPreparation()
-    }
-
-    @discardableResult
-    func useOnlyMaterials(_ ids: Set<UUID>, materials: [WorkboardMaterialSnapshot] = []) -> Bool {
-        guard !ids.isEmpty, !isSaving, !handoff.isPreparing, !handoff.isSending else { return false }
-        handoff.beginAnotherHandoff()
-        handoff.discardPreparation()
-        selectedMaterialIDs = ids
-        additionalMaterialIDs.formIntersection(ids)
-        selectedCompanionIDs = Dictionary(uniqueKeysWithValues: materials.compactMap { material in
-            guard ids.contains(material.id), let companion = material.companion else { return nil }
-            return (material.id, companion.id)
-        })
-        excludedIDs.subtract(ids)
-        return true
-    }
-
-    func isMaterialIncluded(_ id: UUID) -> Bool {
-        if let selectedMaterialIDs { return selectedMaterialIDs.contains(id) }
-        return !excludedIDs.contains(id)
-    }
-
-    /// Adding references never moves their project homes. It makes the whole
-    /// request explicit, so future arrivals cannot broaden the selected set.
-    @discardableResult
-    func addMaterials(_ added: [WorkboardMaterialSnapshot], to current: [WorkboardMaterialSnapshot]) -> Bool {
-        guard !added.isEmpty, !hasMissingSelectedMaterials(in: current) else { return false }
-        let included = includedCards(from: current)
-        var seen = Set<UUID>()
-        let cards = (included + added).filter { seen.insert($0.id).inserted }
-        guard useOnlyMaterials(Set(cards.map(\.id)), materials: cards) else { return false }
-        additionalMaterialIDs.formUnion(added.map(\.id))
-        return true
-    }
-
-    /// A new companion arriving on a chosen photo is also a new material.
-    /// It enters an explicit selection only when that card is selected again.
-    func includedCards(from materials: [WorkboardMaterialSnapshot]) -> [WorkboardMaterialSnapshot] {
-        materials.filter { isMaterialIncluded($0.id) }.map { material in
-            guard selectedMaterialIDs != nil,
-                  material.companion?.id != selectedCompanionIDs[material.id] else { return material }
-            var card = material
-            card.companion = nil
-            return card
-        }
-    }
-
-    func hasMissingSelectedMaterials(in materials: [WorkboardMaterialSnapshot]) -> Bool {
-        guard let selectedMaterialIDs else { return false }
-        let currentIDs = Set(materials.map(\.id))
-        if !selectedMaterialIDs.isSubset(of: currentIDs) { return true }
-        return materials.contains { material in
-            guard selectedMaterialIDs.contains(material.id), let selectedCompanion = selectedCompanionIDs[material.id] else { return false }
-            return material.companion?.id != selectedCompanion
-        }
-    }
-
-    /// Explicitly accept a smaller set after removal or reassignment. Newly
-    /// attached companions still stay out until their parent is selected again.
-    func leaveOutMissingMaterials(in materials: [WorkboardMaterialSnapshot]) {
-        guard let selectedMaterialIDs, !isSaving, !handoff.isPreparing, !handoff.isSending else { return }
-        self.selectedMaterialIDs = selectedMaterialIDs.intersection(materials.map(\.id))
-        selectedCompanionIDs = selectedCompanionIDs.filter { parentID, companionID in
-            materials.contains { $0.id == parentID && $0.companion?.id == companionID }
-        }
-        handoff.discardPreparation()
-    }
-
-    func setMaterialIncluded(_ included: Bool, id: UUID, includingCompanionID: UUID? = nil) {
-        guard !isSaving, !handoff.isPreparing, !handoff.isSending else { return }
-        handoff.discardPreparation()
-        if selectedMaterialIDs != nil {
-            if included { selectedMaterialIDs?.insert(id) } else { selectedMaterialIDs?.remove(id) }
-            selectedCompanionIDs[id] = included ? includingCompanionID : nil
-        }
-        if included { excludedIDs.remove(id) } else { excludedIDs.insert(id) }
-    }
-
-    func discardUnsavedChanges() {
-        projectContext = savedProjectContext
-        brief = ""
-        selectedGateway = savedGateway
-        excludedIDs = projectResultIDs
-        selectedMaterialIDs = nil
-        selectedCompanionIDs = [:]
-        additionalMaterialIDs = []
-        saveError = nil
-        handoff.discardPreparation()
-    }
-
-    /// A new conversation starts with a new task while retaining project context.
-    func startAnotherConversation() {
-        guard !handoff.isSending, !handoff.isPreparing else { return }
-        handoff.beginAnotherHandoff()
-        brief = ""
-        excludedIDs = projectResultIDs
-        selectedMaterialIDs = nil
-        selectedCompanionIDs = [:]
-        additionalMaterialIDs = []
-        saveError = nil
-    }
-}
 
 struct WorkDeskBriefView: View {
     let projectID: UUID
@@ -211,16 +25,41 @@ struct WorkDeskBriefView: View {
     let onSave: @MainActor (String, String?) async -> Bool
     let onOpenConversation: @MainActor (UUID) -> Void
     let onEndEditing: @MainActor () -> Void
+    private let recoveryLookup: WorkDeskInterruptedHandoffLookup
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Bindable private var draft: WorkDeskBriefDraft
     @State private var presentationID: UUID?
     @State private var showingDiscardConfirmation = false
-    @State private var showsMaterials = false
+    @FocusState private var taskIsFocused: Bool
+    @State private var contentHeight: CGFloat = 260
+    @State private var headerHeight: CGFloat = 100
+    @State private var footerHeight: CGFloat = 80
     @State private var showsMaterialPicker = false
+    @State private var conflictConfirmation: ConflictConfirmation?
+    @State private var showsConflictConfirmation = false
+    @State private var interruptedConfirmationID: UUID?
+    @State private var showsInterruptedConfirmation = false
+    @State private var recoveryStatus: RecoveryStatus = .checking
+    @State private var recoveryLookupID: UUID?
 
-    init(
+    private struct ConflictConfirmation {
+        let conflict: WorkDeskBriefDraftStore.Conflict
+        let replace: Bool
+    }
+
+    private enum RecoveryStatus: Equatable {
+        case checking, recordedConversation(UUID), unresolved, failed
+    }
+
+    private struct RecoveryRequest: Hashable {
+        let presentationID: UUID?
+        let conversationID: UUID?
+    }
+
+    @MainActor init(
         projectID: UUID,
         title: String,
         initialBrief: String,
@@ -231,7 +70,8 @@ struct WorkDeskBriefView: View {
         draft: WorkDeskBriefDraft? = nil,
         onSave: @escaping @MainActor (String, String?) async -> Bool,
         onOpenConversation: @escaping @MainActor (UUID) -> Void,
-        onEndEditing: @escaping @MainActor () -> Void = {}
+        onEndEditing: @escaping @MainActor () -> Void = {},
+        recoveryLookup: WorkDeskInterruptedHandoffLookup? = nil
     ) {
         self.projectID = projectID
         self.title = title
@@ -241,6 +81,7 @@ struct WorkDeskBriefView: View {
         self.onSave = onSave
         self.onOpenConversation = onOpenConversation
         self.onEndEditing = onEndEditing
+        self.recoveryLookup = recoveryLookup ?? .live
         self.draft = draft ?? WorkDeskBriefDraft(brief: initialBrief, preferredGatewayRef: preferredGatewayRef)
     }
 
@@ -256,78 +97,65 @@ struct WorkDeskBriefView: View {
     private var expanded: [WorkboardMaterialSnapshot] { WorkDeskHandoffPolicy.expanded(included) }
     private var gateway: WorkDeskGatewayOption? { handoff.gateways.first { $0.ref == draft.selectedGateway } }
     private var busy: Bool { draft.isSaving || handoff.isPreparing || handoff.isSending }
+    private var requestNeedsRecovery: Bool { draft.interruptedHandoffID != nil || draft.persistenceConflict != nil }
     private var blocked: Bool {
         draft.hasMissingSelectedMaterials(in: requestMaterials)
             || expanded.contains { draft.remoteResultIDs.contains($0.id) || WorkDeskHandoffPolicy.blockingReason($0, gateway: gateway) != nil }
     }
 
+    private var showsMaterials: Binding<Bool> {
+        Binding(
+            get: { WorkDeskComposerPolicy.materialsExpanded(total: requestMaterials.count, preference: draft.materialsExpanded) },
+            set: { draft.materialsExpanded = $0 }
+        )
+    }
+
+    private var idealSheetHeight: CGFloat {
+        WorkDeskComposerPolicy.sheetHeight(content: contentHeight, header: headerHeight, footer: footerHeight)
+    }
+
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            header
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    if dynamicTypeSize.isAccessibilitySize { headerTitle }
                     if handoff.acceptedConversationID != nil {
                         acceptedHandoff
+                    } else if draft.interruptedHandoffID != nil {
+                        interruptedHandoffRecovery
                     } else if let packet = handoff.prepared {
                         review(packet)
                     } else {
-                        Text(title).font(.title2.weight(.semibold)).foregroundStyle(AppColors.textPrimary)
-                        instructionEditor
+                        instructionEditor.disabled(draft.isPersistenceUnavailable)
                         gatewayNotice
                         projectContextPreview
-                        materialChecklist
+                        materialChecklist.disabled(draft.isPersistenceUnavailable)
                     }
-                    if let error = draft.saveError ?? handoff.errorMessage {
-                        Label(error, systemImage: "exclamationmark.circle")
-                            .font(.callout)
-                            .foregroundStyle(AppColors.textSecondary)
-                            .accessibilityIdentifier("workdesk-handoff-error")
-                    }
+                    saveAndHandoffErrors
                 }
-                .padding(24)
+                .padding(.horizontal, 24)
+                .padding(.top, 8)
+                .padding(.bottom, 24)
                 .frame(maxWidth: 740, alignment: .leading)
                 .frame(maxWidth: .infinity)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
             .disabled(busy)
             .scrollDismissesKeyboard(.interactively)
-            .background(AppColors.background)
-            .toolbarTitleDisplayMode(.inline)
-            .safeAreaInset(edge: .bottom, spacing: 0) { footer }
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    WorkDeskGatewayHeader(draft: draft)
-                }
-                .sharedBackgroundVisibility(.hidden)
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        Task {
-                            let token = presentationID
-                            guard await save(), draft.isCurrentPresentation(token) else { return }
-                            handoff.discardPreparation()
-                            onEndEditing()
-                            dismiss()
-                        }
-                    } label: {
-                        Text(LocalizedStringResource("common.close", defaultValue: "Close"))
-                    }
-                    .disabled(busy)
-                }
-                if draft.saveError != nil {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(role: .destructive) { showingDiscardConfirmation = true } label: {
-                            Text(LocalizedStringResource("workdesk.brief.discard", defaultValue: "Discard changes"))
-                        }
-                        .disabled(busy)
-                    }
-                }
-            }
+            .scrollBounceBehavior(.basedOnSize)
+            footer
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
         }
+        .background(AppColors.background)
         .sheet(isPresented: $showsMaterialPicker) {
             WorkDeskMaterialPicker(
                 materials: availableMaterials.filter { candidate in !requestMaterials.contains { $0.id == candidate.id } },
                 projectNames: materialProjectNames
             ) { added in
                 let success = draft.addMaterials(added, to: requestMaterials)
-                if success { showsMaterials = true }
+                if success { draft.materialsExpanded = true }
                 return success
             }
         }
@@ -336,7 +164,7 @@ struct WorkDeskBriefView: View {
                 Text(LocalizedStringResource("workdesk.brief.keepEditing", defaultValue: "Keep editing"))
             }
             Button(role: .destructive) {
-                draft.discardUnsavedChanges()
+                guard draft.discardUnsavedChanges() else { return }
                 onEndEditing()
                 dismiss()
             } label: {
@@ -345,10 +173,58 @@ struct WorkDeskBriefView: View {
         } message: {
             Text(LocalizedStringResource("workdesk.brief.discardMessage", defaultValue: "The changes in this window will be lost. Your saved project and materials will stay in Work."))
         }
+        .alert(
+            conflictConfirmation?.replace == true
+                ? Text(LocalizedStringResource("workdesk.draft.replaceTitle", defaultValue: "Use this request instead?"))
+                : Text(LocalizedStringResource("workdesk.draft.reloadTitle", defaultValue: "Load the saved request?")),
+            isPresented: $showsConflictConfirmation,
+            presenting: conflictConfirmation
+        ) { confirmation in
+            Button(role: .cancel) {} label: {
+                Text(LocalizedStringResource("workdesk.brief.keepEditing", defaultValue: "Keep editing"))
+            }
+            Button(role: .destructive) {
+                guard draft.isCurrentPresentation(presentationID), !busy else { return }
+                if confirmation.replace {
+                    draft.replacePersistedRequest(resolving: confirmation.conflict)
+                } else {
+                    draft.reloadPersistedRequest(resolving: confirmation.conflict)
+                }
+            } label: {
+                Text(confirmation.replace
+                     ? LocalizedStringResource("workdesk.draft.useThis", defaultValue: "Use this request")
+                     : LocalizedStringResource("workdesk.draft.loadSaved", defaultValue: "Load saved request"))
+            }
+        } message: { confirmation in
+            Text(confirmation.replace
+                 ? LocalizedStringResource("workdesk.draft.replaceMessage", defaultValue: "This replaces the saved request shown in the composer with the task and material choices in this window.")
+                 : LocalizedStringResource("workdesk.draft.reloadMessage", defaultValue: "This discards the task and material changes in this window and loads the saved request shown in the composer."))
+        }
+        .alert(
+            Text(LocalizedStringResource("workdesk.draft.anotherAfterInterruptionTitle", defaultValue: "Prepare another conversation?")),
+            isPresented: $showsInterruptedConfirmation,
+            presenting: interruptedConfirmationID
+        ) { conversationID in
+            Button(role: .cancel) {} label: {
+                Text(LocalizedStringResource("common.cancel", defaultValue: "Cancel"))
+            }
+            Button {
+                guard draft.isCurrentPresentation(presentationID),
+                      draft.interruptedHandoffID == conversationID, !busy else { return }
+                draft.reviewAfterInterruptedHandoff()
+            } label: {
+                Text(LocalizedStringResource("workdesk.draft.useTaskAgain", defaultValue: "Use this task for another conversation"))
+            }
+        } message: { _ in
+            Text(LocalizedStringResource("workdesk.draft.anotherAfterInterruptionMessage", defaultValue: "The previous send may already have reached your gateway. This keeps your task for a separate conversation. You will still review it and choose Send."))
+        }
         .interactiveDismissDisabled()
         .task(id: presentationID) {
             guard presentationID != nil else { return }
             await refreshGateways()
+        }
+        .task(id: RecoveryRequest(presentationID: presentationID, conversationID: draft.interruptedHandoffID)) {
+            await refreshInterruptedHandoff()
         }
         .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
             Task { await refreshGateways() }
@@ -367,8 +243,278 @@ struct WorkDeskBriefView: View {
             if let presentationID { draft.endPresentation(presentationID) }
         }
         #if os(macOS)
-        .frame(minWidth: 580, idealWidth: 700, minHeight: 520, idealHeight: 640)
+        .frame(minWidth: 560, idealWidth: 640, maxWidth: 740,
+               minHeight: 320, idealHeight: idealSheetHeight, maxHeight: WorkDeskComposerPolicy.maximumSheetHeight)
+        #else
+        .frame(idealHeight: idealSheetHeight)
         #endif
+    }
+
+    private var header: some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                // Keep the destination reachable while the title scrolls away
+                // at large text sizes, leaving room for the task and keyboard.
+                WorkDeskGatewayHeader(draft: draft)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                adaptiveHeader
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, dynamicTypeSize.isAccessibilitySize ? 12 : 24)
+        .accessibilityIdentifier("workdesk-conversation-header")
+    }
+
+    private var adaptiveHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 24) {
+                headerTitle.fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 0)
+                WorkDeskGatewayHeader(draft: draft).fixedSize(horizontal: true, vertical: false)
+            }
+            VStack(alignment: .leading, spacing: 14) {
+                headerTitle
+                WorkDeskGatewayHeader(draft: draft)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var headerTitle: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(headerHeading)
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(AppColors.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(verbatim: title)
+                .font(.subheadline)
+                .foregroundStyle(AppColors.textSecondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var headerHeading: LocalizedStringResource {
+        if handoff.acceptedConversationID != nil {
+            return LocalizedStringResource("workdesk.conversation.accepted", defaultValue: "Conversation started")
+        }
+        return handoff.prepared == nil
+            ? LocalizedStringResource("workdesk.conversation.title", defaultValue: "New conversation")
+            : LocalizedStringResource("workdesk.conversation.reviewTitle", defaultValue: "Review conversation")
+    }
+
+    @ViewBuilder
+    private var saveAndHandoffErrors: some View {
+        if let error = draft.saveError ?? handoff.errorMessage {
+            Label(error, systemImage: "exclamationmark.circle")
+                .font(.callout)
+                .foregroundStyle(AppColors.textSecondary)
+                .accessibilityIdentifier("workdesk-handoff-error")
+        }
+        if let conflict = draft.persistenceConflict {
+            conflictRecovery(conflict)
+        } else if let error = draft.persistenceError {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(error, systemImage: "exclamationmark.circle")
+                    .font(.callout).foregroundStyle(AppColors.textSecondary)
+                if !draft.persistedRequestWasRemoved, draft.interruptedHandoffID == nil {
+                    Button(LocalizedStringResource("workdesk.conversation.retrySaving", defaultValue: "Retry saving draft")) {
+                        draft.persistChanges()
+                    }
+                    .inlineLinkButton()
+                }
+            }
+            .accessibilityIdentifier("workdesk-draft-save-error")
+        }
+        if !draft.persistedRequestWasRemoved, !requestNeedsRecovery,
+           draft.saveError != nil || draft.persistenceError != nil {
+            Button(role: .destructive) { showingDiscardConfirmation = true } label: {
+                Text(LocalizedStringResource("workdesk.brief.discard", defaultValue: "Discard changes"))
+            }
+            .inlineLinkButton()
+        }
+    }
+
+    private func conflictRecovery(_ conflict: WorkDeskBriefDraftStore.Conflict) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label {
+                Text(LocalizedStringResource("workdesk.draft.conflict", defaultValue: "This project’s draft changed in another window. Your request is still here. Choose which draft to keep."))
+            } icon: { Image(systemName: "exclamationmark.circle") }
+            .font(.callout)
+            if let saved = conflict.current {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(LocalizedStringResource("workdesk.draft.savedRequest", defaultValue: "Saved request"))
+                        .font(.subheadline.weight(.semibold))
+                    if saved.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(LocalizedStringResource("workdesk.draft.savedTaskEmpty", defaultValue: "No task entered."))
+                            .font(.callout)
+                    } else {
+                        Text(verbatim: saved.task).font(.callout).textSelection(.enabled)
+                    }
+                    Label {
+                        Text(verbatim: savedGatewayName(saved.gatewayRef))
+                    } icon: { Image(systemName: "network") }
+                    .font(.caption)
+                    savedMaterialsPreview(saved)
+                    if saved.pendingConversationID != nil {
+                        Text(LocalizedStringResource("workdesk.draft.savedSendPending", defaultValue: "A send was started for this request. Load it to check the conversation before preparing another."))
+                            .font(.caption)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 12))
+            } else {
+                Text(LocalizedStringResource("workdesk.draft.savedRequestRetired", defaultValue: "The saved request was completed or removed in another window."))
+                    .font(.callout)
+            }
+            if conflict.canReplace {
+                Button(LocalizedStringResource("workdesk.draft.useThis", defaultValue: "Use this request")) {
+                    conflictConfirmation = .init(conflict: conflict, replace: true)
+                    showsConflictConfirmation = true
+                }
+                .inlineLinkButton()
+                .accessibilityIdentifier("workdesk-draft-use-this")
+            }
+            Button(LocalizedStringResource("workdesk.draft.loadSaved", defaultValue: "Load saved request")) {
+                conflictConfirmation = .init(conflict: conflict, replace: false)
+                showsConflictConfirmation = true
+            }
+            .inlineLinkButton()
+            .accessibilityIdentifier("workdesk-draft-load-saved")
+        }
+        .foregroundStyle(AppColors.textSecondary)
+        .accessibilityIdentifier("workdesk-draft-conflict")
+    }
+
+    private func savedMaterialsPreview(_ saved: WorkDeskBriefDraftRecord) -> some View {
+        let lookup = (materials + availableMaterials).reduce(into: [UUID: WorkboardMaterialSnapshot]()) {
+            $0[$1.id] = $1
+        }
+        let projectIDs = Set(materials.map(\.id)).union(saved.additionalMaterialIDs)
+        let includedIDs = saved.selectedMaterialIDs ?? projectIDs.subtracting(saved.excludedIDs)
+        let known = includedIDs.compactMap { lookup[$0] }.sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+        let missingCompanions = saved.selectedCompanionIDs.filter { parentID, companionID in
+            includedIDs.contains(parentID) && lookup[parentID]?.companion?.id != companionID
+        }.count
+        let unavailableCount = includedIDs.count - known.count + missingCompanions
+            + known.filter { WorkDeskHandoffPolicy.needsBytes($0) && !$0.availability.isAvailable }.count
+        return DisclosureGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(known) { material in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(verbatim: material.name)
+                        if let companion = material.companion,
+                           saved.selectedMaterialIDs == nil || saved.selectedCompanionIDs[material.id] == companion.id {
+                            Text(verbatim: companion.name)
+                                .foregroundStyle(AppColors.textSecondary)
+                        }
+                    }
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                if unavailableCount > 0 {
+                    Text(LocalizedStringResource("workdesk.draft.savedMaterialsUnavailable", defaultValue: "\(unavailableCount) selected materials are unavailable here."))
+                        .font(.caption)
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            Text(LocalizedStringResource("workdesk.draft.savedMaterialsCount", defaultValue: "Materials selected: \(includedIDs.count)"))
+                .font(.caption.weight(.medium))
+        }
+    }
+
+    private func savedGatewayName(_ rawRef: String?) -> String {
+        guard let rawRef else {
+            return String(localized: "workdesk.draft.noSavedGateway", defaultValue: "No gateway selected")
+        }
+        return handoff.gateways.first { $0.ref.rawString == rawRef }?.name
+            ?? String(localized: "workdesk.draft.unavailableSavedGateway", defaultValue: "Saved gateway unavailable on this device")
+    }
+
+    private var interruptedHandoffRecovery: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label {
+                Text(LocalizedStringResource("workdesk.draft.interruptedTitle", defaultValue: "Check the previous conversation"))
+            } icon: { Image(systemName: "clock.arrow.circlepath") }
+            .font(.headline)
+            Text(LocalizedStringResource("workdesk.draft.interruptedMessage", defaultValue: "A send started before this draft closed. Check the saved conversation before preparing another."))
+                .font(.callout).foregroundStyle(AppColors.textSecondary)
+            switch recoveryStatus {
+            case .checking:
+                ProgressView {
+                    Text(LocalizedStringResource("workdesk.draft.checkingConversation", defaultValue: "Checking saved conversations…"))
+                }
+                .controlSize(.small)
+            case .recordedConversation(let conversationID):
+                Button {
+                    guard draft.isCurrentPresentation(presentationID),
+                          draft.interruptedHandoffID == conversationID,
+                          draft.clearPersistedRequest() else { return }
+                    onEndEditing()
+                    dismiss()
+                    onOpenConversation(conversationID)
+                } label: {
+                    Label {
+                        Text(LocalizedStringResource("workdesk.draft.openExistingConversation", defaultValue: "Open existing conversation"))
+                    } icon: { Image(systemName: "arrow.up.right") }
+                }
+                .inlineLinkButton()
+                .accessibilityIdentifier("workdesk-draft-open-existing")
+            case .unresolved:
+                Text(LocalizedStringResource("workdesk.draft.conversationUnresolved", defaultValue: "No saved user message was found on this device. This does not confirm whether the gateway received the previous send."))
+                    .font(.callout).foregroundStyle(AppColors.textSecondary)
+                Button(LocalizedStringResource("workdesk.draft.useTaskAgain", defaultValue: "Use this task for another conversation")) {
+                    interruptedConfirmationID = draft.interruptedHandoffID
+                    showsInterruptedConfirmation = true
+                }
+                .inlineLinkButton()
+                .accessibilityIdentifier("workdesk-draft-review-another")
+                retryConversationLookup
+            case .failed:
+                Text(LocalizedStringResource("workdesk.draft.conversationLookupFailed", defaultValue: "Saved conversations couldn’t be checked. Try again before preparing another conversation."))
+                    .font(.callout).foregroundStyle(AppColors.textSecondary)
+                retryConversationLookup
+            }
+            DisclosureGroup {
+                Text(verbatim: draft.brief)
+                    .font(.callout).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } label: {
+                Text(LocalizedStringResource("workdesk.conversation.reviewTask", defaultValue: "Your task"))
+                    .font(.subheadline.weight(.medium))
+            }
+        }
+        .accessibilityIdentifier("workdesk-draft-interrupted-handoff")
+    }
+
+    private var retryConversationLookup: some View {
+        Button(LocalizedStringResource("workdesk.draft.checkConversationAgain", defaultValue: "Check again")) {
+            Task { await refreshInterruptedHandoff() }
+        }
+        .inlineLinkButton()
+    }
+
+    private func refreshInterruptedHandoff() async {
+        let token = presentationID
+        guard draft.isCurrentPresentation(token), let conversationID = draft.interruptedHandoffID else { return }
+        let lookupID = UUID()
+        recoveryLookupID = lookupID
+        recoveryStatus = .checking
+        do {
+            let existingID = try await recoveryLookup.existingConversationID(conversationID)
+            guard !Task.isCancelled, draft.isCurrentPresentation(token),
+                  draft.interruptedHandoffID == conversationID, recoveryLookupID == lookupID else { return }
+            recoveryStatus = existingID.map(RecoveryStatus.recordedConversation) ?? .unresolved
+        } catch {
+            guard !Task.isCancelled, draft.isCurrentPresentation(token),
+                  draft.interruptedHandoffID == conversationID, recoveryLookupID == lookupID else { return }
+            recoveryStatus = .failed
+        }
     }
 
     private func refreshGateways() async {
@@ -395,70 +541,80 @@ struct WorkDeskBriefView: View {
                     Text(LocalizedStringResource("workdesk.conversation.task.placeholder", defaultValue: "Describe the task and the result you want from this conversation…"))
                 }
             )
+            .textFieldStyle(.plain)
+            .font(.body)
             .lineLimit(3...10)
+            .focused($taskIsFocused)
             .padding(16)
             .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 16))
             .accessibilityIdentifier("workdesk-brief-instructions")
         }
     }
 
+    @ViewBuilder
     private var projectContextPreview: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if draft.projectContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(LocalizedStringResource("workdesk.conversation.context.empty", defaultValue: "No project context. You can add it from the project header."))
-                    .font(.caption).foregroundStyle(AppColors.textSecondary)
-            } else {
-                DisclosureGroup {
-                    Text(verbatim: draft.projectContext)
-                        .font(.callout).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 6)
-                } label: {
-                    Text(LocalizedStringResource("workdesk.conversation.context.included", defaultValue: "Project context included"))
-                        .font(.subheadline.weight(.medium))
-                }
-                .accessibilityIdentifier("workdesk-conversation-context")
-            }
+        if !draft.projectContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            contextPreview(draft.projectContext)
         }
+    }
+
+    private func contextPreview(_ context: String) -> some View {
+        DisclosureGroup {
+            Text(verbatim: context)
+                .font(.callout).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 6)
+        } label: {
+            Text(LocalizedStringResource("workdesk.conversation.context.included", defaultValue: "Project context included"))
+                .font(.subheadline.weight(.medium))
+        }
+        .foregroundStyle(AppColors.textSecondary)
+        .accessibilityIdentifier("workdesk-conversation-context")
     }
 
     private var materialChecklist: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if requestMaterials.isEmpty {
-                Text(LocalizedStringResource("workdesk.conversation.materials.empty", defaultValue: "No materials yet. You can start with a task alone."))
-                    .font(.callout).foregroundStyle(AppColors.textSecondary)
-            } else {
-                DisclosureGroup(isExpanded: $showsMaterials) {
-                    VStack(spacing: 8) {
-                        ForEach(requestMaterials) { material in materialRow(material) }
+            DisclosureGroup(isExpanded: showsMaterials) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if requestMaterials.isEmpty {
+                        Text(LocalizedStringResource("workdesk.conversation.materials.empty", defaultValue: "No materials yet. You can start with a task alone."))
+                            .font(.callout).foregroundStyle(AppColors.textSecondary)
                     }
-                    .padding(.top, 8)
-                } label: {
-                    HStack {
-                        Text(LocalizedStringResource("workdesk.conversation.materials.included", defaultValue: "Materials included"))
-                            .font(.headline)
-                        Spacer()
-                        Text(included.count.formatted())
-                            .font(.caption.monospacedDigit()).foregroundStyle(AppColors.textSecondary)
+                    ForEach(requestMaterials) { material in materialRow(material) }
+                    materialsFromElsewhere
+                    if included.count < requestMaterials.count {
+                        Text(LocalizedStringResource("workdesk.brief.excluded", defaultValue: "Unchecked materials will not be sent. Their project locations stay the same."))
+                            .font(.caption).foregroundStyle(AppColors.textSecondary)
+                            .padding(.top, 4)
                     }
                 }
-                .accessibilityIdentifier("workdesk-conversation-materials")
-                // Capability failures remain visible even with the checklist closed.
-                ForEach(expanded) { material in
-                    if let reason = materialBlockingReason(material) {
+                .padding(.top, 10)
+            } label: {
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        materialsHeading
+                        Spacer(minLength: 8)
+                        materialsCount.fixedSize()
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        materialsHeading
+                        materialsCount
+                    }
+                }
+            }
+            .accessibilityIdentifier("workdesk-conversation-materials")
+            // Selection/capability failures remain visible with the list closed.
+            ForEach(expanded) { material in
+                if let reason = materialBlockingReason(material) {
+                    Label {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(verbatim: material.name).font(.caption.weight(.semibold))
                             Text(verbatim: reason).font(.caption)
                         }
-                        .foregroundStyle(AppColors.textSecondary)
-                        .accessibilityElement(children: .combine)
-                    }
+                    } icon: { Image(systemName: "exclamationmark.circle") }
+                    .foregroundStyle(AppColors.textSecondary)
+                    .accessibilityElement(children: .combine)
                 }
-            }
-            if availableMaterials.contains(where: { candidate in !requestMaterials.contains { $0.id == candidate.id } }) {
-                Button(LocalizedStringResource("workdesk.conversation.addMaterials", defaultValue: "Add materials…"), systemImage: "plus") {
-                    showsMaterialPicker = true
-                }.inlineLinkButton().disabled(draft.hasMissingSelectedMaterials(in: requestMaterials))
             }
             if draft.hasMissingSelectedMaterials(in: requestMaterials) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -469,10 +625,42 @@ struct WorkDeskBriefView: View {
                     }.inlineLinkButton()
                 }
             }
-            if !draft.excludedIDs.isEmpty || draft.selectedMaterialIDs != nil {
-                Text(LocalizedStringResource("workdesk.brief.excluded", defaultValue: "Unchecked materials will not be sent. Their project locations stay the same."))
-                    .font(.caption).foregroundStyle(AppColors.textSecondary)
+        }
+    }
+
+    private var materialsHeading: some View {
+        Text(LocalizedStringResource("workdesk.conversation.materials.heading", defaultValue: "Materials"))
+            .font(.headline).foregroundStyle(AppColors.textPrimary)
+    }
+
+    private var materialsCount: some View {
+        Group {
+            if included.count == requestMaterials.count {
+                Text(LocalizedStringResource("workdesk.conversation.materials.count", defaultValue: "\(included.count) included"))
+            } else {
+                Text(LocalizedStringResource("workdesk.conversation.materials.partialCount", defaultValue: "\(included.count) of \(requestMaterials.count) included"))
             }
+        }
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(AppColors.textSecondary)
+    }
+
+    @ViewBuilder
+    private var materialsFromElsewhere: some View {
+        if availableMaterials.contains(where: { candidate in !requestMaterials.contains { $0.id == candidate.id } }) {
+            Button {
+                taskIsFocused = false
+                showsMaterialPicker = true
+            } label: {
+                Label {
+                    Text(LocalizedStringResource("workdesk.conversation.useElsewhere", defaultValue: "Use materials from elsewhere…"))
+                } icon: { Image(systemName: "plus") }
+                .font(.callout)
+                .padding(.vertical, 10)
+            }
+            .inlineLinkButton()
+            .disabled(draft.hasMissingSelectedMaterials(in: requestMaterials))
+            .accessibilityIdentifier("workdesk-conversation-use-elsewhere")
         }
     }
 
@@ -518,10 +706,11 @@ struct WorkDeskBriefView: View {
                     }
                 }
                 Spacer(minLength: 0)
-                Image(systemName: material.kind == .image ? "photo" : material.kind == .link ? "link" : "doc.text")
+                Image(systemName: WorkboardMaterialIcon.symbol(for: material))
                     .foregroundStyle(AppColors.textTertiary)
             }
-            .padding(14)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 12))
         }
@@ -546,39 +735,66 @@ struct WorkDeskBriefView: View {
     }
 
     private func review(_ packet: WorkDeskPreparedHandoff) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Label {
-                Text(LocalizedStringResource("workdesk.brief.ready", defaultValue: "Ready for your AI"))
-            } icon: { Image(systemName: "paperplane") }
-            .font(.title2.weight(.bold)).foregroundStyle(AppColors.brandAmber)
-            Text(packet.gatewayName).font(.title.weight(.bold))
-            Text(LocalizedStringResource("workdesk.brief.reviewIntro", defaultValue: "Read the prompt below. Sending starts a new chat with this connection and includes only the materials you selected."))
-                .font(.callout).foregroundStyle(AppColors.textSecondary)
-            Text(packet.prompt)
-                .font(.body).textSelection(.enabled)
-                .padding(18).frame(maxWidth: .infinity, alignment: .leading)
-                .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 16))
-                .accessibilityIdentifier("workdesk-handoff-prompt")
-            if !packet.attachmentNames.isEmpty {
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(LocalizedStringResource("workdesk.conversation.reviewTask", defaultValue: "Your task"))
+                    .font(.headline)
+                Text(verbatim: packet.task)
+                    .font(.body).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if !packet.projectContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                contextPreview(packet.projectContext)
+            }
+            if !packet.materials.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(LocalizedStringResource("workdesk.brief.attachedFiles", defaultValue: "Attached files"))
-                        .font(.headline)
-                    ForEach(Array(packet.attachmentNames.enumerated()), id: \.offset) { _, name in
-                        Label(name, systemImage: "paperclip").font(.callout)
+                    HStack {
+                        materialsHeading
+                        Spacer(minLength: 8)
+                        Text(LocalizedStringResource("workdesk.conversation.materials.count", defaultValue: "\(packet.materials.count) included"))
+                            .font(.caption.monospacedDigit()).foregroundStyle(AppColors.textSecondary)
                     }
-                    Text(LocalizedStringResource("workdesk.brief.visionNote", defaultValue: "Image understanding depends on the model configured for this connection."))
-                        .font(.caption).foregroundStyle(AppColors.textSecondary)
+                    ForEach(packet.materials) { material in
+                        Label {
+                            Text(verbatim: material.name)
+                        } icon: {
+                            Image(systemName: WorkboardMaterialIcon.symbol(for: material))
+                        }
+                        .font(.callout).foregroundStyle(AppColors.textSecondary)
+                    }
                 }
             }
-            ForEach(Array(packet.textAttachments.enumerated()), id: \.offset) { _, attachment in
-                DisclosureGroup(attachment.name) {
-                    Text(attachment.text).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            DisclosureGroup {
+                Text(verbatim: packet.prompt)
+                    .font(.callout).textSelection(.enabled)
+                    .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 12))
+                    .accessibilityIdentifier("workdesk-handoff-prompt")
+                    .padding(.top, 8)
+                ForEach(Array(packet.textAttachments.enumerated()), id: \.offset) { _, attachment in
+                    DisclosureGroup(attachment.name) {
+                        Text(verbatim: attachment.text)
+                            .font(.callout).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
+                if !packet.attachmentNames.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(LocalizedStringResource("workdesk.brief.attachedFiles", defaultValue: "Attached files"))
+                            .font(.subheadline.weight(.medium))
+                        ForEach(Array(packet.attachmentNames.enumerated()), id: \.offset) { _, name in
+                            Label(name, systemImage: "paperclip").font(.callout)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+            } label: {
+                Text(LocalizedStringResource("workdesk.conversation.exactMessage", defaultValue: "Full outgoing message"))
+                    .font(.subheadline.weight(.medium))
             }
-            if !draft.excludedIDs.isEmpty {
-                Text(LocalizedStringResource("workdesk.brief.excluded", defaultValue: "Unchecked materials will not be sent. Their project locations stay the same."))
-                    .font(.caption).foregroundStyle(AppColors.textSecondary)
-            }
+            .accessibilityIdentifier("workdesk-handoff-full-message")
+            Text(LocalizedStringResource("workdesk.conversation.sendExplanation", defaultValue: "Send starts a new conversation with the gateway above."))
+                .font(.caption).foregroundStyle(AppColors.textSecondary)
         }
     }
 
@@ -595,30 +811,30 @@ struct WorkDeskBriefView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
+            Spacer(minLength: 0)
             if let acceptedID = handoff.acceptedConversationID {
                 Button {
                     guard !busy else { return }
                     draft.startAnotherConversation()
                 } label: {
-                    Text(LocalizedStringResource("workdesk.conversation.another", defaultValue: "New conversation"))
-                        .padding(.vertical, 12)
+                    footerLabel(primary: false) {
+                        Text(LocalizedStringResource("workdesk.conversation.another", defaultValue: "New conversation"))
+                    }
                 }
-                .inlineLinkButton()
+                .choiceCardButton(cornerRadius: 22)
                 .disabled(busy)
                 .accessibilityIdentifier("workdesk-handoff-prepare-another")
-                Spacer(minLength: 0)
                 Button {
-                    guard !busy else { return }
+                    guard !busy, draft.clearPersistedRequest() else { return }
                     dismiss()
                     onOpenConversation(acceptedID)
                 } label: {
-                    Label {
-                        Text(LocalizedStringResource("workdesk.brief.openChat", defaultValue: "Open chat"))
-                    } icon: { Image(systemName: "arrow.up.right") }
-                    .font(.headline).padding(.horizontal, 20).padding(.vertical, 13)
-                    .foregroundStyle(.black)
-                    .background(AppColors.brandAmber, in: Capsule())
+                    footerLabel(primary: true) {
+                        Label {
+                            Text(LocalizedStringResource("workdesk.brief.openChat", defaultValue: "Open chat"))
+                        } icon: { Image(systemName: "arrow.up.right") }
+                    }
                 }
                 .primaryCTAButton()
                 .disabled(busy)
@@ -627,66 +843,108 @@ struct WorkDeskBriefView: View {
                 Button {
                     handoff.discardPreparation()
                 } label: {
-                    Text(LocalizedStringResource("workdesk.conversation.edit", defaultValue: "Edit request"))
-                        .padding(.vertical, 12)
+                    footerLabel(primary: false) {
+                        Text(LocalizedStringResource("workdesk.conversation.reviewBack", defaultValue: "Back"))
+                    }
                 }
-                .inlineLinkButton()
+                .choiceCardButton(cornerRadius: 22)
                 .disabled(busy)
-                Spacer(minLength: 0)
+                .accessibilityIdentifier("workdesk-handoff-back")
                 Button {
                     Task {
                         let token = presentationID
-                        guard draft.isCurrentPresentation(token), let id = await handoff.send() else { return }
-                        // A deep link may have opened another chat while the
-                        // local send was accepting. Keep that navigation; the
-                        // retained draft can reopen this accepted chat later.
-                        guard draft.isCurrentPresentation(token) else { return }
+                        guard draft.isCurrentPresentation(token), !requestNeedsRecovery,
+                              !draft.isPersistenceUnavailable, let id = await handoff.send() else { return }
+                        // Preserve navigation if a deep link took over while
+                        // local acceptance was in flight. Never send again.
+                        guard draft.isCurrentPresentation(token), draft.clearPersistedRequest() else { return }
                         dismiss()
                         onOpenConversation(id)
                     }
                 } label: {
-                    HStack(spacing: 8) {
-                        if handoff.isSending { ProgressView().controlSize(.small) }
-                        Text(String(localized: "workdesk.brief.sendTo", defaultValue: "Send to \(packet.gatewayName)"))
-                        Image(systemName: "arrow.up.right")
+                    footerLabel(primary: true) {
+                        HStack(spacing: 8) {
+                            if handoff.isSending { ProgressView().controlSize(.small) }
+                            Text(String(localized: "workdesk.brief.sendTo", defaultValue: "Send to \(packet.gatewayName)"))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Image(systemName: "arrow.up.right")
+                        }
                     }
-                    .font(.headline).padding(.horizontal, 18).padding(.vertical, 13)
-                    .foregroundStyle(.black)
-                    .background(AppColors.brandAmber, in: Capsule())
                 }
                 .primaryCTAButton()
-                .disabled(busy)
+                .disabled(busy || requestNeedsRecovery || draft.isPersistenceUnavailable)
                 .accessibilityIdentifier("workdesk-handoff-send")
             } else {
-                Spacer(minLength: 0)
                 Button {
+                    Task { await close() }
+                } label: {
+                    footerLabel(primary: false) {
+                        Text(LocalizedStringResource("common.close", defaultValue: "Close"))
+                    }
+                }
+                .choiceCardButton(cornerRadius: 22)
+                .disabled(busy)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("workdesk-handoff-close")
+                Button {
+                    taskIsFocused = false
                     Task {
                         let token = presentationID
-                        guard await save(), draft.isCurrentPresentation(token), !blocked else { return }
+                        guard !requestNeedsRecovery, await save(), draft.isCurrentPresentation(token),
+                              !requestNeedsRecovery, !blocked else { return }
                         await handoff.prepare(title: title, brief: draft.brief, cards: included, ref: draft.selectedGateway,
                             projectID: projectID, projectContext: draft.projectContext, remoteResultIDs: draft.remoteResultIDs)
                     }
                 } label: {
-                    HStack(spacing: 8) {
-                        if busy { ProgressView().controlSize(.small) }
-                        Text(LocalizedStringResource("workdesk.conversation.review", defaultValue: "Review"))
-                        Image(systemName: "arrow.right")
+                    footerLabel(primary: true) {
+                        HStack(spacing: 8) {
+                            if busy { ProgressView().controlSize(.small) }
+                            Text(LocalizedStringResource("workdesk.conversation.review", defaultValue: "Review"))
+                            Image(systemName: "arrow.right")
+                        }
                     }
-                    .font(.headline).padding(.horizontal, 20).padding(.vertical, 13)
-                    .foregroundStyle(.black)
-                    .background(AppColors.brandAmber, in: Capsule())
                 }
                 .primaryCTAButton()
-                .disabled(busy || gateway == nil || blocked || draft.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(busy || requestNeedsRecovery || draft.isPersistenceUnavailable || gateway == nil || blocked || draft.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityIdentifier("workdesk-handoff-review")
             }
         }
+        // Both labels take the height of the taller action. Long gateway names
+        // and larger text can grow the row without splitting its two actions.
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 24).padding(.vertical, 16)
         .background(.regularMaterial)
+        .overlay(alignment: .top) { Divider() }
+        .accessibilityIdentifier("workdesk-conversation-footer")
+    }
+
+    private func footerLabel<Content: View>(primary: Bool, @ViewBuilder content: () -> Content) -> some View {
+        content()
+            .font(.headline)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 11)
+            .frame(minHeight: 44, maxHeight: .infinity)
+            .foregroundStyle(primary ? Color.black : AppColors.textPrimary)
+            .background(primary ? AppColors.brandAmber : AppColors.cardBackgroundElevated, in: Capsule())
+    }
+
+    private func close() async {
+        guard !busy else { return }
+        if draft.persistedRequestWasRemoved {
+            onEndEditing()
+            dismiss()
+            return
+        }
+        let token = presentationID
+        guard await save(), draft.isCurrentPresentation(token) else { return }
+        handoff.discardPreparation()
+        onEndEditing()
+        dismiss()
     }
 
     private func save() async -> Bool {
-        guard !draft.isSaving else { return false }
+        guard !draft.isSaving, draft.persistenceConflict == nil, draft.persistChanges() else { return false }
         draft.isSaving = true
         draft.saveError = nil
         defer { draft.isSaving = false }
@@ -698,13 +956,13 @@ struct WorkDeskBriefView: View {
         } else {
             draft.saveError = String(localized: "workdesk.conversation.saveFailed", defaultValue: "Your project settings could not be saved. Your task is still here. Keep this window open and try again.")
         }
-        return success
+        return success && draft.persistChanges()
     }
 }
 
-/// Reads the retained draft from its own body so toolbar observations update
-/// when a gateway arrives or changes. A review always names its frozen route;
-/// returning to Edit request is required before choosing another destination.
+/// The shared Chat picker lives in the sheet header, never a toolbar principal
+/// slot that a native sheet may omit. Review always names its frozen route;
+/// returning Back is required before choosing another destination.
 private struct WorkDeskGatewayHeader: View {
     @Bindable var draft: WorkDeskBriefDraft
 
@@ -715,11 +973,12 @@ private struct WorkDeskGatewayHeader: View {
             options: handoff.gateways.map { .init(ref: $0.ref, name: $0.name) },
             selectedRef: packet?.connection.option.ref ?? draft.selectedGateway,
             selectedName: packet?.gatewayName,
-            allowsSelection: !draft.isSaving && !handoff.isPreparing && !handoff.isSending
+            allowsSelection: draft.interruptedHandoffID == nil && !draft.isPersistenceUnavailable && !draft.isSaving && !handoff.isPreparing && !handoff.isSending
                 && packet == nil && handoff.acceptedConversationID == nil,
+            usesStandaloneTouchTarget: true,
             optionAccessibilityPrefix: "workdesk-gateway-"
         ) { ref in
-            guard !draft.isSaving, !handoff.isPreparing, !handoff.isSending,
+            guard draft.interruptedHandoffID == nil, !draft.isPersistenceUnavailable, !draft.isSaving, !handoff.isPreparing, !handoff.isSending,
                   handoff.prepared == nil, handoff.acceptedConversationID == nil,
                   handoff.gateways.contains(where: { $0.ref == ref }) else { return }
             draft.selectedGateway = ref

@@ -111,7 +111,7 @@ enum WorkVoiceCaptureCoordinator {
     static var savedInAllMaterialsMessage: String {
         String(localized: LocalizedStringResource(
             "workdesk.capture.project.atomic.failed.message",
-            defaultValue: "Some items couldn’t be added to the project. They’re safe in All materials. Open All materials to organise them."
+            defaultValue: "Some items couldn’t be added to the project. They’re safe on Home. Open Home to organise them."
         ))
     }
 

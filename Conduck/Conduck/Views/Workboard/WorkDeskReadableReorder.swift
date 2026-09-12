@@ -6,6 +6,8 @@
 // cannot turn a drop into a move to the beginning. Provider decoding is scoped
 // to the view that accepted it; a late callback cannot reorder another project.
 // The existing desk mutation lane owns rank persistence and folded companions.
+// A typed drag from another location first files that same material here; an
+// older reorder-only payload never guesses which membership should be removed.
 
 import SwiftUI
 import Observation
@@ -23,12 +25,22 @@ struct WorkDeskReadableReorderContext: Equatable {
     let layout: WorkboardLayoutMode
     let visibleIDs: [UUID]
     let projectIDs: [UUID: UUID]
+    var locationTokens: WorkDeskLocationTokens? = nil
 
     func stillContains(_ materialID: UUID, asIn previous: Self) -> Bool {
-        scope == previous.scope && search == previous.search && layout == previous.layout
+        guard scope == previous.scope && search == previous.search && layout == previous.layout
             && visibleIDs.contains(materialID) && previous.visibleIDs.contains(materialID)
-            && projectIDs[materialID] == previous.projectIDs[materialID]
+            && projectIDs[materialID] == previous.projectIDs[materialID] else { return false }
+        if let current = locationTokens, let earlier = previous.locationTokens {
+            return Set(current[materialID] ?? []) == Set(earlier[materialID] ?? [])
+        }
+        return true
     }
+}
+
+enum WorkDeskReadableDropOperation: Equatable {
+    case reorder(WorkDeskReadableDropTarget)
+    case move(WorkDeskReadableDropTarget, WorkDeskMaterialLocationMove)
 }
 
 @Observable @MainActor
@@ -80,14 +92,30 @@ final class WorkDeskReadableReorder {
     /// and beginning another drag also leaves its newer pending request alone.
     func resolve(_ payload: WorkMaterialDragPayload?, token: UUID,
                  current: WorkDeskReadableReorderContext, isEnabled: Bool) -> WorkDeskReadableDropTarget? {
+        guard case .reorder(let target) = resolveOperation(payload, token: token, current: current,
+            isEnabled: isEnabled, locations: current.locationTokens ?? [:]) else { return nil }
+        return target
+    }
+
+    func resolveOperation(_ payload: WorkMaterialDragPayload?, token: UUID,
+                          current: WorkDeskReadableReorderContext, isEnabled: Bool,
+                          locations: WorkDeskLocationTokens) -> WorkDeskReadableDropOperation? {
         guard let accepted = pending, accepted.id == token else { return nil }
         pending = nil
         guard isEnabled, let payload,
               payload.itemID == Constants.workboardDeskItemID,
-              payload.materialID != accepted.target.materialID,
-              current.stillContains(payload.materialID, asIn: accepted.context),
+              !payload.materialIDs.contains(accepted.target.materialID),
               current.stillContains(accepted.target.materialID, asIn: accepted.context) else { return nil }
-        return accepted.target
+        if let source = payload.sourceLocation {
+            guard let move = payload.validatedLocationMove(to: current.scope.location, current: locations) else { return nil }
+            if source != current.scope.location {
+                guard current.search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                return .move(accepted.target, move)
+            }
+        }
+        guard payload.materialIDs.count == 1,
+              current.stillContains(payload.materialID, asIn: accepted.context) else { return nil }
+        return .reorder(accepted.target)
     }
 
     static func placement(at point: CGPoint, size: CGSize, layout: WorkboardLayoutMode,

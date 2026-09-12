@@ -4,17 +4,12 @@
 //
 // SOURCE DRIFT GUARD over Work's OWN navigation bar in `WorkboardExperience`.
 //
-// Three facts decide whether that bar exists and what it carries, and none of
-// them can fail anywhere else. (1) The bar is attached INSIDE Work's own
-// `NavigationStack`. Toolbar items are collected by the nearest enclosing
-// navigation container, so an item declared above one reaches no bar at all —
-// the exact shape that left the section control invisible and Work a one-way
-// trip on iPad. (2) Declaration order is left-to-right order within one
-// placement: project navigation leads, and the section control stays last.
-// Both iPhone and iPad share the same project-navigation button. (3) Each section
-// item is gated by its own router; project navigation is not. Compact iPad has
-// neither router and still needs access to the project picker. Layout selection
-// lives once in the named workspace header control, not in this native bar.
+// Work's native iPad sidebar owns project navigation outside the desk's capture
+// inset. Its explicit workspace toggle lives in whichever column is visible;
+// compact layouts use the same button for the Projects picker. Both bars must
+// be attached inside their navigation container, and the
+// section control stays last. The native sidebar and picker share the host's
+// Settings route; inactive layers must not change remembered visibility.
 //
 // The whole bar is `#if os(iOS)`: the Mac's bar belongs to the window shell,
 // which builds its own, so a Work-owned bar compiled there is a second bar.
@@ -62,24 +57,23 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
             in: source,
             path: Self.path
         )
-        let body = try RefusalLaneSource.trailingClosure(
-            after: "var body: some View",
+        let compact = try RefusalLaneSource.trailingClosure(
+            after: "private var compactNavigation: some View",
             in: experience,
             path: Self.path
         )
         let stack = try RefusalLaneSource.trailingClosure(
             after: "NavigationStack",
-            in: body,
+            in: compact,
             path: Self.path
         )
 
         XCTAssertEqual(
-            occurrences(of: ".toolbar", in: body), 1,
-            "`WorkboardExperience` declares a number of toolbars other than one. Work carries exactly "
-            + "one bar, and it is the one this guard follows into the navigation stack."
+            occurrences(of: ".toolbar", in: compact), 1,
+            "The compact Work stack must carry exactly one toolbar attachment."
         )
         XCTAssertTrue(
-            stack.contains(".toolbar { workbenchToolbar }"),
+            stack.contains(".toolbar { workbenchToolbar(showsProjectNavigation: true) }"),
             "Work's toolbar is no longer attached inside its own `NavigationStack`. Toolbar items are "
             + "collected by the nearest enclosing navigation container, so an item declared above one "
             + "reaches no bar and renders nothing — the section control disappears and Work becomes a "
@@ -87,8 +81,8 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
         )
 
         let attachment = try XCTUnwrap(
-            WorkboardSourceDirectives.enclosingConditions(of: ".toolbar { workbenchToolbar }", in: stack),
-            "The toolbar attachment vanished from the navigation stack this guard just found it in."
+            WorkboardSourceDirectives.enclosingConditions(of: "private var compactNavigation", in: source),
+            "The compact navigation declaration vanished."
         )
         XCTAssertEqual(
             WorkboardSourceDirectives.ownership(of: attachment), .exclusive(.iOS),
@@ -99,7 +93,7 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
             + "than assumed: teach `WorkboardSourceDirectives.Platform` the new spelling on purpose."
         )
         let declaration = try XCTUnwrap(
-            WorkboardSourceDirectives.enclosingConditions(of: "private var workbenchToolbar", in: source),
+            WorkboardSourceDirectives.enclosingConditions(of: "private func workbenchToolbar", in: source),
             "`workbenchToolbar` is gone. Work's project navigation and section control both live there."
         )
         XCTAssertEqual(
@@ -110,7 +104,7 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
         )
 
         let toolbar = try RefusalLaneSource.trailingClosure(
-            after: "private var workbenchToolbar: some ToolbarContent",
+            after: "private func workbenchToolbar(showsProjectNavigation: Bool) -> some ToolbarContent",
             in: source,
             path: Self.path
         )
@@ -126,6 +120,11 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
         )
         XCTAssertTrue(navigation.contains("WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)"))
         XCTAssertTrue(navigation.contains("phoneWorkbenchRouter?.dismissPhoneSection(for: .work)"))
+        let detailControls = try RefusalLaneSource.trailingClosure(
+            after: "if showsProjectNavigation", in: active, path: Self.path
+        )
+        XCTAssertTrue(detailControls.contains("WorkDeskSidebarToolbarButton("),
+                      "The detail bar must expose Projects on compact layouts and restore a hidden iPad sidebar")
         let navigationAt = try XCTUnwrap(active.range(of: "WorkDeskSidebarToolbarButton(")?.lowerBound)
         let controlAt = try XCTUnwrap(active.range(of: "WorkbenchSectionToolbarItem(")?.lowerBound)
         XCTAssertEqual(occurrences(of: "WorkDeskSidebarToolbarButton(", in: toolbar), 1,
@@ -165,6 +164,136 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
         XCTAssertTrue(stack.contains("PhoneWorkbenchSectionOverlay(router: router, destination: .work)"))
         let phoneControlAt = try XCTUnwrap(active.range(of: "PhoneWorkbenchSectionButton(")?.lowerBound)
         XCTAssertLessThan(navigationAt, phoneControlAt)
+    }
+
+    func testRegularIPadOwnsNavigationOutsideTheDeskCaptureInset() throws {
+        let source = try workSource()
+        let experience = try RefusalLaneSource.trailingClosure(
+            after: "struct WorkboardExperience: View", in: source, path: Self.path
+        )
+        let host = try RefusalLaneSource.trailingClosure(after: "var body: some View", in: experience, path: Self.path)
+        XCTAssertTrue(host.contains(".onChange(of: usesNativeSidebar, initial: true)"))
+        XCTAssertTrue(host.contains("viewModel.deskWorkspace.updateSidebarLayout(isInline: usesSidebar)"),
+                      "The toolbar must know its navigation mode even before a desk has loaded")
+        let idiom = try RefusalLaneSource.trailingClosure(
+            after: "private var usesNativeSidebar: Bool", in: source, path: Self.path
+        )
+        XCTAssertTrue(idiom.contains("horizontalSizeClass == .regular && DeviceCapabilities.isiPad"),
+                      "A landscape iPhone must retain its compact Projects picker")
+        let wide = try RefusalLaneSource.trailingClosure(
+            after: "private var wideNavigation: some View", in: source, path: Self.path
+        )
+        let sidebar = try RefusalLaneSource.trailingClosure(
+            after: "NavigationSplitView(columnVisibility: sidebarColumnVisibility)", in: wide, path: Self.path
+        )
+        let detail = try RefusalLaneSource.trailingClosure(after: "detail:", in: wide, path: Self.path)
+        XCTAssertTrue(sidebar.contains("WorkDeskSidebarView(viewModel: viewModel)"))
+        XCTAssertTrue(sidebar.contains("SidebarSettingsFooter(onOpenSettings: openSettings)"))
+        XCTAssertFalse(sidebar.contains("detailColumn"),
+                       "Capture belongs in the detail column so the sidebar reaches the window bottom")
+        XCTAssertTrue(detail.contains("detailColumn"))
+        XCTAssertTrue(detail.contains(".toolbar { workbenchToolbar(showsProjectNavigation: !showsSidebar) }"),
+                      "Work/Chats must remain reachable inside the native split's detail bar")
+        let observedAt = try XCTUnwrap(wide.range(of: "let showsSidebar = viewModel.deskWorkspace.showsSidebar")?.lowerBound)
+        let splitAt = try XCTUnwrap(wide.range(of: "NavigationSplitView(columnVisibility:")?.lowerBound)
+        XCTAssertLessThan(observedAt, splitAt,
+                          "Visibility must be observed by the host before constructing escaping toolbar content")
+        XCTAssertFalse(detail.contains("SidebarSettingsFooter"))
+        XCTAssertTrue(wide.contains(".environment(\\.workDeskNavigationIsExternal, true)"))
+        XCTAssertTrue(wide.contains(".environment(\\.workDeskSidebarIsHosted, true)"))
+        XCTAssertTrue(sidebar.contains(".toolbar(removing: isActive ? .sidebarToggle : nil)"))
+        XCTAssertTrue(detail.contains(".toolbar(removing: isActive ? .sidebarToggle : nil)"),
+                      "Both bars must remove the inert default button before supplying the explicit workspace toggle")
+        let sidebarControls = try RefusalLaneSource.trailingClosure(
+            after: "if isActive", in: sidebar, path: Self.path
+        )
+        XCTAssertTrue(sidebarControls.contains("ToolbarItem(placement: .topBarTrailing)"))
+        XCTAssertTrue(sidebarControls.contains("WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)"))
+        XCTAssertEqual(occurrences(of: "WorkDeskSidebarToolbarButton(", in: sidebar), 1)
+        XCTAssertFalse(sidebar.contains("showsSidebar"),
+                       "The column's lifetime removes its own bar; gating again loses the toolbar after reopening")
+    }
+
+    func testNativeIPadSidebarPreservesTheWorkspaceVisibilityAndIgnoresHiddenWrites() throws {
+        let source = try workSource()
+        let binding = try RefusalLaneSource.trailingClosure(
+            after: "private var sidebarColumnVisibility: Binding<NavigationSplitViewVisibility>",
+            in: source, path: Self.path
+        )
+        XCTAssertTrue(binding.contains("Self.sidebarVisibilityBinding("),
+                      "The native split must use the binding exercised across retained destination changes")
+        XCTAssertTrue(binding.contains("workspace: viewModel.deskWorkspace"))
+        XCTAssertTrue(binding.contains("router: personalWorkbenchModel?.router"),
+                      "Native write-backs must consult the live destination rather than a captured host flag")
+        XCTAssertFalse(binding.contains("chatColumnVisibility"))
+    }
+
+    func testIOSWorkReusesSettingsContainersAndProtectsUnsavedPhoneEdits() throws {
+        let source = try workSource()
+        let experience = try RefusalLaneSource.trailingClosure(
+            after: "struct WorkboardExperience: View", in: source, path: Self.path
+        )
+        XCTAssertFalse(experience.contains("@State private var settingsViewModel"),
+                       "Work's navigation is rebuilt on iPad resizing and cannot own a live Settings editor")
+        let open = try RefusalLaneSource.body(ofFunction: "openSettings", in: experience, path: Self.path)
+        let guardAt = try XCTUnwrap(open.range(of: "guard isActive else { return }")?.lowerBound)
+        let actionAt = try XCTUnwrap(open.range(of: "workDeskOpenSettings?()")?.lowerBound)
+        XCTAssertLessThan(guardAt, actionAt)
+
+        let hostPath = "Conduck/Views/Workboard/PersonalWorkbenchView.swift"
+        let host = try RefusalLaneSource.source(at: hostPath)
+        let persistentHost = try RefusalLaneSource.trailingClosure(
+            after: "struct PersonalWorkbenchView<Chats: View>: View", in: host, path: hostPath
+        )
+        let hostBody = try RefusalLaneSource.trailingClosure(
+            after: "var body: some View", in: persistentHost, path: hostPath
+        )
+        XCTAssertTrue(hostBody.contains("shell"))
+        XCTAssertTrue(hostBody.contains(".modifier(WorkSettingsPresentationModifier(router: model.router))"),
+                      "Settings presentation must live above the regular/compact shell branches")
+        let modifier = try RefusalLaneSource.trailingClosure(
+            after: "private struct WorkSettingsPresentationModifier: ViewModifier", in: host, path: hostPath
+        )
+        XCTAssertTrue(modifier.contains("@State private var settingsViewModel = SettingsViewModel()"))
+        let body = try RefusalLaneSource.trailingClosure(
+            after: "func body(content: Content) -> some View", in: modifier, path: hostPath
+        )
+        XCTAssertTrue(body.contains(".environment(\\.workDeskOpenSettings, openSettings)"))
+        let compact = try RefusalLaneSource.trailingClosure(
+            after: ".sheet(item: sheetPresentation)", in: body, path: hostPath
+        )
+        XCTAssertTrue(compact.contains("SettingsView(viewModel: settingsViewModel)"))
+        XCTAssertTrue(compact.contains(".interactiveDismissDisabled(settingsViewModel.editorHasUnsavedChanges)"))
+        let wide = try RefusalLaneSource.trailingClosure(
+            after: ".fullScreenCover(item: fullScreenPresentation)", in: body, path: hostPath
+        )
+        XCTAssertTrue(wide.contains("IpadSettingsView(viewModel: settingsViewModel, onDone:"))
+    }
+
+    func testWorkSettingsFreezesItsStyleAndDismissesOnlyCleanEditorsOnConversationRoutes() throws {
+        let path = "Conduck/Views/Workboard/PersonalWorkbenchView.swift"
+        let source = try RefusalLaneSource.source(at: path)
+        let modifier = try RefusalLaneSource.trailingClosure(
+            after: "private struct WorkSettingsPresentationModifier: ViewModifier", in: source, path: path
+        )
+        let open = try RefusalLaneSource.body(ofFunction: "openSettings", in: modifier, path: path)
+        XCTAssertTrue(open.contains("guard router.destination == .work else { return }"))
+        XCTAssertTrue(open.contains("usesFullScreen: horizontalSizeClass == .regular && DeviceCapabilities.isiPad"))
+        for bindingName in ["sheetPresentation", "fullScreenPresentation"] {
+            let binding = try RefusalLaneSource.trailingClosure(
+                after: "private var \(bindingName): Binding<Presentation?>", in: modifier, path: path
+            )
+            XCTAssertTrue(binding.contains("presentation?.usesFullScreen"))
+            XCTAssertFalse(binding.contains("horizontalSizeClass"),
+                           "Window resizing must not swap the presenter and discard the editor")
+        }
+        let destination = try RefusalLaneSource.trailingClosure(
+            after: ".onChange(of: router.destination)", in: modifier, path: path
+        )
+        let guardAt = try XCTUnwrap(destination.range(of: "guard destination != .work, !settingsViewModel.editorHasUnsavedChanges else { return }")?.lowerBound)
+        let dismissAt = try XCTUnwrap(destination.range(of: "presentation = nil")?.lowerBound)
+        XCTAssertLessThan(guardAt, dismissAt,
+                          "A conversation request must respect the Settings editor's existing Done/Discard guard")
     }
 
     /// NEGATIVE CONTROL over the platform reader both this class and
