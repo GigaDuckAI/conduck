@@ -1,6 +1,160 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "workdesk.project.color" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Project color"
+          }
+        }
+      }
+    },
+    "workdesk.project.color.amber" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amber"
+          }
+        }
+      }
+    },
+    "workdesk.project.color.blue" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blue"
+          }
+        }
+      }
+    },
+    "workdesk.project.color.coral" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coral"
+          }
+        }
+      }
+    },
+    "workdesk.project.color.lavender" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lavender"
+          }
+        }
+      }
+    },
+    "workdesk.project.color.sage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sage"
+          }
+        }
+      }
+    },
+    "workdesk.project.color.slate" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Slate"
+          }
+        }
+      }
+    },
+    "workdesk.project.preview.action" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preview contents"
+          }
+        }
+      }
+    },
+    "workdesk.project.preview.close" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close preview"
+          }
+        }
+      }
+    },
+    "workdesk.project.preview.materialActions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Material actions"
+          }
+        }
+      }
+    },
+    "workdesk.project.preview.open" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open project"
+          }
+        }
+      }
+    },
+    "workdesk.canvas.fit.short" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fit"
+          }
+        }
+      }
+    },
+    "workdesk.project.actions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Project actions"
+          }
+        }
+      }
+    },
+    "workdesk.project.conversations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversations"
+          }
+        }
+      }
+    },
     "workdesk.addToAnotherProject" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -177,17 +331,6 @@
         }
       }
     },
-    "workdesk.project.previewMore" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld more materials"
-          }
-        }
-      }
-    },
     "workdesk.removeFromThisProject" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -217,116 +360,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Move to %@"
-          }
-        }
-      }
-    },
-    "workdesk.tray.close" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Close project"
-          }
-        }
-      }
-    },
-    "workdesk.tray.conversations" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Conversations"
-          }
-        }
-      }
-    },
-    "workdesk.tray.dropHome" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Drop here to move to Home"
-          }
-        }
-      }
-    },
-    "workdesk.tray.expand" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Expand project tray"
-          }
-        }
-      }
-    },
-    "workdesk.tray.move" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move project tray"
-          }
-        }
-      }
-    },
-    "workdesk.tray.moveLeft" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move tray left"
-          }
-        }
-      }
-    },
-    "workdesk.tray.moveRight" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Move tray right"
-          }
-        }
-      }
-    },
-    "workdesk.tray.projectActions" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Project"
-          }
-        }
-      }
-    },
-    "workdesk.tray.projectActionsLabel" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Project actions"
-          }
-        }
-      }
-    },
-    "workdesk.tray.restore" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Restore project tray"
           }
         }
       }
@@ -26272,17 +26305,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Move to"
-          }
-        }
-      }
-    },
-    "workdesk.options" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Desk options"
           }
         }
       }

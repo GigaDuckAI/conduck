@@ -115,10 +115,12 @@ struct WorkDeskSidebarView: View {
                     .accessibilityLabel(Text(LocalizedStringResource("workdesk.conversations.toggle", defaultValue: "Show or hide project conversations")))
                     .accessibilityValue(Text(expanded ? LocalizedStringResource("workdesk.expanded", defaultValue: "Expanded") : LocalizedStringResource("workdesk.collapsed", defaultValue: "Collapsed")))
                 }
-                railRow(title: project.title, symbol: "folder", scope: .project(project.id), count: count)
+                railRow(title: project.title, symbol: "folder", scope: .project(project.id), count: count,
+                        projectColor: project.color)
             }
             .contextMenu {
                 Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project")) { workspace.editProject(project) }
+                WorkDeskProjectColorMenu(project: project, organization: workspace.organization)
                 Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…")) {
                     workspace.requestProjectDeletion(project.id)
                 }
@@ -146,12 +148,14 @@ struct WorkDeskSidebarView: View {
         }
     }
 
-    private func railRow(title: String, symbol: String, scope: WorkDeskScope, count: Int) -> some View {
+    private func railRow(title: String, symbol: String, scope: WorkDeskScope, count: Int,
+                         projectColor: WorkDeskProjectColor? = nil) -> some View {
         Button {
             withAnimation(reduceMotion ? nil : .snappy(duration: 0.28)) { workspace.selectScope(scope) }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: symbol).frame(width: 20).foregroundStyle(workspace.scope == scope && !workspace.isShowingConversation && !workspace.isSearching ? AppColors.accent : AppColors.textSecondary)
+                Image(systemName: symbol).frame(width: 20)
+                    .foregroundStyle(projectColor?.tint ?? (workspace.scope == scope && !workspace.isShowingConversation && !workspace.isSearching ? AppColors.accent : AppColors.textSecondary))
                 Text(verbatim: title).font(.subheadline.weight(.medium)).lineLimit(2)
                 Spacer(minLength: 4)
                 Text(verbatim: String(count)).font(.caption.monospacedDigit()).foregroundStyle(AppColors.textTertiary)

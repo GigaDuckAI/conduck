@@ -3,6 +3,8 @@
 // A project is a visible container rather than another material card. Folder
 // tabs, a content strip and a title survive at different desk scales; readable
 // layouts reuse the same face without imposing a fixed canvas footprint.
+// Open and Preview are sibling controls: the folder face opens the full project,
+// while its material count opens the interactive contents without navigating.
 // Previews decode only thumbnail bytes already held by the board. They never
 // fetch payloads, start playback, or turn a missing file into an openable one.
 
@@ -13,6 +15,12 @@ struct WorkDeskProjectFolder: View {
     let project: WorkDeskCanvasProject
     var style: Style = .tile
     var isTargeted = false
+    var isPreviewing = false
+    let onOpen: () -> Void
+    let onPreview: () -> Void
+
+    private var tint: Color { project.record.color.tint }
+    private var borderColor: Color { isTargeted ? AppColors.brandAmber : tint }
 
     var body: some View {
         Group {
@@ -22,128 +30,148 @@ struct WorkDeskProjectFolder: View {
             }
         }
         .foregroundStyle(AppColors.textPrimary)
-        .accessibilityElement(children: .ignore)
+        // Each action remains a separately discoverable control. Combining or
+        // ignoring children would hide Preview contents behind Open project.
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(verbatim: project.record.title))
-        .accessibilityValue(Text(WorkDeskCopy.materialCount(project.materialCount)))
     }
 
     private var tile: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                if project.previewMaterials.isEmpty {
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 34, weight: .medium))
-                        .foregroundStyle(AppColors.brandAmber)
-                        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-                } else {
-                    ForEach(Array(project.previewMaterials.prefix(3))) { material in
-                        WorkDeskProjectMaterialGlimpse(material: material)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 64)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: onOpen) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(verbatim: project.record.title)
+                        .font(.system(size: 24, weight: .semibold))
+                        .lineLimit(2).multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    thumbnailStrip
+                    Spacer(minLength: 0)
                 }
+                .padding(.horizontal, 18).padding(.top, 30).padding(.bottom, 4)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                #if os(iOS)
+                .contentShape(Rectangle())
+                #endif
             }
-            .accessibilityHidden(true)
-            Text(verbatim: project.record.title)
-                .font(.title3.weight(.semibold))
-                .lineLimit(2).multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 6) {
-                Image(systemName: "folder")
-                Text(WorkDeskCopy.materialCount(project.materialCount))
-            }
-            .font(.caption).foregroundStyle(AppColors.textSecondary)
+            .choiceCardButton(cornerRadius: 12)
+            .accessibilityLabel(Text(verbatim: project.record.title))
+            .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project")))
+            .accessibilityIdentifier("workdesk-project-open-\(project.id.uuidString)")
+            previewButton
         }
-        .padding(.horizontal, 18).padding(.top, 34).padding(.bottom, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background {
             WorkDeskFolderOutline()
                 .fill(AppColors.cardBackgroundElevated)
-                .overlay { WorkDeskFolderOutline().fill(AppColors.brandAmber.opacity(isTargeted ? 0.21 : 0.09)) }
+                .overlay { WorkDeskFolderOutline().fill(tint.opacity(isTargeted ? 0.34 : 0.23)) }
         }
-        .overlay { WorkDeskFolderOutline().stroke(AppColors.brandAmber.opacity(isTargeted ? 0.95 : 0.50), lineWidth: isTargeted ? 2 : 1) }
+        .overlay {
+            WorkDeskFolderOutline()
+                .stroke(borderColor.opacity(isTargeted ? 0.95 : 0.75), lineWidth: isTargeted ? 2 : 1)
+                .allowsHitTesting(false)
+        }
         .overlay(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 2).fill(AppColors.brandAmber.opacity(0.7))
+            RoundedRectangle(cornerRadius: 2).fill(tint.opacity(0.8))
                 .frame(width: 34, height: 3).padding(.leading, 22).padding(.top, 8)
-                .accessibilityHidden(true)
+                .allowsHitTesting(false).accessibilityHidden(true)
         }
-        .contentShape(WorkDeskFolderOutline())
+        .clipShape(WorkDeskFolderOutline())
+    }
+
+    private var thumbnailStrip: some View {
+        HStack(spacing: 8) {
+            if project.previewMaterials.isEmpty {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 32, weight: .medium))
+                    .foregroundStyle(tint)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ForEach(Array(project.previewMaterials.prefix(3))) { material in
+                    WorkDeskProjectMaterialGlimpse(material: material)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+        .frame(height: 52)
+        .accessibilityHidden(true)
     }
 
     private var row: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 43, weight: .regular))
-                    .foregroundStyle(AppColors.brandAmber)
-                if let first = project.previewMaterials.first {
-                    WorkDeskProjectMaterialGlimpse(material: first)
-                        .frame(width: 26, height: 23)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .offset(x: 4, y: 6)
-                }
-            }
-            .frame(width: 58, height: 52).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(verbatim: project.record.title).font(.headline).lineLimit(2)
-                Text(WorkDeskCopy.materialCount(project.materialCount))
-                    .font(.caption).foregroundStyle(AppColors.textSecondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold)).foregroundStyle(AppColors.brandAmber)
-                .accessibilityHidden(true)
-        }
-        .padding(14)
-        .background(AppColors.brandAmber.opacity(isTargeted ? 0.15 : 0.055), in: RoundedRectangle(cornerRadius: 14))
-        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(AppColors.brandAmber.opacity(isTargeted ? 0.9 : 0.3)) }
-    }
-}
-
-struct WorkDeskProjectHoverPreview: View {
-    let project: WorkDeskCanvasProject
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label { Text(verbatim: project.record.title).lineLimit(2) }
-                icon: { Image(systemName: "folder.fill").foregroundStyle(AppColors.brandAmber) }
-                .font(.headline)
-            if project.previewMaterials.isEmpty {
-                Text(LocalizedStringResource("workdesk.project.previewEmpty", defaultValue: "Drop materials into this project"))
-                    .font(.subheadline).foregroundStyle(AppColors.textSecondary)
-            } else {
-                ForEach(Array(project.previewMaterials.prefix(3))) { material in
-                    HStack(spacing: 10) {
-                        WorkDeskProjectMaterialGlimpse(material: material)
-                            .frame(width: 42, height: 42)
-                            .clipShape(RoundedRectangle(cornerRadius: 7))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(verbatim: material.name).font(.subheadline).lineLimit(2)
-                            Text(material.kind.title).font(.caption2).foregroundStyle(AppColors.textSecondary)
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: onOpen) {
+                HStack(spacing: 14) {
+                    ZStack {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 43, weight: .regular))
+                            .foregroundStyle(tint)
+                        if let first = project.previewMaterials.first {
+                            WorkDeskProjectMaterialGlimpse(material: first)
+                                .frame(width: 26, height: 23)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .offset(x: 4, y: 6)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .frame(width: 58, height: 52).accessibilityHidden(true)
+                    Text(verbatim: project.record.title)
+                        .font(.title2.weight(.semibold))
+                        .lineLimit(2).multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold)).foregroundStyle(AppColors.textSecondary)
+                        .accessibilityHidden(true)
                 }
-                let remainder = max(0, project.materialCount - project.previewMaterials.prefix(3).count)
-                if remainder > 0 {
-                    Text(LocalizedStringResource("workdesk.project.previewMore", defaultValue: "\(remainder) more materials"))
-                        .font(.caption).foregroundStyle(AppColors.textSecondary)
-                }
+                .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                #if os(iOS)
+                .contentShape(Rectangle())
+                #endif
             }
+            .choiceCardButton(cornerRadius: 14)
+            .accessibilityLabel(Text(verbatim: project.record.title))
+            .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project")))
+            .accessibilityIdentifier("workdesk-project-open-\(project.id.uuidString)")
+            previewButton
         }
-        .foregroundStyle(AppColors.textPrimary)
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 16))
-        .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(AppColors.brandAmber.opacity(0.45)) }
-        .shadow(color: .black.opacity(0.35), radius: 20, y: 8)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        .background(tint.opacity(isTargeted ? 0.24 : 0.13), in: RoundedRectangle(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(borderColor.opacity(isTargeted ? 0.9 : 0.3), lineWidth: isTargeted ? 2 : 1)
+                .allowsHitTesting(false)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var previewButton: some View {
+        Button(action: onPreview) {
+            HStack(spacing: 7) {
+                Text(WorkDeskCopy.materialCount(project.materialCount))
+                Image(systemName: isPreviewing ? "chevron.up" : "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(AppColors.textSecondary)
+            .padding(.leading, style == .row ? 86 : 18).padding(.trailing, 18)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.bottom, 6)
+            .background(isPreviewing ? tint.opacity(0.10) : .clear)
+            #if os(iOS)
+            .contentShape(Rectangle())
+            #endif
+        }
+        .pointerIconButton(size: 44)
+        .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.preview.action", defaultValue: "Preview contents"))
+            + Text(verbatim: ": " + project.record.title))
+        .accessibilityValue(Text(WorkDeskCopy.materialCount(project.materialCount)) + Text(verbatim: ", ")
+            + Text(isPreviewing ? LocalizedStringResource("workdesk.expanded", defaultValue: "Expanded")
+                : LocalizedStringResource("workdesk.collapsed", defaultValue: "Collapsed")))
+        .accessibilityIdentifier("workdesk-project-preview-\(project.id.uuidString)")
     }
 }
 
-private struct WorkDeskProjectMaterialGlimpse: View {
+struct WorkDeskProjectMaterialGlimpse: View {
     let material: WorkboardMaterialSnapshot
 
     var body: some View {

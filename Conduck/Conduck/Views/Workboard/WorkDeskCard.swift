@@ -112,6 +112,14 @@ private struct WorkDeskObjectDragModifier: ViewModifier {
             .contentShape(Rectangle())
             .focusable(isEnabled)
             .focused($isFocused)
+            // Native focus rings paint outside SwiftUI overlay ordering. Keep
+            // keyboard focus inside the object, beneath any contents preview.
+            .focusEffectDisabled()
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(isFocused ? AppColors.brandAmber : .clear, lineWidth: 2)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
             .highPriorityGesture(
                 DragGesture(minimumDistance: 6, coordinateSpace: .named(coordinateSpace))
                     .updating($isDragging) { _, active, _ in active = true }
@@ -142,8 +150,12 @@ private struct WorkDeskObjectDragModifier: ViewModifier {
             }
             .onChange(of: cancellationGeneration) { _, _ in
                 if dragState.cancel() { onCancelled() }
+                isFocused = false
             }
-            .onDisappear { if dragState.release() { onCancelled() } }
+            .onDisappear {
+                isFocused = false
+                if dragState.release() { onCancelled() }
+            }
             .help(Text(LocalizedStringResource("workdesk.canvas.moveObjectHint", defaultValue: "Drag anywhere on a card to arrange your desk")))
             .accessibilityActions {
                 Button(LocalizedStringResource("workdesk.canvas.moveLeft", defaultValue: "Move left")) { nudge(.leftArrow) }

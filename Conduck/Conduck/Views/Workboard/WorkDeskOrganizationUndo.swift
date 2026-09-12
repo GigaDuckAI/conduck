@@ -135,16 +135,26 @@ final class WorkDeskOrganizationUndoController {
 
 struct WorkDeskOrganizationUndo: ViewModifier {
     let workspace: WorkDeskWorkspaceState
-    @State private var controller = WorkDeskOrganizationUndoController()
+    // Presented previews inherit the workspace history even if their native
+    // sheet supplies a different responder-chain manager (or none).
+    var undoManagerProvider: (() -> UndoManager?)? = nil
+    // The compact preview and the workspace share one receipt/history owner;
+    // showing Undo inside the sheet must not register the same operation twice.
+    private var controller: WorkDeskOrganizationUndoController { workspace.organizationUndo }
     @Environment(\.undoManager) private var undoManager
     @Environment(\.workbenchDestinationIsActive) private var isActive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var manager: UndoManager? {
+        if let undoManagerProvider { return undoManagerProvider() }
+        return undoManager
+    }
 
     func body(content: Content) -> some View {
         content
             .onChange(of: workspace.organization.lastLocationUndo) { _, receipt in
                 guard isActive, let receipt else { return }
-                controller.receive(receipt, organization: workspace.organization, manager: undoManager)
+                controller.receive(receipt, organization: workspace.organization, manager: manager)
             }
             .overlay(alignment: .bottomLeading) {
                 if isActive, controller.showsUndo {
@@ -152,7 +162,7 @@ struct WorkDeskOrganizationUndo: ViewModifier {
                         Text(LocalizedStringResource("workdesk.undo.updated", defaultValue: "Materials organised"))
                             .font(.subheadline)
                         Button(LocalizedStringResource("workdesk.undo.action", defaultValue: "Undo")) {
-                            Task { await controller.undoLatest(organization: workspace.organization, manager: undoManager) }
+                            Task { await controller.undoLatest(organization: workspace.organization, manager: manager) }
                         }
                         .inlineLinkButton()
                         .font(.subheadline.weight(.semibold))

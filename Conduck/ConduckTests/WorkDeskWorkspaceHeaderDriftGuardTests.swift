@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Structural guard for the Work project's two levels of controls. Layout and
-// selection belong to the materials row; starting a conversation belongs to
-// the project header or an explicitly counted selection action. Responsive
-// alternatives reuse the same named action.
+// Structural guard for one active Work collection and its named actions.
+// Layout, selection and the conversation draft share a responsive action row;
+// project context and saved conversations remain in the project title menu.
 // These source checks protect ownership and discoverability, not rendered fit
 // or pointer behavior. Mutation cases verify that each regression is rejected.
 
@@ -21,6 +20,7 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
         var primary: String
         var layout: String
         var selection: String
+        var navigation: String
     }
 
     static func violations(_ source: Surfaces) -> [String] {
@@ -40,15 +40,30 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
         if !source.actions.contains("selectionControls") || !source.collection.contains("selectionBar") {
             found.append("Selection and its bulk actions must remain accessible with the materials")
         }
+        if !source.actions.contains("if workspace.isSelecting || !workspace.visibleMaterials(in: item.materials).isEmpty") {
+            found.append("Done must remain available after filtering or moving every visible material")
+        }
         if source.header.contains("selectionControls") || source.menu.contains("selectionControls") {
             found.append("Material selection must stay out of project actions")
         }
-        if source.collection.contains("newConversationButton") || source.actions.contains("preparingProjectID") {
-            found.append("Collection tools must not imply starting a conversation")
+        if source.actions.contains("preparingProjectID") {
+            found.append("Layout and selection controls must not start a conversation")
         }
-        if !source.header.contains("ViewThatFits") || !source.header.contains("HStack") || !source.header.contains("VStack")
-            || occurrences("newConversationButton", in: source.header) < 2 {
-            found.append("Wide and stacked headers must retain the shared conversation action")
+        if !source.collection.contains("ViewThatFits") || !source.collection.contains("HStack") || !source.collection.contains("VStack")
+            || occurrences("newConversationButton", in: source.collection) < 2 {
+            found.append("Wide and stacked collection rows must retain the named conversation action")
+        }
+        if !source.menu.contains("workspace.editingContextProjectID = project.id")
+            || !source.menu.contains("workspace.conversations(in: project.id)")
+            || !source.menu.contains("workspace.selectConversation(conversation.id, projectID: project.id)") {
+            found.append("Project context and saved conversations must remain reachable from the title menu")
+        }
+        if source.menu.contains("isProjectTrayPresented") || source.collection.contains("isProjectTrayPresented")
+            || source.header.contains("isProjectTrayPresented") || source.actions.contains("isProjectTrayPresented") {
+            found.append("The selected collection must own its title and controls without a second Home surface")
+        }
+        if !source.navigation.contains("!navigationIsExternal") || !source.navigation.contains("!workspace.showsSidebar") {
+            found.append("Home navigation must be available on compact hosts and when a wide sidebar is hidden")
         }
         if !source.primary.contains("Text(") || !source.primary.contains("LocalizedStringResource(")
             || source.primary.contains("isCompact") {
@@ -63,6 +78,10 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
         }
         if !source.selection.contains("else if workspace.scope == .all") {
             found.append("Creating a project from selected materials must remain an All materials action")
+        }
+        if !source.selection.contains("workspace.assignSelection(to:")
+            || !source.selection.contains("workspace.organization.add(materialIDs: ids") {
+            found.append("Selected materials must retain distinct move and add actions")
         }
         return found
     }
@@ -83,26 +102,28 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
             menu: try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskToolbarTitle.swift"),
             primary: try property("newConversationButton"),
             layout: try RefusalLaneSource.source(at: Self.layoutPath),
-            selection: try property("selectionBar")
+            selection: try property("selectionBar"),
+            navigation: try property("showsHomeNavigation")
         )
     }
 
-    func testProjectAndCollectionControlsKeepSeparateOwnership() throws {
+    func testActiveCollectionKeepsOneSetOfControlsAndProjectActions() throws {
         let found = Self.violations(try sources())
         XCTAssertTrue(found.isEmpty, found.joined(separator: "; "))
     }
 
     private static let valid = Surfaces(
-        header: "ViewThatFits { HStack { newConversationButton } VStack { newConversationButton } } materialControls",
-        collection: "materialActions selectionBar",
-        actions: "WorkDeskLayoutControl() selectionControls",
-        menu: "renameProject ungroupProject",
+        header: "materialControls",
+        collection: "ViewThatFits { HStack { materialActions newConversationButton } VStack { materialActions newConversationButton } } selectionBar",
+        actions: "WorkDeskLayoutControl() if workspace.isSelecting || !workspace.visibleMaterials(in: item.materials).isEmpty { selectionControls }",
+        menu: "workspace.editingContextProjectID = project.id workspace.conversations(in: project.id) workspace.selectConversation(conversation.id, projectID: project.id) renameProject ungroupProject",
         primary: "Button {} label: { Text(LocalizedStringResource(key)) }",
         layout: "Text(renderedMode.title)",
-        selection: "WorkDeskMaterialConversationCopy.title(count: workspace.selectedIDs.count) workspace.beginConversation(materialIDs: workspace.selectedIDs) else if workspace.scope == .all"
+        selection: "WorkDeskMaterialConversationCopy.title(count: workspace.selectedIDs.count) workspace.beginConversation(materialIDs: workspace.selectedIDs) else if workspace.scope == .all workspace.assignSelection(to: target) workspace.organization.add(materialIDs: ids)",
+        navigation: "!navigationIsExternal || !workspace.showsSidebar"
     )
 
-    func testValidatorAcceptsSeparateControlsWithNamedResponsiveAction() {
+    func testValidatorAcceptsOneRowWithNamedResponsiveAction() {
         XCTAssertEqual(Self.violations(Self.valid), [])
     }
 
@@ -130,15 +151,51 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
         }
     }
 
+    func testHidingDoneWhenTheVisibleCollectionBecomesEmptyIsRejected() {
+        var changed = Self.valid
+        changed.actions = changed.actions.replacingOccurrences(
+            of: "workspace.isSelecting || ", with: ""
+        )
+        XCTAssertTrue(Self.violations(changed).contains(
+            "Done must remain available after filtering or moving every visible material"
+        ))
+    }
+
     func testMovingSelectionIntoProjectMenuIsRejected() {
         var changed = Self.valid
         changed.menu += " selectionControls"
         XCTAssertFalse(Self.violations(changed).isEmpty)
     }
 
-    func testPlacingConversationActionAmongCollectionToolsIsRejected() {
+    func testStartingConversationThroughLayoutOrSelectionControlsIsRejected() {
         var changed = Self.valid
-        changed.collection += " newConversationButton"
+        changed.actions += " preparingProjectID"
+        XCTAssertFalse(Self.violations(changed).isEmpty)
+    }
+
+    func testLosingContextOrSavedConversationsIsRejected() {
+        var changed = Self.valid
+        changed.menu = "renameProject deleteProject"
+        XCTAssertFalse(Self.violations(changed).isEmpty)
+    }
+
+    func testLeavingTheTitleOrControlsOnHomeBehindAProjectIsRejected() {
+        for keyPath in [\Surfaces.header, \Surfaces.menu, \Surfaces.collection, \Surfaces.actions] {
+            var changed = Self.valid
+            changed[keyPath: keyPath] += " isProjectTrayPresented"
+            XCTAssertFalse(Self.violations(changed).isEmpty)
+        }
+    }
+
+    func testHidingHomeNavigationWithTheSidebarIsRejected() {
+        var changed = Self.valid
+        changed.navigation = "!sidebarIsHosted"
+        XCTAssertFalse(Self.violations(changed).isEmpty)
+    }
+
+    func testLosingAddWhileRetainingMoveIsRejected() {
+        var changed = Self.valid
+        changed.selection = changed.selection.replacingOccurrences(of: "workspace.organization.add(materialIDs: ids)", with: "")
         XCTAssertFalse(Self.violations(changed).isEmpty)
     }
 
@@ -150,7 +207,7 @@ final class WorkDeskWorkspaceHeaderDriftGuardTests: XCTestCase {
 
     func testDroppingTheStackedConversationActionIsRejected() {
         var changed = Self.valid
-        changed.header = "ViewThatFits { HStack { newConversationButton } VStack { projectIdentity } } materialControls"
+        changed.collection = "ViewThatFits { HStack { materialActions newConversationButton } VStack { materialActions } } selectionBar"
         XCTAssertFalse(Self.violations(changed).isEmpty)
     }
 

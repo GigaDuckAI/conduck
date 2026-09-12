@@ -76,6 +76,99 @@ final class WorkDeskMigrationTests: XCTestCase {
         }
     }
 
+    func testV23AddsOnlyOptionalProjectColorAndEveryShippedModelCanUpgrade() throws {
+        let before = try model(version: 22), after = try model(version: 23)
+        XCTAssertEqual(Set(before.entitiesByName.keys), Set(after.entitiesByName.keys))
+        for (name, entity) in before.entitiesByName where name != "WorkDeskProject" {
+            XCTAssertEqual(after.entitiesByName[name]?.versionHash, entity.versionHash,
+                           "Folder color must not change materials, payloads or their locations")
+        }
+        let old = try XCTUnwrap(before.entitiesByName["WorkDeskProject"])
+        let project = try XCTUnwrap(after.entitiesByName["WorkDeskProject"])
+        XCTAssertEqual(Set(project.attributesByName.keys).subtracting(old.attributesByName.keys), ["colorID"])
+        for (name, attribute) in old.attributesByName {
+            XCTAssertEqual(project.attributesByName[name]?.versionHash, attribute.versionHash)
+        }
+        let color = try XCTUnwrap(project.attributesByName["colorID"])
+        XCTAssertEqual(color.attributeType, .stringAttributeType)
+        XCTAssertTrue(color.isOptional)
+        XCTAssertNil(color.defaultValue)
+        XCTAssertTrue(project.relationshipsByName.isEmpty)
+        XCTAssertTrue(project.uniquenessConstraints.isEmpty)
+        XCTAssertTrue(after.entities(forConfigurationName: "Core")!.contains { $0.name == "WorkDeskProject" })
+        XCTAssertEqual(after.entities(forConfigurationName: "Blobs")?.compactMap(\.name), ["WorkMaterialBlob"])
+        for version in 1...22 {
+            XCTAssertNoThrow(try NSMappingModel.inferredMappingModel(forSourceModel: model(version: version), destinationModel: after))
+        }
+    }
+
+    func testV22SQLiteProjectsReceiveDistinctColorsAndChosenColorsSurviveReopening() async throws {
+        let ids = WorkDeskProjectColor.allCases.map { _ in UUID() }
+        let capturedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let old = try await container(version: 22)
+        let context = old.newBackgroundContext()
+        try await context.perform {
+            for id in ids {
+                let row = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
+                row.setValue(id, forKey: "id")
+                row.setValue("Existing project", forKey: "title")
+                row.setValue("Existing context", forKey: "brief")
+                row.setValue("hermes", forKey: "preferredGatewayRef")
+                row.setValue(80.0, forKey: "positionX")
+                row.setValue(90.0, forKey: "positionY")
+                row.setValue(capturedAt, forKey: "createdAt")
+                row.setValue(capturedAt, forKey: "updatedAt")
+            }
+            try context.save()
+        }
+        try unload(old)
+        let store = isolated.make(storeURL: coreURL)
+        let migrated = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(migrated.projects.count, ids.count)
+        XCTAssertEqual(Set(migrated.projects.map(\.color)).count, ids.count,
+            "Legacy projects get distinct automatic colors without a data rewrite")
+        for project in migrated.projects {
+            XCTAssertEqual(project.title, "Existing project")
+            XCTAssertEqual(project.brief, "Existing context")
+            XCTAssertEqual(project.preferredGatewayRef, "hermes")
+            XCTAssertEqual(project.position, .init(x: 80, y: 90))
+            XCTAssertEqual(project.updatedAt, capturedAt, "Reading a migrated color must not edit the project")
+        }
+        for (id, color) in zip(ids, WorkDeskProjectColor.allCases) {
+            _ = try await store.applyWorkDeskMutation(.setProjectColor(id: id, color: color))
+        }
+        try await store._unloadForTesting()
+        let reopened = isolated.make(storeURL: coreURL)
+        let saved = try await reopened.fetchWorkDeskOrganization()
+        for (id, color) in zip(ids, WorkDeskProjectColor.allCases) {
+            XCTAssertEqual(saved.projects.first { $0.id == id }?.color, color)
+        }
+    }
+
+    func testUnknownSyncedColorDisplaysAmberAndUnrelatedEditsPreserveItsIdentifier() async throws {
+        let id = UUID()
+        let current = try await container(version: 23)
+        let context = current.newBackgroundContext()
+        try await context.perform {
+            let row = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
+            row.setValue(id, forKey: "id")
+            row.setValue("Imported project", forKey: "title")
+            row.setValue("future-color", forKey: "colorID")
+            try context.save()
+        }
+        try unload(current)
+        let store = isolated.make(storeURL: coreURL)
+        let imported = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(imported.projects.first?.color, .amber)
+        _ = try await store.applyWorkDeskMutation(.updateProject(id: id, title: "Renamed", brief: "", preferredGatewayRef: nil))
+        _ = try await store.applyWorkDeskMutation(.moveProject(id: id, position: .init(x: 100, y: 200)))
+        let read = await store.newReadContext()
+        try await read.perform {
+            let row = try XCTUnwrap(read.fetch(NSFetchRequest<NSManagedObject>(entityName: "WorkDeskProject")).first)
+            XCTAssertEqual(row.value(forKey: "colorID") as? String, "future-color")
+        }
+    }
+
     func testV21SQLiteAdoptsFiledMaterialOnlyInsideProjectAndKeepsLooseHome() async throws {
         let looseID = UUID(), filedID = UUID(), projectID = UUID()
         let old = try await container(version: 21)

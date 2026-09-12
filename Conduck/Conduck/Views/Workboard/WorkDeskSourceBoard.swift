@@ -24,12 +24,13 @@ struct WorkDeskSourceBoard: View {
     var transferPriority = 0
     @State private var boardGlobalFrame: CGRect = .zero
     @State private var readableSurfaceID = UUID()
+    @State private var trailingDropGeometry = WorkDeskNativeDropGeometry()
     @State private var pendingRemoval: WorkboardMaterialSnapshot?
     @State private var readableReorder = WorkDeskReadableReorder()
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
-    private var boardScope: WorkDeskScope { scopeOverride ?? workspace.scope }
+    private var boardScope: WorkDeskScope { scopeOverride ?? workspace.displayedScope }
     private var boardSearch: String { boardScope == .all ? workspace.search : "" }
     private var isSearching: Bool { !boardSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var isBoardSelecting: Bool { workspace.isSelecting && (workspace.scope == boardScope || isSearching) }
@@ -43,8 +44,7 @@ struct WorkDeskSourceBoard: View {
     }
     private var selectedIDs: Set<UUID> { isBoardSelecting ? workspace.selectedIDs : [] }
     private func selectMaterial(_ id: UUID) {
-        if workspace.scope != boardScope { workspace.selectScope(boardScope) }
-        workspace.toggleSelection(id)
+        workspace.selectMaterial(id, in: boardScope)
     }
 
     private var projects: [WorkDeskCanvasProject] {
@@ -157,6 +157,7 @@ struct WorkDeskSourceBoard: View {
             },
             onSelect: selectMaterial,
             onOpenProject: { workspace.selectScope(.project($0)) },
+            projectPreviewState: workspace.projectPreview,
             onSeedPositions: { materials, projects in
                 await workspace.organization.seedPositions(materials: materials.map { seed in
                     var scoped = seed
@@ -284,7 +285,8 @@ struct WorkDeskSourceBoard: View {
                       return payload.itemProvider()
                   }
                   return WorkMaterialDragPayload(itemID: Constants.workboardDeskItemID, materialID: material.id).itemProvider()
-              }, onDrop: dropReadableMaterial)
+              }, onDrop: dropReadableMaterial,
+              acceptsPoint: { !workspace.transferCoordinator.isOccluded(at: $0) })
     }
 
     /// A complete final grid row still has a place to append. This stays in
@@ -295,13 +297,23 @@ struct WorkDeskSourceBoard: View {
             .frame(height: 44)
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
+            .onGeometryChange(for: WorkDeskNativeDropGeometry.self) {
+                .init(localSize: $0.size, globalFrame: $0.frame(in: .global))
+            } action: { trailingDropGeometry = $0 }
             .onDrop(of: [.conduckWorkboardMaterial], delegate: WorkboardReorderDropDelegate(
                 isEnabled: canReorderReadableMaterials && !readableReorder.isResolving,
                 onLocation: { point in
-                    if point != nil { readableReorder.hover(target) }
+                    if let point, let global = trailingDropGeometry.globalPoint(for: point),
+                       !workspace.transferCoordinator.isOccluded(at: global) { readableReorder.hover(target) }
                     else { readableReorder.leave(materialID: materialID, isTrailing: true) }
                 },
-                onDrop: { provider, _ in dropReadableMaterial(provider, target) }
+                onDrop: { provider, point in
+                    guard let global = trailingDropGeometry.globalPoint(for: point),
+                          !workspace.transferCoordinator.isOccluded(at: global) else { return false }
+                    var released = target
+                    released.globalPoint = global
+                    return dropReadableMaterial(provider, released)
+                }
             ))
             .overlay(alignment: .top) {
                 if readableReorder.target == target {
@@ -313,12 +325,14 @@ struct WorkDeskSourceBoard: View {
 
     private func dropReadableMaterial(_ provider: NSItemProvider, _ target: WorkDeskReadableDropTarget) -> Bool {
         guard canReorderReadableMaterials,
+              target.globalPoint.map({ !workspace.transferCoordinator.isOccluded(at: $0) }) ?? true,
               let token = readableReorder.accept(target, context: readableReorderContext) else { return false }
         provider.loadDataRepresentation(forTypeIdentifier: UTType.conduckWorkboardMaterial.identifier) { data, _ in
             let payload = data.flatMap { try? JSONDecoder().decode(WorkMaterialDragPayload.self, from: $0) }
             Task { @MainActor in
                 guard let operation = readableReorder.resolveOperation(payload, token: token,
-                    current: readableReorderContext, isEnabled: canReorderReadableMaterials,
+                    current: readableReorderContext, isEnabled: canReorderReadableMaterials
+                        && (target.globalPoint.map { !workspace.transferCoordinator.isOccluded(at: $0) } ?? true),
                     locations: workspace.organization.locationTokens(for: payload?.materialIDs ?? [])),
                       let payload else { return }
                 switch operation {
@@ -475,7 +489,6 @@ private struct WorkDeskReadableProject: View {
     let priority: Int
     @State private var targetID = UUID()
     @State private var targetFrame: CGRect = .zero
-    @State private var hovered = false
     @Environment(\.workbenchDestinationIsActive) private var isActive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -485,45 +498,36 @@ private struct WorkDeskReadableProject: View {
     }
 
     var body: some View {
-        Button {
-            withAnimation(reduceMotion ? nil : .snappy(duration: 0.28)) { workspace.selectScope(.project(project.id)) }
-        } label: {
-            WorkDeskProjectFolder(project: project, style: row ? .row : .tile, isTargeted: highlighted)
-                .frame(minHeight: row ? nil : 214)
-        }
-        .choiceCardButton(cornerRadius: 14)
-        .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project")))
+        WorkDeskProjectFolder(project: project, style: row ? .row : .tile, isTargeted: highlighted,
+            isPreviewing: workspace.projectPreview.request?.projectID == project.id,
+            onOpen: {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.28)) { workspace.selectScope(.project(project.id)) }
+            }, onPreview: {
+                guard isActive else { return }
+                workspace.projectPreview.toggle(projectID: project.id, anchor: targetFrame, materialCount: project.materialCount)
+            })
+        .frame(minHeight: row ? nil : 224)
         .accessibilityIdentifier("workdesk-project-\(project.id.uuidString)")
         .workDeskMaterialLocationDrop(location: .project(project.id), isEnabled: isActive,
-            organization: workspace.organization)
+            organization: workspace.organization, acceptsPoint: { point in
+                let global = CGPoint(x: targetFrame.minX + point.x, y: targetFrame.minY + point.y)
+                return !workspace.transferCoordinator.isOccluded(at: global)
+                    && workspace.transferCoordinator.destination(at: global)?.surfaceID == targetID
+            })
         .contextMenu {
             Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
                 workspace.editProject(project.record)
             }
+            WorkDeskProjectColorMenu(project: project.record, organization: workspace.organization)
             Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {
                 workspace.requestProjectDeletion(project.id)
             }
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
-            if targetFrame != frame { workspace.transferCoordinator.hideProjectPeek(ownerID: targetID) }
             targetFrame = frame
             updateTarget()
         }
-        .onHover { hovered = $0 }
-        .task(id: hovered && isActive && !workspace.transferCoordinator.isDragging) {
-            workspace.transferCoordinator.hideProjectPeek(ownerID: targetID)
-            guard hovered, isActive, !workspace.transferCoordinator.isDragging,
-                  let requestID = workspace.transferCoordinator.beginProjectPeek(ownerID: targetID) else { return }
-            do { try await Task.sleep(for: .milliseconds(450)) } catch { return }
-            guard !Task.isCancelled else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
-                workspace.transferCoordinator.showProjectPeek(ownerID: targetID, requestID: requestID, project: project, frame: targetFrame)
-            }
-        }
-        .onChange(of: isActive) { _, active in
-            if !active { hovered = false }
-            updateTarget()
-        }
+        .onChange(of: isActive) { _, _ in updateTarget() }
         .onDisappear { workspace.transferCoordinator.removeSurface(id: targetID) }
     }
     private func updateTarget() {

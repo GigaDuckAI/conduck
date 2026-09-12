@@ -4,8 +4,8 @@
 // navigation in a native sidebar; the composer stays within the detail column.
 // Search stays in navigation so the canvas remains a desk;
 // a compact picker submits its query back to the same global result surface.
-// Home holds loose materials and projects. Opening a project mounts its tray
-// over the retained Home board; only the explicit brief sheet can create a
+// Home holds loose materials and projects. Opening a project replaces the
+// detail surface; only the explicit brief sheet can create a
 // conversation. Deletion reviews the exact materials and affected locations.
 
 import SwiftUI
@@ -24,23 +24,21 @@ struct WorkDeskWorkspaceView: View {
     @Environment(\.workbenchDestinationIsActive) private var isActive
 
     private var workspaceLayout: some View {
-        GeometryReader { geometry in
-            VStack(spacing: 0) {
-                if !workspace.isShowingConversation || showsConversationBackNavigation || workspace.conversationLoadError != nil {
-                    header(isCompact: geometry.size.width < 600)
-                }
-                workspaceContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 0) {
+            if !workspace.isShowingConversation || showsConversationBackNavigation || workspace.conversationLoadError != nil {
+                header()
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onChange(of: navigationIsExternal, initial: true) { _, external in
-                guard isActive else { return }
-                workspace.updateSidebarLayout(isInline: external)
-            }
-            .onChange(of: isActive) { _, active in
-                guard active else { return }
-                workspace.updateSidebarLayout(isInline: navigationIsExternal)
-            }
+            workspaceContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: navigationIsExternal, initial: true) { _, external in
+            guard isActive else { return }
+            workspace.updateSidebarLayout(isInline: external)
+        }
+        .onChange(of: isActive) { _, active in
+            guard active else { return }
+            workspace.updateSidebarLayout(isInline: navigationIsExternal)
         }
     }
 
@@ -226,6 +224,10 @@ struct WorkDeskWorkspaceView: View {
     var body: some View {
         presentedWorkspace
         .modifier(WorkDeskOrganizationUndo(workspace: workspace))
+        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .global).onEnded { value in
+            guard isActive, !workspace.transferCoordinator.isDragging else { return }
+            workspace.projectPreview.dismissOutside(value.location)
+        })
         .background {
             Button(LocalizedStringResource("workdesk.search", defaultValue: "Find an idea or file")) {
                 workspace.requestSearch()
@@ -236,7 +238,7 @@ struct WorkDeskWorkspaceView: View {
         }
         .alert(Text(LocalizedStringResource("workdesk.update.failed", defaultValue: "Couldn’t update the desk")),
                isPresented: Binding(
-                get: { isActive && workspace.organization.errorMessage != nil && workspace.projectEditor == nil && workspace.preparingProjectID == nil && workspace.projectDeletionReview == nil },
+                get: { isActive && workspace.organization.errorMessage != nil && workspace.projectPreview.request == nil && workspace.projectEditor == nil && workspace.preparingProjectID == nil && workspace.projectDeletionReview == nil },
                 set: { if !$0 { workspace.organization.errorMessage = nil } }
                )) {
             Button(LocalizedStringResource("common.ok", defaultValue: "OK")) {
@@ -247,43 +249,18 @@ struct WorkDeskWorkspaceView: View {
         }
     }
 
-    /// The toolbar owns project identity and the conversation gateway.
-    /// Context and collection tools occupy separate, quiet content rows.
+    /// The toolbar owns project identity, gateway, context and saved conversations.
+    /// The active collection has one action row, wrapping only when needed.
     /// Selection offers organization and an explicitly counted conversation
     /// draft; the review sheet still owns what leaves the device. Compact
     /// windows retain a named primary action.
-    private func header(isCompact: Bool) -> some View {
+    private func header() -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            if workspace.isShowingConversation ? showsConversationBackNavigation : (!sidebarIsHosted || workspace.isSearching || showsNewConversation) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        projectIdentity
-                        Spacer(minLength: 8)
-                        if showsNewConversation { newConversationButton }
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        projectIdentity
-                        if showsNewConversation {
-                            HStack { Spacer(); newConversationButton }
-                        }
-                    }
+            if workspace.isShowingConversation {
+                if showsConversationBackNavigation {
+                    HStack { projectIdentity; Spacer(minLength: 0) }
                 }
-            }
-            if let project = workspace.currentProject, !workspace.isSearching, !workspace.isShowingConversation, !workspace.isProjectTrayPresented {
-                Button { workspace.editingContextProjectID = project.id } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "text.alignleft")
-                        Text(WorkDeskCopy.projectBriefState(hasBrief: !project.brief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
-                        if !project.brief.isEmpty {
-                            Text(verbatim: project.brief).lineLimit(1).foregroundStyle(AppColors.textTertiary)
-                        }
-                    }.font(.caption).padding(.vertical, 6)
-                }
-                .inlineLinkButton()
-                .foregroundStyle(AppColors.textSecondary)
-                .accessibilityIdentifier("workdesk-project-context")
-            }
-            if !workspace.isShowingConversation {
+            } else {
                 materialControls
             }
             if let error = workspace.conversationLoadError {
@@ -300,7 +277,7 @@ struct WorkDeskWorkspaceView: View {
     }
 
     private var showsNewConversation: Bool {
-        workspace.currentProject != nil && !workspace.isShowingConversation && !workspace.isSearching && !workspace.isSelecting && !workspace.isProjectTrayPresented
+        workspace.currentProject != nil && !workspace.isShowingConversation && !workspace.isSearching && !workspace.isSelecting
     }
 
     private var showsConversationBackNavigation: Bool {
@@ -309,6 +286,11 @@ struct WorkDeskWorkspaceView: View {
         #else
         false
         #endif
+    }
+
+    private var showsHomeNavigation: Bool {
+        workspace.currentProject != nil && !workspace.isShowingConversation && !workspace.isSearching
+            && (!sidebarIsHosted || !navigationIsExternal || !workspace.showsSidebar)
     }
 
     private var projectIdentity: some View {
@@ -326,6 +308,14 @@ struct WorkDeskWorkspaceView: View {
                         .font(.headline).padding(.vertical, 8)
                 }.inlineLinkButton()
                 .accessibilityHint(Text(LocalizedStringResource("workdesk.conversation.back", defaultValue: "Back to project")))
+            } else if showsHomeNavigation {
+                Button { workspace.selectScope(.all) } label: {
+                    Label(LocalizedStringResource("workdesk.all", defaultValue: "Home"), systemImage: "chevron.left")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 4).frame(minHeight: 44)
+                }
+                .inlineLinkButton()
+                .accessibilityIdentifier("workdesk-back-home")
             }
             if workspace.isSearching {
                 Button { workspace.search = ""; workspace.searchIsFocused = false } label: {
@@ -343,7 +333,9 @@ struct WorkDeskWorkspaceView: View {
             workspace.preparingProjectID = project.id
         } label: {
             Text(LocalizedStringResource("workdesk.conversation.new", defaultValue: "New conversation…"))
-                .font(.subheadline.weight(.semibold)).fixedSize()
+                .font(.subheadline.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.center)
                 .padding(.horizontal, 14).frame(minHeight: 40)
                 .background(AppColors.accent, in: Capsule()).foregroundStyle(.black)
         }
@@ -355,32 +347,54 @@ struct WorkDeskWorkspaceView: View {
         VStack(alignment: .leading, spacing: 4) {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
+                    projectIdentity
                     materialCount
                     Spacer(minLength: 8)
                     materialActions
+                    if showsNewConversation { newConversationButton }
                 }
-                VStack(alignment: .leading, spacing: 0) {
-                    materialCount
-                    HStack { Spacer(minLength: 0); materialActions }
+                VStack(alignment: .leading, spacing: 4) {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            projectIdentity
+                            materialCount
+                            Spacer(minLength: 0)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            projectIdentity
+                            materialCount
+                        }
+                    }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            materialActions
+                            Spacer(minLength: 8)
+                            if showsNewConversation { newConversationButton }
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            materialActions
+                            if showsNewConversation { newConversationButton }
+                        }
+                    }
                 }
             }
-            if workspace.isSelecting && !workspace.selectedIDs.isEmpty && !workspace.isProjectTrayPresented { selectionBar }
+            if workspace.isSelecting && !workspace.selectedIDs.isEmpty { selectionBar }
         }
     }
 
     private var materialCount: some View {
-        Text(WorkDeskCopy.materialCount(workspace.visibleMaterials(in: item.materials, scope: workspace.isProjectTrayPresented ? .all : nil).count))
+        Text(WorkDeskCopy.materialCount(workspace.visibleMaterials(in: item.materials).count))
             .font(.caption).foregroundStyle(AppColors.textSecondary).fixedSize()
     }
 
     @ViewBuilder
     private var materialActions: some View {
-        if !workspace.isSelecting || workspace.isProjectTrayPresented {
+        if !workspace.isSelecting {
             WorkDeskLayoutControl(viewModel: viewModel,
-                supportsSpatialLayout: workspace.isProjectTrayPresented || workspace.supportsSpatialLayout,
-                scope: workspace.isProjectTrayPresented ? .all : nil)
+                supportsSpatialLayout: workspace.supportsSpatialLayout,
+                scope: workspace.isSearching ? .all : workspace.scope)
         }
-        if !workspace.isProjectTrayPresented && !workspace.visibleMaterials(in: item.materials).isEmpty {
+        if workspace.isSelecting || !workspace.visibleMaterials(in: item.materials).isEmpty {
             selectionControls
         }
     }
@@ -448,6 +462,25 @@ struct WorkDeskWorkspaceView: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(workspace.organization.projects.isEmpty)
+                if !workspace.isSearching {
+                    Menu {
+                        ForEach(workspace.organization.projects.filter { $0.id != workspace.currentProject?.id }) { project in
+                            Button {
+                                let ids = workspace.visibleMaterials(in: item.materials).map(\.id)
+                                    .filter { workspace.selectedIDs.contains($0) }
+                                Task {
+                                    _ = await workspace.organization.add(materialIDs: ids,
+                                        to: .project(project.id), positions: [:])
+                                }
+                            } label: { Text(verbatim: project.title) }
+                        }
+                    } label: {
+                        Label(LocalizedStringResource("workdesk.addToAnotherProject", defaultValue: "Add to another project…"),
+                              systemImage: "folder.badge.plus")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!workspace.organization.projects.contains { $0.id != workspace.currentProject?.id })
+                }
             }
             .controlSize(.small)
             .padding(.vertical, 2)

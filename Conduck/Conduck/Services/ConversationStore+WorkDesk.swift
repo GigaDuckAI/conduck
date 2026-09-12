@@ -333,8 +333,8 @@ extension ConversationStore {
         _ mutation: WorkDeskMutation, in context: NSManagedObjectContext
     ) throws {
         switch mutation {
-        case let .createProjectFrom(project, materialIDs, source, expected):
-            try applyDeskMutation(.createProject(project, materialIDs: []), in: context)
+        case let .createProjectFrom(project, materialIDs, source, expected, automaticallyAssignColor):
+            try applyDeskMutation(.createProject(project, materialIDs: [], automaticallyAssignColor: automaticallyAssignColor), in: context)
             try applyDeskLocationMutation(.moveLocations(materialIDs: materialIDs, from: source, to: .project(project.id),
                                                         positions: [:], expected: expected), in: context)
         case .moveLocations, .addLocations, .removeLocations, .positionLocations, .restoreLocations, .reorderLocations, .moveAndReorderLocations:
@@ -342,17 +342,21 @@ extension ConversationStore {
         case .deleteReviewedProject:
             // Validated and applied before this metadata-only switch.
             break
-        case let .createProject(project, materialIDs):
+        case let .createProject(project, materialIDs, automaticallyAssignColor):
             try validateDeskText(title: project.title, brief: project.brief)
             try requireDeskMaterials(materialIDs, in: context)
             guard try deskRows("WorkDeskProject", key: "id", id: project.id, in: context).isEmpty else {
                 throw WorkDeskStoreError.identifierCollision
             }
+            let color = automaticallyAssignColor
+                ? WorkDeskProjectColor.leastUsed(in: try deskOrganization(in: context).projects.map(\.color))
+                : project.color
             let row = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
             row.setValue(project.id, forKey: "id")
             row.setValue(project.title.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "title")
             row.setValue(project.brief, forKey: "brief")
             row.setValue(project.preferredGatewayRef, forKey: "preferredGatewayRef")
+            row.setValue(color.rawValue, forKey: "colorID")
             row.setValue(project.isPinned, forKey: "isPinned")
             row.setValue(project.createdAt, forKey: "createdAt")
             row.setValue(Date(), forKey: "updatedAt")
@@ -370,6 +374,19 @@ extension ConversationStore {
                 row.setValue(brief, forKey: "brief")
                 row.setValue(preferredGatewayRef, forKey: "preferredGatewayRef")
             }
+        case let .setProjectColor(id, color, expectedUpdatedAt):
+            let rows = try liveDeskProjectRows(id, in: context)
+            if let expectedUpdatedAt,
+               rows.first?.value(forKey: "updatedAt") as? Date != expectedUpdatedAt {
+                throw WorkDeskStoreError.staleProject
+            }
+            editDeskRows(rows) { row in
+                // Core Data can mark an equal KVC assignment as changed.
+                // Choosing the current swatch must not advance the revision
+                // and invalidate an editor that still has the same project.
+                guard row.value(forKey: "colorID") as? String != color.rawValue else { return }
+                row.setValue(color.rawValue, forKey: "colorID")
+            }
         case let .deleteProject(id):
             let locationState = try deskLocationState(in: context)
             let rows = try deskRows("WorkDeskProject", key: "id", id: id, in: context)
@@ -378,7 +395,7 @@ extension ConversationStore {
                 row.setValue(row.value(forKey: "deletedAt") ?? Date(), forKey: "deletedAt")
                 // Keep only identity and dates. Deleted projects do not retain
                 // the person's brief or a destination they no longer need.
-                for key in ["title", "brief", "preferredGatewayRef", "positionX", "positionY", "isPinned"] {
+                for key in ["title", "brief", "preferredGatewayRef", "colorID", "positionX", "positionY", "isPinned"] {
                     row.setValue(nil, forKey: key)
                 }
             }
@@ -735,14 +752,17 @@ extension ConversationStore {
             .compactMap { $0.value(forKey: "id") as? UUID })
         var seen: Set<UUID> = []
         var projects: [WorkDeskProjectRecord] = []
+        var uncoloredProjectIDs: Set<UUID> = []
         for row in projectRows {
             guard let id = row.value(forKey: "id") as? UUID,
                   !tombstones.contains(id), !seen.contains(id),
                   let title = row.value(forKey: "title") as? String else { continue }
             seen.insert(id)
+            if row.value(forKey: "colorID") == nil { uncoloredProjectIDs.insert(id) }
             projects.append(WorkDeskProjectRecord(
                 id: id, title: title, brief: row.value(forKey: "brief") as? String ?? "",
                 preferredGatewayRef: row.value(forKey: "preferredGatewayRef") as? String,
+                color: WorkDeskProjectColor(storedID: row.value(forKey: "colorID") as? String),
                 position: deskPoint(on: row), isPinned: row.value(forKey: "isPinned") as? Bool ?? false,
                 createdAt: row.value(forKey: "createdAt") as? Date ?? .distantPast,
                 updatedAt: row.value(forKey: "updatedAt") as? Date ?? .distantPast
@@ -751,6 +771,16 @@ extension ConversationStore {
         projects.sort {
             if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
             return $0.id.uuidString < $1.id.uuidString
+        }
+        // Old projects have no stored color. Resolve in stable creation order,
+        // never from randomized Swift hashes or sidebar title sorting. Later
+        // projects cannot recolor earlier ones merely by being created.
+        var earlierColors: [WorkDeskProjectColor] = []
+        for index in projects.indices {
+            if uncoloredProjectIDs.contains(projects[index].id) {
+                projects[index].color = .leastUsed(in: earlierColors)
+            }
+            earlierColors.append(projects[index].color)
         }
         let materials = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
         materials.propertiesToFetch = ["id"]
