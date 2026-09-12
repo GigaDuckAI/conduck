@@ -5,7 +5,7 @@
 //
 // The desk's compact alternative to mosaic cards. A steady thumbnail column,
 // readable preview and visible actions make a long desk easier to scan. The
-// board owns dragging and order; this row only marks the grip and exposes the
+// board owns whole-row dragging and order; this row exposes the
 // same moves to keyboard and VoiceOver users. There is no footprint to pick:
 // the board draws one slot size, so a row offers no card-size control either.
 //
@@ -77,16 +77,8 @@ struct WorkboardMaterialListRow: View {
                     .accessibilityActions { accessibilityActions }
             }
 
-            HStack(spacing: 0) {
-                rowMenu
-                Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(AppColors.textTertiary)
-                    .frame(width: 20)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-            .padding(.trailing, 8)
+            rowMenu
+                .padding(.trailing, 8)
         }
         .workDeskMetadataControls(organizationActions)
         // The recording's own control, over the picture it belongs to. It is a
@@ -161,7 +153,7 @@ struct WorkboardMaterialListRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.leading, 12)
-        .padding(.trailing, 76)
+        .padding(.trailing, 56)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
         .background(

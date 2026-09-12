@@ -1541,6 +1541,7 @@ private struct WorkboardMaterialBoard: View {
             .onDrag {
                 guard workbenchDestinationIsActive,
                       !viewModel.isCapturingIntoDesk else { return NSItemProvider() }
+                WorkDeskReadableReorder.clearDragFeedback()
                 beginDrag(of: material)
                 return WorkMaterialDragPayload(
                     itemID: Constants.workboardDeskItemID,

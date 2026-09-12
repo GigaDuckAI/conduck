@@ -188,7 +188,7 @@ extension ConversationStore {
             }
         }
         var desired: WorkDeskLocationTokens = [:]
-        var reordered: [UUID]?
+        var reorderedRanks: [UUID: Int] = [:]
         if case let .reorderLocations(moving, target, placement, location, ordered, _) = mutation {
             guard Set(ordered).count == ordered.count, ordered.contains(moving), ordered.contains(target) else {
                 throw WorkDeskStoreError.materialMoved
@@ -199,7 +199,9 @@ extension ConversationStore {
             guard let targetIndex = result.firstIndex(of: target) else { throw WorkDeskStoreError.materialMoved }
             result.insert(moving, at: targetIndex + (placement == .after ? 1 : 0))
             if result == ordered { return }
-            reordered = result
+            // Resolve every rank once; looking up each material by scanning
+            // the ordered array makes rank assignment quadratic in board size.
+            reorderedRanks = Dictionary(uniqueKeysWithValues: result.enumerated().map { ($0.element, $0.offset) })
         }
         for id in Set(ids) {
             var records = before[id] ?? []
@@ -230,7 +232,7 @@ extension ConversationStore {
                       Set(records.map(\.location)).count == records.count else { throw WorkDeskStoreError.materialMoved }
             case let .reorderLocations(_, _, _, location, _, _):
                 guard let index = records.firstIndex(where: { $0.location == location }),
-                      let rank = reordered?.firstIndex(of: id) else { throw WorkDeskStoreError.materialMoved }
+                      let rank = reorderedRanks[id] else { throw WorkDeskStoreError.materialMoved }
                 records[index].sortRank = Double(rank)
             default: break
             }

@@ -7,6 +7,7 @@
 
 import XCTest
 import SwiftUI
+import Observation
 @testable import Conduck
 
 @MainActor
@@ -18,7 +19,7 @@ final class WorkDeskReadableReorderTests: XCTestCase {
 
     func testWholeTilesAndRowsWireToTheSameNativeDragModifier() throws {
         let board = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskSourceBoard.swift")
-        XCTAssertEqual(board.components(separatedBy: ".modifier(readableReorderCard(material))").count - 1, 2)
+        XCTAssertEqual(board.components(separatedBy: ".modifier(readableReorderCard(material, orderIndex: orderIndex))").count - 1, 2)
         XCTAssertTrue(board.contains("if let lastID = visibleIDs.last { trailingReorderTarget(after: lastID) }"))
         let modifier = try RefusalLaneSource.source(at: "Conduck/Views/Workboard/WorkDeskReadableReorder.swift")
         XCTAssertTrue(modifier.contains(".onDrag { isEnabled ? onBegin() : NSItemProvider() }"))
@@ -28,14 +29,117 @@ final class WorkDeskReadableReorderTests: XCTestCase {
             "Decoding must not enqueue a scoped reorder behind another desk mutation.")
     }
 
+    func testNewNativeDragClearsCancelledSourcesAcrossBoardsWithoutCancellingAcceptedDrops() throws {
+        let home = WorkDeskReadableReorder()
+        let other = WorkDeskReadableReorder()
+        home.begin(first)
+        home.hover(.init(materialID: second, placement: .before))
+        home.leave(materialID: second) // The drag was cancelled outside the board.
+        other.begin(third)
+        XCTAssertNil(home.sourceID)
+        home.hover(.init(materialID: first, placement: .before))
+        XCTAssertEqual(home.target?.materialID, first, "The old source must be a valid destination again")
+        XCTAssertNil(WorkDeskReadableReorder.landingSlot(sourceID: home.sourceID,
+            target: home.target, order: .init([first, second, third])))
+
+        let token = try XCTUnwrap(home.accept(target, context: context()))
+        WorkDeskReadableReorder.clearDragFeedback() // A legacy native card begins a new drag.
+        XCTAssertEqual(home.resolve(WorkMaterialDragPayload(itemID: Constants.workboardDeskItemID,
+            materialID: first), token: token, current: context(), isEnabled: true), target,
+            "Starting another drag cannot steal an already accepted provider request")
+    }
+
+    func testLandingOutlineMatchesActualSlotAcrossGridRowsAndSourceRemoval() {
+        // A B C / D E F: the outline must identify the cell the source occupies
+        // after release, not imply that the hover edge is a spatial row move.
+        let ids = (0..<6).map { _ in UUID() }
+        for (source, target, placement, expected) in [
+            (5, 1, WorkboardReorderPlacement.before, 1), // F above B -> B's cell
+            (5, 1, .after, 2),                         // F below B -> C's cell
+            (0, 1, .after, 1),                         // remove A before inserting
+            (0, 4, .before, 3),                        // A before E -> D's cell
+            (1, 5, .after, 5),                         // append -> final cell
+        ] {
+            XCTAssertEqual(WorkDeskReadableReorder.landingSlot(sourceID: ids[source],
+                target: .init(materialID: ids[target], placement: placement), order: .init(ids)), ids[expected])
+        }
+        XCTAssertNil(WorkDeskReadableReorder.landingSlot(sourceID: ids[0],
+            target: .init(materialID: ids[1], placement: .before), order: .init(ids)))
+        XCTAssertNil(WorkDeskReadableReorder.landingSlot(sourceID: nil,
+            target: .init(materialID: ids[1], placement: .before), order: .init(ids)))
+        XCTAssertNil(WorkDeskReadableReorder.landingSlot(sourceID: ids[0], target: nil, order: .init(ids)))
+    }
+
     func testTileInsertionUsesReadingDirectionAndListInsertionUsesHeight() {
         let size = CGSize(width: 200, height: 100)
-        XCTAssertEqual(placement(x: 20, y: 80, size: size, layout: .tiles), .before)
-        XCTAssertEqual(placement(x: 180, y: 20, size: size, layout: .tiles), .after)
-        XCTAssertEqual(placement(x: 20, y: 80, size: size, layout: .tiles, direction: .rightToLeft), .after)
-        XCTAssertEqual(placement(x: 180, y: 20, size: size, layout: .tiles, direction: .rightToLeft), .before)
+        XCTAssertEqual(placement(x: 20, y: 50, size: size, layout: .tiles), .before)
+        XCTAssertEqual(placement(x: 180, y: 50, size: size, layout: .tiles), .after)
+        XCTAssertEqual(placement(x: 20, y: 50, size: size, layout: .tiles, direction: .rightToLeft), .after)
+        XCTAssertEqual(placement(x: 180, y: 50, size: size, layout: .tiles, direction: .rightToLeft), .before)
         XCTAssertEqual(placement(x: 180, y: 20, size: size, layout: .list), .before)
         XCTAssertEqual(placement(x: 20, y: 80, size: size, layout: .list, direction: .rightToLeft), .after)
+    }
+
+    func testTileTopAndBottomEdgesAreIndependentOfReadingDirectionAndAspectRatio() {
+        for size in [CGSize(width: 160, height: 320), CGSize(width: 320, height: 160)] {
+            for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+                let top = WorkDeskReadableReorder.insertionEdge(
+                    at: .init(x: size.width * 0.8, y: size.height * 0.1),
+                    size: size, layout: .tiles, direction: direction)
+                let bottom = WorkDeskReadableReorder.insertionEdge(
+                    at: .init(x: size.width * 0.2, y: size.height * 0.9),
+                    size: size, layout: .tiles, direction: direction)
+                XCTAssertEqual(top, .top)
+                XCTAssertEqual(top?.placement, .before)
+                XCTAssertEqual(bottom, .bottom)
+                XCTAssertEqual(bottom?.placement, .after)
+            }
+        }
+    }
+
+    func testTileMiddleSideEdgesFollowReadingDirection() {
+        let size = CGSize(width: 200, height: 300)
+        for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+            XCTAssertEqual(WorkDeskReadableReorder.insertionEdge(at: .init(x: 20, y: 150),
+                size: size, layout: .tiles, direction: direction),
+                direction == .leftToRight ? .leading : .trailing)
+            XCTAssertEqual(WorkDeskReadableReorder.insertionEdge(at: .init(x: 180, y: 150),
+                size: size, layout: .tiles, direction: direction),
+                direction == .leftToRight ? .trailing : .leading)
+        }
+    }
+
+    func testOutOfBoundsHoverNeverInventsAnEdge() {
+        let size = CGSize(width: 200, height: 100)
+        for layout in [WorkboardLayoutMode.tiles, .list] {
+            for point in [CGPoint(x: -1, y: 50), CGPoint(x: 201, y: 50),
+                          CGPoint(x: 50, y: -1), CGPoint(x: 50, y: 101)] {
+                XCTAssertNil(WorkDeskReadableReorder.insertionEdge(at: point, size: size,
+                    layout: layout, direction: .leftToRight))
+            }
+        }
+    }
+
+    func testRepeatedPointerUpdatesDoNotInvalidateAnUnchangedInsertionEdge() {
+        let reorder = WorkDeskReadableReorder()
+        reorder.begin(first)
+        let edge = WorkDeskReadableDropTarget(materialID: second, placement: .before, edge: .top)
+        reorder.hover(edge)
+        let flag = HoverObservationFlag()
+        withObservationTracking { _ = reorder.target } onChange: {
+            MainActor.assumeIsolated { flag.changed = true }
+        }
+        for _ in 0..<100 { reorder.hover(edge) }
+        XCTAssertFalse(flag.changed)
+        // Same logical placement, different visible edge must still redraw.
+        reorder.hover(.init(materialID: second, placement: .before, edge: .leading))
+        XCTAssertTrue(flag.changed)
+        XCTAssertEqual(reorder.target?.edge, .leading)
+    }
+
+    @MainActor
+    private final class HoverObservationFlag {
+        var changed = false
     }
 
     func testUnknownMeasurementsAndSpatialLayoutNeverGuessAnInsertion() {

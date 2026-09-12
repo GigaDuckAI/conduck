@@ -24,7 +24,7 @@ struct WorkDeskSourceBoard: View {
     var transferPriority = 0
     @State private var boardGlobalFrame: CGRect = .zero
     @State private var readableSurfaceID = UUID()
-    @State private var trailingDropGeometry = WorkDeskNativeDropGeometry()
+    @State private var pendingReadableOrder: WorkDeskReadablePendingOrder?
     @State private var pendingRemoval: WorkboardMaterialSnapshot?
     @State private var readableReorder = WorkDeskReadableReorder()
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -35,7 +35,8 @@ struct WorkDeskSourceBoard: View {
     private var isSearching: Bool { !boardSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var isBoardSelecting: Bool { workspace.isSelecting && (workspace.scope == boardScope || isSearching) }
     private var materials: [WorkboardMaterialSnapshot] {
-        workspace.visibleMaterials(in: item.materials, scope: boardScope, search: boardSearch)
+        let current = workspace.visibleMaterials(in: item.materials, scope: boardScope, search: boardSearch)
+        return pendingReadableOrder?.project(current, context: readableReorderContext) ?? current
     }
     private var sourceLocation: WorkDeskLocation? { isSearching ? nil : boardScope.location }
     private var project: WorkDeskProjectRecord? {
@@ -86,8 +87,11 @@ struct WorkDeskSourceBoard: View {
                 readableBoard
             }
         }
+        // Populated readable layouts own precise card/append targets. A second
+        // pane-wide receiver would outline the window and compete for the drop.
         .workDeskMaterialLocationDrop(location: boardScope.location,
-            isEnabled: workbenchDestinationIsActive && !isSearching,
+            isEnabled: workbenchDestinationIsActive && !isSearching
+                && (renderedLayout == .desk || materials.isEmpty),
             organization: workspace.organization,
             acceptsPoint: { point in
                 let global = CGPoint(x: boardGlobalFrame.minX + point.x, y: boardGlobalFrame.minY + point.y)
@@ -120,15 +124,15 @@ struct WorkDeskSourceBoard: View {
                 ? LocalizedStringResource("workdesk.material.delete.message", defaultValue: "This material will be deleted from Home and every project that contains it.")
                 : LocalizedStringResource("workdesk.material.delete.pair", defaultValue: "This picture and its voice note will be deleted from Home and every project that contains them."))
         }
-        .onChange(of: workspace.scope) { _, _ in readableReorder.cancel() }
-        .onChange(of: workspace.search) { _, _ in readableReorder.cancel() }
-        .onChange(of: renderedLayout) { _, _ in readableReorder.cancel() }
-        .onChange(of: workspace.isSelecting) { _, _ in readableReorder.cancel() }
+        .onChange(of: workspace.scope) { _, _ in cancelReadableReorder() }
+        .onChange(of: workspace.search) { _, _ in cancelReadableReorder() }
+        .onChange(of: renderedLayout) { _, _ in cancelReadableReorder() }
+        .onChange(of: workspace.isSelecting) { _, _ in cancelReadableReorder() }
         .onChange(of: workbenchDestinationIsActive) { _, active in
-            if !active { readableReorder.cancel() }
+            if !active { cancelReadableReorder() }
             updateReadableSurface()
         }
-        .onDisappear { readableReorder.cancel(); workspace.transferCoordinator.removeSurface(id: readableSurfaceID) }
+        .onDisappear { cancelReadableReorder(); workspace.transferCoordinator.removeSurface(id: readableSurfaceID) }
     }
 
     private var spatialBoard: some View {
@@ -189,6 +193,7 @@ struct WorkDeskSourceBoard: View {
     private var readableBoard: some View {
         let visible = materials
         let visibleIDs = visible.map(\.id)
+        let orderIndex = WorkDeskReadableOrderIndex(visibleIDs)
         let indices = Dictionary(visibleIDs.enumerated().map { ($0.element, $0.offset + 1) }, uniquingKeysWith: { first, _ in first })
         return ScrollViewReader { proxy in
             ScrollView {
@@ -216,7 +221,7 @@ struct WorkDeskSourceBoard: View {
                                     .overlay(RoundedRectangle(cornerRadius: 13).stroke(selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2)
                                         .allowsHitTesting(false))
                                     .overlay(alignment: .topLeading) { selectionIndicator(material) }
-                                    .modifier(readableReorderCard(material))
+                                    .modifier(readableReorderCard(material, orderIndex: orderIndex))
                             }
                         }
                     } else {
@@ -226,7 +231,7 @@ struct WorkDeskSourceBoard: View {
                                 .overlay(RoundedRectangle(cornerRadius: 13).stroke(selectedIDs.contains(material.id) ? AppColors.accent : .clear, lineWidth: 2)
                                     .allowsHitTesting(false))
                                 .overlay(alignment: .topLeading) { selectionIndicator(material) }
-                                .modifier(readableReorderCard(material))
+                                .modifier(readableReorderCard(material, orderIndex: orderIndex))
                         }
                     }
                     if let lastID = visibleIDs.last { trailingReorderTarget(after: lastID) }
@@ -262,7 +267,7 @@ struct WorkDeskSourceBoard: View {
 
     private var canReorderReadableMaterials: Bool {
         workbenchDestinationIsActive && !isBoardSelecting
-            && !viewModel.isCapturingIntoDesk && renderedLayout != .desk
+            && !viewModel.isCapturingIntoDesk && pendingReadableOrder == nil && renderedLayout != .desk
     }
 
     private var readableReorderContext: WorkDeskReadableReorderContext {
@@ -274,7 +279,7 @@ struct WorkDeskSourceBoard: View {
                      locationTokens: workspace.organization.locationTokens(for: live.map(\.id)))
     }
 
-    private func readableReorderCard(_ material: WorkboardMaterialSnapshot) -> WorkDeskReadableReorderCard {
+    private func readableReorderCard(_ material: WorkboardMaterialSnapshot, orderIndex: WorkDeskReadableOrderIndex) -> WorkDeskReadableReorderCard {
         .init(materialID: material.id, layout: renderedLayout, isEnabled: canReorderReadableMaterials,
               reorder: readableReorder, onBegin: {
                   guard canReorderReadableMaterials else { return NSItemProvider() }
@@ -286,41 +291,23 @@ struct WorkDeskSourceBoard: View {
                   }
                   return WorkMaterialDragPayload(itemID: Constants.workboardDeskItemID, materialID: material.id).itemProvider()
               }, onDrop: dropReadableMaterial,
-              acceptsPoint: { !workspace.transferCoordinator.isOccluded(at: $0) })
+              acceptsPoint: { !workspace.transferCoordinator.isOccluded(at: $0) },
+              dragPreviewTitle: material.name, dragPreviewSymbol: WorkboardMaterialIcon.symbol(for: material),
+              orderIndex: orderIndex)
     }
 
     /// A complete final grid row still has a place to append. This stays in
     /// the scroll content so native drag autoscroll can reach the last card.
     private func trailingReorderTarget(after materialID: UUID) -> some View {
-        let target = WorkDeskReadableDropTarget(materialID: materialID, placement: .after, isTrailing: true)
-        return Color.clear
-            .frame(height: 44)
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-            .onGeometryChange(for: WorkDeskNativeDropGeometry.self) {
-                .init(localSize: $0.size, globalFrame: $0.frame(in: .global))
-            } action: { trailingDropGeometry = $0 }
-            .onDrop(of: [.conduckWorkboardMaterial], delegate: WorkboardReorderDropDelegate(
-                isEnabled: canReorderReadableMaterials && !readableReorder.isResolving,
-                onLocation: { point in
-                    if let point, let global = trailingDropGeometry.globalPoint(for: point),
-                       !workspace.transferCoordinator.isOccluded(at: global) { readableReorder.hover(target) }
-                    else { readableReorder.leave(materialID: materialID, isTrailing: true) }
-                },
-                onDrop: { provider, point in
-                    guard let global = trailingDropGeometry.globalPoint(for: point),
-                          !workspace.transferCoordinator.isOccluded(at: global) else { return false }
-                    var released = target
-                    released.globalPoint = global
-                    return dropReadableMaterial(provider, released)
-                }
-            ))
-            .overlay(alignment: .top) {
-                if readableReorder.target == target {
-                    Capsule().fill(AppColors.accent).frame(height: 3).allowsHitTesting(false)
-                }
-            }
-            .accessibilityHidden(true)
+        WorkDeskReadableTrailingDropTarget(materialID: materialID,
+            isEnabled: canReorderReadableMaterials, reorder: readableReorder,
+            acceptsPoint: { !workspace.transferCoordinator.isOccluded(at: $0) },
+            onDrop: dropReadableMaterial)
+    }
+
+    private func cancelReadableReorder() {
+        readableReorder.cancel()
+        pendingReadableOrder = nil
     }
 
     private func dropReadableMaterial(_ provider: NSItemProvider, _ target: WorkDeskReadableDropTarget) -> Bool {
@@ -337,8 +324,19 @@ struct WorkDeskSourceBoard: View {
                       let payload else { return }
                 switch operation {
                 case .reorder(let target):
+                    // Show the accepted order while storage validates and saves.
+                    // The preview projects current cards, never stale payloads,
+                    // and a changed scope/membership/order supersedes it.
+                    let context = readableReorderContext
+                    let current = workspace.visibleMaterials(in: viewModel.desk?.materials ?? item.materials,
+                        scope: boardScope, search: boardSearch)
+                    let pending = WorkDeskReadablePendingOrder(moving: payload.materialID,
+                        relativeTo: target.materialID, placement: target.placement,
+                        materials: current, context: context)
+                    pendingReadableOrder = pending
                     _ = await reorderMaterial(payload.materialID, relativeTo: target.materialID,
-                                                       placement: target.placement)
+                                              placement: target.placement)
+                    if pendingReadableOrder?.id == pending?.id { pendingReadableOrder = nil }
                 case .move(let target, let move):
                     let ordered = readableReorderContext.visibleIDs
                     var expected = workspace.organization.locationTokens(for: ordered)
