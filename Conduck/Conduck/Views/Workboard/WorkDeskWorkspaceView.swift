@@ -616,40 +616,97 @@ private struct WorkDeskProjectEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isSaving = false
     @State private var error: String?
+    @State private var contentHeight: CGFloat = 180
     @FocusState private var titleFocused: Bool
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField(text: $title) {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text(request.project == nil
+                        ? LocalizedStringResource("workdesk.project.new", defaultValue: "New project")
+                        : LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"))
+                        .font(.title2.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityAddTraits(.isHeader)
+                    VStack(alignment: .leading, spacing: 8) {
                         Text(LocalizedStringResource("workdesk.project.name", defaultValue: "Project name"))
+                            .font(.subheadline.weight(.medium))
+                        TextField(text: $title) {
+                            Text(LocalizedStringResource("workdesk.project.name", defaultValue: "Project name"))
+                        }
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 11)
+                        .frame(maxWidth: .infinity, minHeight: WorkboardMetrics.touchTarget)
+                        .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 10))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(titleFocused ? AppColors.brandAmber : AppColors.textTertiary.opacity(0.35), lineWidth: 1)
+                        }
+                        .focused($titleFocused)
+                        .submitLabel(.done)
+                        .onSubmit { save() }
+                        .disabled(isSaving)
+                        .accessibilityIdentifier("workdesk-project-name")
                     }
-                    .focused($titleFocused)
-                    .submitLabel(.done)
-                    .onSubmit { save() }
-                } footer: {
-                    Text(LocalizedStringResource("workdesk.project.create.explanation", defaultValue: "A home for related ideas, files and the brief you’ll shape from them."))
+                    if request.project == nil {
+                        Text(LocalizedStringResource("workdesk.project.create.explanation", defaultValue: "A home for related ideas, files and the brief you’ll shape from them."))
+                            .font(.callout)
+                            .foregroundStyle(AppColors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let error {
+                        Label(error, systemImage: "exclamationmark.circle")
+                            .font(.callout)
+                            .foregroundStyle(AppColors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("workdesk-project-save-error")
+                    }
                 }
-                if let error { Text(verbatim: error).foregroundStyle(.red) }
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(Text(request.project == nil
-                ? LocalizedStringResource("workdesk.project.new", defaultValue: "New project")
-                : LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project")))
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) { dismiss() }
-                        .disabled(isSaving)
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(idealHeight: contentHeight)
+
+            Divider().opacity(0.45)
+            HStack(spacing: 12) {
+                Spacer(minLength: 0)
+                Button { dismiss() } label: {
+                    Text(LocalizedStringResource("common.cancel", defaultValue: "Cancel"))
+                        .font(.body.weight(.medium))
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .frame(minHeight: WorkboardMetrics.touchTarget, maxHeight: .infinity)
+                        .background(AppColors.cardBackgroundElevated, in: Capsule())
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(LocalizedStringResource("common.save", defaultValue: "Save")) { save() }
-                        .disabled(isSaving || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .primaryCTAButton()
+                .keyboardShortcut(.cancelAction)
+                .disabled(isSaving)
+                Button { save() } label: {
+                    Text(LocalizedStringResource("common.save", defaultValue: "Save"))
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .frame(minHeight: WorkboardMetrics.touchTarget, maxHeight: .infinity)
+                        .background(AppColors.brandAmber, in: Capsule())
                 }
+                .primaryCTAButton()
+                .keyboardShortcut(.defaultAction)
+                .disabled(isSaving || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
         }
-        .frame(minWidth: 300, idealWidth: 420, minHeight: 240)
-        .presentationDetents([.medium])
+        .foregroundStyle(AppColors.textPrimary)
+        .background(AppColors.background)
+        .workboardDesktopSheetFrame(minWidth: 340, minHeight: 0, idealWidth: 440, maxWidth: 520, maxHeight: 560)
+        .presentationSizing(.form.fitted(horizontal: false, vertical: true))
         .interactiveDismissDisabled(isSaving)
         .onAppear { titleFocused = true }
     }
@@ -704,5 +761,6 @@ private struct WorkDeskBriefHost: View {
                 return saved
             }, onOpenConversation: onOpenConversation,
             onEndEditing: { workspace.endBriefEditing(projectID: project.id) })
+            .workDeskConversationSheetPresentation()
     }
 }

@@ -168,8 +168,10 @@ final class WorkDeskOrganization {
             let saved: Bool
             do {
                 let snapshot = try await apply(mutation)
-                publish(snapshot)
                 errorMessage = nil
+                // Publishing can report a local draft cleanup failure after
+                // the organization mutation succeeds. Keep that remedy visible.
+                publish(snapshot)
                 saved = true
             } catch {
                 report(error)
@@ -198,6 +200,9 @@ final class WorkDeskOrganization {
         // failed reads never write, and unseen deletions still reclaim slots.
         // The process-wide pruner handles each ID once across all windows.
         WorkboardLayoutMode.pruneProjectPreferences(deletedProjectIDs: snapshot.deletedProjectIDs)
+        // Retry local request cleanup on every confirmed tombstone snapshot.
+        // The preference pruner itself deliberately runs once per project.
+        WorkDeskWorkspaceState.pruneProjectSessions(deletedProjectIDs: snapshot.deletedProjectIDs)
         // A position seed often finds that all its slots are already saved.
         // Publishing identical arrays still invalidates the whole desk's views.
         if projects != snapshot.projects {

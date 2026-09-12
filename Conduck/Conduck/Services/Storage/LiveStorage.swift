@@ -276,3 +276,16 @@ extension SettingsDependencies {
         )
     }
 }
+
+#if !os(watchOS)
+extension WorkDeskBriefDraftFileStorage {
+    /// Main-app support only: no App Group, ubiquitous store or extension access.
+    /// CONDUCK_TESTING never calls this factory; disk tests provide a temp URL.
+    static func live() -> WorkDeskBriefDraftFileStorage {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return WorkDeskBriefDraftFileStorage(directory: support
+            .appendingPathComponent(Constants.identityNamespace, isDirectory: true)
+            .appendingPathComponent("WorkConversationDrafts", isDirectory: true))
+    }
+}
+#endif
