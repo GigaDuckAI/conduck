@@ -31,6 +31,8 @@ struct GatewayPicker: View {
     var allowsSelection = true
     /// MainWindowView already owns the dot beside its picker/clone/title states.
     var showsPresence = true
+    /// An inline touch host supplies no native toolbar target around the label.
+    var usesStandaloneTouchTarget = false
     var optionAccessibilityPrefix: String? = nil
     let onPick: (RemoteAgentRef) -> Void
 
@@ -138,6 +140,9 @@ struct GatewayPicker: View {
         .padding(.vertical, 7)
         .background(AppColors.cardBackgroundElevated, in: Capsule())
         .contentShape(Capsule())
+        #else
+        .frame(minHeight: usesStandaloneTouchTarget ? 44 : nil)
+        .contentShape(Rectangle())
         #endif
     }
 }

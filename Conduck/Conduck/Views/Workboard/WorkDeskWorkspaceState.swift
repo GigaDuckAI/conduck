@@ -49,6 +49,7 @@ final class WorkDeskWorkspaceState {
     var isSelecting = false {
         didSet { if !isSelecting { hiddenSelectionIDs.removeAll() } }
     }
+    var searchIsFocused = false
     var showsSidebar = true
     var presentsSidebarInline = true
     var showsProjectPicker = false
@@ -79,6 +80,7 @@ final class WorkDeskWorkspaceState {
     @ObservationIgnored private var conversationSessions: [UUID: WorkDeskConversationSession] = [:]
     @ObservationIgnored private var conversationReloadGeneration = 0
     @ObservationIgnored private let conversationStore: ConversationStore
+    @ObservationIgnored private let draftStore: WorkDeskBriefDraftStore
     @ObservationIgnored private var canvasSessions: [WorkDeskScope: WorkDeskCanvasSession] = [:]
     @ObservationIgnored private var composerSessions: [WorkDeskScope: WorkDeskComposerSession] = [:]
     @ObservationIgnored private var layoutSessions: [WorkDeskScope: WorkDeskLayoutSession] = [:]
@@ -95,9 +97,20 @@ final class WorkDeskWorkspaceState {
     /// A tombstone learned in any window releases sessions in every live window.
     /// Weak registration does not keep a closed window or its drafts alive.
     static func pruneProjectSessions(deletedProjectIDs: Set<UUID>) {
+        guard !deletedProjectIDs.isEmpty else { return }
         liveWorkspaces.removeAll { $0.value == nil }
+        // Include requests that have never been opened in this process.
+        try? WorkDeskBriefDraftStore.shared.deleteProjects(deletedProjectIDs)
         for workspace in liveWorkspaces.compactMap(\.value) {
+            do { try workspace.draftStore.deleteProjects(deletedProjectIDs) }
+            catch {
+                workspace.organization.errorMessage = String(localized: "workdesk.draft.clearFailed",
+                    defaultValue: "This draft couldn’t be removed from this device. Try again.")
+            }
             for id in deletedProjectIDs {
+                workspace.briefDrafts.removeValue(forKey: id)
+                workspace.briefRevisions.removeValue(forKey: id)
+                if workspace.preparingProjectID == id { workspace.preparingProjectID = nil }
                 let scope = WorkDeskScope.project(id)
                 workspace.composerSessions.removeValue(forKey: scope)?.setText("")
                 // Invalidate a view that still observes the old session while
@@ -133,9 +146,11 @@ final class WorkDeskWorkspaceState {
         return session
     }
 
-    init(organization: WorkDeskOrganization? = nil, conversationStore: ConversationStore = .shared) {
+    init(organization: WorkDeskOrganization? = nil, conversationStore: ConversationStore = .shared,
+         draftStore: WorkDeskBriefDraftStore = .shared) {
         self.organization = organization ?? WorkDeskOrganization()
         self.conversationStore = conversationStore
+        self.draftStore = draftStore
         Self.liveWorkspaces.removeAll { $0.value == nil }
         Self.liveWorkspaces.append(WeakWorkspace(self))
     }
@@ -293,8 +308,8 @@ final class WorkDeskWorkspaceState {
             projectConversations = conversations.filter { $0.projectID != nil }
             let arrivingResults = Set(sources.keys).subtracting(results.keys)
             for draft in briefDrafts.values {
-                draft.excludedIDs.formUnion(arrivingResults)
-                draft.projectResultIDs = Set(sources.keys).union(resultMaterialIDs)
+                draft.excludedIDs.formUnion(arrivingResults.subtracting(draft.projectResultIDs))
+                draft.projectResultIDs.formUnion(Set(sources.keys).union(resultMaterialIDs))
                 draft.remoteResultIDs = Set(sources.values.filter(\.isRemoteReference).map(\.materialID)).union(remoteResultMaterialIDs)
             }
             results = sources
@@ -354,12 +369,27 @@ final class WorkDeskWorkspaceState {
         return visibleIDs.indices.contains(target) ? visibleIDs[target] : nil
     }
 
+    /// Search may be requested while its native sidebar or compact picker is
+    /// absent. The shared field consumes focus when that surface appears.
+    func requestSearch() {
+        if presentsSidebarInline { showsSidebar = true }
+        else { showsProjectPicker = true }
+        searchIsFocused = true
+    }
+
+    func gatewayName(for conversation: ConversationRecord) -> String {
+        guard let ref = RemoteAgentRef(rawString: conversation.backend) else {
+            return String(localized: "workdesk.conversation.connectionMissing", defaultValue: "Connection unavailable")
+        }
+        return RemoteAgentRefMetadata.displayName(for: ref, customs: conversationSettings.customGateways)
+    }
+
     func updateSidebarLayout(isInline: Bool) {
         presentsSidebarInline = isInline
         if isInline { showsProjectPicker = false }
     }
 
-    /// Both the native Mac toolbar and the in-pane mobile button route here.
+    /// Compact project-navigation controls and native sidebar hosts share state.
     /// A compact window opens the project picker; it never toggles a hidden rail.
     func toggleProjectNavigation() {
         if presentsSidebarInline { showsSidebar.toggle() }
@@ -395,8 +425,8 @@ final class WorkDeskWorkspaceState {
         resultMaterialIDs = materialResults
         remoteResultMaterialIDs = Set(materials.filter(\.isRemoteProjectResult).map(\.id))
         for draft in briefDrafts.values {
-            draft.excludedIDs.formUnion(newResults)
-            draft.projectResultIDs = Set(results.keys).union(materialResults)
+            draft.excludedIDs.formUnion(newResults.subtracting(draft.projectResultIDs))
+            draft.projectResultIDs.formUnion(Set(results.keys).union(materialResults))
             draft.remoteResultIDs.formUnion(remoteResultMaterialIDs)
         }
         if case .project(let id) = scope,
@@ -531,15 +561,17 @@ final class WorkDeskWorkspaceState {
     }
 
     func briefDraft(for project: WorkDeskProjectRecord, resolver: WorkDeskConversationResolver) -> WorkDeskBriefDraft {
-        if let existing = briefDrafts[project.id] {
+        if let existing = briefDrafts[project.id], !existing.persistedRequestWasRemoved {
             existing.refreshProjectContext(project.brief)
             briefRevisions[project.id] = project.updatedAt
             return existing
         }
-        let draft = WorkDeskBriefDraft(brief: project.brief, preferredGatewayRef: project.preferredGatewayRef, conversationResolver: resolver)
+        let draft = WorkDeskBriefDraft(brief: project.brief, preferredGatewayRef: project.preferredGatewayRef, conversationResolver: resolver,
+                                      projectID: project.id, persistence: draftStore)
         // A result joining the project is not permission to send it elsewhere.
-        draft.excludedIDs = Set(results.keys).union(resultMaterialIDs)
-        draft.projectResultIDs = draft.excludedIDs
+        let currentResults = Set(results.keys).union(resultMaterialIDs)
+        draft.excludedIDs.formUnion(currentResults.subtracting(draft.projectResultIDs))
+        draft.projectResultIDs.formUnion(currentResults)
         draft.remoteResultIDs = Set(results.values.filter(\.isRemoteReference).map(\.materialID)).union(remoteResultMaterialIDs)
         briefDrafts[project.id] = draft
         briefRevisions[project.id] = project.updatedAt
@@ -547,6 +579,7 @@ final class WorkDeskWorkspaceState {
     }
 
     func finishConversationDraft(projectID: UUID) {
+        guard briefDrafts[projectID]?.clearPersistedRequest() != false else { return }
         briefDrafts.removeValue(forKey: projectID)
         briefRevisions.removeValue(forKey: projectID)
     }

@@ -1168,6 +1168,11 @@ struct PersonalWorkbenchView<Chats: View>: View {
 
     var body: some View {
         shell
+            #if os(iOS)
+            // This presenter stays above the regular/compact shell branches, so
+            // resizing an iPad cannot destroy a Settings editor opened in Work.
+            .modifier(WorkSettingsPresentationModifier(router: model.router))
+            #endif
             // The window view the system's share UI pops out of. It has to be a
             // real platform view in a real window: `NSSharingServicePicker`
             // shows relative to one, and `UIActivityViewController` traps on
@@ -1449,7 +1454,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
         // layer from OUT HERE sits above that layer's container, is collected by
         // nothing, and renders no item at all. The control is declared by the
         // HOSTS instead, each inside its own container — `ConversationLibraryView`'s
-        // detail column for Chats, `WorkboardExperience`'s stack for Work — and
+        // detail column for Chats, `WorkboardExperience`'s split for Work — and
         // this shell's whole job is handing them the router. Presence is the
         // flag for the wide control. The compact shell uses a separate phone
         // router, so the wide control never appears alongside the phone one.
@@ -1486,6 +1491,75 @@ struct PersonalWorkbenchView<Chats: View>: View {
     }
     #endif
 }
+
+#if os(iOS)
+/// Work opens the existing Settings containers from one retained presenter.
+/// Its location above the shell keeps editor state through iPad window resizing;
+/// the presentation style is chosen once when opening, never from live width
+/// while a sheet or cover is already on screen. A conversation request closes a
+/// clean Settings screen; a dirty editor keeps the existing Done/Discard guard,
+/// with the requested conversation selected underneath, as on macOS.
+private struct WorkSettingsPresentationModifier: ViewModifier {
+    let router: PersonalWorkbenchRouter
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var settingsViewModel = SettingsViewModel()
+    @State private var presentation: Presentation?
+
+    private struct Presentation: Identifiable {
+        let id = UUID()
+        let usesFullScreen: Bool
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.workDeskOpenSettings, openSettings)
+            .sheet(item: sheetPresentation) { route in
+                SettingsView(viewModel: settingsViewModel)
+                    .id(route.id)
+                    .environment(\.workbenchDestinationIsActive, true)
+                    .interactiveDismissDisabled(settingsViewModel.editorHasUnsavedChanges)
+            }
+            .fullScreenCover(item: fullScreenPresentation) { route in
+                IpadSettingsView(viewModel: settingsViewModel, onDone: { presentation = nil })
+                    .id(route.id)
+                    .environment(\.workbenchDestinationIsActive, true)
+            }
+            .onChange(of: router.destination) { _, destination in
+                guard destination != .work, !settingsViewModel.editorHasUnsavedChanges else { return }
+                presentation = nil
+            }
+            .appReviewBusy(presentation != nil)
+    }
+
+    private func openSettings() {
+        guard router.destination == .work else { return }
+        router.dismissPhoneSection(for: .work)
+        presentation = Presentation(
+            usesFullScreen: horizontalSizeClass == .regular && DeviceCapabilities.isiPad
+        )
+    }
+
+    private var sheetPresentation: Binding<Presentation?> {
+        Binding(
+            get: { presentation?.usesFullScreen == false ? presentation : nil },
+            set: { route in
+                guard presentation?.usesFullScreen == false else { return }
+                presentation = route
+            }
+        )
+    }
+
+    private var fullScreenPresentation: Binding<Presentation?> {
+        Binding(
+            get: { presentation?.usesFullScreen == true ? presentation : nil },
+            set: { route in
+                guard presentation?.usesFullScreen == true else { return }
+                presentation = route
+            }
+        )
+    }
+}
+#endif
 
 private struct WorkbenchPlatformRoutingModifier: ViewModifier {
     let router: PersonalWorkbenchRouter

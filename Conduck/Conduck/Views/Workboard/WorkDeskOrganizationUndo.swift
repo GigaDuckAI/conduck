@@ -202,6 +202,7 @@ struct WorkDeskRailDropTarget: ViewModifier {
                 updateTarget()
             }
             .onChange(of: isEnabled) { _, _ in updateTarget() }
+            .onAppear { updateTarget() }
             .onDisappear { workspace.transferCoordinator.removeSurface(id: targetID) }
     }
     private func updateTarget() {

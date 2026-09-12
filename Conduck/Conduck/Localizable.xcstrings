@@ -25299,28 +25299,6 @@
         }
       }
     },
-    "workdesk.brief.ready" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ready for your AI"
-          }
-        }
-      }
-    },
-    "workdesk.brief.reviewIntro" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Read the prompt below. Sending starts a new chat with this connection and includes only the materials you selected."
-          }
-        }
-      }
-    },
     "workdesk.brief.savedUnavailable" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25339,17 +25317,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Send to %@"
-          }
-        }
-      }
-    },
-    "workdesk.brief.visionNote" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Image understanding depends on the model configured for this connection."
           }
         }
       }
@@ -25616,24 +25583,13 @@
         }
       }
     },
-    "workdesk.conversation.addMaterials" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Add materials…"
-          }
-        }
-      }
-    },
     "workdesk.conversation.addMaterials.explanation" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Use materials from anywhere in Work. They stay in their current projects."
+            "value" : "Included in this conversation only. Their projects stay the same."
           }
         }
       }
@@ -25644,7 +25600,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Add materials"
+            "value" : "Materials from Work"
           }
         }
       }
@@ -25715,17 +25671,6 @@
         }
       }
     },
-    "workdesk.conversation.context.empty" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No project context. You can add it from the project header."
-          }
-        }
-      }
-    },
     "workdesk.conversation.context.included" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -25733,17 +25678,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Project context included"
-          }
-        }
-      }
-    },
-    "workdesk.conversation.edit" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Edit request"
           }
         }
       }
@@ -25799,17 +25733,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No materials yet. You can start with a task alone."
-          }
-        }
-      }
-    },
-    "workdesk.conversation.materials.included" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Materials included"
           }
         }
       }
@@ -27048,6 +26971,468 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Your speech provider sent an unexpected response. Pick another provider in Conduck on your iPhone."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.addMaterials.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All available materials are already in this conversation."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.addMaterials.noMatches" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No materials match your search."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.exactMessage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Full outgoing message"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.materials.count" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld included"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.materials.heading" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Materials"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.materials.partialCount" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld of %lld included"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.retrySaving" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retry saving draft"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.reviewBack" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.reviewTask" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your task"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.reviewTitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Review conversation"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.sendExplanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send starts a new conversation with the gateway above."
+          }
+        }
+      }
+    },
+    "workdesk.conversation.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New conversation"
+          }
+        }
+      }
+    },
+    "workdesk.conversation.useElsewhere" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use materials from elsewhere…"
+          }
+        }
+      }
+    },
+    "workdesk.draft.anotherAfterInterruptionMessage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The previous send may already have reached your gateway. This keeps your task for a separate conversation. You will still review it and choose Send."
+          }
+        }
+      }
+    },
+    "workdesk.draft.anotherAfterInterruptionTitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prepare another conversation?"
+          }
+        }
+      }
+    },
+    "workdesk.draft.checkConversationAgain" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check again"
+          }
+        }
+      }
+    },
+    "workdesk.draft.checkingConversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking saved conversations…"
+          }
+        }
+      }
+    },
+    "workdesk.draft.clearFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This draft couldn’t be removed from this device. Try again."
+          }
+        }
+      }
+    },
+    "workdesk.draft.conflict" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This project’s draft changed in another window. Your request is still here. Choose which draft to keep."
+          }
+        }
+      }
+    },
+    "workdesk.draft.conversationLookupFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved conversations couldn’t be checked. Try again before preparing another conversation."
+          }
+        }
+      }
+    },
+    "workdesk.draft.conversationUnresolved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No saved user message was found on this device. This does not confirm whether the gateway received the previous send."
+          }
+        }
+      }
+    },
+    "workdesk.draft.interruptedMessage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A send started before this draft closed. Check the saved conversation before preparing another."
+          }
+        }
+      }
+    },
+    "workdesk.draft.interruptedTitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check the previous conversation"
+          }
+        }
+      }
+    },
+    "workdesk.draft.loadFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The saved draft couldn’t open. Try again to keep your previous request."
+          }
+        }
+      }
+    },
+    "workdesk.draft.loadSaved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load saved request"
+          }
+        }
+      }
+    },
+    "workdesk.draft.noSavedGateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No gateway selected"
+          }
+        }
+      }
+    },
+    "workdesk.draft.openExistingConversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open existing conversation"
+          }
+        }
+      }
+    },
+    "workdesk.draft.reloadMessage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This discards the task and material changes in this window and loads the saved request shown in the composer."
+          }
+        }
+      }
+    },
+    "workdesk.draft.reloadTitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load the saved request?"
+          }
+        }
+      }
+    },
+    "workdesk.draft.removed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This draft was removed. Close it to start a new conversation."
+          }
+        }
+      }
+    },
+    "workdesk.draft.replaceMessage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This replaces the saved request shown in the composer with the task and material choices in this window."
+          }
+        }
+      }
+    },
+    "workdesk.draft.replaceTitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use this request instead?"
+          }
+        }
+      }
+    },
+    "workdesk.draft.saveFailed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This draft couldn’t save on this device. Try again before closing."
+          }
+        }
+      }
+    },
+    "workdesk.draft.savedMaterialsCount" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Materials selected: %lld"
+          }
+        }
+      }
+    },
+    "workdesk.draft.savedMaterialsUnavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld selected materials are unavailable here."
+          }
+        }
+      }
+    },
+    "workdesk.draft.savedRequest" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved request"
+          }
+        }
+      }
+    },
+    "workdesk.draft.savedRequestRetired" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The saved request was completed or removed in another window."
+          }
+        }
+      }
+    },
+    "workdesk.draft.savedSendPending" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A send was started for this request. Load it to check the conversation before preparing another."
+          }
+        }
+      }
+    },
+    "workdesk.draft.savedTaskEmpty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No task entered."
+          }
+        }
+      }
+    },
+    "workdesk.draft.unavailableSavedGateway" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved gateway unavailable on this device"
+          }
+        }
+      }
+    },
+    "workdesk.draft.useTaskAgain" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use this task for another conversation"
+          }
+        }
+      }
+    },
+    "workdesk.draft.useThis" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use this request"
           }
         }
       }
