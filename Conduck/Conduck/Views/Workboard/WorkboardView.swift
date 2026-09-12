@@ -3,11 +3,12 @@
 // Conduck
 // WorkboardView.swift
 //
-// Work is one desk, so this surface is one pane: the desk canvas plus the
-// durable presentation chain that rides above it. The pane is wrapped in a
-// navigation container here rather than by the caller, because iPad mounts two
-// sibling workspaces in one ZStack and each needs its own navigation bar for
-// the section control to render into.
+// Work's reusable desk column and durable presentation chain. macOS supplies
+// the window's persistent native sidebar; regular-width iPad supplies its own
+// split view here, with the same project navigation and Settings footer. Phone
+// and compact iPad keep a navigation stack and the Projects picker. Each iPad
+// workspace owns its navigation container so the retained Work/Chats layers
+// keep their own bars and state.
 
 import SwiftUI
 
@@ -17,10 +18,30 @@ private struct WorkDeskSidebarHostKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+/// A native split column owns navigation outside the desk's capture inset.
+private struct WorkDeskExternalNavigationKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+/// Settings belongs to the platform host, shared by the sidebar and picker.
+private struct WorkDeskOpenSettingsKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
 extension EnvironmentValues {
     var workDeskSidebarIsHosted: Bool {
         get { self[WorkDeskSidebarHostKey.self] }
         set { self[WorkDeskSidebarHostKey.self] = newValue }
+    }
+
+    var workDeskNavigationIsExternal: Bool {
+        get { self[WorkDeskExternalNavigationKey.self] }
+        set { self[WorkDeskExternalNavigationKey.self] = newValue }
+    }
+
+    var workDeskOpenSettings: (() -> Void)? {
+        get { self[WorkDeskOpenSettingsKey.self] }
+        set { self[WorkDeskOpenSettingsKey.self] = newValue }
     }
 }
 
@@ -90,35 +111,142 @@ struct WorkboardExperience: View {
     @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
     #if os(iOS)
     @Environment(\.phoneWorkbenchRouter) private var phoneWorkbenchRouter
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.workDeskOpenSettings) private var workDeskOpenSettings
     #endif
 
     var body: some View {
+        #if os(iOS)
+        iosNavigation
+            // Navigation exists before the desk finishes loading. Keep the
+            // toggle's mode accurate even when no workspace detail is mounted.
+            .onChange(of: usesNativeSidebar, initial: true) { _, usesSidebar in
+                guard isActive else { return }
+                viewModel.deskWorkspace.updateSidebarLayout(isInline: usesSidebar)
+            }
+            .onChange(of: isActive) { _, active in
+                guard active else { return }
+                viewModel.deskWorkspace.updateSidebarLayout(isInline: usesNativeSidebar)
+            }
+            .environment(\.workbenchDestinationIsActive, isActive)
+            .modifier(presentationModifier)
+        #else
+        NavigationStack { detailColumn }
+            .environment(\.workbenchDestinationIsActive, isActive)
+            .modifier(presentationModifier)
+        #endif
+    }
+
+    #if os(iOS)
+    /// Match the app shell's idiom gate: a landscape iPhone can report regular
+    /// width while still requiring its compact project picker.
+    private var usesNativeSidebar: Bool {
+        horizontalSizeClass == .regular && DeviceCapabilities.isiPad
+    }
+
+    @ViewBuilder
+    private var iosNavigation: some View {
+        if usesNativeSidebar {
+            wideNavigation
+        } else {
+            compactNavigation
+        }
+    }
+
+    /// In retained sibling Work/Chats split views, the iPad system toggle drew
+    /// but tapping it delivered no visibility-binding write. Reuse the explicit
+    /// workspace button in the visible column's native bar; the split itself
+    /// still owns the full-height sidebar and column layout.
+    private var wideNavigation: some View {
+        // Read visibility in the host's observation scope. A nested toolbar
+        // closure alone can outlive the update that should replace its items.
+        let showsSidebar = viewModel.deskWorkspace.showsSidebar
+        return NavigationSplitView(columnVisibility: sidebarColumnVisibility) {
+            VStack(spacing: 0) {
+                WorkDeskSidebarView(viewModel: viewModel)
+                SidebarSettingsFooter(onOpenSettings: openSettings)
+                    .disabled(!isActive)
+            }
+            .frame(minWidth: 260, maxHeight: .infinity)
+            .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 320)
+            .workbenchNavigationTitle(Text(""), isActive: isActive)
+            .toolbar(removing: isActive ? .sidebarToggle : nil)
+            .toolbar {
+                // The sidebar column's own lifetime removes this bar while
+                // collapsed. Gating it on visibility as well loses the bar on
+                // reopening, so only the destination may silence its content.
+                if isActive {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)
+                    }
+                }
+            }
+        } detail: {
+            detailColumn
+                .toolbar(removing: isActive ? .sidebarToggle : nil)
+                .toolbar { workbenchToolbar(showsProjectNavigation: !showsSidebar) }
+        }
+        .environment(\.workDeskNavigationIsExternal, true)
+        .environment(\.workDeskSidebarIsHosted, true)
+    }
+
+    /// The workspace owns Work's remembered visibility across section changes
+    /// and compact-width rebuilds. Native visibility write-backs use the current
+    /// router state so hidden layers cannot overwrite that remembered choice.
+    private var sidebarColumnVisibility: Binding<NavigationSplitViewVisibility> {
+        Self.sidebarVisibilityBinding(
+            workspace: viewModel.deskWorkspace,
+            router: personalWorkbenchModel?.router,
+            standaloneIsActive: isActive
+        )
+    }
+
+    /// A retained binding must both activate and become inert again as the
+    /// router changes. Standalone hosts without a workbench keep their own gate.
+    static func sidebarVisibilityBinding(
+        workspace: WorkDeskWorkspaceState,
+        router: PersonalWorkbenchRouter?,
+        standaloneIsActive: Bool
+    ) -> Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { workspace.showsSidebar ? .all : .detailOnly },
+            set: { visibility in
+                let isActive = router.map { $0.destination == .work } ?? standaloneIsActive
+                guard isActive else { return }
+                workspace.showsSidebar = visibility != .detailOnly
+            }
+        )
+    }
+
+    private var compactNavigation: some View {
         NavigationStack {
             detailColumn
-                #if os(iOS)
                 .environment(\.workDeskSidebarIsHosted, true)
-                .toolbar { workbenchToolbar }
+                .toolbar { workbenchToolbar(showsProjectNavigation: true) }
                 .overlay {
                     if let router = phoneWorkbenchRouter {
                         PhoneWorkbenchSectionOverlay(router: router, destination: .work)
                     }
                 }
                 .onDisappear { phoneWorkbenchRouter?.dismissPhoneSection(for: .work) }
-                #endif
         }
-        .environment(\.workbenchDestinationIsActive, isActive)
-        .modifier(presentationModifier)
+        .environment(\.workDeskNavigationIsExternal, false)
     }
 
-    #if os(iOS)
-    /// Work's bar, declared INSIDE this view's own `NavigationStack`. Toolbar
+    private func openSettings() {
+        guard isActive else { return }
+        workDeskOpenSettings?()
+    }
+
+    /// Work's bar, declared INSIDE this view's navigation container. Toolbar
     /// items are collected in view-tree order, so an item declared ABOVE a
     /// navigation container reaches no bar at all — which is why this belongs
     /// here rather than on whichever host mounts the surface.
     ///
-    /// Project navigation leads on both iPhone and iPad; the section control
-    /// stays trailing-most. Layout selection belongs to the named workspace
-    /// header control, which describes the layout the current scope can show.
+    /// Project navigation leads on compact layouts and when the native iPad
+    /// sidebar is hidden. With the sidebar up its own bar carries that button.
+    /// The section control stays last; layout selection belongs to the named
+    /// workspace header control.
     ///
     /// No `ToolbarSpacer` between the two. A fixed spacer exists to break the
     /// ONE shared glass capsule the system wraps around adjacent items of a
@@ -130,13 +258,15 @@ struct WorkboardExperience: View {
     /// destination-aware host keeps, so a hidden layer contributes no toolbar
     /// preference to the window it shares with its sibling.
     @ToolbarContentBuilder
-    private var workbenchToolbar: some ToolbarContent {
+    private func workbenchToolbar(showsProjectNavigation: Bool) -> some ToolbarContent {
         if isActive {
-            ToolbarItem(placement: .topBarLeading) {
-                WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)
-                    .simultaneousGesture(TapGesture().onEnded {
-                        phoneWorkbenchRouter?.dismissPhoneSection(for: .work)
-                    })
+            if showsProjectNavigation {
+                ToolbarItem(placement: .topBarLeading) {
+                    WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)
+                        .simultaneousGesture(TapGesture().onEnded {
+                            phoneWorkbenchRouter?.dismissPhoneSection(for: .work)
+                        })
+                }
             }
 
             if let personalWorkbenchModel {

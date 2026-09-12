@@ -45,6 +45,38 @@ final class WorkDeskWorkspaceTests: XCTestCase {
         XCTAssertEqual(workspace.visibleMaterials(in: [image, file, unrelated]).map(\.id), [image.id, file.id])
     }
 
+    func testSearchRevealsNativeSidebarWithoutChangingProjectOrDraft() async {
+        let workspace = await makeWorkspace(.init())
+        let scope = WorkDeskScope.project(UUID())
+        workspace.selectScope(scope)
+        let session = workspace.composerSession(for: scope)
+        session.setText("Keep this project draft")
+        workspace.showsSidebar = false
+        workspace.updateSidebarLayout(isInline: true)
+
+        workspace.requestSearch()
+
+        XCTAssertTrue(workspace.showsSidebar)
+        XCTAssertTrue(workspace.searchIsFocused)
+        XCTAssertFalse(workspace.showsProjectPicker)
+        XCTAssertEqual(workspace.scope, scope)
+        XCTAssertEqual(session.text, "Keep this project draft")
+    }
+
+    func testCompactSearchOpensPickerWithoutChangingNativeVisibilityPreference() async {
+        let workspace = await makeWorkspace(.init())
+        workspace.showsSidebar = false
+        workspace.updateSidebarLayout(isInline: false)
+        workspace.requestSearch()
+        XCTAssertTrue(workspace.showsProjectPicker)
+        XCTAssertTrue(workspace.searchIsFocused)
+        XCTAssertFalse(workspace.showsSidebar)
+
+        workspace.updateSidebarLayout(isInline: true)
+        XCTAssertFalse(workspace.showsProjectPicker)
+        XCTAssertFalse(workspace.showsSidebar)
+    }
+
     func testWideSidebarButtonCollapsesAndExpandsTheProjectRail() async {
         let workspace = await makeWorkspace(.init())
         workspace.updateSidebarLayout(isInline: true)

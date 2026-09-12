@@ -392,38 +392,12 @@ struct ConversationListView: View {
 
     // MARK: - Settings footer
 
-    /// Bottom-pinned "Settings" row, mirroring the macOS `identityFooter`
-    /// design. Renders ONLY when the host wired `onOpenSettings` (iOS sheet /
-    /// iPad sidebar); macOS passes nil so its own external footer stays the
-    /// single source of the Settings affordance.
+    /// Bottom-pinned Settings entry shared with the Work sidebar. Hosts that
+    /// provide their own footer or toolbar entry suppress this inset.
     @ViewBuilder
     private var settingsFooterRow: some View {
         if let onOpenSettings, !settingsInToolbar {
-            VStack(spacing: 0) {
-                Divider().overlay(AppColors.border)
-                Button {
-                    onOpenSettings()
-                } label: {
-                    HStack(spacing: 10) {
-                        Image("conduck-app-mark")
-                            .resizable()
-                            .interpolation(.high)
-                            .frame(width: 32, height: 32)
-                        Text(LocalizedStringResource("menu.settings.short", defaultValue: "Settings"))
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AppColors.textPrimary)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                            .foregroundStyle(AppColors.textTertiary)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .padding(12)
-                .accessibilityIdentifier("toolbar.settings")
-            }
-            .background(AppColors.cardBackground)
+            SidebarSettingsFooter(onOpenSettings: onOpenSettings)
         }
     }
 
@@ -899,29 +873,39 @@ private struct NativeSearchableModifier: ViewModifier {
 #endif
 
 /// Shared sidebar search field (magnifier + plain field + clear button) used by
-/// BOTH the iPad split sidebar (`ConversationLibraryView`) and the macOS unified
-/// window (`MainWindowView`). Reproduces the iPhone's native dark-mode search
+/// Chats and Work on iPad/macOS and Work's compact project picker. Reproduces
+/// the iPhone's native dark-mode search
 /// chrome — cool translucent system-gray fill, capsule shape, body-size glyph —
 /// inline at the TOP of the sidebar column, which the native `.searchable`
 /// cannot do (iOS forces it into the nav-bar area instead). Drives the list's
 /// filter via the host's `externalSearchText` binding.
 struct SidebarSearchField: View {
     @Binding var text: String
+    @Binding private var isFocused: Bool
     let prompt: LocalizedStringResource
     let accessibilityLabel: LocalizedStringResource
+    let onSubmit: () -> Void
+    let accessibilityIdentifier: String
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
     init(
         text: Binding<String>,
         prompt: LocalizedStringResource = LocalizedStringResource("Search conversations"),
-        accessibilityLabel: LocalizedStringResource? = nil
+        accessibilityLabel: LocalizedStringResource? = nil,
+        isFocused: Binding<Bool> = .constant(false),
+        onSubmit: @escaping () -> Void = {},
+        accessibilityIdentifier: String = "sidebar.search"
     ) {
         _text = text
+        _isFocused = isFocused
         self.prompt = prompt
         self.accessibilityLabel = accessibilityLabel ?? prompt
+        self.onSubmit = onSubmit
+        self.accessibilityIdentifier = accessibilityIdentifier
     }
 
-    /// Drives the macOS click-anywhere-on-the-capsule focus assist below.
+    /// Native focus stays local; the optional binding lets the host focus a
+    /// newly revealed sidebar and dismiss its keyboard when search submits.
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
@@ -969,15 +953,45 @@ struct SidebarSearchField: View {
         .background(
             Color.clear
                 .contentShape(Capsule(style: .continuous))
-                .onTapGesture { fieldFocused = true }
+                .onTapGesture {
+                    guard workbenchDestinationIsActive else { return }
+                    fieldFocused = true
+                }
                 .accessibilityHidden(true)
         )
         #endif
         .disabled(!workbenchDestinationIsActive)
-        .onChange(of: workbenchDestinationIsActive) { _, isActive in
-            if !isActive { fieldFocused = false }
+        .onAppear { synchronizeRequestedFocus() }
+        .onChange(of: isFocused) { _, _ in synchronizeRequestedFocus() }
+        .onChange(of: fieldFocused) { _, focused in
+            guard workbenchDestinationIsActive else {
+                clearFocus()
+                return
+            }
+            if isFocused != focused { isFocused = focused }
         }
-        .accessibilityIdentifier("sidebar.search")
+        .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            if isActive {
+                synchronizeRequestedFocus()
+            } else {
+                clearFocus()
+            }
+        }
+        .onDisappear { clearFocus() }
+        .accessibilityIdentifier(accessibilityIdentifier)
+    }
+
+    private func synchronizeRequestedFocus() {
+        guard workbenchDestinationIsActive else {
+            clearFocus()
+            return
+        }
+        fieldFocused = isFocused
+    }
+
+    private func clearFocus() {
+        fieldFocused = false
+        if isFocused { isFocused = false }
     }
 
     /// Reproduces the iPhone's native dark-mode search bar: a very subtle
@@ -992,16 +1006,18 @@ struct SidebarSearchField: View {
         let base = TextField(String(localized: prompt), text: $text)
             .textFieldStyle(.plain)
             .font(.body)
+            .focused($fieldFocused)
+            .onSubmit {
+                guard workbenchDestinationIsActive else { return }
+                onSubmit()
+            }
             .accessibilityLabel(Text(accessibilityLabel))
         #if os(iOS)
         base
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
         #else
-        // Bound only off iOS — it exists for the capsule-wide click-to-focus
-        // assist in `body`, which is macOS-only.
         base
-            .focused($fieldFocused)
         #endif
     }
 }
