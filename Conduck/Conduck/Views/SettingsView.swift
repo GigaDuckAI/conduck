@@ -142,7 +142,13 @@ struct SettingsView: View {
     private var content: some View {
         Group {
             Form {
-                Section { ProSettingsEntry() }
+                Section {
+                    ProSettingsEntry()
+                        // The entry owns its padding and rounded background;
+                        // avoid a second inset card from the grouped Form.
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
                 // iOS / iPadOS: master-detail root. Each area is a summary row
                 // with trailing status that pushes its own sub-screen — first-
                 // open clarity for the 90% configure-once user.

@@ -4,6 +4,9 @@
 // of its draft; this sheet carries no project contents or gateway credentials.
 // StoreKit supplies the real localized price, billing period and purchase UI.
 // A verified purchase closes only this sheet, never saves or sends the draft.
+// A configured offer keeps one StoreKit view mounted through loading, errors
+// and entitlement changes. StoreKit owns scrolling, product loading and controls;
+// no product result swaps in a competing ScrollView during sheet layout.
 
 import SwiftUI
 import StoreKit
@@ -42,103 +45,48 @@ struct ProPaywallView: View {
     @State private var store = ProSubscriptionStore.shared
     @State private var showingManagement = false
     @State private var didBeginPurchase = false
+    @State private var hasPreparedSession = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(AppColors.textSecondary)
-                        .frame(width: 44, height: 44)
+        NavigationStack {
+            offer
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    footer
+                        .padding(.top, 8)
+                        .frame(maxWidth: .infinity)
+                        .background(AppColors.cardBackground)
                 }
-                .pointerIconButton(size: 44, shape: .circle)
-                .accessibilityLabel(Text(LocalizedStringResource("pro.close", defaultValue: "Close Conduck Pro")))
-                .keyboardShortcut(.cancelAction)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 4)
-
-            if store.hasProAccess {
-                ScrollView {
-                    marketingHeader
-                    Text(LocalizedStringResource("pro.active", defaultValue: "Conduck Pro is active"))
-                        .font(.headline)
-                        .padding(.top)
-                    Button(LocalizedStringResource("pro.subscription.manage", defaultValue: "Manage subscription")) {
-                        #if os(macOS)
-                        openURL(URL(string: "https://apps.apple.com/account/subscriptions")!)
-                        #else
-                        showingManagement = true
-                        #endif
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .padding()
-                }
-            } else if let product = store.product {
-                SubscriptionStoreView(subscriptions: [product]) {
-                    marketingHeader
-                }
-                .subscriptionStoreControlStyle(.prominentPicker)
-                .subscriptionStoreButtonLabel(.multiline)
-                .subscriptionStoreControlBackground(AppColors.cardBackgroundElevated)
-                .containerBackground(AppColors.cardBackground, for: .subscriptionStoreFullHeight)
-                .storeButton(.hidden, for: .cancellation, .restorePurchases)
-                .subscriptionStorePolicyDestination(url: URL(string: Constants.termsOfServiceURL)!, for: .termsOfService)
-                .subscriptionStorePolicyDestination(url: URL(string: Constants.privacyPolicyURL)!, for: .privacyPolicy)
-                .onInAppPurchaseStart { _ in didBeginPurchase = true }
-                .onInAppPurchaseCompletion { product, result in
-                    await store.purchaseCompleted(product: product, result: result)
-                    if store.hasProAccess { dismiss() }
-                }
-            } else {
-                ScrollView {
-                    marketingHeader
-                    if store.isLoadingProduct {
-                        ProgressView().padding()
-                    } else {
-                        Text(store.isConfigured
-                             ? LocalizedStringResource("pro.store.unavailable", defaultValue: "Subscriptions are unavailable right now. Please try again later.")
-                             : LocalizedStringResource("pro.store.community", defaultValue: "Subscriptions are not available in this build."))
-                            .foregroundStyle(AppColors.textSecondary)
-                            .multilineTextAlignment(.center)
-                            .padding()
-                        if store.isConfigured {
-                            Button(LocalizedStringResource("pro.store.retry", defaultValue: "Try again")) {
-                                Task { store.message = nil; await store.loadProduct(); await store.refresh() }
-                            }
-                            .buttonStyle(.bordered)
-                            .padding(.bottom)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button { dismiss() } label: {
+                            Label(LocalizedStringResource("pro.close", defaultValue: "Close Conduck Pro"), systemImage: "xmark")
+                                .labelStyle(.iconOnly)
                         }
+                        .keyboardShortcut(.cancelAction)
                     }
                 }
-            }
-
-            footer
         }
         .background(AppColors.cardBackground)
         .foregroundStyle(AppColors.textPrimary)
         .tint(AppColors.brandAmber)
         .preferredColorScheme(.dark)
         #if os(macOS)
-        .frame(width: 480, height: 760)
+        .frame(width: 520, height: 760)
         #else
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        #endif
-        #if os(iOS)
         .manageSubscriptionsSheet(isPresented: $showingManagement)
         #endif
         .task {
             store.start()
             store.message = nil
-            await store.refresh()
-            if store.hasProAccess && context != .manual { dismiss(); return }
-            await store.loadProduct()
+            hasPreparedSession = true
+            await store.refreshAndWaitUntilApplied()
+            guard !Task.isCancelled else { return }
+            if store.hasProAccess && context != .manual { dismiss() }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await store.refresh() } }
@@ -148,18 +96,45 @@ struct ProPaywallView: View {
         }
     }
 
+    @ViewBuilder
+    private var offer: some View {
+        if let productID = store.configuration.productID {
+            // Identity depends only on the build's product ID, never on a
+            // transient product fetch or access result. Native controls handle
+            // loading, unavailable products and existing subscriptions in place.
+            SubscriptionStoreView(productIDs: [productID]) {
+                marketingHeader
+            }
+            .subscriptionStoreControlStyle(.automatic)
+            .subscriptionStoreButtonLabel(.multiline)
+            .subscriptionStoreControlBackground(AppColors.cardBackgroundElevated)
+            .containerBackground(AppColors.cardBackground, for: .subscriptionStoreFullHeight)
+            .storeButton(.hidden, for: .cancellation, .restorePurchases)
+            .subscriptionStorePolicyDestination(url: URL(string: Constants.termsOfServiceURL)!, for: .termsOfService)
+            .subscriptionStorePolicyDestination(url: URL(string: Constants.privacyPolicyURL)!, for: .privacyPolicy)
+            .onInAppPurchaseStart { _ in didBeginPurchase = true }
+            .onInAppPurchaseCompletion { product, result in
+                await store.purchaseCompleted(product: product, result: result)
+                if store.hasProAccess { dismiss() }
+            }
+        } else {
+            ScrollView {
+                marketingHeader
+                Text(LocalizedStringResource("pro.store.community", defaultValue: "Subscriptions are not available in this build."))
+                    .foregroundStyle(AppColors.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding()
+            }
+        }
+    }
+
     private var marketingHeader: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Image("conduck-pro-workspace")
                 .resizable()
                 .scaledToFit()
-                .frame(maxWidth: 250, maxHeight: 140)
-                .mask {
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(.white)
-                        .padding(4)
-                        .blur(radius: 5)
-                }
+                .frame(width: 180, height: 120)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
                 .accessibilityHidden(true)
             HStack(spacing: 8) {
                 Text(verbatim: "Conduck").font(.headline)
@@ -186,13 +161,29 @@ struct ProPaywallView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Label(LocalizedStringResource("pro.benefit.projects", defaultValue: "Unlimited active projects"), systemImage: "folder")
                 Label(LocalizedStringResource("pro.benefit.gateways", defaultValue: "Unlimited configured gateways"), systemImage: "server.rack")
+                Label(LocalizedStringResource("pro.benefit.advanced", defaultValue: "Advanced features as they arrive"), systemImage: "sparkles")
+                Label(LocalizedStringResource("pro.benefit.support", defaultValue: "Support this project"), systemImage: "heart")
             }
             .font(.subheadline.weight(.medium))
             .labelStyle(.titleAndIcon)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 18)
             .overlay(alignment: .top) { Divider().overlay(AppColors.border) }
             .overlay(alignment: .bottom) { Divider().overlay(AppColors.border) }
+            if store.hasProAccess {
+                Text(LocalizedStringResource("pro.active", defaultValue: "Conduck Pro is active"))
+                    .font(.headline)
+                Button(LocalizedStringResource("pro.subscription.manage", defaultValue: "Manage subscription")) {
+                    #if os(macOS)
+                    openURL(URL(string: "https://apps.apple.com/account/subscriptions")!)
+                    #else
+                    showingManagement = true
+                    #endif
+                }
+                .buttonStyle(.bordered)
+                .padding(.bottom, 8)
+            }
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 12)
@@ -200,7 +191,7 @@ struct ProPaywallView: View {
 
     private var footer: some View {
         VStack(spacing: 8) {
-            if let message = store.message, !store.isLoadingProduct {
+            if hasPreparedSession, let message = store.message {
                 Text(message)
                     .font(.footnote)
                     .multilineTextAlignment(.center)
@@ -246,24 +237,34 @@ struct ProSettingsEntry: View {
 
     var body: some View {
         Button { showingPro = true } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "square.stack.3d.up")
-                    .foregroundStyle(AppColors.brandAmber)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(verbatim: "Conduck Pro").font(.headline)
-                    Text(store.hasProAccess
-                         ? LocalizedStringResource("pro.subscription.manage", defaultValue: "Manage subscription")
-                         : LocalizedStringResource("pro.settings.subtitle", defaultValue: "Unlimited projects and gateways"))
-                        .font(.caption)
-                        .foregroundStyle(AppColors.textSecondary)
-                }
+            HStack(spacing: 10) {
+                Image("conduck-app-mark")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 30, height: 30)
+                    .accessibilityHidden(true)
+                Text(verbatim: "Conduck Pro")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(AppColors.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.right").font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
+                    .accessibilityHidden(true)
             }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+            .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 10))
         }
-        .settingsRowButton(minHeight: 44)
+        .settingsRowButton(minHeight: 48, washCornerRadius: 10)
+        #if os(iOS)
+        .hoverEffect(.highlight)
+        #endif
+        .accessibilityLabel(Text(verbatim: "Conduck Pro"))
+        .accessibilityValue(store.hasProAccess
+            ? Text(LocalizedStringResource("pro.active", defaultValue: "Conduck Pro is active"))
+            : Text(verbatim: ""))
         .sheet(isPresented: $showingPro) { ProPaywallView() }
     }
 }

@@ -80,13 +80,6 @@ struct WorkDeskSidebarView: View {
                         .pointerIconButton(size: 44)
                         .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.new", defaultValue: "New project")))
                     }.padding(.leading, 12).padding(.top, 12)
-                    Group {
-                        if workspace.organization.hasProAccess {
-                            Text(LocalizedStringResource("workdesk.projects.proCount", defaultValue: "\(workspace.organization.activeProjects.count) active projects · Pro"))
-                        } else {
-                            Text(LocalizedStringResource("workdesk.projects.allowance", defaultValue: "\(workspace.organization.activeProjects.count) of \(Constants.maxActiveWorkProjects) active projects"))
-                        }
-                    }.font(.caption).foregroundStyle(AppColors.textSecondary).padding(.horizontal, 12)
                     ForEach(workspace.organization.activeProjects) { project in
                         projectNavigationRow(project, count: counts[project.id] ?? 0)
                     }

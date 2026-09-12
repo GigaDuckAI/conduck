@@ -27459,6 +27459,28 @@
         }
       }
     },
+    "pro.benefit.advanced" : {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Advanced features as they arrive"
+          }
+        }
+      }
+    },
+    "pro.benefit.support" : {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Support this project"
+          }
+        }
+      }
+    },
     "pro.store.unavailable" : {
       "extractionState" : "manual",
       "localizations" : {
