@@ -34,6 +34,47 @@ final class MacWorkbenchShellDriftGuardTests: XCTestCase {
         try RefusalLaneSource.source(at: Self.path)
     }
 
+    func testVisitedWorkKeepsItsViewIdentityAcrossLongAndRapidRoundTrips() throws {
+        let source = try shellSource()
+        let mount = try RefusalLaneSource.trailingClosure(
+            after: "private var mountsWorkLayer: Bool", in: source, path: Self.path
+        )
+        XCTAssertTrue(mount.contains("workDestinationIsActive || workLayerIsReady"))
+        let activation = try RefusalLaneSource.trailingClosure(
+            after: ".task(id: workDestinationIsActive)", in: source, path: Self.path
+        )
+        XCTAssertTrue(activation.contains("guard workDestinationIsActive else { return }"))
+        XCTAssertTrue(activation.contains("workLayerIsReady = true"))
+        XCTAssertEqual(source.components(separatedBy: "workLayerIsReady = false").count - 1, 1,
+                       "Only the @State declaration may initialize the latch; leaving Work must not reset it")
+        XCTAssertFalse(activation.contains("Task.sleep"),
+                       "A delayed unmount discards scroll and thumbnail state after every visit")
+    }
+
+    func testModeChangeSuppressesSplitMotionWhileOnlyLayerOpacityDissolves() throws {
+        let source = try shellSource()
+        let split = try RefusalLaneSource.trailingClosure(
+            after: "private var persistentSplitView: some View", in: source, path: Self.path
+        )
+        let transaction = try RefusalLaneSource.trailingClosure(
+            after: ".transaction(value: workDestinationIsActive)", in: split, path: Self.path
+        )
+        XCTAssertTrue(transaction.contains("transaction.animation = nil"))
+        XCTAssertTrue(transaction.contains("transaction.disablesAnimations = true"))
+
+        let path = "Conduck/Views/Workboard/PersonalWorkbenchView.swift"
+        let layers = try RefusalLaneSource.source(at: path)
+        let modifier = try RefusalLaneSource.trailingClosure(
+            after: "struct WorkbenchDestinationLayerModifier: ViewModifier", in: layers, path: path
+        )
+        let pixels = try RefusalLaneSource.trailingClosure(after: "body:", in: modifier, path: path)
+        XCTAssertTrue(pixels.contains("animatedContent.opacity(isVisible ? 1 : 0)"))
+        XCTAssertFalse(pixels.contains("frame("))
+        XCTAssertFalse(pixels.contains("allowsHitTesting"))
+        XCTAssertTrue(modifier.contains(".allowsHitTesting(isActive)"))
+        XCTAssertTrue(modifier.contains(".accessibilityHidden(!isActive)"))
+    }
+
     func testWorkReplacesOnlyTheDefaultToggleWithoutReplacingTheSplitView() throws {
         let source = try shellSource()
         let split = try RefusalLaneSource.trailingClosure(

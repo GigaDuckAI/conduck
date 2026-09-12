@@ -4,6 +4,9 @@
 // of its pixels. Switching layouts, searching, or visiting a chat preserves
 // each project's place on the desk. Gesture snapshots are deliberately local:
 // a selection never gains another member halfway through a drag.
+// Hidden retained canvases keep their last valid viewport, but cannot consume
+// a reveal. A mount owns its active viewport so an older view disappearing
+// cannot deactivate the new view that just inherited this session.
 
 import SwiftUI
 import Observation
@@ -13,14 +16,31 @@ final class WorkDeskCanvasSession {
     var transform = WorkDeskCanvasTransform()
     var isInitialized = false
     var columns = 3
-    var viewportSize: CGSize = .zero
+    private(set) var viewportSize: CGSize = .zero
+    private var activeViewportOwner: UUID?
     private var pendingRevealFrames: [CGRect] = []
     private(set) var layerRevision = 0
     @ObservationIgnored private var layers: [WorkDeskCanvasItemID: Int] = [:]
     @ObservationIgnored private var nextLayer = 0
 
+    @discardableResult
+    func receiveViewport(_ size: CGSize, owner: UUID, isActive: Bool) -> Bool {
+        guard isActive, size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0 else {
+            suspendViewport(owner: owner)
+            return false
+        }
+        activeViewportOwner = owner
+        viewportSize = size
+        return true
+    }
+
+    func suspendViewport(owner: UUID) {
+        if activeViewportOwner == owner { activeViewportOwner = nil }
+    }
+
     /// Deletion can retain a cluster while All materials is showing a list or
-    /// has never opened spatially. Keep the reveal until a real viewport exists.
+    /// has never opened spatially. Keep the reveal until a real active viewport exists.
     func reveal(frames: [CGRect]) {
         guard !frames.isEmpty else { return }
         pendingRevealFrames = frames
@@ -28,7 +48,8 @@ final class WorkDeskCanvasSession {
     }
 
     func applyPendingReveal() {
-        guard !pendingRevealFrames.isEmpty, viewportSize.width > 0, viewportSize.height > 0 else { return }
+        guard activeViewportOwner != nil, !pendingRevealFrames.isEmpty,
+              viewportSize.width > 0, viewportSize.height > 0 else { return }
         transform = WorkDeskCanvasGeometry.fit(frames: pendingRevealFrames, viewport: viewportSize)
         pendingRevealFrames = []
         isInitialized = true

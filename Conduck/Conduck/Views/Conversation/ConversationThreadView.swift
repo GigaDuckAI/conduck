@@ -76,6 +76,7 @@ struct ConversationThreadView: View {
     /// `ConversationActivityMark` already apply to their own state transitions.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @State private var visibilityOwnerID = UUID()
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
     @Environment(\.workDeskOpenConversation) private var workDeskOpenConversation
     #if os(iOS)
@@ -294,10 +295,10 @@ struct ConversationThreadView: View {
         }
         // Mark this conversation as on-screen so `NotificationDelegate.willPresent`
         // suppresses banners for replies that land for it. iPad multi-scene +
-        // macOS multi-window register independently (Set<UUID> in the tracker).
+        // macOS multi-window register independently through their owner identities.
         .onAppear {
             guard workbenchDestinationIsActive else { return }
-            ActiveViewTracker.track(viewModel.conversationID)
+            ActiveViewTracker.track(viewModel.conversationID, ownerID: visibilityOwnerID)
             // The acknowledgement seam. Opening the thread IS the act of
             // looking at it, so it stamps the read marker (which un-bolds its
             // list row here, on the iPad, on the Mac and on the wrist — the
@@ -320,7 +321,7 @@ struct ConversationThreadView: View {
         }
         .onChange(of: workbenchDestinationIsActive) { _, isActive in
             if isActive {
-                ActiveViewTracker.track(viewModel.conversationID)
+                ActiveViewTracker.track(viewModel.conversationID, ownerID: visibilityOwnerID)
                 markThreadViewed()
                 acknowledgeVisibleFailure()
                 NotificationDeepLink.clearDelivered(for: viewModel.conversationID)
@@ -329,7 +330,7 @@ struct ConversationThreadView: View {
                 attemptAutoSpeak()
                 #endif
             } else {
-                ActiveViewTracker.untrack(viewModel.conversationID)
+                ActiveViewTracker.untrack(viewModel.conversationID, ownerID: visibilityOwnerID)
                 dismissTransientChatUI()
             }
         }
@@ -414,7 +415,7 @@ struct ConversationThreadView: View {
         }
         #endif
         .onDisappear {
-            ActiveViewTracker.untrack(viewModel.conversationID)
+            ActiveViewTracker.untrack(viewModel.conversationID, ownerID: visibilityOwnerID)
             dismissTransientChatUI()
         }
         // Copy conversation — declared HERE (not in the three host views) so

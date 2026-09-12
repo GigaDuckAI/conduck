@@ -9,9 +9,10 @@
 // reply lands for a conversation the user is already looking at, the bubble
 // renders in place and the banner is suppressed (no "double feedback").
 //
-// `Set<UUID>` (not `UUID?`) because iPad multi-scene and macOS multi-window can
-// have multiple threads visible simultaneously. Insert on `.onAppear`, remove
-// on `.onDisappear`, contains-check at delivery time. Idempotent (Set semantics).
+// Each mounted thread owns a separate visibility claim. Chats and Work can
+// display the same conversation, so an outgoing pane releases only its claim:
+// its delayed hide must not erase the incoming pane's visibility. The public
+// snapshot remains a set of conversation IDs for delivery-time decisions.
 //
 // Not used by the Watch target — `WatchConversationThreadView` lives in a
 // different compile set and the Watch already returns `[]` from its own
@@ -21,32 +22,34 @@ import Foundation
 
 @MainActor
 enum ActiveViewTracker {
-    /// Conversation IDs currently visible to the user. Exposed `private(set)`
-    /// so the delivery-time decider in `NotificationPresentationDecider` can
-    /// snapshot the set; mutations only happen via `track(_:)` / `untrack(_:)`.
-    private(set) static var viewedConversationIDs: Set<UUID> = []
+    private static var ownersByConversation: [UUID: Set<UUID>] = [:]
 
-    /// Mark `id` as currently being viewed. Idempotent — re-tracking the same
-    /// id is a no-op (Set semantics).
-    static func track(_ id: UUID) {
-        viewedConversationIDs.insert(id)
+    static var viewedConversationIDs: Set<UUID> {
+        Set(ownersByConversation.keys)
     }
 
-    /// Mark `id` as no longer visible. Idempotent — untracking an absent id is
-    /// a no-op.
-    static func untrack(_ id: UUID) {
-        viewedConversationIDs.remove(id)
+    /// Omitting an owner keeps the idempotent single-owner calling convention.
+    /// Mounted thread views always supply their own stable identity.
+    static func track(_ id: UUID, ownerID: UUID? = nil) {
+        ownersByConversation[id, default: []].insert(ownerID ?? id)
+    }
+
+    static func untrack(_ id: UUID, ownerID: UUID? = nil) {
+        ownersByConversation[id]?.remove(ownerID ?? id)
+        if ownersByConversation[id]?.isEmpty == true {
+            ownersByConversation.removeValue(forKey: id)
+        }
     }
 
     /// Whether the user is currently viewing the given conversation on any
     /// scene/window.
     static func isViewing(_ id: UUID) -> Bool {
-        viewedConversationIDs.contains(id)
+        ownersByConversation[id] != nil
     }
 
     /// Test-only reset hook. Clears the registry so test order doesn't leak
     /// state between cases.
     static func _resetForTesting() {
-        viewedConversationIDs.removeAll()
+        ownersByConversation.removeAll()
     }
 }

@@ -42,7 +42,9 @@ final class WorkDeskProjectDeletionPresentationTests: XCTestCase {
         let layout = workspace.layoutSession(for: .all)
         layout.mode = .list
         let session = workspace.canvasSession(for: .all)
-        session.viewportSize = .init(width: 900, height: 600)
+        let viewportOwner = UUID()
+        session.receiveViewport(.init(width: 900, height: 600), owner: viewportOwner, isActive: true)
+        session.suspendViewport(owner: viewportOwner)
         let review = makeReview(project: project, visibleIDs: [kept.id, disappeared])
         workspace.finishProjectDeletion(review, keptMaterials: true, materials: [kept, other])
         XCTAssertEqual(workspace.scope, .all)
@@ -50,6 +52,9 @@ final class WorkDeskProjectDeletionPresentationTests: XCTestCase {
         XCTAssertTrue(workspace.isSelecting)
         XCTAssertEqual(layout.mode, .list)
         XCTAssertEqual(workspace.materialRevealRequest?.materialID, kept.id)
+        XCTAssertEqual(session.transform, WorkDeskCanvasTransform(), "The hidden spatial view must leave its reveal queued")
+        session.receiveViewport(.init(width: 900, height: 600), owner: viewportOwner, isActive: true)
+        session.applyPendingReveal()
         let expected = WorkDeskCanvasGeometry.fit(frames: [WorkDeskCanvasGeometry.frame(at: actual,
             bodySize: WorkDeskCanvasGeometry.cardBodySize, scale: 1)], viewport: session.viewportSize)
         XCTAssertEqual(session.transform, expected, "Use committed placement, not the stale review's proposed cluster")
@@ -75,7 +80,7 @@ final class WorkDeskProjectDeletionPresentationTests: XCTestCase {
         let frames = [CGRect(x: 2100, y: -1500, width: 230, height: 190)]
         session.reveal(frames: frames)
         XCTAssertFalse(session.isInitialized)
-        session.viewportSize = CGSize(width: 800, height: 600)
+        session.receiveViewport(CGSize(width: 800, height: 600), owner: UUID(), isActive: true)
         session.applyPendingReveal()
         XCTAssertEqual(session.transform, WorkDeskCanvasGeometry.fit(frames: frames, viewport: session.viewportSize))
         XCTAssertTrue(session.isInitialized)

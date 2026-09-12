@@ -151,7 +151,7 @@ final class WorkDeskHandoffTests: XCTestCase {
         let window = try RefusalLaneSource.source(at: "Conduck/Views/Conversation/MainWindowView.swift")
         XCTAssertTrue(window.contains(".environment(\\.workDeskConversationResolver, WorkDeskConversationResolver("))
         XCTAssertTrue(window.contains("coordinator.retainWorkViewModel(for: id, ownerID: owner)"))
-        XCTAssertTrue(window.contains("coordinator.clearWindowVisibleConversation(ifCurrent: id)"))
+        XCTAssertTrue(window.contains("coordinator.clearWindowVisibleConversation(ifCurrent: id, ownerID: workVisibilityOwnerID)"))
         let coordinatorPath = "Conduck/MenuBar/MenuBarCoordinator.swift"
         let coordinator = try RefusalLaneSource.source(at: coordinatorPath)
         let bind = try RefusalLaneSource.body(ofFunction: "bindWindowViewModel", in: coordinator, path: coordinatorPath)

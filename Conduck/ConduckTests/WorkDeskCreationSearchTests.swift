@@ -196,7 +196,7 @@ final class WorkDeskCreationSearchTests: XCTestCase {
     func testToolbarCreationUsesTheVisibleDeskAndFreezesItBeforeEditing() async throws {
         let workspace = await makeWorkspace(.init())
         let session = workspace.canvasSession(for: .all)
-        session.viewportSize = CGSize(width: 900, height: 700)
+        session.receiveViewport(CGSize(width: 900, height: 700), owner: UUID(), isActive: true)
         session.transform = .init(scale: 0.75, offset: CGSize(width: -1600, height: -800))
         let insertion = try XCTUnwrap(session.projectInsertionPoint)
         workspace.beginProject()

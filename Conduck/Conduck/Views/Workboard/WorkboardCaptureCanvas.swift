@@ -108,6 +108,7 @@ struct WorkboardCaptureCanvas: View {
     /// and the conversation list must never disagree about whether iCloud is
     /// signed in, nor about whether this outage's banner was already dismissed.
     @State private var syncMonitor = CloudSyncMonitor.shared
+    @State private var focusLease = WorkCaptureFocusLease()
     @FocusState private var composerFocused: Bool
     #if os(iOS)
     @State private var showsCamera = false
@@ -164,13 +165,18 @@ struct WorkboardCaptureCanvas: View {
             }
         }
         .sheet(isPresented: activeVoiceCaptureIsPresented) {
+            let capturedScope = voiceDraftScope
+            let focusRequest = focusLease.capture(scope: capturedScope)
             WorkboardVoiceCaptureView(
                 target: .context,
                 projectID: voiceDestination.projectID,
                 onTranscript: { transcript in
-                    viewModel.receiveComposerTranscript(transcript, in: voiceDraftScope)
+                    viewModel.receiveComposerTranscript(transcript, in: capturedScope)
                     showsVoiceCapture = false
-                    composerFocused = true
+                    if focusLease.permits(focusRequest, currentScope: viewModel.composerScope,
+                                          destinationIsActive: deskWorkspace?.isActive ?? true) {
+                        composerFocused = true
+                    }
                 },
                 onCancel: { showsVoiceCapture = false },
                 onSavedInAllMaterials: { viewModel.presentCaptureSavedInAllMaterials() }
@@ -210,9 +216,11 @@ struct WorkboardCaptureCanvas: View {
             }
         )
         .onDisappear {
+            focusLease.invalidate()
             dismissTransientCaptureUI()
         }
         .onChange(of: workbenchDestinationIsActive) { _, isActive in
+            focusLease.setActive(isActive)
             if isActive {
                 // A request that arrived while the pane was hidden was left
                 // unconsumed, not dropped — this is where it lands.
@@ -222,6 +230,7 @@ struct WorkboardCaptureCanvas: View {
             }
         }
         .onAppear {
+            focusLease.setActive(workbenchDestinationIsActive)
             consumeVoiceCaptureLaunchRoute()
         }
         .onReceive(NotificationCenter.default.publisher(for: .showWorkboardVoiceCapture)) { _ in
@@ -480,7 +489,10 @@ struct WorkboardCaptureCanvas: View {
         .background(
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture { composerFocused = true }
+                .onTapGesture {
+                    guard workbenchDestinationIsActive else { return }
+                    composerFocused = true
+                }
                 .accessibilityHidden(true)
         )
     }
@@ -672,6 +684,7 @@ struct WorkboardCaptureCanvas: View {
         let target = destination
         let capturedDraft = composerText
         let capturedScope = viewModel.composerScope
+        let focusRequest = focusLease.capture(scope: capturedScope)
         Task {
             let added = await viewModel.addThought(thought, projectID: target.projectID)
             if added {
@@ -688,7 +701,10 @@ struct WorkboardCaptureCanvas: View {
                 AccessibilityAnnouncer.announce(message)
             }
             isAddingThought = false
-            composerFocused = workbenchDestinationIsActive && !added
+            if focusLease.permits(focusRequest, currentScope: viewModel.composerScope,
+                                  destinationIsActive: deskWorkspace?.isActive ?? true) {
+                composerFocused = !added
+            }
         }
     }
 

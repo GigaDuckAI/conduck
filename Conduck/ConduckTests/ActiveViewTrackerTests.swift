@@ -90,6 +90,27 @@ final class ActiveViewTrackerTests: XCTestCase {
 
     // MARK: - Reset hook
 
+    func testDepartingPaneCannotUntrackIncomingPaneForTheSameConversation() {
+        let id = UUID(), chats = UUID(), work = UUID()
+        ActiveViewTracker.track(id, ownerID: chats)
+        ActiveViewTracker.track(id, ownerID: work)
+        ActiveViewTracker.untrack(id, ownerID: chats)
+        ActiveViewTracker.untrack(id, ownerID: chats)
+        XCTAssertTrue(ActiveViewTracker.isViewing(id))
+        XCTAssertEqual(ActiveViewTracker.viewedConversationIDs, [id])
+        ActiveViewTracker.untrack(id, ownerID: work)
+        XCTAssertFalse(ActiveViewTracker.isViewing(id))
+    }
+
+    func testModeSwitchCanReleaseBeforeRegisteringTheNextPane() {
+        let id = UUID(), chats = UUID(), work = UUID()
+        ActiveViewTracker.track(id, ownerID: work)
+        ActiveViewTracker.untrack(id, ownerID: work)
+        ActiveViewTracker.track(id, ownerID: chats)
+        ActiveViewTracker.untrack(id, ownerID: work)
+        XCTAssertTrue(ActiveViewTracker.isViewing(id))
+    }
+
     func testResetClearsAllEntries() {
         ActiveViewTracker.track(UUID())
         ActiveViewTracker.track(UUID())

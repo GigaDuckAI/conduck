@@ -391,7 +391,7 @@ struct MessageComposerBar: View {
         .disabled(!workbenchDestinationIsActive)
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: attachments)
         .onAppear {
-            fieldFocused = true
+            fieldFocused = workbenchDestinationIsActive
             newChatGatewaySelectionLocked?.wrappedValue = shouldLockNewChatGateway
         }
         // The FIRST thing worth sending is this composer's engagement signal —
@@ -698,7 +698,10 @@ struct MessageComposerBar: View {
         .background(
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture { fieldFocused = true }
+                .onTapGesture {
+                    guard workbenchDestinationIsActive else { return }
+                    fieldFocused = true
+                }
                 .accessibilityHidden(true)
         )
     }

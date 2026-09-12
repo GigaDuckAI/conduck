@@ -67,6 +67,8 @@ final class WorkDeskWorkspaceState {
     @ObservationIgnored private var composerSessions: [WorkDeskScope: WorkDeskComposerSession] = [:]
     @ObservationIgnored private var layoutSessions: [WorkDeskScope: WorkDeskLayoutSession] = [:]
     @ObservationIgnored private var hiddenSelectionIDs: Set<UUID> = []
+    @ObservationIgnored private var refreshCoordinator: WorkDeskWorkspaceRefreshCoordinator?
+    @ObservationIgnored private var refreshMaterials: @MainActor () -> [WorkboardMaterialSnapshot] = { [] }
     private static var liveWorkspaces: [WeakWorkspace] = []
 
     private final class WeakWorkspace {
@@ -120,6 +122,40 @@ final class WorkDeskWorkspaceState {
         self.conversationStore = conversationStore
         Self.liveWorkspaces.removeAll { $0.value == nil }
         Self.liveWorkspaces.append(WeakWorkspace(self))
+    }
+
+    /// A real mount requests a complete snapshot. Mode changes only drain
+    /// changes recorded while hidden, so a round trip through Chats neither
+    /// reloads Settings nor scans all project results again.
+    func startRefreshing(
+        isActive: Bool,
+        materials: @escaping @MainActor () -> [WorkboardMaterialSnapshot]
+    ) {
+        refreshMaterials = materials
+        if refreshCoordinator == nil {
+            refreshCoordinator = WorkDeskWorkspaceRefreshCoordinator { [weak self] request in
+                guard let self else { return }
+                if request.contains(.settings) { await conversationSettings.loadSettings() }
+                if !request.intersection([.organization, .results]).isEmpty {
+                    await organization.reload()
+                    await reloadProjectActivity(reconcileResults: request.contains(.results))
+                    // The desk can change while these reads suspend. Reconcile
+                    // the current cards, never the mounting view's old value.
+                    reconcile(materials: refreshMaterials())
+                }
+            }
+        }
+        requestRefresh(.all)
+        setRefreshActive(isActive)
+    }
+
+    func requestRefresh(_ request: WorkDeskWorkspaceRefreshCoordinator.Request) {
+        refreshCoordinator?.request(request)
+    }
+
+    func setRefreshActive(_ active: Bool) {
+        isActive = active
+        refreshCoordinator?.setActive(active)
     }
 
     var currentProject: WorkDeskProjectRecord? {
@@ -215,7 +251,10 @@ final class WorkDeskWorkspaceState {
         let sending = Set(briefDrafts.values.filter { $0.handoff.isSending }
             .compactMap { $0.handoff.prepared?.id ?? $0.handoff.acceptedConversationID })
         for (id, model) in conversationModels {
-            guard !(isActive && selectedConversationID == id), !model.isAwaitingReply,
+            // A hidden Work thread is still mounted and still owns this VM.
+            // Keep the selected lease until actual conversation navigation;
+            // releasing it on a mode switch can mint a competing sender on return.
+            guard selectedConversationID != id, !model.isAwaitingReply,
                   !sending.contains(id) else { continue }
             conversationModels.removeValue(forKey: id)
             conversationLeases.removeValue(forKey: id)
@@ -444,7 +483,7 @@ final class WorkDeskWorkspaceState {
     }
 
     func suspend() {
-        isActive = false
+        setRefreshActive(false)
         deletingProjectID = nil
         projectDeletionReview = nil
         materialUsePickerID = nil

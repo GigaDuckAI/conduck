@@ -318,6 +318,20 @@ final class MenuBarCoordinatorRegistryTests: XCTestCase {
                      + "acknowledging here would retire an account-wide mark on every device for something nobody saw.")
     }
 
+    func testSameConversationModeSwitchIgnoresOutgoingOwnerClear() {
+        let coordinator = MenuBarCoordinator()
+        let id = UUID(), chats = UUID(), work = UUID()
+        coordinator.setWindowVisibleConversation(id, ownerID: chats)
+        coordinator.setWindowVisibleConversation(id, ownerID: work)
+        coordinator.clearWindowVisibleConversation(ifCurrent: id, ownerID: chats)
+        XCTAssertEqual(coordinator.windowVisibleConversationID, id)
+        coordinator.clearWindowVisibleConversation(ifCurrent: id, ownerID: work)
+        XCTAssertNil(coordinator.windowVisibleConversationID)
+        coordinator.setWindowVisibleConversation(id, ownerID: chats)
+        coordinator.clearWindowVisibleConversation(ifCurrent: id, ownerID: work)
+        XCTAssertEqual(coordinator.windowVisibleConversationID, id)
+    }
+
     // MARK: - Popover display override (read-only shared-reply glance)
 
     func testDisplayedPopoverViewModelFallsBackToQuickLane() {

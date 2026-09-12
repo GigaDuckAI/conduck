@@ -39,7 +39,12 @@ struct WorkDeskWorkspaceView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .onChange(of: geometry.size.width, initial: true) { _, width in
+                guard isActive else { return }
                 workspace.updateSidebarLayout(isInline: width >= 850)
+            }
+            .onChange(of: isActive) { _, active in
+                guard active else { return }
+                workspace.updateSidebarLayout(isInline: geometry.size.width >= 850)
             }
         }
     }
@@ -88,12 +93,11 @@ struct WorkDeskWorkspaceView: View {
 
     private var liveWorkspace: some View {
         workspaceLayout
-        .task {
-            workspace.isActive = isActive
-            await workspace.conversationSettings.loadSettings()
-            await reloadOrganization(reconcileResults: true)
+        .onAppear {
+            workspace.startRefreshing(isActive: isActive, materials: { [weak viewModel] in
+                viewModel?.desk?.materials ?? []
+            })
         }
-        .onAppear { workspace.isActive = isActive }
         .onDisappear { workspace.suspend() }
         .onChange(of: item.materials) { _, _ in workspace.reconcile(materials: item.materials) }
         .onChange(of: workspace.search) { _, _ in workspace.reconcile(materials: item.materials) }
@@ -105,11 +109,10 @@ struct WorkDeskWorkspaceView: View {
                 resolver: effectiveConversationResolver)
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active && isActive { Task { await reloadOrganization(reconcileResults: true) } }
+            if phase == .active { workspace.requestRefresh(.all) }
         }
         .onChange(of: isActive) { _, active in
-            workspace.isActive = active
-            if active { Task { await reloadOrganization(reconcileResults: true) } }
+            if active { workspace.setRefreshActive(true) }
             else {
                 searchFocused = false
                 requestsSearchFocus = false
@@ -117,10 +120,10 @@ struct WorkDeskWorkspaceView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .conversationsDidChange)) { _ in
-            if isActive { Task { await reloadOrganization() } }
+            workspace.requestRefresh(.organization)
         }
         .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
-            if isActive { Task { await workspace.conversationSettings.loadSettings() } }
+            workspace.requestRefresh(.settings)
         }
     }
 
@@ -234,12 +237,6 @@ struct WorkDeskWorkspaceView: View {
         } message: {
             Text(verbatim: workspace.organization.errorMessage ?? "")
         }
-    }
-
-    private func reloadOrganization(reconcileResults: Bool = false) async {
-        await workspace.organization.reload()
-        await workspace.reloadProjectActivity(reconcileResults: reconcileResults)
-        workspace.reconcile(materials: item.materials)
     }
 
     private var title: String {

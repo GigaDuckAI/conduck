@@ -129,7 +129,7 @@ final class WorkDeskCanvasInteractionTests: XCTestCase {
     func testNewProjectInsertionUsesTheCurrentVisibleDeskCenter() {
         let session = WorkDeskCanvasSession()
         XCTAssertNil(session.projectInsertionPoint)
-        session.viewportSize = CGSize(width: 900, height: 640)
+        session.receiveViewport(CGSize(width: 900, height: 640), owner: UUID(), isActive: true)
         session.transform = .init(scale: 0.8, offset: CGSize(width: 500, height: -300))
         let point = session.projectInsertionPoint!
         XCTAssertLessThan(point.x, 0, "The visible desk extends left of the original origin.")

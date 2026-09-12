@@ -22,7 +22,9 @@
 // sections swap pixels inside its columns rather than swapping the split
 // itself. Chats is the shell described above. In Work the native Chat sidebar
 // collapses (`splitColumnVisibility`) and the desk's project rail owns its own
-// visibility. The sidebar-region toolbar then controls that project rail and
+// visibility. Once visited, Work stays mounted so returning keeps its scroll
+// views and cached content. Section changes suppress split layout motion; only
+// the destination layers dissolve. The sidebar-region toolbar controls the rail and
 // hides Chat's compose action; switching back restores the native Chat toggle
 // and its remembered visibility. Both sections retain a zero-area principal
 // item whose flexible spaces are the only thing pinning the
@@ -157,25 +159,13 @@ struct MainWindowView: View {
     /// so a column the user collapsed BY HAND survives a round trip through Work.
     @State private var chatColumnVisibility: NavigationSplitViewVisibility = .automatic
 
-    /// Keeps Work's columns mounted for the tail of the dissolve after Work is
-    /// hidden, so the crossfade still has a layer to fade out. Set by the
-    /// `.task(id:)` on the split view below, never written directly.
-    @State private var keepsWorkLayerMounted = false
-    /// Turns the ENTER dissolve on, one update after Work's columns mount.
-    ///
-    /// Work's layer is conditionally mounted, and a view inserted with no
-    /// transition renders at its FINAL value — so a layer inserted in the same
-    /// update that activates it appears fully opaque and cuts over Chat's
-    /// fade-out. Mounting still reads the destination directly, so the layer is
-    /// present at opacity 0 for one update; flipping this in the `.task(id:)`
-    /// below then makes activation an animatable 0 -> 1 change, which is the
-    /// only thing `WorkbenchDestinationLayerModifier` can dissolve. Set by that
-    /// task, never written directly.
-    ///
-    /// It is a permission, not the answer: `workLayerIsShowing` re-gates it on
-    /// the live destination, so a hold this task never got to clear cannot show
-    /// Work over Chat.
-    @State private var workLayerIsVisible = false
+    /// Mount lazily on the first visit, then retain the desk for this window.
+    /// The first activation waits one update before dissolving in; later visits
+    /// reuse its scroll views, thumbnails and conversation composer immediately.
+    /// Never reset this latch on departure: timed teardown makes every return
+    /// repeat first-appearance work and loses view-owned scroll state.
+    @State private var workLayerIsReady = false
+    @State private var workVisibilityOwnerID = UUID()
     private static let workLayerIdentity = "workbench.destination.work"
 
     /// The Settings modal. Triggered by the footer menu, ⌘,, the
@@ -344,14 +334,10 @@ struct MainWindowView: View {
     /// so the divider, system sidebar toggle, and measured Chat toolbar slots do
     /// not acquire a new AppKit identity when the section picker changes.
     private var persistentSplitView: some View {
-        // Keep the visibility on the native binding with no app-supplied
-        // animation transaction — including the Work collapse, which is just
-        // another value this binding reports. AppKit owns the divider's
-        // velocity, clipping, toolbar tracking separator and Reduce Motion
-        // behavior; driving the width ourselves would double-animate the system
-        // split and can move the measured toolbar controls. Work / Chats motion
-        // is scoped to layer opacity below, so it cannot leak into this native
-        // sidebar transition.
+        // The native split still owns column sizing and the user's sidebar
+        // toggle. Only a section change suppresses its layout animation: Work
+        // should dissolve at the final width, not grow through its rail's
+        // compact breakpoint while the Chat sidebar is collapsing.
         NavigationSplitView(columnVisibility: splitColumnVisibility) {
             // WHY a width floor on the column CONTENT as well as the column
             // width: each `NavigationSplitView` column is hosted in its OWN
@@ -478,27 +464,13 @@ struct MainWindowView: View {
             // isn't double-wrapped.
             .sharedBackgroundVisibility(.hidden)
         }
-        // Hold Work's detail layer for the tail of the dissolve after Work is
-        // hidden, then drop it. `.task(id:)` cancels a pending unmount if Work
-        // comes back first, so a fast Work → Chats → Work round trip never
-        // unmounts, and a cancelled hold cannot wedge: the id is the destination
-        // itself, so whichever value it settles on re-runs this to completion.
-        // It also runs AFTER the update that mounted that layer, which is what
-        // gives the enter dissolve a frame at opacity 0 to fade up from.
-        //
-        // The hold comes from the layer modifier so it always outlasts the fade.
+        .transaction(value: workDestinationIsActive) { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
         .task(id: workDestinationIsActive) {
-            if workDestinationIsActive {
-                keepsWorkLayerMounted = true
-                workLayerIsVisible = true
-                return
-            }
-            workLayerIsVisible = false
-            try? await Task.sleep(
-                for: WorkbenchDestinationLayerModifier.mountHold(reduceMotion: reduceMotion)
-            )
-            guard !Task.isCancelled else { return }
-            keepsWorkLayerMounted = false
+            guard workDestinationIsActive else { return }
+            workLayerIsReady = true
         }
     }
 
@@ -546,25 +518,14 @@ struct MainWindowView: View {
         )
     }
 
-    /// What the Work layer's PIXELS follow, as distinct from
-    /// `workDestinationIsActive`, which hit testing, accessibility and draw
-    /// order follow immediately. Entering trails the destination by one update
-    /// (see `workLayerIsVisible`) so the fade has something to fade from;
-    /// leaving falls on the destination change itself, because Work is already
-    /// mounted and needs no lead-in.
-    ///
-    /// The `workDestinationIsActive` conjunct is the safety half: a Settings
-    /// mode swap can unmount this split mid-transition and cancel the task that
-    /// would have cleared `workLayerIsVisible`, and on the way back Work would
-    /// otherwise mount fully opaque over Chat for a frame.
+    /// The first visit mounts at zero opacity before the task opens the fade.
+    /// Thereafter the retained layer follows the destination in the same update
+    /// as Chat, including rapid reversals. Interaction always follows the live
+    /// destination, never the first-mount latch.
     private var workLayerIsShowing: Bool {
-        workDestinationIsActive && workLayerIsVisible
+        workDestinationIsActive && workLayerIsReady
     }
 
-    /// The exact complement, so both layers change opacity in the SAME update
-    /// and the dissolve is symmetric entering and leaving. Deriving Chat's
-    /// pixels from the destination instead would start its fade one update
-    /// ahead of Work's on the way in.
     private var chatLayerIsShowing: Bool {
         !workLayerIsShowing
     }
@@ -573,15 +534,8 @@ struct MainWindowView: View {
         !workDestinationIsActive
     }
 
-    /// Chat stays mounted for its whole session — it owns a selected thread, an
-    /// unsent composer, a live recorder and a parked drop batch. Work owns none
-    /// of that inside its layer: composer text and every sheet live on the view
-    /// model or on the persistent split view above, and deactivating Work
-    /// already discards its transient capture UI. So Work's desk is mounted only
-    /// while it is on screen (plus the dissolve's tail), and hidden Chat never
-    /// pays to lay out a second full column tree.
     private var mountsWorkLayer: Bool {
-        workDestinationIsActive || keepsWorkLayerMounted
+        workDestinationIsActive || workLayerIsReady
     }
 
     private func workboardExperience(
@@ -628,9 +582,9 @@ struct MainWindowView: View {
                     workboardExperience(for: personalWorkbenchModel).detailColumn
                         .environment(\.workDeskConversationResolver, WorkDeskConversationResolver(
                             resolve: { [coordinator] in coordinator.viewModel(for: $0) },
-                            reportVisible: { [coordinator] id, visible in
-                                if visible { coordinator.setWindowVisibleConversation(id) }
-                                else { coordinator.clearWindowVisibleConversation(ifCurrent: id) }
+                            reportVisible: { [coordinator, workVisibilityOwnerID] id, visible in
+                                if visible { coordinator.setWindowVisibleConversation(id, ownerID: workVisibilityOwnerID) }
+                                else { coordinator.clearWindowVisibleConversation(ifCurrent: id, ownerID: workVisibilityOwnerID) }
                             },
                             retain: { [coordinator] id, owner in coordinator.retainWorkViewModel(for: id, ownerID: owner) },
                             release: { [coordinator] owner in coordinator.releaseWorkViewModel(ownerID: owner) }))
@@ -1985,6 +1939,7 @@ struct MainWindowView: View {
 private struct WindowThreadVisibilityReporter: ViewModifier {
     let coordinator: MenuBarCoordinator
     let conversationID: UUID
+    @State private var visibilityOwnerID = UUID()
     @Environment(\.appearsActive) private var appearsActive
     @Environment(\.workbenchDestinationIsActive) private var workbenchDestinationIsActive
 
@@ -2006,15 +1961,15 @@ private struct WindowThreadVisibilityReporter: ViewModifier {
                 updateVisibility(isVisible)
             }
             .onDisappear {
-                coordinator.clearWindowVisibleConversation(ifCurrent: conversationID)
+                coordinator.clearWindowVisibleConversation(ifCurrent: conversationID, ownerID: visibilityOwnerID)
             }
     }
 
     private func updateVisibility(_ visible: Bool) {
         if visible {
-            coordinator.setWindowVisibleConversation(conversationID)
+            coordinator.setWindowVisibleConversation(conversationID, ownerID: visibilityOwnerID)
         } else {
-            coordinator.clearWindowVisibleConversation(ifCurrent: conversationID)
+            coordinator.clearWindowVisibleConversation(ifCurrent: conversationID, ownerID: visibilityOwnerID)
         }
     }
 }

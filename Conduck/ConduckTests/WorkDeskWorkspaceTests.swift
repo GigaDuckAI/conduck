@@ -9,6 +9,32 @@ import XCTest
 
 @MainActor
 final class WorkDeskWorkspaceTests: XCTestCase {
+    func testModeSwitchRetainsTheSelectedConversationModelUntilActualNavigation() async throws {
+        let workspace = await makeWorkspace(.init())
+        let selected = UUID()
+        let resolver = WorkDeskConversationResolver(resolve: { id in
+            ConversationDetailViewModel(conversationID: id)
+        })
+        workspace.isActive = true
+        workspace.selectConversation(selected, projectID: UUID())
+        let model = try XCTUnwrap(workspace.conversationModel(for: selected, resolver: resolver))
+        let session = workspace.conversationSession(for: selected)
+        session.draft = "Keep these words"
+        let presentation = session.resume()
+
+        workspace.suspend()
+        XCTAssertFalse(workspace.isActive)
+        XCTAssertFalse(session.isCurrentPresentation(presentation))
+        XCTAssertTrue(workspace.conversationModel(for: selected, resolver: resolver) === model)
+        XCTAssertEqual(session.draft, "Keep these words")
+
+        workspace.setRefreshActive(true)
+        XCTAssertTrue(workspace.conversationModel(for: selected, resolver: resolver) === model)
+        workspace.selectScope(.all)
+        XCTAssertFalse(workspace.conversationModel(for: selected, resolver: resolver) === model,
+                       "An idle model is released when its conversation is actually left")
+    }
+
     func testSearchFindsNotesOnMaterialsAndTheirCompanions() async {
         let workspace = await makeWorkspace(.init())
         let words = WorkboardMaterialSnapshot(kind: .transcript, name: "Words", annotation: "remember the deadline")

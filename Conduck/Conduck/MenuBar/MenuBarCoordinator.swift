@@ -459,6 +459,7 @@ final class MenuBarCoordinator {
     /// mounts, and a reply landing in a window the user isn't looking at must
     /// still raise the dot).
     private(set) var windowVisibleConversationID: UUID?
+    @ObservationIgnored private var windowVisibilityOwnerID: UUID?
 
     /// Weak handle to the popover view's `ThreadSpeaker`, registered by
     /// `DictationPopoverView.onAppear`. Exists so `MenuBarController.
@@ -742,8 +743,9 @@ final class MenuBarCoordinator {
     /// in a backgrounded window never reaches here — which matters more than it
     /// used to, because what it would retire is now the mark on the phone and the
     /// wrist as well.
-    func setWindowVisibleConversation(_ id: UUID?) {
+    func setWindowVisibleConversation(_ id: UUID?, ownerID: UUID? = nil) {
         windowVisibleConversationID = id
+        windowVisibilityOwnerID = id == nil ? nil : ownerID
         if let id {
             noteConversationSeen(id)
             // Covers cmd-tabbing back onto an ALREADY-MOUNTED thread: the view's
@@ -756,9 +758,12 @@ final class MenuBarCoordinator {
     /// Unmount-path clear (the reporter's `.onDisappear`): drop the pin ONLY if
     /// it still points at `id` — a sidebar thread switch can mount the NEW
     /// thread's reporter before the OLD one's `.onDisappear` runs, and an
-    /// unconditional nil would wipe the fresh report.
-    func clearWindowVisibleConversation(ifCurrent id: UUID) {
-        if windowVisibleConversationID == id { windowVisibleConversationID = nil }
+    /// unconditional nil would wipe the fresh report. Owner identity also
+    /// distinguishes Chats and Work when both have the same conversation open.
+    func clearWindowVisibleConversation(ifCurrent id: UUID, ownerID: UUID? = nil) {
+        guard windowVisibleConversationID == id, windowVisibilityOwnerID == ownerID else { return }
+        windowVisibleConversationID = nil
+        windowVisibilityOwnerID = nil
     }
 
     // MARK: - Popover display override (read-only shared-reply glance)

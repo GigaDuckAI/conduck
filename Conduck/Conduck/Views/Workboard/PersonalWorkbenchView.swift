@@ -8,11 +8,10 @@
 // preview conveniences; capture persistence remains in its dedicated seam.
 // A section switch animates ONLY root opacity: a cheap composited dissolve,
 // while title, toolbar, lifecycle and accessibility state change immediately
-// outside the animation transaction. Native NavigationSplitView motion remains
-// untouched. Chat stays mounted across the switch because it owns a selected
-// thread, an unsent composer and a live recorder; Work keeps its equivalents on
-// the view model, so the macOS shell mounts Work's layer only while it is on
-// screen (`MainWindowView.mountsWorkLayer`).
+// outside the animation transaction. Mac suppresses split-view layout motion
+// during a section change so the dissolve happens at the destination's width.
+// Chat stays mounted across the switch; Mac retains Work after its first visit
+// so both keep their scroll views and view-owned composition state.
 
 #if !os(watchOS)
 
@@ -73,34 +72,14 @@ extension View {
     }
 }
 
-/// The one motion contract for mounted Work / Chats layers on Mac and iPad.
-/// Scoped `animation(_:body:)` is load-bearing: a broad implicit transaction
-/// would also animate navigation-title and toolbar preference changes, which
-/// can move the otherwise persistent window chrome. Opacity is intentionally
-/// the only animated property — no layout pass, blur texture, scale raster or
-/// hand-driven split width is added to either substantial workspace tree.
-///
-/// `isActive` and `isVisible` are SEPARATE inputs because a conditionally
-/// mounted layer cannot dissolve in on the update it appears: a view inserted
-/// with no transition renders at its FINAL value. A host that unmounts the
-/// hidden layer therefore holds `isVisible` back for one update after mounting,
-/// and keeps the LEAVING layer mounted until the fade ends
-/// (`mountHold(reduceMotion:)`). `isActive` — hit testing, accessibility, draw
-/// order — always tracks the destination immediately. Both layers flip
-/// `isVisible` in the SAME update and share ONE curve, which is what makes the
-/// crossfade symmetric in both directions.
+/// The motion contract for retained Work / Chats layers on Mac and iPad.
+/// Only opacity receives an animation transaction. The host can suppress native
+/// split-view layout animation without suppressing this dissolve or animating
+/// toolbar preferences, child layout, or lifecycle changes. Separate visibility
+/// lets a lazily mounted layer begin its first fade one update after insertion.
 struct WorkbenchDestinationLayerModifier: ViewModifier {
-    /// The dissolve both directions share.
     static let duration: Double = 0.18
     static let reduceMotionDuration: Double = 0.08
-
-    /// How long a host must keep a leaving layer mounted: the whole fade plus
-    /// one update of slack. Derived from the durations above so a hidden layer
-    /// can never be dropped part-way through its own fade.
-    static func mountHold(reduceMotion: Bool) -> Duration {
-        let seconds = (reduceMotion ? reduceMotionDuration : duration) + 0.04
-        return .milliseconds(Int(seconds * 1000))
-    }
 
     let isActive: Bool
     let isVisible: Bool
@@ -114,7 +93,10 @@ struct WorkbenchDestinationLayerModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .animation(animation) { animatedContent in
+            .transaction { transaction in
+                transaction.disablesAnimations = false
+                transaction.animation = animation
+            } body: { animatedContent in
                 animatedContent.opacity(isVisible ? 1 : 0)
             }
             // These semantics switch immediately. Only pixels dissolve.

@@ -32,6 +32,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
     @State private var viewport: CGSize = .zero
     @State private var controlsFrame: CGRect = .zero
     @State private var coordinateSpace = UUID()
+    @State private var viewportOwner = UUID()
     @State private var nativeNavigation = false
     @State private var cancellationGeneration = 0
     @State private var lastPanTranslation: CGSize = .zero
@@ -76,17 +77,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
                 .clipped()
                 .coordinateSpace(name: coordinateSpace)
                 .onChange(of: proxy.size, initial: true) { _, size in
-                    viewport = size
-                    session.viewportSize = size
-                    guard size.width > 0, size.height > 0 else { return }
-                    if !session.isInitialized {
-                        session.isInitialized = true
-                        session.transform.scale = size.width < 600 ? 0.72 : 1
-                        session.columns = max(2, min(4, Int((size.width - 32) / (264 * transform.scale))))
-                        refreshLayout()
-                        revealDeskIfOffscreen()
-                    } else { refreshLayout() }
-                    session.applyPendingReveal()
+                    updateViewport(size)
                 }
                 .onChange(of: materials.map(\.id), initial: true) { _, _ in refreshLayout() }
                 .onChange(of: projects.map(\.record), initial: true) { _, _ in refreshLayout() }
@@ -94,8 +85,14 @@ struct WorkDeskCanvas<CardContent: View>: View {
                 .onChange(of: isPanning) { _, active in
                     if !active { lastPanTranslation = .zero; suppressPanUntilRelease = false }
                 }
-                .onChange(of: isActive) { _, active in if !active { cancelInteractions() } }
-                .onDisappear { cancelInteractions() }
+                .onChange(of: isActive) { _, active in
+                    updateViewport(proxy.size)
+                    if !active { cancelInteractions() }
+                }
+                .onDisappear {
+                    session.suspendViewport(owner: viewportOwner)
+                    cancelInteractions()
+                }
                 .task(id: hover.generation) { await armDropAfterDwell() }
         }
         .accessibilityIdentifier("workdesk-spatial-canvas")
@@ -284,8 +281,9 @@ struct WorkDeskCanvas<CardContent: View>: View {
     }
 
     private func backgroundTapped(_ location: CGPoint) {
+        guard isActive else { return }
         dismissCaptureKeyboard()
-        guard isActive, !nativeNavigation, drag == nil,
+        guard !nativeNavigation, drag == nil,
               transform.scale < WorkDeskCanvasGeometry.overviewThreshold else { return }
         let candidates = visibleIDs.map {
             WorkDeskDropCandidate(id: $0, frame: screenFrame(for: $0), layer: session.layer(for: $0))
@@ -391,7 +389,23 @@ struct WorkDeskCanvas<CardContent: View>: View {
         }
     }
 
+    /// Hidden retained views can report zero-sized or intermediate geometry.
+    /// Keep the last camera until activation supplies the actual current size.
+    private func updateViewport(_ size: CGSize) {
+        guard session.receiveViewport(size, owner: viewportOwner, isActive: isActive) else { return }
+        viewport = size
+        if !session.isInitialized {
+            session.isInitialized = true
+            session.transform.scale = size.width < 600 ? 0.72 : 1
+            session.columns = max(2, min(4, Int((size.width - 32) / (264 * transform.scale))))
+            refreshLayout()
+            revealDeskIfOffscreen()
+        } else { refreshLayout() }
+        session.applyPendingReveal()
+    }
+
     private func refreshLayout() {
+        guard isActive else { return }
         // A remount after search/layout changes must preserve the saved camera,
         // even if it points at blank space. Only a live empty-to-first-item
         // transition needs to reveal a capture seeded outside the viewport.
@@ -576,6 +590,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
     }
 
     private func nativeInteractionChanged(_ active: Bool) {
+        guard isActive || !active else { return }
         nativeNavigation = active
         if active {
             dismissCaptureKeyboard()
@@ -620,6 +635,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
     }
 
     private func focus(_ id: WorkDeskCanvasItemID) {
+        guard isActive else { return }
         let point = currentPoint(id), size = bodySize(for: id)
         let scale: CGFloat = viewport.width < 600 ? 0.85 : 1
         withAnimation(motion) {
@@ -630,6 +646,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
     }
 
     private func changeZoom(to scale: CGFloat) {
+        guard isActive else { return }
         withAnimation(motion) { session.transform = WorkDeskCanvasGeometry.zoomed(transform, to: scale, anchor: viewportCenter) }
     }
 
@@ -638,6 +655,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
     }
 
     private func fitDesk() {
+        guard isActive else { return }
         let frames = visibleIDs.map {
             WorkDeskCanvasGeometry.frame(at: currentPoint($0), bodySize: bodySize(for: $0), scale: 1)
         }
