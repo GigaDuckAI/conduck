@@ -9,6 +9,8 @@
 // Compact sheets provide the same explicit Move/Add actions without requiring
 // a drag to a destination hidden behind the sheet. Opening a material delegates
 // to the established details/availability flow after this preview dismisses.
+// A late free-plan choice presents above this preview, including its compact
+// sheet. It never asks a covered workspace presenter to compete for a sheet.
 
 import SwiftUI
 
@@ -67,6 +69,13 @@ struct WorkDeskProjectPreview: View {
                 listFrame = $0
                 registerTargets()
             }
+            if workspace.organization.canPresentFreeProjectSelection {
+                Button(LocalizedStringResource("workdesk.pro.chooseProjects", defaultValue: "Choose projects")) {
+                    workspace.organization.projectSelectionRequested = true
+                }
+                .inlineLinkButton()
+                .padding(12)
+            }
             if let error = workspace.organization.errorMessage {
                 HStack(alignment: .top, spacing: 8) {
                     Text(verbatim: error).font(.caption).fixedSize(horizontal: false, vertical: true)
@@ -124,6 +133,12 @@ struct WorkDeskProjectPreview: View {
             onClose()
             return .handled
         }
+        .sheet(isPresented: Binding(
+            get: { isActive && workspace.projectSelectionPresenter == .preview(request.id) },
+            set: { workspace.organization.projectSelectionRequested = $0 }
+        )) {
+            WorkDeskFreeProjectSelectionView(organization: workspace.organization)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("workdesk-project-preview")
     }
@@ -176,12 +191,16 @@ struct WorkDeskProjectPreview: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "folder.fill")
+            Image(systemName: project?.isArchived == true ? "archivebox.fill" : "folder.fill")
                 .font(.title3).foregroundStyle(project?.color.tint ?? AppColors.brandAmber)
                 .padding(.top, 3).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(verbatim: project?.title ?? "").font(.title3.weight(.semibold)).lineLimit(2)
                 Text(WorkDeskCopy.materialCount(materials.count)).font(.caption).foregroundStyle(AppColors.textSecondary)
+                if project?.isArchived == true {
+                    Text(LocalizedStringResource("workdesk.projects.archived", defaultValue: "Archived"))
+                        .font(.caption).foregroundStyle(AppColors.textSecondary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading).accessibilityAddTraits(.isHeader)
             Button(action: onClose) { Image(systemName: "xmark").frame(width: closeSize, height: closeSize) }

@@ -36,6 +36,7 @@ private enum MacPersonalAIRoute: Hashable {
 
 struct MacPersonalAICategory: View {
     @Bindable var viewModel: SettingsViewModel
+    @State private var planFlow = GatewayPlanFlow()
 
     /// Drives all pushes — the default chooser + a gateway config detail.
     @State private var route: MacPersonalAIRoute?
@@ -68,6 +69,7 @@ struct MacPersonalAICategory: View {
                         // `hasLoadedRemoteAgentState` so nothing flashes before
                         // state loads.
                         if viewModel.hasLoadedRemoteAgentState {
+                            GatewayPlanControls(viewModel: viewModel, flow: planFlow)
                             defaultSelector
                             connectSection
                             selfHostedGatewaySection
@@ -111,6 +113,9 @@ struct MacPersonalAICategory: View {
                     RemoteAgentConfigBody(viewModel: viewModel, ref: ref, guidedHost: $guidedHost)
                 }
             }
+        }
+        .gatewayPlanSheets(viewModel: viewModel, flow: planFlow) {
+            if let id = viewModel.newCustomGatewayDraftID() { route = .configure(.custom(id)) }
         }
     }
 
@@ -326,17 +331,20 @@ struct MacPersonalAICategory: View {
     /// hint to delete/edit one above. Tap → mint a draft → push editor.
     @ViewBuilder
     private var addCustomGatewayCard: some View {
-        let canAdd = viewModel.customGatewayCount < Constants.maxCustomGateways
+        let canAdd = viewModel.canAddConfiguredGateway
         VStack(alignment: .leading, spacing: 4) {
             Button {
                 if let id = viewModel.newCustomGatewayDraftID() {
                     route = .configure(.custom(id))
+                } else {
+                    planFlow.resumeAdd = true
+                    planFlow.showingUpgrade = true
                 }
             } label: {
                 Label {
                     Text(canAdd
                         ? LocalizedStringResource("settings.remoteAgent.customGateway.add.v2", defaultValue: "Set up a custom server")
-                        : LocalizedStringResource("settings.remoteAgent.customGateway.addAtCap.v2", defaultValue: "Set up a custom server (limit reached)"))
+                        : LocalizedStringResource("settings.remoteAgent.customGateway.addAtCap.v2", defaultValue: "Set up a custom server with Pro"))
                 } icon: {
                     Image(systemName: "plus.circle.fill")
                         .foregroundStyle(canAdd ? AppColors.brandAmber : AppColors.textTertiary)
@@ -345,7 +353,6 @@ struct MacPersonalAICategory: View {
                 .foregroundStyle(canAdd ? AppColors.textPrimary : AppColors.textTertiary)
             }
             .settingsCardRowButton()
-            .disabled(!canAdd)
             .accessibilityIdentifier("settings.personalAI.addCustomGateway")
             if !canAdd {
                 // Passive caption riding along in the Add row's cell, not a row
@@ -353,10 +360,7 @@ struct MacPersonalAICategory: View {
                 // own inset lives inside the button's live frame, and the card
                 // supplies none, so without this the hint would sit flush
                 // against the card's left edge under an indented label.
-                Text(LocalizedStringResource(
-                    "settings.remoteAgent.customGateway.capHint.v2",
-                    defaultValue: "Delete a custom server above to add another."
-                ))
+                Text(SettingsViewModel.gatewayLimitMessage)
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
                     .padding(.horizontal, SettingsCardMetrics.rowInset)

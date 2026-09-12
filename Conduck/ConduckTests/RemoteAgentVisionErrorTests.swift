@@ -61,8 +61,8 @@ final class RemoteAgentVisionErrorTests: XCTestCase {
     private func sendThrowingAppError(status: Int, body: Data) async throws -> AppError {
         respond(status: status, body: body)
         do {
-            let reply = try await RemoteAgentClient.shared.send(
-                backend: .openclaw,
+            let reply = try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw),
                 url: gatewayURL,
                 token: "test-token",
                 newUserText: "describe this image",

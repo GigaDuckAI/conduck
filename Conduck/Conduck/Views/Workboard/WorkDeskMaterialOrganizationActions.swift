@@ -44,10 +44,10 @@ struct WorkDeskMaterialOrganizationActions {
     }
     var projectID: UUID? { project?.id }
     var destinations: [WorkDeskProjectRecord] {
-        workspace.organization.projects.filter { WorkDeskLocation.project($0.id) != sourceLocation }
+        workspace.organization.availableProjectDestinations.filter { WorkDeskLocation.project($0.id) != sourceLocation }
     }
     var additionalDestinations: [WorkDeskProjectRecord] {
-        workspace.organization.projects.filter {
+        workspace.organization.availableProjectDestinations.filter {
             !workspace.organization.contains(materialID: materialID, at: .project($0.id))
         }
     }
@@ -61,7 +61,7 @@ struct WorkDeskMaterialOrganizationActions {
     var canMoveHome: Bool { canMove && sourceLocation != .home }
     var canRemoveFromProject: Bool { canMove && sourceProject != nil }
     var conversationMaterialIDs: Set<UUID> {
-        guard !workspace.isSearching, let current = workspace.currentProject,
+        guard !workspace.isSearching, let current = workspace.currentProject, workspace.currentProjectAllowsNewActivity,
               sourceLocation == .project(current.id), canMove else { return [] }
         return workspace.selectedIDs.contains(materialID) ? workspace.selectedIDs : [materialID]
     }

@@ -337,6 +337,7 @@ enum SharedInboxRouting {
         _ record: ConversationRecord,
         settings: SettingsManager
     ) async throws -> Resolved {
+        await ProSubscriptionStore.shared.awaitInitialAccess()
         guard let snapshot = await settings.remoteAgentSnapshot(forConversationBackend: record.backend) else {
             throw AppError.remoteAgentNotConfigured
         }
@@ -373,6 +374,7 @@ enum SharedInboxRouting {
         settings: SettingsManager,
         store: ConversationStore
     ) async throws -> Resolved {
+        await ProSubscriptionStore.shared.awaitInitialAccess()
         guard let snapshot = await settings.remoteAgentSnapshot(for: ref) else {
             throw role.notConfiguredError
         }

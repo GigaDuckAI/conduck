@@ -131,7 +131,7 @@ extension ConversationStore {
     }
 
     nonisolated static func applyDeskLocationMutation(
-        _ mutation: WorkDeskMutation, in context: NSManagedObjectContext
+        _ mutation: WorkDeskMutation, access: ProAccessSnapshot, in context: NSManagedObjectContext
     ) throws {
         if case let .moveAndReorderLocations(ids, source, destination, target, placement, ordered, expected) = mutation {
             guard !ids.isEmpty, !ids.contains(target), ordered.contains(target) else { throw WorkDeskStoreError.materialMoved }
@@ -143,7 +143,7 @@ extension ConversationStore {
                 }
             }
             try applyDeskLocationMutation(.moveLocations(materialIDs: ids, from: source, to: destination,
-                                                        positions: [:], expected: expected), in: context)
+                                                        positions: [:], expected: expected), access: access, in: context)
             var result = ordered.filter { !ids.contains($0) }
             guard let targetIndex = result.firstIndex(of: target) else { throw WorkDeskStoreError.materialMoved }
             let moving = ids.reduce(into: [UUID]()) { result, id in if !result.contains(id) { result.append(id) } }
@@ -155,7 +155,7 @@ extension ConversationStore {
                 guard let index = ranked[id]?.firstIndex(where: { $0.location == destination }) else { throw WorkDeskStoreError.materialMoved }
                 ranked[id]?[index].sortRank = Double(rank)
             }
-            try applyDeskLocationMutation(.restoreLocations(ranked, expected: current), in: context)
+            try applyDeskLocationMutation(.restoreLocations(ranked, expected: current), access: access, in: context)
             return
         }
         let ids: [UUID]
@@ -239,8 +239,15 @@ extension ConversationStore {
             if records.isEmpty { records = [.init(materialID: id, location: .home, position: nil)] }
             for record in records {
                 guard record.sortRank?.isFinite ?? true else { throw WorkDeskStoreError.materialMoved }
-                if let projectID = record.location.projectID,
-                   try resolvedDeskProjectID(projectID, in: context) == nil { throw WorkDeskStoreError.projectNotFound }
+                if let projectID = record.location.projectID {
+                    guard try resolvedDeskProjectID(projectID, in: context) != nil else { throw WorkDeskStoreError.projectNotFound }
+                    // Adding membership is new project activity, including
+                    // source-aware moves and undo. Existing membership may be
+                    // reordered or removed while the project is paused.
+                    if !(before[id] ?? []).contains(where: { $0.location == record.location }) {
+                        try requireActiveDeskProject(projectID, access: access, in: context)
+                    }
+                }
             }
             desired[id] = records
         }

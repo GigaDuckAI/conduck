@@ -2257,6 +2257,7 @@ final class CarPlayRecordingService {
     }
 
     private func startConverseHop(transcript: String, attemptID: UInt64) async {
+        await ProSubscriptionStore.shared.awaitInitialAccess()
         // The appended user row, visible to the catch below. Nil until the
         // append lands; from then on every exit that is not a dispatch has to
         // settle it (see `terminalizeAbandonedUserTurn`).

@@ -207,6 +207,8 @@ final class PairingImportFlow {
 
     private(set) var phase: Phase = .input
     var pastedCode: String = ""
+    var showingProPaywall = false
+    private var pendingUpgradePayload: PairingPayload?
     private(set) var inlineError: InlineError?
     /// An await is in flight on the path to persistence — disables the actions
     /// that would start a second one.
@@ -364,60 +366,76 @@ final class PairingImportFlow {
             inlineError = Self.inlineError(for: error)
             restartScanner()
         case .success(let payload):
-            // One generation guard covers BOTH awaits below. Planning mints the
-            // roster draft for a free-target custom import, so an unguarded
-            // resume could orphan a draft and then go on to present a card for an
-            // import the user already walked away from.
-            operationGeneration &+= 1
-            let generation = operationGeneration
-            let freshlyMinted = isFreshlyMinted(payload)
-            planning = true
-            resolutionTask = Task { [environment, lockedTarget] in
-                let plan = await environment.plan(payload, lockedTarget: lockedTarget)
+            planParsedPayload(payload)
+        }
+    }
 
-                // Build the card in the SAME task rather than after a hop back to
-                // the view: a second unstructured Task would need its own guard,
-                // and the window between them is exactly where a cancelled import
-                // used to keep going.
-                //
-                // `.ready` and `.needsOverwriteConfirm` converge deliberately — an
-                // overwrite is not a different DECISION, it is the same decision
-                // with more at stake, and the card states what is being replaced
-                // from a fresh read rather than from the plan's snapshot. That
-                // also removes the old alert's bypass, where confirming a
-                // replacement skipped straight past every check the direct path
-                // ran.
-                let resolved: (target: RemoteAgentRef, model: PairingReviewModel)?
-                switch plan {
-                case .ready(let target), .needsOverwriteConfirm(let target, _, _):
-                    resolved = (target, await environment.review(
-                        payload, target: target, freshlyMinted: freshlyMinted
-                    ))
-                case .blocked:
-                    // `.blocked` never mints (the cap case fails before minting; a
-                    // kind mismatch implies a locked target, which never mints),
-                    // so there is nothing to clean up on this arm.
-                    resolved = nil
-                }
+    private func planParsedPayload(_ payload: PairingPayload) {
+        pendingUpgradePayload = nil
+        // One generation guard covers BOTH awaits below. Planning mints the
+        // roster draft for a free-target custom import, so an unguarded
+        // resume could orphan a draft and then go on to present a card for an
+        // import the user already walked away from.
+        operationGeneration &+= 1
+        let generation = operationGeneration
+        let freshlyMinted = isFreshlyMinted(payload)
+        planning = true
+        resolutionTask = Task { [environment, lockedTarget] in
+            let plan = await environment.plan(payload, lockedTarget: lockedTarget)
 
-                guard generation == self.operationGeneration else {
-                    // Abandoned mid-flight. This Task is the only holder of the
-                    // minted target, so it owns the cleanup.
-                    if freshlyMinted, let target = resolved?.target {
-                        environment.discardDraft(target)
-                    }
-                    return
-                }
-                self.planning = false
+            // Build the card in the SAME task rather than after a hop back to
+            // the view: a second unstructured Task would need its own guard,
+            // and the window between them is exactly where a cancelled import
+            // used to keep going.
+            //
+            // `.ready` and `.needsOverwriteConfirm` converge deliberately — an
+            // overwrite is not a different DECISION, it is the same decision
+            // with more at stake, and the card states what is being replaced
+            // from a fresh read rather than from the plan's snapshot. That
+            // also removes the old alert's bypass, where confirming a
+            // replacement skipped straight past every check the direct path
+            // ran.
+            let resolved: (target: RemoteAgentRef, model: PairingReviewModel)?
+            switch plan {
+            case .ready(let target), .needsOverwriteConfirm(let target, _, _):
+                resolved = (target, await environment.review(
+                    payload, target: target, freshlyMinted: freshlyMinted
+                ))
+            case .blocked:
+                // `.blocked` never mints (the cap case fails before minting; a
+                // kind mismatch implies a locked target, which never mints),
+                // so there is nothing to clean up on this arm.
+                resolved = nil
+            }
 
-                if let resolved {
-                    self.enterReview(payload, target: resolved.target,
-                                     freshlyMinted: freshlyMinted, model: resolved.model)
-                } else if case .blocked(let block) = plan {
-                    self.showBlocked(block)
+            guard generation == self.operationGeneration else {
+                // Abandoned mid-flight. This Task is the only holder of the
+                // minted target, so it owns the cleanup.
+                if freshlyMinted, let target = resolved?.target {
+                    environment.discardDraft(target)
                 }
+                return
+            }
+            self.planning = false
+
+            if let resolved {
+                self.enterReview(payload, target: resolved.target,
+                                 freshlyMinted: freshlyMinted, model: resolved.model)
+            } else if case .blocked(let block) = plan {
+                if case .customGatewayCapReached = block { self.pendingUpgradePayload = payload }
+                self.showBlocked(block)
             }
         }
+    }
+
+    /// Purchase resumes local planning/review only. It never repeats Connect,
+    /// probes the server, saves credentials or dispatches a conversation.
+    func resumeAfterUpgrade(hasProAccess: Bool) {
+        guard hasProAccess, let payload = pendingUpgradePayload else { return }
+        pendingUpgradePayload = nil
+        phase = .input
+        inlineError = nil
+        planParsedPayload(payload)
     }
 
     /// A code that cannot land at any target — terminal, back to the input step.
@@ -426,9 +444,9 @@ final class PairingImportFlow {
         // Neither block is a transport problem — the code is fine and the server
         // was never contacted — so neither carries a recipe link.
         case .customGatewayCapReached:
+            showingProPaywall = true
             inlineError = InlineError(
-                message: String(localized: "settings.pairing.error.capReached",
-                                defaultValue: "You've reached the custom-gateway limit. Delete one in Settings to import another."),
+                message: SettingsViewModel.gatewayLimitMessage,
                 anchor: nil
             )
         case .kindMismatch(let expectedDisplayName):
@@ -643,6 +661,8 @@ final class PairingImportFlow {
     /// Takes no context because those paths have none in hand: the pending target
     /// is whatever the review step claimed.
     func invalidatePendingImport() {
+        pendingUpgradePayload = nil
+        showingProPaywall = false
         operationGeneration &+= 1
         resolutionTask?.cancel()
         resolutionTask = nil
@@ -710,6 +730,14 @@ final class PairingImportFlow {
         stageStatus[.save] = .running
         switch await environment.execute(payload, target: target,
                                          gatewayPin: gatewayPin, fileServerPin: fileServerPin) {
+        case .upgradeRequired:
+            let generation = operationGeneration
+            let freshlyMinted = isFreshlyMinted(payload)
+            let review = await environment.review(payload, target: target, freshlyMinted: freshlyMinted)
+            guard generation == operationGeneration else { return }
+            enterReview(payload, target: target, freshlyMinted: freshlyMinted, model: review)
+            showingProPaywall = true
+            return
         case .failed:
             // Retryable: the message says so, and re-running the import is the
             // remedy. The recovery section never sees it — a failed save ends

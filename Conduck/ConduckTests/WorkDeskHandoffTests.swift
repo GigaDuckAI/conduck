@@ -524,6 +524,109 @@ final class WorkDeskHandoffTests: XCTestCase {
         XCTAssertEqual(fixture.submittedLaneID, fixture.connections[0].files?.durableLaneID)
     }
 
+    func testPausedProjectAfterReviewRefusesFilesAndTextBeforeAnyEgress() async {
+        for refusal in [WorkDeskStoreError.projectArchived, .projectSelectionRequired] {
+            for includesFile in [false, true] {
+                let fixture = Fixture(files: true)
+                let file = fixture.add(kind: .file, name: "Private.pdf", data: Data([0, 255]), mime: "application/pdf")
+                let projectID = UUID()
+                var paused = false
+                var dependencies = fixture.dependencies
+                dependencies.validateProjectActivity = { id in
+                    XCTAssertEqual(id, projectID)
+                    if paused { throw refusal }
+                }
+                let handoff = WorkDeskHandoff(dependencies: dependencies)
+                let draft = WorkDeskBriefDraft(brief: "Standing context", preferredGatewayRef: gatewayRef.rawString,
+                    task: "Keep this request", handoff: handoff)
+                await handoff.prepare(title: "Project", brief: draft.brief, cards: includesFile ? [file] : [],
+                    ref: gatewayRef, projectID: projectID)
+                XCTAssertNotNil(handoff.prepared)
+                paused = true
+                let result = await handoff.send()
+                XCTAssertNil(result)
+                XCTAssertTrue(fixture.events.isEmpty, "A paused project must not upload, create or submit")
+                XCTAssertEqual(handoff.errorMessage, refusal.localizedDescription)
+                XCTAssertEqual(draft.brief, "Keep this request")
+                XCTAssertNil(handoff.acceptedConversationID)
+                XCTAssertTrue(fixture.exported.allSatisfy { !FileManager.default.fileExists(atPath: $0.url.path) })
+            }
+        }
+    }
+
+    func testProjectPauseDuringMultipleUploadsStopsRemainingFilesAndCleansAttempt() async {
+        for refusal in [WorkDeskStoreError.projectArchived, .projectSelectionRequired] {
+            let fixture = Fixture(files: true)
+            let first = fixture.add(kind: .file, name: "First.pdf", data: Data([0, 255]), mime: "application/pdf")
+            let second = fixture.add(kind: .file, name: "Second.pdf", data: Data([0, 255]), mime: "application/pdf")
+            var paused = false
+            var checks = 0
+            var dependencies = fixture.dependencies
+            let upload = dependencies.upload
+            dependencies.upload = { url, key, lane in
+                try await upload(url, key, lane)
+                paused = true
+            }
+            dependencies.validateProjectActivity = { _ in
+                checks += 1
+                if paused { throw refusal }
+            }
+            let handoff = WorkDeskHandoff(dependencies: dependencies)
+            await handoff.prepare(title: "Project", brief: "Review both", cards: [first, second],
+                ref: gatewayRef, projectID: UUID())
+            let result = await handoff.send()
+            XCTAssertNil(result)
+            XCTAssertEqual(checks, 2, "Each outbound file needs current admission")
+            XCTAssertEqual(fixture.events, ["upload", "remove-upload"])
+            XCTAssertEqual(handoff.errorMessage, refusal.localizedDescription)
+            XCTAssertNil(handoff.acceptedConversationID)
+            XCTAssertTrue(fixture.exported.allSatisfy { !FileManager.default.fileExists(atPath: $0.url.path) })
+        }
+    }
+
+    func testProjectPauseAfterFinalUploadRefusesConversationAndCleansUploadedFile() async {
+        let fixture = Fixture(files: true)
+        let file = fixture.add(kind: .file, name: "Last.pdf", data: Data([0, 255]), mime: "application/pdf")
+        var paused = false
+        var dependencies = fixture.dependencies
+        let upload = dependencies.upload
+        dependencies.upload = { url, key, lane in
+            try await upload(url, key, lane)
+            paused = true
+        }
+        dependencies.validateProjectActivity = { _ in
+            if paused { throw WorkDeskStoreError.projectArchived }
+        }
+        let handoff = WorkDeskHandoff(dependencies: dependencies)
+        await handoff.prepare(title: "Project", brief: "Review", cards: [file], ref: gatewayRef, projectID: UUID())
+        let result = await handoff.send()
+        XCTAssertNil(result)
+        XCTAssertEqual(fixture.events, ["upload", "remove-upload"])
+        XCTAssertEqual(handoff.errorMessage, WorkDeskStoreError.projectArchived.localizedDescription)
+    }
+
+    func testProjectPauseAfterAcceptancePreservesAcceptedConversationAndNeverResends() async {
+        let fixture = Fixture()
+        var paused = false
+        var dependencies = fixture.dependencies
+        dependencies.validateProjectActivity = { _ in
+            if paused { throw WorkDeskStoreError.projectArchived }
+        }
+        let handoff = WorkDeskHandoff(dependencies: dependencies)
+        var acceptedCount = 0
+        handoff.onAccepted = { acceptedCount += 1 }
+        await handoff.prepare(title: "Project", brief: "Accepted request", cards: [], ref: gatewayRef, projectID: UUID())
+        let accepted = await handoff.send()
+        XCTAssertNotNil(accepted)
+        paused = true
+        let repeated = await handoff.send()
+        XCTAssertNil(repeated)
+        XCTAssertEqual(handoff.acceptedConversationID, accepted)
+        XCTAssertEqual(fixture.events, ["create", "submit"])
+        XCTAssertEqual(acceptedCount, 1)
+        XCTAssertNil(handoff.errorMessage)
+    }
+
     func testUploadFailureCleansAllAttemptedKeysAndNeverCreatesConversation() async {
         let fixture = Fixture(files: true)
         fixture.failUpload = true
@@ -954,7 +1057,8 @@ final class WorkDeskHandoffTests: XCTestCase {
                         return await withCheckedContinuation { submissionContinuation = $0 }
                     }
                     return accepts
-                }
+                },
+                validateProjectActivity: { _ in }
             )
         }
     }

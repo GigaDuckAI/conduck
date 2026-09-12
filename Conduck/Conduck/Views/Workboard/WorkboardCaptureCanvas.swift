@@ -122,7 +122,9 @@ struct WorkboardCaptureCanvas: View {
     var body: some View {
         Group {
             if mode == .composer {
-                pinnedComposer
+                if deskWorkspace?.currentProject == nil || deskWorkspace?.currentProjectAllowsNewActivity == true || deskWorkspace?.isSearching == true {
+                    pinnedComposer
+                }
             } else {
                 // No container around the cards: the WHOLE pane is the drop
                 // target, and a bordered surface would read as the one place a
@@ -992,6 +994,16 @@ private struct WorkboardPaneDropModifier: ViewModifier {
     private func handleDrop(_ providers: [NSItemProvider], at point: CGPoint) -> Bool {
         guard workbenchDestinationIsActive, !viewModel.deskWorkspace.isShowingConversation,
               !isImporting, dropSession == nil, let target = captureDestination(at: point) else { return false }
+        if case .project(let projectID, _) = target,
+           let project = viewModel.deskWorkspace.organization.project(id: projectID),
+           project.isArchived || viewModel.deskWorkspace.organization.requiresFreeProjectSelection {
+            if viewModel.deskWorkspace.organization.requiresFreeProjectSelection {
+                viewModel.deskWorkspace.organization.projectSelectionRequested = true
+            } else {
+                viewModel.deskWorkspace.organization.errorMessage = WorkDeskStoreError.projectArchived.localizedDescription
+            }
+            return false
+        }
         let routed = providers.compactMap { provider -> (NSItemProvider, WorkboardDropProviderRoute)? in
             guard let route = WorkboardDropProviderRoute(provider: provider) else { return nil }
             return (provider, route)

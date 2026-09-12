@@ -154,7 +154,7 @@ final class SettingsViewModelCommitHonestyTests: XCTestCase {
         let vm = SettingsViewModel()
         let overflowRef = RemoteAgentRef.custom(overflowID)
         vm.remoteAgentURLStrings[overflowRef] = "https://overflow.example.test:18789"
-        vm.remoteAgentAuthSchemes[overflowRef] = .none   // keyless → no Keychain dependency
+        vm.remoteAgentAuthSchemes[overflowRef] = RemoteAgentAuthScheme.none   // keyless → no Keychain dependency
 
         let saved = await vm.saveRemoteAgent(ref: overflowRef, name: "Overflow", stagedToken: .stored)
         XCTAssertFalse(saved,
@@ -276,4 +276,65 @@ final class SettingsViewModelCommitHonestyTests: XCTestCase {
         XCTAssertNil(vm.remoteAgentCommitEpoch[openclaw],
                      "A failed save must leave the receipt untouched — a bump would make the editor rehydrate from storage that holds nothing.")
     }
+    func testManualFourthBuiltinRefusedButExistingCustomCanBeEdited() async {
+        let vm = SettingsViewModel()
+        await vm.loadSettings()
+        await Task.yield()
+        vm.editorHasUnsavedChanges = true
+        let custom = CustomGateway(id: UUID(), name: "Editable")
+        _ = await SettingsManager.shared.upsertCustomGateway(custom)
+        _ = await SettingsManager.shared.upsertCustomGateway(CustomGateway(id: UUID(), name: "Second"))
+        await SettingsManager.shared.setRemoteAgentURL(URL(string: "https://openclaw.example.test")!, for: openclaw)
+        await SettingsManager.shared.setRemoteAgentAuthScheme(.none, for: openclaw)
+        await SettingsManager.shared.setDefaultRemoteAgentRef(openclaw)
+        let hermes: RemoteAgentRef = .builtin(.hermes)
+        vm.remoteAgentURLStrings[hermes] = "https://refused.example.test"
+        vm.remoteAgentAuthSchemes[hermes] = .bearer
+        let failed = await vm.saveRemoteAgent(ref: hermes, name: nil, stagedToken: .typed("must-not-write"))
+        XCTAssertFalse(failed)
+        let token = await SettingsManager.shared.getRemoteAgentToken(for: hermes)
+        let url = await SettingsManager.shared.getRemoteAgentURL(for: hermes)
+        XCTAssertNil(token)
+        XCTAssertNil(url)
+        XCTAssertNil(vm.remoteAgentCommitEpoch[hermes])
+        let ref = RemoteAgentRef.custom(custom.id)
+        vm.remoteAgentURLStrings[ref] = "https://edited.example.test"
+        vm.remoteAgentAuthSchemes[ref] = RemoteAgentAuthScheme.none
+        let edited = await vm.saveRemoteAgent(ref: ref, name: "Edited", stagedToken: .stored)
+        XCTAssertTrue(edited, "An existing definition can be repaired at the cap")
+        await vm.clearRemoteAgent(for: openclaw)
+        vm.remoteAgentURLStrings[hermes] = "https://hermes.example.test"
+        vm.remoteAgentAuthSchemes[hermes] = RemoteAgentAuthScheme.none
+        let afterForget = await vm.saveRemoteAgent(ref: hermes, name: nil, stagedToken: .stored)
+        XCTAssertTrue(afterForget, "Forgetting a built-in frees its slot")
+    }
+
+    func testDirtyEditorSeesFreedCapacityWithoutLosingDraftFields() async {
+        let vm = SettingsViewModel()
+        await vm.loadSettings()
+        await Task.yield()
+        vm.editorHasUnsavedChanges = true
+        let occupied = (0..<Constants.maxConfiguredGateways).map {
+            CustomGateway(id: UUID(), name: "Saved \($0)")
+        }
+        for row in occupied { _ = await SettingsManager.shared.upsertCustomGateway(row) }
+        let hermes: RemoteAgentRef = .builtin(.hermes)
+        vm.remoteAgentURLStrings[hermes] = "https://my-unsaved-draft.example.test"
+        vm.remoteAgentAuthSchemes[hermes] = RemoteAgentAuthScheme.none
+        let refused = await vm.saveRemoteAgent(ref: hermes, name: nil, stagedToken: .stored)
+        XCTAssertFalse(refused)
+        XCTAssertEqual(vm.remoteAgentValidationStates[hermes], .invalid(message: SettingsViewModel.gatewayLimitMessage))
+        XCTAssertFalse(vm.canConfigureRemoteAgent(hermes))
+        await SettingsManager.shared.deleteCustomGateway(id: occupied[0].id)
+        // Exactly the handler invoked by the remote settings notification;
+        // awaiting it avoids a timing-dependent notification/run-loop sleep.
+        await vm.handleSettingsChangeNotification()
+        XCTAssertTrue(vm.canConfigureRemoteAgent(hermes))
+        XCTAssertTrue(vm.editorHasUnsavedChanges)
+        XCTAssertEqual(vm.remoteAgentURLStrings[hermes], "https://my-unsaved-draft.example.test")
+        XCTAssertEqual(vm.remoteAgentAuthSchemes[hermes], RemoteAgentAuthScheme.none)
+        let retry = await vm.saveRemoteAgent(ref: hermes, name: nil, stagedToken: .stored)
+        XCTAssertTrue(retry)
+    }
+
 }

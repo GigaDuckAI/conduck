@@ -403,8 +403,8 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
         defer { session.invalidateAndCancel() }
 
         do {
-            _ = try await RemoteAgentClient.shared.send(
-                backend: .openclaw,
+            _ = try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw),
                 url: fixture.baseURL(port: fixture.portA),
                 token: Self.bearerToken,
                 newUserText: "hello",
@@ -428,8 +428,8 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
             pinnedFingerprintHex: fixture.ecPin)
         defer { session.invalidateAndCancel() }
 
-        let reply = try await RemoteAgentClient.shared.send(
-            backend: .openclaw,
+        let reply = try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+            backend: .openclaw, ref: .builtin(.openclaw),
             url: fixture.baseURL(port: fixture.portA),
             token: Self.bearerToken,
             newUserText: "hello",
@@ -449,8 +449,8 @@ final class RemoteAgentLiveTLSTrustTests: XCTestCase {
         defer { session.invalidateAndCancel() }
 
         do {
-            _ = try await RemoteAgentClient.shared.send(
-                backend: .openclaw,
+            _ = try await RemoteAgentClient(isGatewayActive: { _ in true }).send(
+                backend: .openclaw, ref: .builtin(.openclaw),
                 // `/xredirect/v1/chat/completions` answers 302 → another origin.
                 url: fixture.baseURL(port: fixture.portA).appending(path: "xredirect"),
                 token: Self.bearerToken,

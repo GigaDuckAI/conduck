@@ -357,4 +357,57 @@ final class WatchFileLaneReturnCapabilityTests: XCTestCase {
             "The durable slot retires in the same breath as the lane identity's."
         )
     }
+    func testGatewaySelectionNarrowsDispatchWithoutRemovingConfigurationAndSurvivesRelaunch() throws {
+        let defaults = InMemoryDefaultsStore()
+        let kvs = InMemoryUbiquitousStore()
+        let dependencies = SettingsDependencies.inMemory(defaults: defaults, ubiquitous: kvs)
+        let access = WatchGatewayTestAccess(ProAccessSnapshot(hasExpiredSubscription: true))
+        let reader = WatchSettingsReader(dependencies: dependencies, proAccess: { access.value })
+        let refs = [RemoteAgentRef.builtin(.openclaw), .builtin(.hermes), .custom(UUID()), .custom(UUID())]
+        let subs = refs.map { ref in
+            RemoteAgentBroadcastEnvelope(backendRef: ref.rawString,
+                url: URL(string: "https://gateway.example.test")!,
+                name: ref.customID == nil ? nil : "Saved custom", model: nil,
+                colorID: nil, monogram: nil, token: nil, authScheme: .none,
+                certFingerprintHex: nil, fileTransferAvailable: false,
+                activeSessionID: nil, timestamp: 1)
+        }
+        let selection = GatewayFreeSelection(selectedRefs: Set(refs.prefix(3).map(\.rawString)),
+            reviewedRefs: Set(refs.map(\.rawString)))
+        let envelope = RemoteAgentMultiBroadcastEnvelope(backends: subs,
+            defaultBackendRef: refs[0].rawString, timestamp: 1, sessionPolicy: nil,
+            knownGatewayRefs: refs.map(\.rawString), freeGatewaySelection: selection,
+            requiresFreeGatewaySelection: true)
+        XCTAssertTrue(reader.updateRemoteAgents(multi: envelope))
+        XCTAssertEqual(Set(reader.configuredBackendRefs()), Set(refs.prefix(3).map(\.rawString)))
+        XCTAssertNil(reader.remoteAgentConfig(for: refs[3].rawString))
+        XCTAssertNotNil(defaults.string(forKey: Constants.remoteAgentURLKey(for: refs[3])),
+                        "An inactive gateway must keep its durable URL")
+        access.value = ProAccessSnapshot(hasProAccess: true)
+        XCTAssertNotNil(reader.remoteAgentConfig(for: refs[3].rawString), "Verified renewal restores access immediately")
+        access.value = ProAccessSnapshot(hasExpiredSubscription: true)
+        let relaunched = WatchSettingsReader(dependencies: dependencies, proAccess: { access.value })
+        XCTAssertNil(relaunched.remoteAgentConfig(for: refs[3].rawString))
+        XCTAssertNotNil(relaunched.remoteAgentConfig(for: refs[0].rawString))
+        XCTAssertTrue(reader.isRemoteAgentActive(RemoteAgentRef.builtin(.openrouter).rawString))
+        let malformed = GatewayFreeSelection(selectedRefs: Set(refs.map(\.rawString)), reviewedRefs: Set(refs.map(\.rawString)))
+        let newer = RemoteAgentMultiBroadcastEnvelope(backends: subs,
+            defaultBackendRef: refs[0].rawString, timestamp: 2, sessionPolicy: nil,
+            knownGatewayRefs: refs.map(\.rawString), freeGatewaySelection: malformed,
+            requiresFreeGatewaySelection: true)
+        XCTAssertTrue(reader.updateRemoteAgents(multi: newer))
+        XCTAssertTrue(reader.configuredBackendRefs().isEmpty, "A malformed choice cannot enable a fourth gateway")
+        XCTAssertFalse(reader.updateRemoteAgents(multi: envelope), "An older choice cannot replace the newer restriction")
+    }
+
+}
+
+private final class WatchGatewayTestAccess: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: ProAccessSnapshot
+    init(_ value: ProAccessSnapshot) { stored = value }
+    var value: ProAccessSnapshot {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); defer { lock.unlock() }; stored = newValue }
+    }
 }

@@ -123,6 +123,34 @@ final class WorkDeskProjectConversationTests: XCTestCase {
         XCTAssertTrue(all.isEmpty)
     }
 
+    func testArchiveKeepsLateReplyFilesAndTheirPayloadRecoveryInTheProject() async throws {
+        let store = isolated.make()
+        let project = WorkDeskProjectRecord(title: "Completed research")
+        _ = try await store.applyWorkDeskMutation(.createProject(project, materialIDs: []))
+        let conversation = try await store.createConversation(backend: "hermes", projectID: project.id)
+        _ = try await store.applyWorkDeskMutation(.archiveProject(id: project.id, isArchived: true))
+        let reply = try await store.appendMessage(role: "agent", text: "Late file", conversationID: conversation.id,
+            sourceDevice: "test", attachments: [file()])
+        await store.reconcileProjectResults()
+        let id = try await storedAttachmentID(for: reply, conversationID: conversation.id, store: store)
+        let material = try await store.fetchWorkMaterial(id: id)
+        let organization = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(material?.filename, "result.txt")
+        XCTAssertEqual(organization.projects.first?.isArchived, true)
+        XCTAssertEqual(organization.placements[id]?.projectID, project.id)
+        _ = await store._deleteWorkMaterialBlobRowsForTesting(materialID: id)
+        let missing = try await store.loadWorkMaterialPayload(id: id)
+        XCTAssertNil(missing)
+        await store.reconcileProjectResults()
+        let restored = try await store.loadWorkMaterialPayload(id: id)
+        let preserved = try await store.fetchWorkDeskOrganization()
+        XCTAssertEqual(restored, Data("file contents".utf8))
+        XCTAssertEqual(preserved.placements, organization.placements)
+        let receipts = try await store.fetchWorkDeskResults()
+        XCTAssertEqual(receipts.count, 1)
+        XCTAssertEqual(receipts[id]?.conversationID, conversation.id)
+    }
+
     func testOnlyReturnedNonAudioFilesBecomeProjectMaterialsWithProvenance() async throws {
         let store = isolated.make()
         let project = WorkDeskProjectRecord(title: "Research")

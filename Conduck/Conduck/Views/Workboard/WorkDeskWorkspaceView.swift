@@ -7,6 +7,8 @@
 // Home holds loose materials and projects. Opening a project replaces the
 // detail surface; only the explicit brief sheet can create a
 // conversation. Deletion reviews the exact materials and affected locations.
+// Active and archived projects remain accessible in navigation. Archiving
+// stops new project activity while retaining its materials and conversations.
 
 import SwiftUI
 
@@ -25,7 +27,7 @@ struct WorkDeskWorkspaceView: View {
 
     private var workspaceLayout: some View {
         VStack(spacing: 0) {
-            if !workspace.isShowingConversation || showsConversationBackNavigation || workspace.conversationLoadError != nil {
+            if !workspace.isShowingConversation || showsConversationBackNavigation || workspace.conversationLoadError != nil || workspace.showsProjectAccessRecovery {
                 header()
             }
             workspaceContent
@@ -56,6 +58,10 @@ struct WorkDeskWorkspaceView: View {
                 WorkDeskConversationView(conversation: conversation, viewModel: model,
                     session: workspace.conversationSession(for: conversation.id),
                     settingsVM: workspace.conversationSettings,
+                    allowsNewTurns: workspace.currentProjectAllowsNewActivity,
+                    newActivityMessage: workspace.currentProject?.isArchived == true
+                        ? WorkDeskStoreError.projectArchived.localizedDescription
+                        : WorkDeskStoreError.projectSelectionRequired.localizedDescription,
                     onVisibilityChanged: conversationResolver.reportVisible)
                     .environment(\.workDeskOpenConversation, { [weak workspace, sourceID = conversation.id] id in
                         guard let workspace, workspace.isActive,
@@ -153,6 +159,32 @@ struct WorkDeskWorkspaceView: View {
                     }
             }
             .presentationDetents([.medium, .large])
+            .sheet(isPresented: Binding(
+                get: { isActive && workspace.showsProjectPicker && workspace.organization.projectLimitRequested },
+                set: { workspace.organization.projectLimitRequested = $0 }
+            ), onDismiss: workspace.projectLimitDidDismiss) {
+                ProPaywallView(context: .projectLimit, onManage: workspace.manageProjectsFromLimit)
+            }
+            .sheet(isPresented: Binding(
+                get: { isActive && workspace.projectSelectionPresenter == .picker },
+                set: { workspace.organization.projectSelectionRequested = $0 }
+            )) {
+                WorkDeskFreeProjectSelectionView(organization: workspace.organization)
+            }
+            // The picker is its own presenter on iPhone/compact iPad. A limit
+            // reached here must appear above this sheet, keeping it open so
+            // the person can archive a project and retry without losing scope.
+            .alert(Text(LocalizedStringResource("workdesk.update.failed", defaultValue: "Couldn’t update the desk")),
+                   isPresented: Binding(
+                    get: { isActive && workspace.showsProjectPicker && workspace.organization.errorMessage != nil },
+                    set: { if !$0 { workspace.organization.errorMessage = nil } }
+                   )) {
+                Button(LocalizedStringResource("common.ok", defaultValue: "OK")) {
+                    workspace.organization.errorMessage = nil
+                }
+            } message: {
+                Text(verbatim: workspace.organization.errorMessage ?? "")
+            }
         }
         .sheet(item: Binding(
             get: { isActive ? workspace.projectEditor : nil },
@@ -161,6 +193,18 @@ struct WorkDeskWorkspaceView: View {
             WorkDeskProjectEditor(request: request, organization: workspace.organization, title: $workspace.editorTitle) { _ in
                 if request.project == nil { workspace.selectScope(.all) }
             }
+        }
+        .sheet(isPresented: Binding(
+            get: { isActive && !workspace.showsProjectPicker && workspace.projectEditor == nil && workspace.preparingProjectID == nil && workspace.organization.projectLimitRequested },
+            set: { workspace.organization.projectLimitRequested = $0 }
+        ), onDismiss: workspace.projectLimitDidDismiss) {
+            ProPaywallView(context: .projectLimit, onManage: workspace.manageProjectsFromLimit)
+        }
+        .sheet(isPresented: Binding(
+            get: { isActive && workspace.projectSelectionPresenter == .workspace },
+            set: { workspace.organization.projectSelectionRequested = $0 }
+        )) {
+            WorkDeskFreeProjectSelectionView(organization: workspace.organization)
         }
         .sheet(isPresented: Binding(
             get: { isActive && workspace.editingContextProjectID != nil },
@@ -238,7 +282,7 @@ struct WorkDeskWorkspaceView: View {
         }
         .alert(Text(LocalizedStringResource("workdesk.update.failed", defaultValue: "Couldn’t update the desk")),
                isPresented: Binding(
-                get: { isActive && workspace.organization.errorMessage != nil && workspace.projectPreview.request == nil && workspace.projectEditor == nil && workspace.preparingProjectID == nil && workspace.projectDeletionReview == nil },
+                get: { isActive && !workspace.showsProjectPicker && workspace.organization.errorMessage != nil && workspace.projectPreview.request == nil && workspace.projectEditor == nil && workspace.preparingProjectID == nil && workspace.projectDeletionReview == nil },
                 set: { if !$0 { workspace.organization.errorMessage = nil } }
                )) {
             Button(LocalizedStringResource("common.ok", defaultValue: "OK")) {
@@ -256,6 +300,28 @@ struct WorkDeskWorkspaceView: View {
     /// windows retain a named primary action.
     private func header() -> some View {
         VStack(alignment: .leading, spacing: 4) {
+            if workspace.organization.canPresentFreeProjectSelection {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(workspace.organization.hasExpiredSubscription
+                        ? LocalizedStringResource("workdesk.pro.expired.message", defaultValue: "Your Pro subscription ended. Choose which projects stay active on the free plan.")
+                        : LocalizedStringResource("workdesk.pro.selection.message", defaultValue: "Choose which projects stay active on the free plan. All your materials and conversations remain available."))
+                        .font(.caption).foregroundStyle(AppColors.textSecondary)
+                    Spacer(minLength: 0)
+                    Button(LocalizedStringResource("workdesk.pro.chooseProjects", defaultValue: "Choose projects")) {
+                        workspace.organization.projectSelectionRequested = true
+                    }.inlineLinkButton()
+                }.padding(.vertical, 6)
+            }
+            if let project = workspace.currentProject, project.isArchived, !workspace.isSearching {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(LocalizedStringResource("workdesk.project.archived.message", defaultValue: "Archived. Restore this project to add materials or start a new conversation."))
+                        .font(.caption).foregroundStyle(AppColors.textSecondary)
+                    Spacer(minLength: 0)
+                    WorkDeskProjectArchiveButton(project: project, organization: workspace.organization)
+                        .inlineLinkButton()
+                }
+                .padding(.vertical, 6)
+            }
             if workspace.isShowingConversation {
                 if showsConversationBackNavigation {
                     HStack { projectIdentity; Spacer(minLength: 0) }
@@ -277,7 +343,7 @@ struct WorkDeskWorkspaceView: View {
     }
 
     private var showsNewConversation: Bool {
-        workspace.currentProject != nil && !workspace.isShowingConversation && !workspace.isSearching && !workspace.isSelecting
+        workspace.currentProjectAllowsNewActivity && !workspace.isShowingConversation && !workspace.isSearching && !workspace.isSelecting
     }
 
     private var showsConversationBackNavigation: Bool {
@@ -328,9 +394,7 @@ struct WorkDeskWorkspaceView: View {
 
     private var newConversationButton: some View {
         Button {
-            guard let project = workspace.currentProject else { return }
-            _ = workspace.briefDraft(for: project, resolver: effectiveConversationResolver)
-            workspace.preparingProjectID = project.id
+            workspace.beginConversation(resolver: effectiveConversationResolver)
         } label: {
             Text(LocalizedStringResource("workdesk.conversation.new", defaultValue: "New conversation…"))
                 .font(.subheadline.weight(.semibold))
@@ -431,7 +495,7 @@ struct WorkDeskWorkspaceView: View {
             HStack(spacing: 12) {
                 Text(LocalizedStringResource("workdesk.selected.count", defaultValue: "\(workspace.selectedIDs.count) selected"))
                     .font(.caption.monospacedDigit())
-                if workspace.currentProject != nil && !workspace.isSearching {
+                if workspace.currentProjectAllowsNewActivity && !workspace.isSearching {
                     Button(WorkDeskMaterialConversationCopy.title(count: workspace.selectedIDs.count),
                            systemImage: "bubble.left.and.bubble.right") {
                         workspace.beginConversation(materialIDs: workspace.selectedIDs, materials: item.materials,
@@ -451,7 +515,7 @@ struct WorkDeskWorkspaceView: View {
                             Task { await workspace.assignSelection(to: nil, materials: item.materials) }
                         }
                     }
-                    ForEach(workspace.organization.projects.filter { workspace.isSearching || $0.id != workspace.currentProject?.id }) { project in
+                    ForEach(workspace.organization.availableProjectDestinations.filter { workspace.isSearching || $0.id != workspace.currentProject?.id }) { project in
                         Button { Task { await workspace.assignSelection(to: project.id, materials: item.materials) } }
                         label: { Text(verbatim: project.title) }
                     }
@@ -461,10 +525,10 @@ struct WorkDeskWorkspaceView: View {
                         : LocalizedStringResource("workdesk.move", defaultValue: "Move to"), systemImage: "folder")
                 }
                 .buttonStyle(.bordered)
-                .disabled(workspace.organization.projects.isEmpty)
+                .disabled(workspace.organization.activeProjects.isEmpty && !workspace.selectedIDs.contains(where: { workspace.organization.projectID(for: $0) != nil }))
                 if !workspace.isSearching {
                     Menu {
-                        ForEach(workspace.organization.projects.filter { $0.id != workspace.currentProject?.id }) { project in
+                        ForEach(workspace.organization.availableProjectDestinations.filter { $0.id != workspace.currentProject?.id }) { project in
                             Button {
                                 let ids = workspace.visibleMaterials(in: item.materials).map(\.id)
                                     .filter { workspace.selectedIDs.contains($0) }
@@ -479,7 +543,7 @@ struct WorkDeskWorkspaceView: View {
                               systemImage: "folder.badge.plus")
                     }
                     .buttonStyle(.bordered)
-                    .disabled(!workspace.organization.projects.contains { $0.id != workspace.currentProject?.id })
+                    .disabled(!workspace.organization.availableProjectDestinations.contains { $0.id != workspace.currentProject?.id })
                 }
             }
             .controlSize(.small)
@@ -592,6 +656,15 @@ private struct WorkDeskProjectEditor: View {
         .presentationSizing(.form.fitted(horizontal: false, vertical: true))
         .interactiveDismissDisabled(isSaving)
         .onAppear { titleFocused = true }
+        .sheet(isPresented: Binding(
+            get: { organization.projectLimitRequested },
+            set: { organization.projectLimitRequested = $0 }
+        )) {
+            // The editor remains underneath the purchase sheet with its name,
+            // selection and insertion point intact. A verified purchase only
+            // dismisses the paywall; Save is still the person's explicit write.
+            ProPaywallView(context: .projectLimit)
+        }
     }
 
     private func save() {
@@ -609,7 +682,7 @@ private struct WorkDeskProjectEditor: View {
             }
             isSaving = false
             if let savedID { onCreated(savedID); dismiss() }
-            else { error = organization.errorMessage; organization.errorMessage = nil }
+            else { error = organization.projectLimitRequested ? nil : organization.errorMessage; organization.errorMessage = nil }
         }
     }
 }

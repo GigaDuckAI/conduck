@@ -443,9 +443,9 @@ final class SettingsViewModel {
     // Custom-gateways: the per-backend dicts are re-keyed from
     // `RemoteAgentBackend` to `RemoteAgentRef` so a row can be EITHER a
     // built-in (OpenClaw / Hermes) OR a user-defined custom gateway (keyed by
-    // UUID). The built-in two rows route exactly as before (a built-in ref's
-    // `rawString` == its `RemoteAgentBackend.rawValue`); customs add up to
-    // `Constants.maxCustomGateways` more. The Settings "Personal AI" screen
+    // UUID). Built-in refs keep their frozen backend raw strings. Saved
+    // self-hosted built-ins and customs share `Constants.maxConfiguredGateways`;
+    // OpenRouter is exempt. The Settings "Personal AI" screen
     // renders a gateway LIST (master) → per-ref detail, mirroring
     // `STTProviderListView`.
 
@@ -902,25 +902,22 @@ final class SettingsViewModel {
         ) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
-                // Key-readiness probe refreshes UNFENCED: it binds to no editor
-                // buffer, and the banner must clear the instant a synced key
-                // arrives even while an editor is dirty (the arrival monitor's
-                // post is exactly this notification).
-                await self.refreshActiveTTSKeyProbe()
-                // FENCE: never reload buffered fields out from under an open editor.
-                // `loadRemoteAgentState()` / `loadCustomSTTState()` rebuild the URL /
-                // model / cert dicts the editor's TextFields bind to, so a reload
-                // mid-edit (a remote iCloud-KVS sync, or a local write-on-change
-                // control like the image-history picker that posts this same
-                // notification) would silently revert the user's typing. Defer it;
-                // `drainDeferredReloadIfCleared` runs it when the last dirty editor
-                // closes or goes clean.
-                if self.editorHasUnsavedChanges {
-                    self.pendingRemoteReload = true
-                } else {
-                    await self.loadSettings()
-                }
+                await self.handleSettingsChangeNotification()
             }
+        }
+    }
+
+    /// Refresh derived readiness and admission facts even with dirty editors.
+    /// Those facts are never text buffers: a slot freed on another device must
+    /// re-enable Save without discarding the draft. Full rehydration still waits
+    /// until the last dirty editor closes or goes clean.
+    func handleSettingsChangeNotification() async {
+        await refreshActiveTTSKeyProbe()
+        if editorHasUnsavedChanges {
+            pendingRemoteReload = true
+            await refreshRemoteAgentReadinessSnapshots()
+        } else {
+            await loadSettings()
         }
     }
 
@@ -2056,7 +2053,10 @@ final class SettingsViewModel {
     /// editor it opens offers no Forget — the two describing different moments.
     private func refreshRemoteAgentReadinessSnapshots() async {
         let inventory = await SettingsManager.shared.remoteAgentInventory()
-        configuredRemoteAgentRefSet = Set(inventory.configuredRefs)
+        gatewayAllowanceRefs = inventory.allowanceRefs
+        gatewayActivation = await SettingsManager.shared.gatewayActivationState()
+        savedConfiguredRemoteAgentRefSet = Set(inventory.configuredRefs)
+        configuredRemoteAgentRefSet = Set(inventory.configuredRefs.filter { gatewayActivation.permits($0) })
         unavailableRemoteAgentRefSet = Set(inventory.incompleteRefs)
         removableRemoteAgentRefSet = inventory.removableRefs
     }
@@ -2464,8 +2464,52 @@ final class SettingsViewModel {
         return rows
     }
 
-    /// Number of custom gateways currently in the cached roster (incl. an
-    /// in-memory draft). Drives the cap gate on the "+ Add" affordance.
+    /// Saved definitions occupying the free allowance. Separate from send
+    /// readiness so a locked Keychain or pending sync never frees a slot.
+    /// Draft rows and OpenRouter are excluded by the inventory projection.
+    private(set) var gatewayAllowanceRefs: Set<RemoteAgentRef> = []
+    /// Complete saved setups regardless of their current plan eligibility. An
+    /// inactive setup must not make a later repair look like the first gateway
+    /// ever saved and silently replace the user's default.
+    private var savedConfiguredRemoteAgentRefSet: Set<RemoteAgentRef> = []
+
+    private(set) var gatewayActivation = GatewayActivationState(savedRefs: [], activeRefs: [], requiresSelection: false)
+    private(set) var gatewayLimitBlockedRefs: Set<RemoteAgentRef> = []
+
+    var canAddConfiguredGateway: Bool {
+        ProSubscriptionStore.shared.hasProAccess || (!gatewayActivation.requiresSelection
+            && gatewayActivation.activeRefs.count < Constants.maxConfiguredGateways)
+    }
+
+    var showsGatewaySelection: Bool {
+        let store = ProSubscriptionStore.shared
+        return (store.hasLoadedAccess || !store.isConfigured) && !store.hasProAccess
+            && gatewayAllowanceRefs.count > Constants.maxConfiguredGateways
+    }
+
+    func canConfigureRemoteAgent(_ ref: RemoteAgentRef) -> Bool {
+        ref == .builtin(.openrouter) || gatewayAllowanceRefs.contains(ref) || canAddConfiguredGateway
+    }
+
+    func isRemoteAgentActive(_ ref: RemoteAgentRef) -> Bool {
+        ProSubscriptionStore.shared.hasProAccess || gatewayActivation.permits(ref)
+    }
+
+    func refreshGatewayPlan() async { await refreshRemoteAgentReadinessSnapshots() }
+
+    func chooseActiveGateways(_ refs: Set<RemoteAgentRef>) async -> Bool {
+        let saved = await SettingsManager.shared.chooseActiveRemoteAgents(refs)
+        await refreshRemoteAgentReadinessSnapshots()
+        return saved
+    }
+
+    static var gatewayLimitMessage: String {
+        String(localized: "settings.remoteAgent.freeLimit.message",
+               defaultValue: "Your free plan includes three active gateways. Upgrade to Pro for unlimited gateways, or manage your free selection. OpenRouter is always available.")
+    }
+
+    /// Cached custom rows, including unsaved drafts. This is a roster count,
+    /// never the configured-gateway allowance.
     var customGatewayCount: Int {
         customGateways.count
     }
@@ -2474,13 +2518,13 @@ final class SettingsViewModel {
     /// (empty name; auto-assigned badge color; nil model) into the cached
     /// roster and return its id so the caller can push the editor bound to
     /// `.custom(id)`. Persists NOTHING — the draft becomes real only on the
-    /// first successful `validateAndSaveRemoteAgent`. Backing out of an empty
+    /// first successful `saveRemoteAgent`. Backing out of an empty
     /// draft drops it on the next `loadRemoteAgentState` reload.
     ///
-    /// Guarded by the cap: returns nil when already at `maxCustomGateways`
-    /// (the UI also disables the button, so this is defense-in-depth).
+    /// Returns nil when the saved gateway allowance is full. Other unsaved
+    /// drafts consume no slots; Save checks live storage again before writing.
     func newCustomGatewayDraftID() -> UUID? {
-        guard customGateways.count < Constants.maxCustomGateways else { return nil }
+        guard canAddConfiguredGateway else { return nil }
         let id = UUID()
         let usedColorIDs = customGateways.compactMap { $0.colorID }
         let colorID = RemoteAgentBadgePalette.nextUnusedID(existing: usedColorIDs)
@@ -2547,21 +2591,18 @@ final class SettingsViewModel {
         return false
     }
 
-    /// Persist a badge override (color swatch / monogram) on an EXISTING custom
-    /// gateway and re-sync the cached roster. No-op if the gateway isn't yet
-    /// persisted (an unsaved draft keeps the override in-memory until first
-    /// save folds it in via `validateAndSaveRemoteAgent`).
+    /// A badge edit updates only badge fields on a still-existing saved row.
+    /// Existence and mutation share one actor turn, so a concurrent Forget can
+    /// never be undone by a late swatch change. Unsaved drafts keep their badge
+    /// in memory until the configuration commit creates their first row.
     func updateCustomGatewayBadge(_ gateway: CustomGateway) async {
-        // Mirror into the in-memory cache immediately (so the swatch/monogram
-        // re-render without waiting on the actor hop), then persist.
         if let idx = customGateways.firstIndex(where: { $0.id == gateway.id }) {
-            customGateways[idx] = gateway
+            customGateways[idx].colorID = gateway.colorID
+            customGateways[idx].monogram = gateway.monogram
         }
-        // Only persist a gateway that's already configured (has a roster entry);
-        // a never-saved draft has no per-ref slots yet. `upsertCustomGateway`
-        // on an existing id is an UPDATE (never trips the cap).
-        if await SettingsManager.shared.customGateway(id: gateway.id) != nil {
-            _ = await SettingsManager.shared.upsertCustomGateway(gateway)
+        if await SettingsManager.shared.updateExistingCustomGatewayBadge(
+            id: gateway.id, colorID: gateway.colorID, monogram: gateway.monogram
+        ) {
             customGateways = await SettingsManager.shared.customGateways()
         }
     }
@@ -2990,8 +3031,8 @@ final class SettingsViewModel {
     /// test required; Save commits even if untested). Mirrors
     /// `saveCustomVoiceEndpoint` for the custom-voice editor. Reuses the same
     /// guards as `validateRemoteAgent` (custom name required, `https://`-only
-    /// URL) and persists in the order the per-ref slots expect: roster upsert
-    /// (custom) → URL → token (only if a token was typed) → cert pin. Then
+    /// URL), then commits the validated definition in one storage-actor turn
+    /// after checking live capacity, with credentials written first. Then
     /// clears the global session + (conditionally) the active-conversation
     /// pointer and refreshes the derived snapshots. Returns `true` on a
     /// committed save, `false` when a guard rejected it.
@@ -3008,16 +3049,17 @@ final class SettingsViewModel {
     /// resolved token flows only to Keychain; never logged or retained.
     @discardableResult
     func saveRemoteAgent(ref: RemoteAgentRef, name: String?, stagedToken: StagedRemoteAgentToken) async -> Bool {
+        gatewayLimitBlockedRefs.remove(ref)
         let backendName = displayName(for: ref)
 
         // Bootstrap snapshot — whether ANY gateway was already configured BEFORE
         // this save. Drives the first-gateway-ever default bootstrap at the end
-        // (parity with the pairing-import path). Read the cached set SYNCHRONOUSLY
+        // (parity with the pairing-import path). Read saved readiness, including
+        // plan-inactive gateways, SYNCHRONOUSLY
         // at method entry — an `await` here would open a suspension window before
         // the buffer reads below, letting a late `loadSettings` / remote reload
-        // reset `remoteAgentAuthSchemes[ref]` mid-save (matches the View's
-        // `hasAnyConfiguredRemoteAgent` snapshot, which reads the same set).
-        let hadAnyConfiguredBefore = !configuredRemoteAgentRefSet.isEmpty
+        // reset `remoteAgentAuthSchemes[ref]` mid-save.
+        let hadAnyConfiguredBefore = !savedConfiguredRemoteAgentRefSet.isEmpty
 
         // Custom-only: name required; soft 40-char cap.
         var trimmedName: String? = nil
@@ -3198,151 +3240,56 @@ final class SettingsViewModel {
             }
         }
 
-        // Snapshot the stored URL BEFORE the save to detect a host change
-        // (a token-only re-save is NOT a URL change and must not clear the
-        // active-conversation pointer).
-        let priorURL = await SettingsManager.shared.getRemoteAgentURL(for: ref)
-        let urlChanged = (priorURL != parsedURL)
-
-        // ATOMICITY snapshot: the Keychain token write below is the LAST persistence
-        // step, but the roster upsert / URL / auth scheme all land BEFORE it. On a
-        // token-write failure the contract is "nothing persisted" (spec: commits
-        // atomically), so capture the pre-write state now and restore it in the
-        // catch. `priorURL` (above) is the URL half; here we add the roster row (or
-        // its absence for a brand-new draft) and the auth scheme.
-        let priorAuthScheme = await SettingsManager.shared.getRemoteAgentAuthScheme(for: ref)
-        var priorRosterEntry: CustomGateway? = nil
-        if case .custom(let id) = ref {
-            priorRosterEntry = await SettingsManager.shared.customGateway(id: id)
-        }
-        // Whether this ref had ANY persisted config before this save — a brand-new
-        // custom draft (no roster row) or a never-configured built-in rolls back by
-        // CLEARING; an existing config rolls back by RESTORING. Built-ins are probed
-        // via the RAW stored slots, never `getRemoteAgentURL` — fixed-endpoint
-        // backends (OpenRouter) synthesize their URL, so that getter reads non-nil
-        // even when nothing was ever saved.
-        let storedSlotsExist = await SettingsManager.shared.hasStoredRemoteAgentSlots(for: ref)
-        let refExistedBefore: Bool = {
-            if case .custom = ref { return priorRosterEntry != nil }
-            return storedSlotsExist
-        }()
-
-        // Undo whatever landed before a mid-commit failure, restoring the
-        // snapshot above. Every persistence step from here on either completes
-        // the tuple or calls this — the spec contract is that a failed save
-        // persists NOTHING, so a half-written store is never left behind for a
-        // reader (the editor, CarPlay dispatch, the share-target snapshot) to
-        // observe as a configured gateway.
-        func rollbackPartialCommit() async {
-            if refExistedBefore {
-                await SettingsManager.shared.setRemoteAgentURL(priorURL, for: ref)
-                await SettingsManager.shared.setRemoteAgentAuthScheme(priorAuthScheme, for: ref)
-                if let priorRosterEntry {
-                    _ = await SettingsManager.shared.upsertCustomGateway(priorRosterEntry)
-                }
-            } else if case .custom(let id) = ref {
-                // Brand-new draft: deleteCustomGateway clears the roster row AND
-                // its per-ref URL / auth-scheme / cert slots in one call.
-                await SettingsManager.shared.deleteCustomGateway(id: id)
-            } else {
-                // Brand-new built-in configure: clear the URL + scheme just written.
-                await SettingsManager.shared.setRemoteAgentURL(nil, for: ref)
-                await SettingsManager.shared.clearRemoteAgentAuthScheme(for: ref)
-            }
-        }
-
-        // Persist — custom roster first so per-ref slots have a complete home.
+        // Build the prospective roster row without persisting. The storage
+        // actor checks live capacity and commits credentials plus definition in
+        // one turn; UI caches and open drafts never reserve a slot.
+        var updatedCustomGateway: CustomGateway?
         if case .custom(let id) = ref, let trimmedName {
             let existing = customGateways.first(where: { $0.id == id })
-            let usedColorIDs = customGateways
-                .filter { $0.id != id }
-                .compactMap { $0.colorID }
-            let colorID = existing?.colorID
-                ?? RemoteAgentBadgePalette.nextUnusedID(existing: usedColorIDs)
-            let updated = CustomGateway(
-                id: id,
-                name: trimmedName,
-                model: trimmedModel,
-                colorID: colorID,
+            let usedColorIDs = customGateways.filter { $0.id != id }.compactMap { $0.colorID }
+            updatedCustomGateway = CustomGateway(
+                id: id, name: trimmedName, model: trimmedModel,
+                colorID: existing?.colorID ?? RemoteAgentBadgePalette.nextUnusedID(existing: usedColorIDs),
                 monogram: existing?.monogram
             )
-            // A refused upsert (roster at `Constants.maxCustomGateways`) must
-            // fail the save. Reporting success here would leave a ref with
-            // per-ref slots but NO roster row — which `cancelRemoteAgentEdit`
-            // reads as a never-stored draft and wipes, silently destroying a
-            // config the user was told had been saved. Nothing has persisted
-            // yet at this point (the roster upsert is the FIRST write), so
-            // returning is already clean.
-            //
-            // REACHABLE, despite `newCustomGatewayDraftID` refusing to mint a
-            // draft at the cap: that check reads the CACHED roster, so a peer
-            // device syncing its own fifth gateway in over KVS between the mint
-            // and this Save closes the last slot underneath an editor that is
-            // already open.
-            guard await SettingsManager.shared.upsertCustomGateway(updated) else {
-                remoteAgentValidationStates[ref] = .invalid(
-                    message: String(localized: "settings.remoteAgent.error.capReached",
-                                    defaultValue: "You've reached the custom-gateway limit. Delete one to add another.")
-                )
-                return false
-            }
         }
-        // The write fence can refuse an inadmissible URL (`EndpointURLPolicy`).
-        // The guard above already rejected one, and normalisation only strips
-        // query/fragment/path — so this is unreachable today and exists so a
-        // future normalisation change can't turn a refused write into a
-        // reported-saved gateway with no endpoint.
-        guard await SettingsManager.shared.setRemoteAgentURL(parsedURL, for: ref) else {
-            await rollbackPartialCommit()
+        await ProSubscriptionStore.shared.awaitInitialAccess()
+        let commit = await SettingsManager.shared.commitRemoteAgentConfiguration(
+            ref: ref, url: parsedURL, authScheme: authScheme,
+            token: trimmedToken.isEmpty ? nil : trimmedToken,
+            fingerprint: effectiveFingerprint, model: trimmedModel,
+            customGateway: updatedCustomGateway
+        )
+        let urlChanged: Bool
+        switch commit {
+        case .committed(let changed):
+            urlChanged = changed
+        case .limitReached:
+            gatewayLimitBlockedRefs.insert(ref)
+            remoteAgentValidationStates[ref] = .invalid(message: Self.gatewayLimitMessage)
+            await refreshRemoteAgentReadinessSnapshots()
+            return false
+        case .invalidConfiguration:
             remoteAgentValidationStates[ref] = .invalid(
                 message: Self.remoteAgentURLRejectionMessage(parsedURL.absoluteString)
             )
             return false
+        case .missingToken:
+            remoteAgentValidationStates[ref] = .invalid(
+                message: String(localized: "Paste your \(backendName) bearer token.")
+            )
+            return false
+        case .credentialWriteFailed:
+            remoteAgentValidationStates[ref] = .invalid(
+                message: String(localized: "Couldn't save your token securely. Try again.")
+            )
+            return false
         }
-        // Persist the auth scheme EXPLICITLY (never inferred downstream from a
-        // nil token).
-        await SettingsManager.shared.setRemoteAgentAuthScheme(authScheme, for: ref)
         if authScheme == .none {
-            // Keyless: drop any stored token + masked tail. The header is omitted
-            // regardless, but don't leave a stale secret behind. A clear failure
-            // is non-critical — a leftover token is never sent under `.none`.
-            try? await SettingsManager.shared.clearRemoteAgentToken(for: ref)
             remoteAgentMaskedTails[ref] = nil
         } else if !trimmedToken.isEmpty {
-            // Persist a freshly-typed token. A FAILED write MUST NOT report
-            // success: under the keyless-aware "configured" predicate a
-            // URL-present bearer gateway whose token never persisted would read
-            // as configured-keyless — surface the failure (fail closed) instead.
-            do {
-                try await SettingsManager.shared.setRemoteAgentToken(trimmedToken, for: ref)
-                remoteAgentMaskedTails[ref] = maskedTail(trimmedToken)
-                // The Keychain now owns this key, so the sign-in vault's copy has
-                // no remaining job — drop it HERE, at the first instant losing it
-                // costs the user nothing. Consuming any earlier would strand a key
-                // that cannot be re-typed if a later step of this save failed;
-                // consuming any later (or never) would leave a raw credential in
-                // memory for the rest of the session.
-                if let oauthHandleToConsume {
-                    openRouterOAuthState.discard(oauthHandleToConsume)
-                }
-            } catch {
-                // Roll back the roster / URL / auth scheme that already persisted
-                // above so the "nothing persisted on failure" contract holds — the
-                // UI reports total failure, so the store must match.
-                await rollbackPartialCommit()
-                remoteAgentValidationStates[ref] = .invalid(
-                    message: String(localized: "Couldn't save your token securely. Try again.")
-                )
-                return false
-            }
-        }
-        await SettingsManager.shared.setRemoteAgentCertFingerprint(effectiveFingerprint, for: ref)
-        // Built-in hosted backends (OpenRouter) keep their model in the dedicated
-        // per-ref slot (customs carry it on the roster entry, persisted above).
-        // Gated on `showsModelField` so self-hosted built-ins never touch the
-        // slot. Empty model → cleared (setter treats nil/empty identically).
-        if builtinDescriptor?.showsModelField == true {
-            await SettingsManager.shared.setRemoteAgentModel(trimmedModel, for: ref)
+            remoteAgentMaskedTails[ref] = maskedTail(trimmedToken)
+            if let oauthHandleToConsume { openRouterOAuthState.discard(oauthHandleToConsume) }
         }
         // A URL change clears the GLOBAL active session; the
         // active-conversation pointer clears ONLY when it's bound to THIS ref.

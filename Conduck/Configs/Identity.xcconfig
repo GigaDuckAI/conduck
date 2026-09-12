@@ -14,6 +14,9 @@ CONDUCK_DISPLAY_NAME = Conduck Community
 CONDUCK_ENTITLEMENTS_VARIANT = Community
 // Empty in source builds; official distribution supplies its numeric listing ID.
 CONDUCK_APP_STORE_ID =
+// Official distribution supplies its registered monthly subscription product.
+// Empty Community builds do not offer purchases for someone else's app.
+CONDUCK_PRO_MONTHLY_PRODUCT_ID =
 CONDUCK_DEVELOPMENT_TEAM =
 
 DEVELOPMENT_TEAM = $(CONDUCK_DEVELOPMENT_TEAM)

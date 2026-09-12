@@ -304,6 +304,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
             }
             if let organization {
                 WorkDeskProjectColorMenu(project: project.record, organization: organization)
+                WorkDeskProjectArchiveButton(project: project.record, organization: organization)
             }
             if let onDeleteProject {
                 Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {

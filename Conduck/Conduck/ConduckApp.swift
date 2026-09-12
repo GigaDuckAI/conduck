@@ -229,6 +229,7 @@ struct ConduckApp: App {
         // Foreground banner delegate stays App-scope (shared with iOS branch
         // posture); AppDelegate owns the rest of the init wiring on macOS.
         UNUserNotificationCenter.current().delegate = notificationDelegate
+        ProSubscriptionStore.shared.start()
 
         // TTS key-arrival monitor — bounded foreground Keychain re-check that
         // converges a Mac still waiting on an iCloud-Keychain-synced voice key
@@ -443,6 +444,7 @@ struct ConduckApp: App {
         // 0. Share Extension snapshot. Write the initial "Send to" targets
         //    snapshot the appex picker reads, and start the change observers that
         //    keep it fresh.
+        ProSubscriptionStore.shared.start()
         Task {
             await ShareTargetsSnapshotWriter.shared.regenerate()
         }

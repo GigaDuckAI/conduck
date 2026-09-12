@@ -42,6 +42,7 @@ private enum PersonalAIRoute: Hashable {
 
 struct PersonalAISettingsView: View {
     @Bindable var viewModel: SettingsViewModel
+    @State private var planFlow = GatewayPlanFlow()
 
     /// Drives all pushes (the default chooser + a gateway config detail).
     @State private var route: PersonalAIRoute?
@@ -65,12 +66,16 @@ struct PersonalAISettingsView: View {
             // Gated on `hasLoadedRemoteAgentState` so nothing flashes before
             // state loads.
             if viewModel.hasLoadedRemoteAgentState {
+                GatewayPlanControls(viewModel: viewModel, flow: planFlow)
                 defaultSelectorSection
                 connectSection
                 selfHostedGatewaySection
                 hostedModelSection
                 customGatewaySection
             }
+        }
+        .gatewayPlanSheets(viewModel: viewModel, flow: planFlow) {
+            if let id = viewModel.newCustomGatewayDraftID() { route = .configure(.custom(id)) }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
@@ -337,17 +342,20 @@ struct PersonalAISettingsView: View {
     /// the editor bound to `.custom(id)`.
     @ViewBuilder
     private var addCustomGatewayRow: some View {
-        let canAdd = viewModel.customGatewayCount < Constants.maxCustomGateways
+        let canAdd = viewModel.canAddConfiguredGateway
         VStack(alignment: .leading, spacing: 4) {
             Button {
                 if let id = viewModel.newCustomGatewayDraftID() {
                     route = .configure(.custom(id))
+                } else {
+                    planFlow.resumeAdd = true
+                    planFlow.showingUpgrade = true
                 }
             } label: {
                 Label {
                     Text(canAdd
                         ? LocalizedStringResource("settings.remoteAgent.customGateway.add.v2", defaultValue: "Set up a custom server")
-                        : LocalizedStringResource("settings.remoteAgent.customGateway.addAtCap.v2", defaultValue: "Set up a custom server (limit reached)"))
+                        : LocalizedStringResource("settings.remoteAgent.customGateway.addAtCap.v2", defaultValue: "Set up a custom server with Pro"))
                 } icon: {
                     Image(systemName: "plus.circle.fill")
                         .foregroundStyle(canAdd ? AppColors.brandAmber : AppColors.textTertiary)
@@ -356,13 +364,9 @@ struct PersonalAISettingsView: View {
                 .foregroundStyle(canAdd ? AppColors.textPrimary : AppColors.textTertiary)
             }
             .buttonStyle(.plain)
-            .disabled(!canAdd)
             .accessibilityIdentifier("settings.personalAI.addCustomGateway")
             if !canAdd {
-                Text(LocalizedStringResource(
-                    "settings.remoteAgent.customGateway.capHint.v2",
-                    defaultValue: "Delete a custom server above to add another."
-                ))
+                Text(SettingsViewModel.gatewayLimitMessage)
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
             }

@@ -1,0 +1,42 @@
+{
+  "identifier": "8AA5697F",
+  "nonRenewingSubscriptions": [],
+  "products": [],
+  "settings": {
+    "_billingGracePeriodEnabled": false,
+    "_renewalBillingIssuesEnabled": false,
+    "_storefront": "USA",
+    "_timeRate": 0
+  },
+  "subscriptionGroups": [
+    {
+      "id": "10000001",
+      "localizations": [],
+      "name": "Conduck Pro",
+      "subscriptions": [
+        {
+          "adHocOffers": [],
+          "codeOffers": [],
+          "displayPrice": "29.99",
+          "familyShareable": false,
+          "groupNumber": 1,
+          "internalID": "10000002",
+          "introductoryOffer": null,
+          "localizations": [
+            {
+              "description": "Unlimited active projects and configured gateways",
+              "displayName": "Conduck Pro Monthly",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "com.example.conduck.pro.monthly",
+          "recurringSubscriptionPeriod": "P1M",
+          "referenceName": "Conduck Pro Monthly",
+          "subscriptionGroupID": "10000001",
+          "type": "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version": { "major": 2, "minor": 0 }
+}

@@ -22,8 +22,13 @@ final class WatchSettingsReader {
 
     /// External-change feed for the ubiquitous store.
     private let changes: any KVSChangeSource
+    private let proAccess: @Sendable () -> ProAccessSnapshot
+    private static let knownGatewayRefsKey = "remoteAgent.freeGatewayKnownRefs.v1"
+    private static let freeSelectionRequiredKey = "remoteAgent.freeGatewaySelectionRequired.v1"
 
-    init(dependencies: SettingsDependencies = .processDefault) {
+    init(dependencies: SettingsDependencies = .processDefault,
+         proAccess: @escaping @Sendable () -> ProAccessSnapshot = { ProAccess.current }) {
+        self.proAccess = proAccess
         self.kvs = dependencies.ubiquitous
         self.appGroupDefaults = dependencies.defaults
         self.changes = dependencies.changes
@@ -661,6 +666,17 @@ final class WatchSettingsReader {
     @discardableResult
     func updateRemoteAgents(multi envelope: RemoteAgentMultiBroadcastEnvelope) -> Bool {
         guard envelope.timestamp > lastRemoteAgentEnvelopeTimestamp else { return false }
+        // Access metadata never purges a URL or token. A new-format inventory
+        // with no choice explicitly means no reviewed selection yet.
+        if let known = envelope.knownGatewayRefs {
+            appGroupDefaults.set(known, forKey: Self.knownGatewayRefsKey)
+            if let selection = envelope.freeGatewaySelection, let data = try? JSONEncoder().encode(selection) {
+                appGroupDefaults.set(data, forKey: GatewayFreeSelection.storageKey)
+            } else { appGroupDefaults.removeObject(forKey: GatewayFreeSelection.storageKey) }
+        }
+        if let required = envelope.requiresFreeGatewaySelection {
+            appGroupDefaults.set(required, forKey: Self.freeSelectionRequiredKey)
+        }
 
         // EXPLICIT teardown — the user forgot their last gateway on the iPhone.
         // Read from the dedicated flag, never inferred from `backends.isEmpty`,
@@ -1046,6 +1062,7 @@ final class WatchSettingsReader {
     /// per-ref model cache (nil for built-ins → gateway default; omitted from the
     /// converse body).
     func remoteAgentConfig(for ref: String) -> (url: URL, token: String, authScheme: RemoteAgentAuthScheme, cert: String?, model: String?)? {
+        guard isRemoteAgentActive(ref) else { return nil }
         guard let url = remoteAgentURLs[ref], EndpointURLPolicy.isAdmissible(url) else { return nil }
         let cert = remoteAgentCertFingerprints[ref]
         // A saved fingerprint over plain `http` is a configuration this build
@@ -1065,6 +1082,23 @@ final class WatchSettingsReader {
             return nil
         }
         return (url, storedToken ?? "", scheme, cert, remoteAgentModels[ref])
+    }
+
+    /// Re-evaluated for every dispatch, including a bound conversation or a
+    /// cold headless capture. The phone can narrow access but never grant Pro;
+    /// verified StoreKit access on this device is the only unlimited grant.
+    func isRemoteAgentActive(_ rawRef: String) -> Bool {
+        guard let ref = RemoteAgentRef(rawString: rawRef) else { return false }
+        let access = proAccess()
+        if ref == .builtin(.openrouter) || access.hasProAccess { return true }
+        let expired = access.hasExpiredSubscription || appGroupDefaults.bool(forKey: Self.freeSelectionRequiredKey)
+        let known = appGroupDefaults.stringArray(forKey: Self.knownGatewayRefsKey) ?? Array(remoteAgentURLs.keys)
+        let saved = Set(known.compactMap(RemoteAgentRef.init(rawString:)).filter { $0 != .builtin(.openrouter) })
+        let selection = appGroupDefaults.data(forKey: GatewayFreeSelection.storageKey).flatMap {
+            try? JSONDecoder().decode(GatewayFreeSelection.self, from: $0)
+        }
+        return GatewayActivationState.resolve(savedRefs: saved, selection: selection,
+            access: ProAccessSnapshot(hasProAccess: false, hasExpiredSubscription: expired)).permits(ref)
     }
 
     /// Whether the gateway bound to `ref` (a `rawString`) has a READY file lane,

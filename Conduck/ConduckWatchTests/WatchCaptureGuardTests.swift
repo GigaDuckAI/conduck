@@ -54,6 +54,7 @@
 //    the iPhone.
 
 import XCTest
+import CoreData
 @testable import ConduckWatch_Watch_App
 
 @MainActor
@@ -1367,5 +1368,49 @@ final class WatchCaptureDiscardOutcomeTests: XCTestCase {
         XCTAssertEqual(service.captureDiscardCount, 0,
                        "`dismissError()` doubles as the internal error-supersede (new attempts, relay-success auto-clear) — a bump there pops a live draft mid-mint. User abandonment pops view-locally instead.")
         XCTAssertEqual(service.state, .idle)
+    }
+}
+
+// The Watch compiles the shared persistence gate without WorkDeskStoreError.
+// Exercise its native refusal mapping against an isolated Core Data model.
+extension WatchCaptureGuardTests {
+    func testProjectAdmissionKeepsArchivedWorkPausedOnFreeAndPro() throws {
+        let entity = NSEntityDescription()
+        entity.name = "WorkDeskProject"
+        entity.managedObjectClassName = "NSManagedObject"
+        entity.properties = [("id", NSAttributeType.UUIDAttributeType), ("title", .stringAttributeType),
+            ("updatedAt", .dateAttributeType), ("archivedAt", .dateAttributeType), ("deletedAt", .dateAttributeType)].map { name, type in
+                let attribute = NSAttributeDescription()
+                attribute.name = name
+                attribute.attributeType = type
+                attribute.isOptional = true
+                return attribute
+            }
+        let model = NSManagedObjectModel()
+        model.entities = [entity]
+        let coordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
+        try coordinator.addPersistentStore(ofType: NSInMemoryStoreType, configurationName: nil, at: nil)
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        context.persistentStoreCoordinator = coordinator
+        var ids: [UUID] = []
+        for index in 0..<5 {
+            let id = UUID()
+            ids.append(id)
+            let row = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
+            row.setValue(id, forKey: "id")
+            row.setValue("Project \(index)", forKey: "title")
+            row.setValue(Date(), forKey: "updatedAt")
+            if index == 4 { row.setValue(Date(), forKey: "archivedAt") }
+        }
+        for hasPro in [false, true] {
+            XCTAssertThrowsError(try ConversationStore.validateWorkProjectActivity(ids[4],
+                access: .init(hasProAccess: hasPro), in: context)) { error in
+                    XCTAssertEqual(error as? WorkProjectAccessError, .archived)
+                }
+        }
+        XCTAssertThrowsError(try ConversationStore.validateWorkProjectActivity(ids[0], access: .init(), in: context)) { error in
+            XCTAssertEqual(error as? WorkProjectAccessError, .selectionRequired)
+        }
+        XCTAssertNoThrow(try ConversationStore.validateWorkProjectActivity(ids[0], access: .init(hasProAccess: true), in: context))
     }
 }

@@ -196,6 +196,29 @@ final class SettingsViewModelMakeDefaultTests: XCTestCase {
                        "Saving an additional gateway must never silently re-point the default.")
     }
 
+    func testRepairingInactiveGatewayDoesNotBootstrapOverExistingDefault() async throws {
+        let rows = (0..<4).map { CustomGateway(id: UUID(), name: "Saved \($0)") }
+        let roster = try JSONEncoder().encode(rows)
+        defaults.set(roster, forKey: Constants.customGatewaysRegistryKey)
+        TestStores.kvs.set(roster, forKey: Constants.customGatewaysRegistryKey)
+        for row in rows {
+            await SettingsManager.shared.setRemoteAgentURL(URL(string: "https://gateway.example.test"), for: row.ref)
+            await SettingsManager.shared.setRemoteAgentAuthScheme(.none, for: row.ref)
+        }
+        let original = rows[0].ref
+        let repaired = rows[1].ref
+        defaults.set(original.rawString, forKey: Constants.remoteAgentDefaultBackendKVSKey)
+        let vm = await makeVM()
+        let inactive = await SettingsManager.shared.configuredRemoteAgentRefs()
+        XCTAssertTrue(inactive.isEmpty, "Precondition: free roster needs an explicit selection")
+
+        let saved = await saveKeyless(vm, ref: repaired, name: "Repaired", url: "https://gateway.example.test")
+        XCTAssertTrue(saved, "Inactive saved configurations remain editable")
+        XCTAssertEqual(defaults.string(forKey: Constants.remoteAgentDefaultBackendKVSKey), original.rawString,
+                       "Repair is not a first gateway save and cannot replace the chosen default")
+        XCTAssertEqual(vm.defaultRemoteAgentRef, original)
+    }
+
     func testBootstrap_firstGatewayOpenRouter_becomesDefault() async throws {
         // OpenRouter is bearer-locked, so this case needs the access-group
         // Keychain (signed build); skip cleanly on the unsigned sim.

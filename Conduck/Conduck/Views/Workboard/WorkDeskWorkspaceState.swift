@@ -58,6 +58,9 @@ final class WorkDeskWorkspaceState {
     var showsProjectPicker = false
     var projectEditor: WorkDeskProjectEditorRequest?
     var pendingProjectEditor: WorkDeskProjectEditorRequest?
+    private var limitedProjectEditor: WorkDeskProjectEditorRequest?
+    private var managesProjectsAfterLimit = false
+    private var pendingProjectAccessRequest: UUID?
     var editorTitle = ""
     var briefDrafts: [UUID: WorkDeskBriefDraft] = [:]
     var briefRevisions: [UUID: Date] = [:]
@@ -206,6 +209,32 @@ final class WorkDeskWorkspaceState {
     var currentProject: WorkDeskProjectRecord? {
         guard case .project(let id) = scope else { return nil }
         return organization.project(id: id)
+    }
+
+    /// One native presenter owns a free-project choice, including a contents
+    /// preview that is itself a sheet on compact devices. Closing a preview
+    /// changes presentation ownership without changing the requested choice.
+    enum ProjectSelectionPresenter: Equatable {
+        case workspace, picker, preview(UUID)
+    }
+
+    var projectSelectionPresenter: ProjectSelectionPresenter? {
+        guard isActive, organization.projectSelectionRequested,
+              organization.canPresentFreeProjectSelection else { return nil }
+        if let request = projectPreview.request { return .preview(request.id) }
+        if showsProjectPicker { return .picker }
+        guard projectEditor == nil, preparingProjectID == nil,
+              editingContextProjectID == nil, projectDeletionReview == nil,
+              materialUsePickerID == nil else { return nil }
+        return .workspace
+    }
+
+    var showsProjectAccessRecovery: Bool {
+        organization.canPresentFreeProjectSelection || (currentProject?.isArchived == true && !isSearching)
+    }
+
+    var currentProjectAllowsNewActivity: Bool {
+        currentProject?.isArchived == false && !organization.requiresFreeProjectSelection
     }
 
     var currentConversation: ConversationRecord? {
@@ -467,8 +496,54 @@ final class WorkDeskWorkspaceState {
     }
 
     func beginProject(materialIDs: [UUID] = [], position: WorkDeskPoint? = nil) {
-        presentEditor(WorkDeskProjectEditorRequest(project: nil, materialIDs: materialIDs,
-            position: projectCreationPosition(materialIDs: materialIDs, requested: position)))
+        guard organization.hasLoadedProAccess else {
+            let token = UUID(), requestedScope = scope
+            pendingProjectAccessRequest = token
+            Task {
+                await organization.awaitInitialProAccess()
+                guard isActive, scope == requestedScope, pendingProjectAccessRequest == token else { return }
+                pendingProjectAccessRequest = nil
+                beginProject(materialIDs: materialIDs, position: position)
+            }
+            return
+        }
+        let request = WorkDeskProjectEditorRequest(project: nil, materialIDs: materialIDs,
+            position: projectCreationPosition(materialIDs: materialIDs, requested: position))
+        guard organization.canCreateProject else {
+            limitedProjectEditor = request
+            organization.requestProjectLimit()
+            return
+        }
+        presentEditor(request)
+    }
+
+    func projectLimitDidDismiss() {
+        defer { limitedProjectEditor = nil }
+        if managesProjectsAfterLimit {
+            managesProjectsAfterLimit = false
+            if organization.requiresFreeProjectSelection { organization.projectSelectionRequested = true }
+            else if presentsSidebarInline { showsSidebar = true }
+            else { showsProjectPicker = true }
+            return
+        }
+        guard organization.hasProAccess, let limitedProjectEditor else { return }
+        presentEditor(limitedProjectEditor)
+    }
+
+    func manageProjectsFromLimit() {
+        managesProjectsAfterLimit = true
+        organization.projectLimitRequested = false
+    }
+
+    /// The project detail header uses this admission check.
+    /// Opening never resets a retained request or starts a gateway operation.
+    @discardableResult
+    func beginConversation(resolver: WorkDeskConversationResolver) -> Bool {
+        guard isActive, !isSearching, let project = currentProject,
+              currentProjectAllowsNewActivity else { return false }
+        _ = briefDraft(for: project, resolver: resolver)
+        preparingProjectID = project.id
+        return true
     }
 
     /// A card menu retains identifiers rather than a copied snapshot/resolver.
@@ -476,14 +551,14 @@ final class WorkDeskWorkspaceState {
     /// before opening preparation, so a delayed menu action cannot change scope
     /// or quietly shrink the set the person asked to use.
     func requestConversation(materialIDs: Set<UUID>) {
-        guard !isSearching, let project = currentProject, !materialIDs.isEmpty else { return }
+        guard !isSearching, let project = currentProject, currentProjectAllowsNewActivity, !materialIDs.isEmpty else { return }
         conversationSelectionRequest = WorkDeskConversationSelectionRequest(projectID: project.id, materialIDs: materialIDs)
     }
 
     @discardableResult
     func beginConversation(materialIDs: Set<UUID>, materials: [WorkboardMaterialSnapshot],
                            resolver: WorkDeskConversationResolver) -> Bool {
-        guard isActive, !isSearching, let project = currentProject, !materialIDs.isEmpty else { return false }
+        guard isActive, !isSearching, let project = currentProject, currentProjectAllowsNewActivity, !materialIDs.isEmpty else { return false }
         let available = Set(visibleMaterials(in: materials).map(\.id))
         guard materialIDs.isSubset(of: available) else {
             organization.errorMessage = String(localized: "workdesk.conversation.selectionChanged",

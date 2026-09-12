@@ -762,4 +762,35 @@ final class SettingsViewModelOpenRouterOAuthTests: XCTestCase {
         let after = await SettingsManager.shared.getRemoteAgentToken(for: openrouter)
         XCTAssertEqual(after, issuedKey)
     }
+    func testOAuthConnectionRemainsAvailableAtConfiguredGatewayCap() async throws {
+        let seeded = (0..<Constants.maxConfiguredGateways).map {
+            CustomGateway(id: UUID(), name: "Allowance \($0)")
+        }
+        // Preserve the suite's unrelated roster fixture and restore it verbatim.
+        let priorLocal = defaults.data(forKey: Constants.customGatewaysRegistryKey)
+        let priorCloud = TestStores.kvs.data(forKey: Constants.customGatewaysRegistryKey)
+        defer {
+            if let priorLocal { defaults.set(priorLocal, forKey: Constants.customGatewaysRegistryKey) }
+            else { defaults.removeObject(forKey: Constants.customGatewaysRegistryKey) }
+            if let priorCloud { TestStores.kvs.set(priorCloud, forKey: Constants.customGatewaysRegistryKey) }
+            else { TestStores.kvs.removeObject(forKey: Constants.customGatewaysRegistryKey) }
+        }
+        let data = try JSONEncoder().encode(seeded)
+        defaults.set(data, forKey: Constants.customGatewaysRegistryKey)
+        TestStores.kvs.set(data, forKey: Constants.customGatewaysRegistryKey)
+        let vm = await makeVM()
+        XCTAssertFalse(vm.canAddConfiguredGateway)
+        XCTAssertTrue(vm.canConfigureRemoteAgent(openrouter))
+        guard let staged = await stageSignIn(vm: vm, counter: CallCounter()) else {
+            return XCTFail("Expected a transaction on a build with a callback scheme")
+        }
+        let saved = await vm.saveRemoteAgent(ref: openrouter, name: nil, stagedToken: .oauthIssued(staged.handle))
+        XCTAssertTrue(saved)
+        XCTAssertNil(vm.openRouterIssuedKeyTail(handle: staged.handle))
+        let stored = await SettingsManager.shared.getRemoteAgentToken(for: openrouter)
+        XCTAssertEqual(stored, issuedKey)
+        let inventory = await SettingsManager.shared.remoteAgentInventory()
+        XCTAssertEqual(inventory.allowanceRefs.count, Constants.maxConfiguredGateways)
+    }
+
 }

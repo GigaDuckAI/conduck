@@ -80,13 +80,28 @@ struct WorkDeskSidebarView: View {
                         .pointerIconButton(size: 44)
                         .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.new", defaultValue: "New project")))
                     }.padding(.leading, 12).padding(.top, 12)
-                    ForEach(workspace.organization.projects) { project in
+                    Group {
+                        if workspace.organization.hasProAccess {
+                            Text(LocalizedStringResource("workdesk.projects.proCount", defaultValue: "\(workspace.organization.activeProjects.count) active projects · Pro"))
+                        } else {
+                            Text(LocalizedStringResource("workdesk.projects.allowance", defaultValue: "\(workspace.organization.activeProjects.count) of \(Constants.maxActiveWorkProjects) active projects"))
+                        }
+                    }.font(.caption).foregroundStyle(AppColors.textSecondary).padding(.horizontal, 12)
+                    ForEach(workspace.organization.activeProjects) { project in
                         projectNavigationRow(project, count: counts[project.id] ?? 0)
                     }
                     if workspace.organization.projects.isEmpty {
                         Text(LocalizedStringResource("workdesk.projects.empty", defaultValue: "Bring related ideas together. Select a few cards to create your first project."))
                             .font(.caption).foregroundStyle(AppColors.textSecondary)
                             .padding(12)
+                    }
+                    if !workspace.organization.archivedProjects.isEmpty {
+                        Text(LocalizedStringResource("workdesk.projects.archived", defaultValue: "Archived"))
+                            .font(.caption.weight(.semibold)).foregroundStyle(AppColors.textTertiary)
+                            .padding(.leading, 12).padding(.top, 18)
+                        ForEach(workspace.organization.archivedProjects) { project in
+                            projectNavigationRow(project, count: counts[project.id] ?? 0)
+                        }
                     }
                 }
                 .padding(.horizontal, searchInset)
@@ -113,12 +128,13 @@ struct WorkDeskSidebarView: View {
                     .accessibilityLabel(Text(LocalizedStringResource("workdesk.conversations.toggle", defaultValue: "Show or hide project conversations")))
                     .accessibilityValue(Text(expanded ? LocalizedStringResource("workdesk.expanded", defaultValue: "Expanded") : LocalizedStringResource("workdesk.collapsed", defaultValue: "Collapsed")))
                 }
-                railRow(title: project.title, symbol: "folder", scope: .project(project.id), count: count,
+                railRow(title: project.title, symbol: project.isArchived ? "archivebox" : "folder", scope: .project(project.id), count: count,
                         projectColor: project.color)
             }
             .contextMenu {
                 Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project")) { workspace.editProject(project) }
                 WorkDeskProjectColorMenu(project: project, organization: workspace.organization)
+                WorkDeskProjectArchiveButton(project: project, organization: workspace.organization)
                 Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…")) {
                     workspace.requestProjectDeletion(project.id)
                 }
@@ -165,5 +181,23 @@ struct WorkDeskSidebarView: View {
         .accessibilityAddTraits(workspace.scope == scope && !workspace.isShowingConversation && !workspace.isSearching ? .isSelected : [])
         .modifier(WorkDeskRailDropTarget(workspace: workspace, scope: scope, title: title,
             isEnabled: isActive && navigationIsAvailable))
+    }
+}
+
+/// The same archive/restore intent is available beside project identity in the
+/// sidebar, tray and folder menus. A refused restore routes the retained host
+/// to the shared Pro sheet without deleting content or dismissing the project.
+struct WorkDeskProjectArchiveButton: View {
+    let project: WorkDeskProjectRecord
+    let organization: WorkDeskOrganization
+
+    var body: some View {
+        Button(project.isArchived
+            ? LocalizedStringResource("workdesk.project.restore", defaultValue: "Restore project")
+            : LocalizedStringResource("workdesk.project.archive", defaultValue: "Archive project"),
+               systemImage: project.isArchived ? "arrow.uturn.backward" : "archivebox") {
+            Task { await organization.setProjectArchived(!project.isArchived, id: project.id) }
+        }
+        .disabled(organization.isSaving)
     }
 }

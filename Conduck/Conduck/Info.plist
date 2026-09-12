@@ -61,6 +61,8 @@
 	<string>$(CONDUCK_GROUP_ID)</string>
 	<key>ConduckAppStoreID</key>
 	<string>$(CONDUCK_APP_STORE_ID)</string>
+	<key>ConduckProMonthlyProductID</key>
+	<string>$(CONDUCK_PRO_MONTHLY_PRODUCT_ID)</string>
 	<key>ConduckCloudKitBlobsContainerID</key>
 	<string>$(CONDUCK_ICLOUD_BLOBS_CONTAINER_ID)</string>
 	<key>ConduckCloudKitContainerID</key>

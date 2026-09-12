@@ -498,6 +498,10 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
         // in-flight thinking UX).
         awaitReply: Bool = true
     ) async throws -> String {
+        await ProSubscriptionStore.shared.awaitInitialAccess()
+        guard await SettingsManager.shared.isRemoteAgentActive(ref) else {
+            throw AppError.invalidRequest(message: GatewayActivationState.inactiveMessage)
+        }
         // Build the request + body file on disk (background uploads require a
         // file URL, not in-memory Data). The Authorization header is baked into
         // the enqueued task here (the recovery metadata only re-locates the reply
@@ -647,6 +651,11 @@ nonisolated final class BackgroundRemoteAgent: NSObject, @unchecked Sendable {
                 try? FileManager.default.removeItem(at: bodyURL)
                 throw AppError.fileTransferNotConfigured
             }
+        }
+
+        guard await SettingsManager.shared.isRemoteAgentActive(ref) else {
+            try? FileManager.default.removeItem(at: bodyURL)
+            throw AppError.invalidRequest(message: GatewayActivationState.inactiveMessage)
         }
 
         // --- THE FINAL PRE-TRANSPORT BOUNDARY ---

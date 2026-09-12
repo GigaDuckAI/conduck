@@ -223,18 +223,66 @@ final class SettingsViewModelPairingImportTests: XCTestCase {
     }
 
     func testPlanCustomPayloadBlockedAtCap() async throws {
-        let vm = await makeVM()
-        // Fill the roster to the cap with in-memory drafts (drafts count —
-        // `newCustomGatewayDraftID` gates on the cached roster size).
-        for _ in 0..<Constants.maxCustomGateways {
-            XCTAssertNotNil(vm.newCustomGatewayDraftID(), "Pre-cap mints must succeed.")
+        for index in 0..<Constants.maxConfiguredGateways {
+            _ = await SettingsManager.shared.upsertCustomGateway(
+                CustomGateway(id: UUID(), name: "Saved \(index)")
+            )
         }
-
+        let vm = await makeVM()
         let payload = try makePayload(kind: "custom", name: "Home LLM")
         let plan = await vm.planPairingImport(payload, lockedTarget: nil)
+        XCTAssertEqual(plan, .blocked(.customGatewayCapReached))
+    }
 
-        XCTAssertEqual(plan, .blocked(.customGatewayCapReached),
-                       "A custom payload with a full roster must block at the cap, not mint an over-cap slot.")
+    func testUnsavedDraftsConsumeNoGatewaySlots() async throws {
+        let vm = await makeVM()
+        for _ in 0...Constants.maxConfiguredGateways {
+            XCTAssertNotNil(vm.newCustomGatewayDraftID())
+        }
+        let payload = try makePayload(kind: "custom", name: "Home LLM")
+        let plan = await vm.planPairingImport(payload, lockedTarget: nil)
+        guard case .ready = plan else { return XCTFail("Unsaved drafts must not occupy the allowance") }
+        let stored = await SettingsManager.shared.remoteAgentInventory()
+        XCTAssertTrue(stored.allowanceRefs.isEmpty)
+    }
+
+    func testBuiltinPairingAtCapIsBlockedAndExecutionLeavesEverySlotUntouched() async throws {
+        let vm = await makeVM() // deliberately stale while another window fills capacity
+        vm.editorHasUnsavedChanges = true
+        for index in 0..<Constants.maxConfiguredGateways {
+            _ = await SettingsManager.shared.upsertCustomGateway(
+                CustomGateway(id: UUID(), name: "Saved \(index)")
+            )
+        }
+        await SettingsManager.shared.setDefaultRemoteAgentRef(.builtin(.openrouter))
+        await SettingsManager.shared.setRemoteAgentActiveSession("session-before-refusal")
+        // A file-server-only residue is not a configured gateway definition.
+        // Refusing a new gateway must not overwrite these unrelated saved slots.
+        await SettingsManager.shared.setFileServerURL(URL(string: "https://existing-files.example.test")!, for: hermes)
+        await SettingsManager.shared.setFileServerCertFingerprint(String(repeating: "b", count: 64), for: hermes)
+        try await SettingsManager.shared.setFileServerCredential("existing-file-key", for: hermes)
+        let payload = try makePayload(
+            kind: "hermes", url: "https://new-gateway.example.test", token: "new-gateway-key",
+            fileServer: ["url": "https://new-files.example.test", "credential": "new-file-key"],
+            transport: "tailscale"
+        )
+        let plan = await vm.planPairingImport(payload, lockedTarget: hermes)
+        XCTAssertEqual(plan, .blocked(.customGatewayCapReached))
+        let beforeLocal = defaults.dictionaryRepresentation() as NSDictionary
+        let beforeCloud = TestStores.kvs.dictionaryRepresentation() as NSDictionary
+        let outcome = await vm.executePairingImport(
+            payload, target: hermes,
+            resolvedGatewayPin: String(repeating: "a", count: 64), resolvedFileServerPin: nil
+        )
+        XCTAssertEqual(outcome, .upgradeRequired)
+        XCTAssertEqual(defaults.dictionaryRepresentation() as NSDictionary, beforeLocal)
+        XCTAssertEqual(TestStores.kvs.dictionaryRepresentation() as NSDictionary, beforeCloud)
+        let token = await SettingsManager.shared.getRemoteAgentToken(for: hermes)
+        let credential = await SettingsManager.shared.getFileServerCredential(for: hermes)
+        XCTAssertNil(token)
+        XCTAssertEqual(credential, "existing-file-key")
+        XCTAssertNil(vm.remoteAgentCommitEpoch[hermes])
+        XCTAssertEqual(vm.remoteAgentValidationStates[hermes], .invalid(message: SettingsViewModel.gatewayLimitMessage))
     }
 
     func testPlanLockedBuiltinRejectsOtherBuiltinPayload() async throws {

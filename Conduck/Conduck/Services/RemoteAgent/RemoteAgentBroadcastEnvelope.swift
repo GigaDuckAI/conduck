@@ -492,6 +492,15 @@ struct RemoteAgentMultiBroadcastEnvelope: Codable, Sendable {
     /// only when `false`, so an ordinary envelope carries no extra key.
     let defaultBackendChosen: Bool?
 
+    /// Configuration inventory and the user's explicit free selection, never a
+    /// paid entitlement. Inactive definitions still travel in `backends` so a
+    /// plan change cannot trigger the receiver's forgotten-gateway cleanup.
+    let knownGatewayRefs: [String]?
+    let freeGatewaySelection: GatewayFreeSelection?
+    /// A restriction only. The wrist independently verifies paid access; no
+    /// phone-supplied boolean can grant Pro.
+    let requiresFreeGatewaySelection: Bool?
+
     /// Explicit memberwise init so the optional tail fields can default to nil —
     /// every existing construction site (and every test) predates them and must
     /// keep compiling as a normal, non-destructive envelope naming a chosen
@@ -502,7 +511,10 @@ struct RemoteAgentMultiBroadcastEnvelope: Codable, Sendable {
         timestamp: TimeInterval,
         sessionPolicy: String?,
         clearAll: Bool? = nil,
-        defaultBackendChosen: Bool? = nil
+        defaultBackendChosen: Bool? = nil,
+        knownGatewayRefs: [String]? = nil,
+        freeGatewaySelection: GatewayFreeSelection? = nil,
+        requiresFreeGatewaySelection: Bool? = nil
     ) {
         self.backends = backends
         self.defaultBackendRef = defaultBackendRef
@@ -510,6 +522,9 @@ struct RemoteAgentMultiBroadcastEnvelope: Codable, Sendable {
         self.sessionPolicy = sessionPolicy
         self.clearAll = clearAll
         self.defaultBackendChosen = defaultBackendChosen
+        self.knownGatewayRefs = knownGatewayRefs
+        self.freeGatewaySelection = freeGatewaySelection
+        self.requiresFreeGatewaySelection = requiresFreeGatewaySelection
     }
 
     /// Plist-compatible dict for `WCSession.transferUserInfo`. `backends` is
@@ -527,6 +542,11 @@ struct RemoteAgentMultiBroadcastEnvelope: Codable, Sendable {
         // reading and what every older build assumes, so saying it costs a key
         // on every envelope and changes nothing.
         if defaultBackendChosen == false { dict["defaultBackendChosen"] = false }
+        if let knownGatewayRefs { dict["knownGatewayRefs"] = knownGatewayRefs }
+        if let freeGatewaySelection, let data = try? JSONEncoder().encode(freeGatewaySelection) {
+            dict["freeGatewaySelection"] = data
+        }
+        if let requiresFreeGatewaySelection { dict["requiresFreeGatewaySelection"] = requiresFreeGatewaySelection }
         return dict
     }
 
@@ -574,7 +594,12 @@ struct RemoteAgentMultiBroadcastEnvelope: Codable, Sendable {
             timestamp: timestamp,
             sessionPolicy: sessionPolicy,
             clearAll: clearAll,
-            defaultBackendChosen: defaultBackendChosen
+            defaultBackendChosen: defaultBackendChosen,
+            knownGatewayRefs: dict["knownGatewayRefs"] as? [String],
+            freeGatewaySelection: (dict["freeGatewaySelection"] as? Data).flatMap {
+                try? JSONDecoder().decode(GatewayFreeSelection.self, from: $0)
+            },
+            requiresFreeGatewaySelection: dict["requiresFreeGatewaySelection"] as? Bool
         )
     }
 }

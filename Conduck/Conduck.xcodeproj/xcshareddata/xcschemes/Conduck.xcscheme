@@ -41,6 +41,9 @@
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "NO">
+      <StoreKitConfigurationFileReference
+         identifier = "../ConduckTests/Fixtures/ConduckPro.storekit">
+      </StoreKitConfigurationFileReference>
       <Testables>
          <TestableReference
             skipped = "NO">
@@ -125,7 +128,7 @@
          </CommandLineArgument>
          <CommandLineArgument
             argument = "-ConduckUncapCustomGateways"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>

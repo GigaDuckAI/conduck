@@ -27,10 +27,10 @@ final class WorkDeskProjectColorTests: XCTestCase {
 
     @MainActor
     func testNewProjectsUseUnusedColorsThenReuseLeastUsedWithoutChangingExistingChoices() async throws {
-        let store = isolated.make()
+        let store = isolated.make(proAccessProvider: { .init(hasProAccess: true) })
         let explicit = WorkDeskProjectRecord(title: "Chosen", color: .sage)
         _ = try await store.applyWorkDeskMutation(.createProject(explicit, materialIDs: []))
-        let organization = WorkDeskOrganization(store: store)
+        let organization = WorkDeskOrganization(store: store, proAccessProvider: { .init(hasProAccess: true) })
         await organization.reload()
         for index in 0..<5 {
             let id = await organization.createProject(title: "Automatic \(index)")
@@ -47,7 +47,7 @@ final class WorkDeskProjectColorTests: XCTestCase {
     }
 
     func testEveryColorRoundTripsAndUnrelatedEditsPreserveColorAndCapture() async throws {
-        let store = isolated.make()
+        let store = isolated.make(proAccessProvider: { .init(hasProAccess: true) })
         let material = try await store.upsertDeskMaterial(.init(kind: .note, title: "Original", textContent: "Private words"))
         for color in WorkDeskProjectColor.allCases {
             let project = WorkDeskProjectRecord(title: "Project", brief: "Context", preferredGatewayRef: "hermes", color: color)
@@ -124,6 +124,7 @@ final class WorkDeskProjectColorTests: XCTestCase {
             _ = try await store.applyWorkDeskMutation(.deleteReviewedProject(review, deleteMaterials: false))
             XCTFail("Reviewed deletion must notice a changed project")
         } catch { XCTAssertEqual(error as? WorkDeskStoreError, .staleProjectDeletion) }
+        _ = try await store.applyWorkDeskMutation(.archiveProject(id: project.id, isArchived: true))
         _ = try await store.applyWorkDeskMutation(.deleteProject(id: project.id))
         for id in [project.id, UUID()] {
             do {
@@ -138,6 +139,7 @@ final class WorkDeskProjectColorTests: XCTestCase {
             let tombstone = try XCTUnwrap(context.fetch(request).first)
             XCTAssertNotNil(tombstone.value(forKey: "deletedAt"))
             XCTAssertNil(tombstone.value(forKey: "colorID"))
+            XCTAssertNil(tombstone.value(forKey: "archivedAt"))
         }
     }
 

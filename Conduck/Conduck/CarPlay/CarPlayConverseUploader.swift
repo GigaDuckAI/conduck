@@ -381,6 +381,10 @@ nonisolated final class CarPlayConverseUploader: NSObject, @unchecked Sendable {
         outboxKey: String?,
         turnToken: UInt64
     ) async throws {
+        await ProSubscriptionStore.shared.awaitInitialAccess()
+        guard await SettingsManager.shared.isRemoteAgentActive(ref) else {
+            throw AppError.invalidRequest(message: GatewayActivationState.inactiveMessage)
+        }
         let endpoint = url.appending(path: "v1/chat/completions")
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"

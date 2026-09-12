@@ -54,7 +54,7 @@ struct WorkDeskSourceBoard: View {
         return workspace.organization.projects.filter { project in
             if !query.isEmpty { return project.title.localizedStandardContains(query) }
             switch boardScope {
-            case .all: return true
+            case .all: return !project.isArchived
             case .project: return false
             }
         }.map { record in
@@ -517,6 +517,7 @@ private struct WorkDeskReadableProject: View {
                 workspace.editProject(project.record)
             }
             WorkDeskProjectColorMenu(project: project.record, organization: workspace.organization)
+            WorkDeskProjectArchiveButton(project: project.record, organization: workspace.organization)
             Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {
                 workspace.requestProjectDeletion(project.id)
             }

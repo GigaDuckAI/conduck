@@ -8,7 +8,9 @@
 // and submit a normal conversation turn. The reviewed packet owns immutable
 // copies, the selected connection, and one attempt. A failure before local
 // acceptance leaves the project intact; an accepted turn belongs to Chat's
-// existing delivery and retry machinery, never a second Work send.
+// existing delivery and retry machinery, never a second Work send. Project
+// admission is checked before each file leaves the device and again before
+// creating a conversation; archiving or losing access stops the remaining work.
 
 #if !os(watchOS)
 import Foundation
@@ -177,6 +179,7 @@ final class WorkDeskHandoff {
         var createConversation: @MainActor (UUID, RemoteAgentRef, UUID?, String?) async throws -> Void
         var removeConversation: @MainActor (UUID) async -> Void
         var submit: @MainActor (UUID, String, [PendingAttachment], RemoteAgentRef, String?, SettingsManager.RemoteAgentSnapshot, [WorkDeskMaterialInput]) async -> Bool
+        var validateProjectActivity: @MainActor (UUID) async throws -> Void
         var defaultGateway: @MainActor () async -> RemoteAgentRef? = { nil }
 
         static func live(conversationResolver: WorkDeskConversationResolver) -> Self {
@@ -223,6 +226,7 @@ final class WorkDeskHandoff {
                     #endif
                     return await viewModel.submitUserTurnAwaitingLocalAcceptance(prompt, attachments: attachments, expectedRef: ref, expectedFileLaneID: laneID, expectedGatewaySnapshot: agent, workMaterialInputs: materialInputs)
                 },
+                validateProjectActivity: { try await ConversationStore.shared.validateWorkDeskProjectActivity(projectID: $0) },
                 defaultGateway: { await SettingsManager.shared.defaultRemoteAgentRefIfSendable() }
             )
         }
@@ -340,6 +344,7 @@ final class WorkDeskHandoff {
                 if let key = file.storedKey, let lane = packet.connection.files {
                     // Revalidate before EVERY egress, not just the first file.
                     try await validateConnection(packet.connection)
+                    try await validateProjectActivity(packet.projectID)
                     // A transport failure may follow a landed PUT, so include
                     // the attempted key in cleanup before starting its upload.
                     uploaded.append(key)
@@ -356,6 +361,7 @@ final class WorkDeskHandoff {
                 }
             }
             try await validateConnection(packet.connection)
+            try await validateProjectActivity(packet.projectID)
             try await dependencies.createConversation(packet.id, packet.connection.option.ref, packet.projectID, packet.taskTitle)
             conversationCreated = true
             let accepted = await dependencies.submit(packet.id, packet.prompt, attachments, packet.connection.option.ref, packet.connection.files?.durableLaneID, packet.connection.agent, packet.materialInputs)
@@ -389,6 +395,11 @@ final class WorkDeskHandoff {
         for material in packet.materials { try await validate(material) }
     }
 
+    private func validateProjectActivity(_ projectID: UUID?) async throws {
+        guard let projectID else { return }
+        try await dependencies.validateProjectActivity(projectID)
+    }
+
     private func validateConnection(_ expected: WorkDeskGatewayConnection) async throws {
         guard let current = await dependencies.connections().first(where: { $0.option.ref == expected.option.ref }), expected.matches(current) else { throw WorkDeskHandoffError.connectionChanged }
     }
@@ -414,6 +425,7 @@ final class WorkDeskHandoff {
         // Arbitrary provider/file-system diagnostics may contain endpoints.
         // Only controlled domain errors reach this preparation surface.
         if let known = error as? WorkDeskHandoffError { return known.localizedDescription }
+        if let known = error as? WorkDeskStoreError { return known.localizedDescription }
         if error is WorkMaterialExportError { return WorkDeskHandoffError.bytesUnavailable.localizedDescription }
         return String(localized: "workdesk.handoff.failed", defaultValue: "The handoff could not finish. Your project is unchanged. Review it again to try once more.")
     }

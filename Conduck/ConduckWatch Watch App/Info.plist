@@ -26,6 +26,8 @@
 	<string>$(CONDUCK_ICLOUD_CONTAINER_ID)</string>
 	<key>ConduckIdentityNamespace</key>
 	<string>$(CONDUCK_IDENTITY_NAMESPACE)</string>
+	<key>ConduckProMonthlyProductID</key>
+	<string>$(CONDUCK_PRO_MONTHLY_PRODUCT_ID)</string>
 	<!-- Same key, same reason, same prohibition as the phone's Info.plist. Do
 	     not add NSAllowsArbitraryLoads here either. -->
 	<key>NSAppTransportSecurity</key>

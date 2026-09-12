@@ -683,7 +683,7 @@ struct MainWindowView: View {
                         guidedHost.dismiss()
                     },
                     showPrimer: !SettingsManager.hasSeenGatewayPrimer() && !settingsVM.hasAnyConfiguredRemoteAgent,
-                    customLaneAvailable: settingsVM.customGatewayCount < Constants.maxCustomGateways
+                    customLaneAvailable: settingsVM.canAddConfiguredGateway
                 )
                 .transition(.opacity)
                 .zIndex(1)

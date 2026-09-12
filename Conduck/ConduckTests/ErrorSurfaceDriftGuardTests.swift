@@ -335,6 +335,9 @@ final class ErrorSurfaceDriftGuardTests: XCTestCase {
     /// reach this registry, and a control labelled anything else is invisible to
     /// it; see KNOWN LIMITS, and Rule 2b for the prose surfaces.
     private static let retrySurfaces: [String: RetryGate] = [
+        "Conduck/Views/Settings/ProPaywallView.swift": .notErrorDriven(
+            reason: "Reloads Apple's subscription catalog and verified purchase status. It never retries an AI request, credential write or AppError; purchasing still requires the separate native confirmation."
+        ),
         "Conduck/Views/Settings/ContentSyncSettingsSection.swift": .notErrorDriven(
             reason: "Retries a failed local persistent-store transition; no AI request or AppError is retried."
         ),

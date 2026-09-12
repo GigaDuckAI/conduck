@@ -76,6 +76,7 @@ struct WorkDeskToolbarTitle: View {
                         workspace.editProject(project)
                     }
                     WorkDeskProjectColorMenu(project: project, organization: workspace.organization)
+                    WorkDeskProjectArchiveButton(project: project, organization: workspace.organization)
                     Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {
                         workspace.requestProjectDeletion(project.id)
                     }

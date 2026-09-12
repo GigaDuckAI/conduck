@@ -18,6 +18,7 @@ struct WorkDeskProjectSurface: View {
     let onShare: (WorkboardMaterialSnapshot) -> Void
     let onReattach: (WorkboardMaterialSnapshot) -> Void
     @State private var pendingAction: PreviewAction?
+    @State private var previewStyleWhileChoosing: Bool?
     @Environment(\.workbenchDestinationIsActive) private var isActive
     @Environment(\.undoManager) private var undoManager
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -32,7 +33,7 @@ struct WorkDeskProjectSurface: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let compact = usesSheet(in: geometry.size)
+            let compact = previewStyleWhileChoosing ?? usesSheet(in: geometry.size)
             WorkDeskSourceBoard(viewModel: viewModel, item: item, workspace: workspace,
                 onOpen: onOpen, onShare: onShare, onReattach: onReattach,
                 scopeOverride: workspace.displayedScope)
@@ -69,6 +70,13 @@ struct WorkDeskProjectSurface: View {
                             .presentationDetents([.medium, .large])
                             .presentationDragIndicator(.visible)
                     }
+                }
+                .onChange(of: workspace.projectSelectionPresenter, initial: true) { _, presenter in
+                    // Keep the native parent stable while its project-choice
+                    // sheet is open. Resizing must not discard checked projects.
+                    if case .preview = presenter {
+                        if previewStyleWhileChoosing == nil { previewStyleWhileChoosing = compact }
+                    } else { previewStyleWhileChoosing = nil }
                 }
                 .onChange(of: workspace.scope) { _, _ in pendingAction = nil }
                 .onChange(of: workspace.search) { _, _ in pendingAction = nil }

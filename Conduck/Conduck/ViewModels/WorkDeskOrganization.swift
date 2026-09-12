@@ -15,6 +15,22 @@ import Observation
 @MainActor @Observable
 final class WorkDeskOrganization {
     private(set) var projects: [WorkDeskProjectRecord] = []
+    var activeProjects: [WorkDeskProjectRecord] { projects.filter { !$0.isArchived } }
+    var archivedProjects: [WorkDeskProjectRecord] { projects.filter(\.isArchived) }
+    var hasProAccess: Bool { proAccessProvider().hasProAccess }
+    var hasExpiredSubscription: Bool { proAccessProvider().hasExpiredSubscription }
+    var hasLoadedProAccess: Bool { accessLoadedProvider() }
+    var canPresentFreeProjectSelection: Bool { hasLoadedProAccess && requiresFreeProjectSelection }
+    var canCreateProject: Bool { hasProAccess || activeProjects.count < Constants.maxActiveWorkProjects }
+    var requiresFreeProjectSelection: Bool {
+        let access = proAccessProvider()
+        return !access.hasProAccess && activeProjects.count > Constants.maxActiveWorkProjects
+    }
+    var availableProjectDestinations: [WorkDeskProjectRecord] {
+        requiresFreeProjectSelection ? [] : activeProjects
+    }
+    var projectLimitRequested = false
+    var projectSelectionRequested = false
     private(set) var placements: [UUID: WorkDeskPlacementRecord] = [:]
     private(set) var materialLocations: WorkDeskLocationTokens = [:]
     private(set) var lastLocationUndo: WorkDeskLocationUndo?
@@ -25,6 +41,9 @@ final class WorkDeskOrganization {
     @ObservationIgnored private let fetch: @Sendable () async throws -> WorkDeskOrganizationSnapshot
     @ObservationIgnored private let apply: @Sendable (WorkDeskMutation) async throws -> WorkDeskOrganizationSnapshot
     @ObservationIgnored private let reviewDeletion: @Sendable (UUID) async throws -> WorkDeskProjectDeletionReview
+    @ObservationIgnored private let proAccessProvider: @MainActor () -> ProAccessSnapshot
+    @ObservationIgnored private let accessLoadedProvider: @MainActor () -> Bool
+    @ObservationIgnored private let awaitAccess: @MainActor () async -> Void
     @ObservationIgnored private var mutationTail: Task<Bool, Never>?
     @ObservationIgnored private var pendingMutationCount = 0
     @ObservationIgnored private var generation: UInt64 = 0
@@ -32,7 +51,23 @@ final class WorkDeskOrganization {
     @ObservationIgnored private var hasLoadedSnapshot = false
     @ObservationIgnored private var initialLoadTask: Task<Void, Error>?
 
-    init(store: ConversationStore = .shared) {
+    init(store: ConversationStore = .shared, proAccessProvider: (@MainActor () -> ProAccessSnapshot)? = nil) {
+        if let proAccessProvider {
+            self.proAccessProvider = proAccessProvider
+            accessLoadedProvider = { true }
+            awaitAccess = { }
+        } else if store.usesSharedProAccess {
+            self.proAccessProvider = {
+                .init(hasProAccess: ProSubscriptionStore.shared.hasProAccess,
+                      hasExpiredSubscription: ProSubscriptionStore.shared.hasExpiredSubscription)
+            }
+            accessLoadedProvider = { ProSubscriptionStore.shared.hasLoadedAccess }
+            awaitAccess = { await ProSubscriptionStore.shared.awaitInitialAccess() }
+        } else {
+            self.proAccessProvider = { store.proAccessProvider() }
+            accessLoadedProvider = { true }
+            awaitAccess = { }
+        }
         fetch = { try await store.fetchWorkDeskOrganization() }
         apply = { try await store.applyWorkDeskMutation($0) }
         reviewDeletion = { try await store.reviewWorkDeskProjectDeletion(id: $0) }
@@ -43,8 +78,12 @@ final class WorkDeskOrganization {
     init(
         fetch: @escaping @Sendable () async throws -> WorkDeskOrganizationSnapshot,
         apply: @escaping @Sendable (WorkDeskMutation) async throws -> WorkDeskOrganizationSnapshot,
-        reviewDeletion: @escaping @Sendable (UUID) async throws -> WorkDeskProjectDeletionReview = { _ in throw WorkDeskStoreError.projectNotFound }
+        reviewDeletion: @escaping @Sendable (UUID) async throws -> WorkDeskProjectDeletionReview = { _ in throw WorkDeskStoreError.projectNotFound },
+        proAccessProvider: @escaping @MainActor () -> ProAccessSnapshot = { .init() }
     ) {
+        self.proAccessProvider = proAccessProvider
+        accessLoadedProvider = { true }
+        awaitAccess = { }
         self.fetch = fetch
         self.apply = apply
         self.reviewDeletion = reviewDeletion
@@ -57,6 +96,18 @@ final class WorkDeskOrganization {
     }
 
     func project(id: UUID) -> WorkDeskProjectRecord? { projectsByID[id] }
+
+    func requestProjectLimit() {
+        errorMessage = nil
+        projectLimitRequested = true
+    }
+
+    func awaitInitialProAccess() async { await awaitAccess() }
+
+    @discardableResult
+    func selectFreeProjects(keeping: Set<UUID>, expectedActiveProjectIDs: Set<UUID>) async -> Bool {
+        await enqueue(.selectFreeProjects(keeping: keeping, expectedActiveProjectIDs: expectedActiveProjectIDs))
+    }
 
     func locations(for materialID: UUID) -> [WorkDeskLocationRecord] {
         snapshot.locations(for: materialID)
@@ -153,6 +204,7 @@ final class WorkDeskOrganization {
     func createProject(
         title: String, brief: String = "", materialIDs: [UUID] = [], position: WorkDeskPoint? = nil
     ) async -> UUID? {
+        await awaitInitialProAccess()
         let project = WorkDeskProjectRecord(title: title, brief: brief, position: position)
         let saved = await enqueue(.createProject(project, materialIDs: materialIDs, automaticallyAssignColor: true))
         return saved ? project.id : nil
@@ -161,6 +213,7 @@ final class WorkDeskOrganization {
     @discardableResult
     func createProject(title: String, brief: String = "", materialIDs: [UUID], position: WorkDeskPoint? = nil,
                        from source: WorkDeskLocation, expected: WorkDeskLocationTokens? = nil) async -> UUID? {
+        await awaitInitialProAccess()
         let project = WorkDeskProjectRecord(title: title, brief: brief, position: position)
         let saved = await enqueue(.createProjectFrom(project, materialIDs: materialIDs, source: source, expected: expected, automaticallyAssignColor: true))
         return saved ? project.id : nil
@@ -179,6 +232,12 @@ final class WorkDeskOrganization {
 
     @discardableResult
     func deleteProject(id: UUID) async -> Bool { await enqueue(.deleteProject(id: id)) }
+
+    @discardableResult
+    func setProjectArchived(_ isArchived: Bool, id: UUID) async -> Bool {
+        if !isArchived { await awaitInitialProAccess() }
+        return await enqueue(.archiveProject(id: id, isArchived: isArchived))
+    }
 
     func reviewProjectDeletion(id: UUID) async -> WorkDeskProjectDeletionReview? {
         _ = await mutationTail?.value
@@ -199,20 +258,23 @@ final class WorkDeskOrganization {
 
     @discardableResult
     func assign(materialIDs: [UUID], to projectID: UUID?) async -> Bool {
-        await enqueue(.assign(materialIDs: materialIDs, projectID: projectID))
+        if projectID != nil { await awaitInitialProAccess() }
+        return await enqueue(.assign(materialIDs: materialIDs, projectID: projectID))
     }
 
     @discardableResult
     func move(materialIDs: [UUID], from source: WorkDeskLocation, to destination: WorkDeskLocation,
               positions: [UUID: WorkDeskPoint] = [:], expected: WorkDeskLocationTokens? = nil) async -> Bool {
-        await enqueue(.moveLocations(materialIDs: materialIDs, from: source, to: destination,
+        if source != destination, destination.projectID != nil { await awaitInitialProAccess() }
+        return await enqueue(.moveLocations(materialIDs: materialIDs, from: source, to: destination,
                                      positions: positions, expected: expected))
     }
 
     @discardableResult
     func add(materialIDs: [UUID], to destination: WorkDeskLocation, positions: [UUID: WorkDeskPoint] = [:],
              expected: WorkDeskLocationTokens? = nil) async -> Bool {
-        await enqueue(.addLocations(materialIDs: materialIDs, to: destination, positions: positions, expected: expected))
+        if destination.projectID != nil { await awaitInitialProAccess() }
+        return await enqueue(.addLocations(materialIDs: materialIDs, to: destination, positions: positions, expected: expected))
     }
 
     @discardableResult
@@ -229,7 +291,8 @@ final class WorkDeskOrganization {
 
     @discardableResult
     func restoreLocations(_ saved: WorkDeskLocationTokens, expected: WorkDeskLocationTokens) async -> Bool {
-        await enqueue(.restoreLocations(saved, expected: expected))
+        await awaitInitialProAccess()
+        return await enqueue(.restoreLocations(saved, expected: expected))
     }
 
     @discardableResult
@@ -252,7 +315,8 @@ final class WorkDeskOrganization {
     func moveAndReorder(materialIDs: [UUID], from source: WorkDeskLocation, to destination: WorkDeskLocation,
                         relativeTo targetID: UUID, placement: WorkboardReorderPlacement,
                         orderedMaterialIDs: [UUID], expected: WorkDeskLocationTokens? = nil) async -> Bool {
-        await enqueue(.moveAndReorderLocations(materialIDs: materialIDs, from: source, to: destination,
+        if source != destination, destination.projectID != nil { await awaitInitialProAccess() }
+        return await enqueue(.moveAndReorderLocations(materialIDs: materialIDs, from: source, to: destination,
             relativeTo: targetID, placement: placement, orderedMaterialIDs: orderedMaterialIDs,
             expected: expected ?? locationTokens(for: materialIDs + orderedMaterialIDs)))
     }
@@ -357,6 +421,15 @@ final class WorkDeskOrganization {
     }
 
     private func report(_ error: Error) {
+        if error as? WorkDeskStoreError == .activeProjectLimitReached {
+            requestProjectLimit()
+            return
+        }
+        if error as? WorkDeskStoreError == .projectSelectionRequired {
+            errorMessage = nil
+            projectSelectionRequested = true
+            return
+        }
         errorMessage = (error as? WorkDeskStoreError)?.localizedDescription ?? String(
             localized: "workdesk.error.save",
             defaultValue: "The desk couldn’t save that change. Try again."

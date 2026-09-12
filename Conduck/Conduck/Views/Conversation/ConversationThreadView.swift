@@ -109,6 +109,9 @@ struct ConversationThreadView: View {
     /// the same pose and don't flicker A→B during the launch render sequence
     /// (host start-empty → resolved empty conversation thread).
     let emptyMascot: String
+    /// Work can retain a readable thread while its project is archived or
+    /// awaiting an active selection. Explicit retries are new delivery attempts.
+    var allowsNewAttempts = true
 
     /// Whether the user is pinned to the bottom of the scroll. When true, a
     /// new reply auto-scrolls into view; when false (scrolled up), the
@@ -506,6 +509,7 @@ struct ConversationThreadView: View {
                         MessageBubble(
                             message: message,
                             showsGatewayWaitIndicator: viewModel.showsGatewayWaitIndicator,
+                            allowsNewAttempts: allowsNewAttempts,
                             boundRef: viewModel.boundRef,
                             speakState: speaker.speakState(for: message.id),
                             usedFallbackVoice: speaker.usedFallbackVoice(for: message.id),
@@ -1624,6 +1628,7 @@ private struct MessageBubble: View, Equatable {
     /// several awaits earlier on macOS, which would suppress this dot for the
     /// entire pre-dispatch window — exactly the window it exists to cover.
     let showsGatewayWaitIndicator: Bool
+    let allowsNewAttempts: Bool
     /// The conversation's bound gateway ref — resolves the file-server snapshot
     /// for an assistant-bubble download-chip tap. Nil before the VM resolves it
     /// (a download falls back to the Settings default ref).
@@ -1719,6 +1724,7 @@ private struct MessageBubble: View, Equatable {
     static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
         lhs.message == rhs.message
             && lhs.showsGatewayWaitIndicator == rhs.showsGatewayWaitIndicator
+            && lhs.allowsNewAttempts == rhs.allowsNewAttempts
             && lhs.boundRef == rhs.boundRef
             && lhs.speakState == rhs.speakState
             && lhs.usedFallbackVoice == rhs.usedFallbackVoice
@@ -1960,7 +1966,7 @@ private struct MessageBubble: View, Equatable {
             // Actions stack vertically (trailing) — the photo-recovery labels
             // are long, and a horizontal row overflows the narrow popover.
             VStack(alignment: .trailing, spacing: 6) {
-                if presentation.offersRetry {
+                if allowsNewAttempts && presentation.offersRetry {
                     Button(action: onRetry) {
                         HStack(spacing: 3) {
                             Image(systemName: "arrow.clockwise")
@@ -1971,7 +1977,7 @@ private struct MessageBubble: View, Equatable {
                     }
                     .inlineLinkButton()
                 }
-                if presentation.offersResendWithoutPhoto {
+                if allowsNewAttempts && presentation.offersResendWithoutPhoto {
                     Button(action: onResendWithoutPhoto) {
                         Text(LocalizedStringResource("declinedTurn.action.resendWithoutPhoto", defaultValue: "Resend without photo"))
                             .font(.caption.weight(.semibold))
@@ -1979,7 +1985,7 @@ private struct MessageBubble: View, Equatable {
                     }
                     .inlineLinkButton()
                 }
-                if presentation.offersKeepChattingWithoutPhotos {
+                if allowsNewAttempts && presentation.offersKeepChattingWithoutPhotos {
                     Button(action: onKeepChattingWithoutPhotos) {
                         Text(LocalizedStringResource("declinedTurn.action.keepChatting", defaultValue: "Keep chatting without photos"))
                             .font(.caption.weight(.semibold))

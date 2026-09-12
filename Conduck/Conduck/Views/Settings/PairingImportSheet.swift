@@ -161,6 +161,11 @@ struct PairingImportSheet: View {
                 Text(blockReason(lane: context.lane, block: context.block))
             }
         }
+        .sheet(isPresented: $flow.showingProPaywall, onDismiss: {
+            flow.resumeAfterUpgrade(hasProAccess: ProSubscriptionStore.shared.hasProAccess)
+        }) {
+            ProPaywallView(context: .gatewayLimit)
+        }
         #if os(macOS)
         .frame(minWidth: 460, minHeight: 420)
         #endif

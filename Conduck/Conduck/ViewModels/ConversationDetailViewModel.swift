@@ -4142,6 +4142,7 @@ final class ConversationDetailViewModel {
         }
 
         if let expectedGatewaySnapshot {
+            await ProSubscriptionStore.shared.awaitInitialAccess()
             let current = await SettingsManager.shared.remoteAgentSnapshot(forConversationBackend: rawBackend ?? "")
             guard let current, expectedGatewaySnapshot.hasSameDispatchDestination(as: current) else {
                 #if os(macOS)
@@ -4286,6 +4287,7 @@ final class ConversationDetailViewModel {
         // CLOSED rather than silently sending unauthenticated. Either failure
         // flips the just-appended turn to `failed` (Retry chip) — the text is
         // never lost.
+        await ProSubscriptionStore.shared.awaitInitialAccess()
         let resolvedSnapshot = await SettingsManager.shared.remoteAgentSnapshot(forConversationBackend: rawBackend ?? "")
         let resolvedToken = resolvedSnapshot?.token ?? ""
         guard let snapshot = resolvedSnapshot,
@@ -4479,6 +4481,7 @@ final class ConversationDetailViewModel {
                 try Task.checkCancellation()
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
+                    ref: snapshot.ref,
                     url: snapshot.url,
                     token: token,
                     authScheme: snapshot.authScheme,
@@ -5061,6 +5064,9 @@ final class ConversationDetailViewModel {
             #if os(macOS)
             isAwaitingReply = false
             #endif
+            do { try await ConversationStore.shared.validateConversationProjectActivity(conversationID: conversationID) }
+            catch let error as WorkDeskStoreError { setSendNotice(error.localizedDescription) }
+            catch { reportComposerDispatchRejection() }
             return
         }
         // CLAIM THE TURN AT THE CAS, not at the dispatch far below. A retry
@@ -5095,6 +5101,7 @@ final class ConversationDetailViewModel {
         // routing — NOT the global default; same resolution as `sendUserTurn`).
         // A nil snapshot → `remoteAgentNotConfigured` (no silent reroute).
         let rawBackend = try? await ConversationStore.shared.fetchConversation(id: conversationID)?.backend
+        await ProSubscriptionStore.shared.awaitInitialAccess()
         guard let snapshot = await SettingsManager.shared.remoteAgentSnapshot(forConversationBackend: rawBackend ?? "") else {
             #if os(macOS)
             isAwaitingReply = false
@@ -5395,6 +5402,7 @@ final class ConversationDetailViewModel {
                 try Task.checkCancellation()
                 let reply = try await RemoteAgentClient.shared.send(
                     backend: snapshot.backend,
+                    ref: snapshot.ref,
                     url: snapshot.url,
                     token: token,
                     authScheme: snapshot.authScheme,
