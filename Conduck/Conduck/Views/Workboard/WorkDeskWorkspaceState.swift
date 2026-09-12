@@ -33,6 +33,7 @@ final class WorkDeskWorkspaceState {
     var isSelecting = false {
         didSet { if !isSelecting { hiddenSelectionIDs.removeAll() } }
     }
+    var searchIsFocused = false
     var showsSidebar = true
     var presentsSidebarInline = true
     var showsProjectPicker = false
@@ -338,12 +339,27 @@ final class WorkDeskWorkspaceState {
         return visibleIDs.indices.contains(target) ? visibleIDs[target] : nil
     }
 
+    /// Search may be requested while its native sidebar or compact picker is
+    /// absent. The shared field consumes focus when that surface appears.
+    func requestSearch() {
+        if presentsSidebarInline { showsSidebar = true }
+        else { showsProjectPicker = true }
+        searchIsFocused = true
+    }
+
+    func gatewayName(for conversation: ConversationRecord) -> String {
+        guard let ref = RemoteAgentRef(rawString: conversation.backend) else {
+            return String(localized: "workdesk.conversation.connectionMissing", defaultValue: "Connection unavailable")
+        }
+        return RemoteAgentRefMetadata.displayName(for: ref, customs: conversationSettings.customGateways)
+    }
+
     func updateSidebarLayout(isInline: Bool) {
         presentsSidebarInline = isInline
         if isInline { showsProjectPicker = false }
     }
 
-    /// Both the native Mac toolbar and the in-pane mobile button route here.
+    /// Compact project-navigation controls and native sidebar hosts share state.
     /// A compact window opens the project picker; it never toggles a hidden rail.
     func toggleProjectNavigation() {
         if presentsSidebarInline { showsSidebar.toggle() }

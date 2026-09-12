@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// The responsive management desk: a project rail on wide windows and a picker
-// on phones. Search stays in that navigation rail so the canvas remains a desk;
+// The management desk detail and its compact project picker. Wide hosts own
+// navigation in a native sidebar; the composer stays within the detail column.
+// Search stays in navigation so the canvas remains a desk;
 // a compact picker submits its query back to the same global result surface.
 // All materials is home; projects focus the same collection. Only the explicit
 // brief sheet can create a conversation. Deletion reviews an immutable set of
@@ -13,38 +14,30 @@ struct WorkDeskWorkspaceView: View {
     @Bindable var viewModel: WorkboardViewModel
     let item: WorkboardItemSnapshot
     @Bindable var workspace: WorkDeskWorkspaceState
-    @FocusState private var searchFocused: Bool
-    @State private var requestsSearchFocus = false
+    @State private var opensSettingsAfterPicker = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.workDeskConversationResolver) private var conversationResolver
     @Environment(\.workDeskSidebarIsHosted) private var sidebarIsHosted
+    @Environment(\.workDeskNavigationIsExternal) private var navigationIsExternal
+    @Environment(\.workDeskOpenSettings) private var openSettings
     @Environment(\.workbenchDestinationIsActive) private var isActive
 
     private var workspaceLayout: some View {
         GeometryReader { geometry in
-            HStack(spacing: 0) {
-                if geometry.size.width >= 850 && workspace.showsSidebar {
-                    projectRail
-                        .frame(width: 222)
-                        .background(AppColors.cardBackgroundElevated.opacity(0.55))
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                    Divider().opacity(0.35)
-                }
-                VStack(spacing: 0) {
-                    header(isCompact: geometry.size.width < 600)
-                    workspaceContent
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                header(isCompact: geometry.size.width < 600)
+                workspaceContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .onChange(of: geometry.size.width, initial: true) { _, width in
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onChange(of: navigationIsExternal, initial: true) { _, external in
                 guard isActive else { return }
-                workspace.updateSidebarLayout(isInline: width >= 850)
+                workspace.updateSidebarLayout(isInline: external)
             }
             .onChange(of: isActive) { _, active in
                 guard active else { return }
-                workspace.updateSidebarLayout(isInline: geometry.size.width >= 850)
+                workspace.updateSidebarLayout(isInline: navigationIsExternal)
             }
         }
     }
@@ -114,8 +107,7 @@ struct WorkDeskWorkspaceView: View {
         .onChange(of: isActive) { _, active in
             if active { workspace.setRefreshActive(true) }
             else {
-                searchFocused = false
-                requestsSearchFocus = false
+                workspace.searchIsFocused = false
                 workspace.suspend()
             }
         }
@@ -132,9 +124,25 @@ struct WorkDeskWorkspaceView: View {
         .sheet(isPresented: Binding(
             get: { isActive && workspace.showsProjectPicker },
             set: { if isActive { workspace.showsProjectPicker = $0 } }
-        ), onDismiss: workspace.projectPickerDidDismiss) {
+        ), onDismiss: {
+            workspace.projectPickerDidDismiss()
+            guard opensSettingsAfterPicker else { return }
+            opensSettingsAfterPicker = false
+            guard isActive else { return }
+            openSettings?()
+        }) {
             NavigationStack {
-                projectRail
+                WorkDeskSidebarView(viewModel: viewModel)
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        if openSettings != nil {
+                            SidebarSettingsFooter {
+                                // The picker must finish dismissing before its
+                                // host presents Settings into the same scene.
+                                opensSettingsAfterPicker = true
+                                workspace.showsProjectPicker = false
+                            }
+                        }
+                    }
                     .navigationTitle(Text(LocalizedStringResource("workdesk.projects", defaultValue: "Projects")))
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
@@ -217,10 +225,7 @@ struct WorkDeskWorkspaceView: View {
         presentedWorkspace
         .background {
             Button(LocalizedStringResource("workdesk.search", defaultValue: "Find an idea or file")) {
-                requestsSearchFocus = true
-                if workspace.presentsSidebarInline { workspace.showsSidebar = true }
-                else { workspace.showsProjectPicker = true }
-                searchFocused = true
+                workspace.requestSearch()
             }
             .keyboardShortcut("f", modifiers: .command)
             .disabled(!isActive)
@@ -287,7 +292,7 @@ struct WorkDeskWorkspaceView: View {
                     HStack {
                         Text(verbatim: conversation.displayTitle).font(.headline).lineLimit(1)
                         Spacer()
-                        Text(verbatim: gatewayName(for: conversation)).font(.caption).foregroundStyle(AppColors.textSecondary)
+                        Text(verbatim: workspace.gatewayName(for: conversation)).font(.caption).foregroundStyle(AppColors.textSecondary)
                     }.padding(.vertical, 6)
                 }
             } else {
@@ -330,7 +335,7 @@ struct WorkDeskWorkspaceView: View {
             }
             if workspace.currentProject != nil && !workspace.isSearching { workspaceMenu() }
             if workspace.isSearching {
-                Button { workspace.search = ""; searchFocused = false } label: {
+                Button { workspace.search = ""; workspace.searchIsFocused = false } label: {
                     Image(systemName: "xmark").frame(width: 40, height: 40)
                 }.pointerIconButton(size: 40)
                 .accessibilityLabel(Text(LocalizedStringResource("workdesk.search.clear", defaultValue: "Clear search")))
@@ -410,38 +415,6 @@ struct WorkDeskWorkspaceView: View {
         }
     }
 
-    // This is an explicit rail, not a NavigationSplitView column. SwiftUI's
-    // searchable(.sidebar) would fall back into the window toolbar here.
-    private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").foregroundStyle(AppColors.textTertiary)
-            TextField(text: $workspace.search) {
-                Text(LocalizedStringResource("workdesk.search", defaultValue: "Find an idea or file"))
-            }
-            .textFieldStyle(.plain)
-            .focused($searchFocused)
-            .submitLabel(.search)
-            .onSubmit {
-                searchFocused = false
-                workspace.showsProjectPicker = false
-            }
-            .accessibilityIdentifier("workdesk-search")
-            if !workspace.search.isEmpty {
-                Button { workspace.search = ""; searchFocused = true } label: {
-                    Image(systemName: "xmark.circle.fill").frame(width: 32, height: 36)
-                }
-                .pointerIconButton(size: 32)
-                .accessibilityLabel(Text(LocalizedStringResource("workdesk.search.clear", defaultValue: "Clear search")))
-            }
-        }
-        .font(.subheadline)
-        .padding(.leading, 12).padding(.trailing, 4).frame(minHeight: 40)
-        .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 10))
-        .onAppear {
-            if requestsSearchFocus { searchFocused = true; requestsSearchFocus = false }
-        }
-    }
-
     /// Infrequent project actions stay beside the project name. Layout belongs
     /// exclusively to the responsive material row at every window width.
     private func workspaceMenu() -> some View {
@@ -498,114 +471,7 @@ struct WorkDeskWorkspaceView: View {
         .scrollDismissesKeyboard(.interactively)
     }
 
-    private var projectRail: some View {
-        let counts = workspace.organization.materialCounts(in: item.materials)
-        return VStack(spacing: 0) {
-            searchField.padding(12)
-            if !workspace.presentsSidebarInline && workspace.isSearching {
-                Button(LocalizedStringResource("workdesk.search.show", defaultValue: "Show results")) {
-                    searchFocused = false
-                    workspace.showsProjectPicker = false
-                }
-                .buttonStyle(.borderedProminent)
-                .padding(.bottom, 8)
-            }
-            ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                railRow(title: String(localized: LocalizedStringResource("workdesk.all", defaultValue: "All materials")), symbol: "tray.full", scope: .all, count: item.materials.count)
-                HStack {
-                    Text(LocalizedStringResource("workdesk.projects", defaultValue: "Projects"))
-                        .font(.caption.weight(.semibold)).foregroundStyle(AppColors.textTertiary)
-                    Spacer()
-                    Button {
-                        workspace.beginProject()
-                    } label: { Image(systemName: "plus").frame(width: 44, height: 44) }
-                    .pointerIconButton(size: 44)
-                    .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.new", defaultValue: "New project")))
-                }.padding(.leading, 12).padding(.top, 18)
-                ForEach(workspace.organization.projects) { project in
-                    projectNavigationRow(project, count: counts[project.id] ?? 0)
-                }
-                if workspace.organization.projects.isEmpty {
-                    Text(LocalizedStringResource("workdesk.projects.empty", defaultValue: "Bring related ideas together. Select a few cards to create your first project."))
-                        .font(.caption).foregroundStyle(AppColors.textSecondary)
-                        .padding(12)
-                }
-            }
-            .padding(12)
-        }
-            .scrollDismissesKeyboard(.interactively)
-        }
-    }
 
-    private func gatewayName(for conversation: ConversationRecord) -> String {
-        guard let ref = RemoteAgentRef(rawString: conversation.backend) else {
-            return String(localized: "workdesk.conversation.connectionMissing", defaultValue: "Connection unavailable")
-        }
-        return RemoteAgentRefMetadata.displayName(for: ref, customs: workspace.conversationSettings.customGateways)
-    }
-
-    private func projectNavigationRow(_ project: WorkDeskProjectRecord, count: Int) -> some View {
-        let conversations = workspace.conversations(in: project.id)
-        let expanded = workspace.expandedProjectIDs.contains(project.id)
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 0) {
-                if !conversations.isEmpty {
-                    Button {
-                        if expanded { workspace.expandedProjectIDs.remove(project.id) }
-                        else { workspace.expandedProjectIDs.insert(project.id) }
-                    } label: {
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.caption).frame(width: 28, height: 40)
-                    }.pointerIconButton(size: 28)
-                    .accessibilityLabel(Text(LocalizedStringResource("workdesk.conversations.toggle", defaultValue: "Show or hide project conversations")))
-                    .accessibilityValue(Text(expanded ? LocalizedStringResource("workdesk.expanded", defaultValue: "Expanded") : LocalizedStringResource("workdesk.collapsed", defaultValue: "Collapsed")))
-                }
-                railRow(title: project.title, symbol: "folder", scope: .project(project.id), count: count)
-            }
-            .contextMenu {
-                Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project")) { workspace.editProject(project) }
-                Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…")) {
-                    workspace.requestProjectDeletion(project.id)
-                }
-            }
-            if expanded {
-                ForEach(conversations) { conversation in
-                    let tail = TailProjection.read(conversation.tailProjection, lastActivityAt: conversation.lastActivityAt)
-                    let state = ConversationRowActivity.state(inputs: ConversationActivityInputs(record: conversation, tailRole: tail.role), conversationID: conversation.id)
-                    Button { workspace.selectConversation(conversation.id, projectID: project.id) } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "bubble.left").font(.caption)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(verbatim: conversation.displayTitle).font(.subheadline).lineLimit(2)
-                                Text(verbatim: gatewayName(for: conversation)).font(.caption2).foregroundStyle(AppColors.textTertiary)
-                            }
-                            Spacer(minLength: 0)
-                            ConversationActivityMark(state: state, conversationID: conversation.id, now: Date())
-                        }
-                        .padding(.leading, 28).padding(.trailing, 8).padding(.vertical, 8)
-                        .background(workspace.selectedConversationID == conversation.id ? AppColors.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 10))
-                    }.choiceCardButton(cornerRadius: 10)
-                    .accessibilityAddTraits(workspace.selectedConversationID == conversation.id ? .isSelected : [])
-                }
-            }
-        }
-    }
-
-    private func railRow(title: String, symbol: String, scope: WorkDeskScope, count: Int) -> some View {
-        Button { workspace.selectScope(scope) } label: {
-            HStack(spacing: 10) {
-                Image(systemName: symbol).frame(width: 20).foregroundStyle(workspace.scope == scope && !workspace.isShowingConversation ? AppColors.accent : AppColors.textSecondary)
-                Text(verbatim: title).font(.subheadline.weight(.medium)).lineLimit(2)
-                Spacer(minLength: 4)
-                Text(verbatim: String(count)).font(.caption.monospacedDigit()).foregroundStyle(AppColors.textTertiary)
-            }
-            .padding(.horizontal, 12).frame(minHeight: 46)
-            .background(workspace.scope == scope && !workspace.isShowingConversation ? AppColors.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 12))
-        }
-        .choiceCardButton(cornerRadius: 12)
-        .accessibilityAddTraits(workspace.scope == scope && !workspace.isShowingConversation ? .isSelected : [])
-    }
 }
 
 private struct WorkDeskProjectEditor: View {

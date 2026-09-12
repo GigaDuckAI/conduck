@@ -122,7 +122,6 @@ struct MainWindowView: View {
     /// collapse/expand frame-starting state write, every search keystroke and
     /// every section switch. `NSApp.applicationIconImage` is never reassigned at
     /// runtime, so there is nothing to invalidate the cached copy.
-    @State private var footerAppIcon = highResAppIcon(size: 32)
 
     /// Whether this window is the active one. macOS has no `scenePhase`
     /// transition for "the window came forward", so this is what the presence
@@ -336,8 +335,8 @@ struct MainWindowView: View {
     private var persistentSplitView: some View {
         // The native split still owns column sizing and the user's sidebar
         // toggle. Only a section change suppresses its layout animation: Work
-        // should dissolve at the final width, not grow through its rail's
-        // compact breakpoint while the Chat sidebar is collapsing.
+        // should dissolve at the final width when the two destinations have
+        // different remembered sidebar visibility.
         NavigationSplitView(columnVisibility: splitColumnVisibility) {
             // WHY a width floor on the column CONTENT as well as the column
             // width: each `NavigationSplitView` column is hosted in its OWN
@@ -389,16 +388,7 @@ struct MainWindowView: View {
                 // all, each correct only where it stands; moving any of them
                 // breaks the surface it serves. The measurements are in that
                 // file's header.
-                .toolbar(removing: workDestinationIsActive ? .sidebarToggle : nil)
                 .toolbar {
-                    if workDestinationIsActive, let personalWorkbenchModel {
-                        ToolbarItem(placement: .primaryAction) {
-                            WorkDeskSidebarToolbarButton(
-                                workspace: personalWorkbenchModel.workboardViewModel.deskWorkspace,
-                                isActive: workDestinationIsActive
-                            )
-                        }
-                    }
                     if chatDestinationIsActive {
                         // Delete-All ahead of compose: within the sidebar region a
                         // column-level item renders in declaration order, so this
@@ -421,9 +411,8 @@ struct MainWindowView: View {
                         // bar shows no Delete-All at all — a destructive bulk
                         // action stays with the list it destroys, like the iPad
                         // sidebar bar, while compose+toggle keep their two
-                        // collapsed capsules. Work collapses the column, so the
-                        // same rule hides the trash there: the list it would
-                        // destroy is not on screen to stand beside it.
+                        // collapsed capsules. Work supplies project navigation
+                        // in this column, so Chat actions stay gated to Chats.
                         if sidebarHasConversations && effectiveColumnVisibility != .detailOnly {
                             ToolbarItem(placement: .primaryAction) {
                                 Button(role: .destructive) {
@@ -489,31 +478,25 @@ struct MainWindowView: View {
         personalWorkbenchModel?.router.destination == .work
     }
 
-    /// The visibility the window is REALLY in, Work's forced collapse included.
-    /// Every sidebar-region toolbar gate reads this rather than the stored
-    /// value, so a control that must not appear over a collapsed column is
-    /// hidden in Work for the same reason it is hidden when the user collapses
-    /// the column by hand.
+    /// Both destinations use the same native sidebar and resize handle, with
+    /// independently remembered visibility. Work's state also lets Cmd+F reveal
+    /// the real column before its shared search field takes focus.
     private var effectiveColumnVisibility: NavigationSplitViewVisibility {
-        workDestinationIsActive ? .detailOnly : chatColumnVisibility
+        if workDestinationIsActive, let personalWorkbenchModel {
+            return personalWorkbenchModel.workboardViewModel.deskWorkspace.showsSidebar ? .all : .detailOnly
+        }
+        return chatColumnVisibility
     }
 
-    /// What the split view is driven with. Work is ONE desk with no list beside
-    /// it, so its column collapses and the desk gets the whole window; switching
-    /// to Chats hands the column back in the state Chat was left in.
-    ///
-    /// Writes are accepted only from Chat. Work replaces the native toolbar
-    /// toggle with its own project-navigation action; keeping this getter
-    /// constant also stops a write-back AppKit performs on its OWN
-    /// initiative (it revises this binding when the window is resized past the
-    /// two-column floor, and when it restores a saved frame) from rewriting
-    /// Chat's remembered state out of a section that has no sidebar to describe.
     private var splitColumnVisibility: Binding<NavigationSplitViewVisibility> {
         Binding(
             get: { effectiveColumnVisibility },
             set: { newValue in
-                guard !workDestinationIsActive else { return }
-                chatColumnVisibility = newValue
+                if workDestinationIsActive, let personalWorkbenchModel {
+                    personalWorkbenchModel.workboardViewModel.deskWorkspace.showsSidebar = newValue != .detailOnly
+                } else {
+                    chatColumnVisibility = newValue
+                }
             }
         )
     }
@@ -548,21 +531,31 @@ struct MainWindowView: View {
         )
     }
 
-    /// The sidebar column is CHAT's alone — Work is one desk and mounts nothing
-    /// here. Chat's list still stays mounted while Work is active (it owns a
-    /// selection, a search string and a scroll position), hidden by the same
-    /// layer contract the detail side uses, so the column the user comes back to
-    /// is the one they left rather than a rebuilt one.
-    @ViewBuilder
+    /// One full-height native sidebar and one Settings footer serve both
+    /// destinations. Retain each navigation layer's search and scroll position,
+    /// and silence the hidden layer exactly as the detail side does.
     private var mountedSidebarDestinations: some View {
-        ZStack {
-            sidebar
-                .environment(\.workbenchDestinationIsActive, chatDestinationIsActive)
-                .workbenchDestinationLayer(
-                    isActive: chatDestinationIsActive,
-                    isVisible: chatLayerIsShowing,
-                    reduceMotion: reduceMotion
-                )
+        VStack(spacing: 0) {
+            ZStack {
+                sidebar
+                    .environment(\.workbenchDestinationIsActive, chatDestinationIsActive)
+                    .workbenchDestinationLayer(
+                        isActive: chatDestinationIsActive,
+                        isVisible: chatLayerIsShowing,
+                        reduceMotion: reduceMotion
+                    )
+                if let personalWorkbenchModel, mountsWorkLayer {
+                    WorkDeskSidebarView(viewModel: personalWorkbenchModel.workboardViewModel)
+                        .environment(\.workbenchDestinationIsActive, workDestinationIsActive)
+                        .workbenchDestinationLayer(
+                            isActive: workDestinationIsActive,
+                            isVisible: workLayerIsShowing,
+                            reduceMotion: reduceMotion
+                        )
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            identityFooter
         }
     }
 
@@ -589,6 +582,7 @@ struct MainWindowView: View {
                             retain: { [coordinator] id, owner in coordinator.retainWorkViewModel(for: id, ownerID: owner) },
                             release: { [coordinator] owner in coordinator.releaseWorkViewModel(ownerID: owner) }))
                         .environment(\.workDeskSidebarIsHosted, true)
+                        .environment(\.workDeskNavigationIsExternal, true)
                         .environment(\.workbenchDestinationIsActive, workDestinationIsActive)
                         .workbenchDestinationLayer(
                             isActive: workDestinationIsActive,
@@ -934,8 +928,6 @@ struct MainWindowView: View {
 
             Spacer(minLength: 0)
 
-            // 3. Identity footer menu.
-            identityFooter
         }
     }
 
@@ -1114,34 +1106,8 @@ struct MainWindowView: View {
     /// About, so the old popup was redundant. Shows the real app icon, not the
     /// line-art menu-bar glyph.
     private var identityFooter: some View {
-        VStack(spacing: 0) {
-            Divider().overlay(AppColors.border)
-            Button {
-                showingSettings = true
-            } label: {
-                HStack(spacing: 10) {
-                    Image(nsImage: footerAppIcon)
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: 32, height: 32)
-                    Text(LocalizedStringResource("menu.settings.short", defaultValue: "Settings"))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppColors.textPrimary)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(AppColors.textTertiary)
-                }
-            }
-            // The row's 12pt inset lives INSIDE its live frame, and the height
-            // floor carries the rest of it (32pt icon + 12pt above and below),
-            // so the wash and the click target span the footer edge to edge.
-            // Padding applied from outside lands beyond the frame, where it
-            // reads as a dead, unlit border.
-            .settingsRowButton(minHeight: 56, horizontalPadding: 12, washCornerRadius: 0)
+        SidebarSettingsFooter { showingSettings = true }
             .keyboardShortcut(",", modifiers: .command)
-        }
-        .background(AppColors.cardBackground)
     }
 
     // MARK: - Sidebar helpers
