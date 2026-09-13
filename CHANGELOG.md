@@ -7,6 +7,342 @@ and build number Apple shows — and matches `v<version>-<build>` in this
 repository. Versions 1.3 and 1.4 shipped on macOS while iOS moved directly
 from 1.2 to 1.5.
 
+## [1.6-13] — the Work release
+
+App Store build, tagged `v1.6-13` on 14 September 2026. 125 commits since 1.5.
+
+### Work — a private desk beside your chats
+
+- Work is a new destination next to Chats on iPhone, iPad, Mac, Apple Watch and
+  CarPlay. It is a board of cards — thoughts, files, screenshots, photos, links and
+  spoken notes — that you collect first and brief your AI with later. Adding to Work
+  sends nothing to your AI. Every capture surface says so on its receipt: "Added to
+  Work. Nothing was sent."
+- Captures arrive from the app's composer, drag and drop, paste, the share sheet,
+  Shortcuts, a chat message's menu, the Mac menu bar, Apple Watch and CarPlay. A link
+  card saves the address as text; Conduck never fetches the page in the background
+- Cards open in place: images in a full-screen gallery with a counter, arrow keys and
+  Share; files in Quick Look; links in the browser. Any card can be shared, with a
+  note going out as text, a link as a URL, and an image or file as a disposable copy
+- Three layouts — Tiles, List and a freeform Canvas that pans and zooms, with Fit and
+  Reset zoom. Cards keep the order you leave them in, in every layout, and a capture
+  that lands mid-drag slips in behind the card you are holding rather than
+  interrupting you. VoiceOver gets Move Earlier / Move Later and the Canvas exposes
+  Move up / down / left / right and Zoom in / out as accessible actions
+- Search across the whole of Work — "Find an idea or file" — crosses project
+  boundaries on purpose
+- A screenshot and the voice note spoken with it appear as one card, "Screenshot with
+  note", with a play control and per-part Open, Share and Reattach actions
+- Every image card is normalised at the desk write, on every lane: a JPEG capped at
+  1568 px on the long edge — the same size a chat turn sends inline — with EXIF, GPS,
+  TIFF, IPTC and XMP metadata stripped. GIFs, multi-frame images and already-small
+  clean JPEGs pass through untouched. This says nothing about images you send in a
+  chat, which are unchanged
+- A first visit to Work shows a four-page introduction — a home for your next idea,
+  catch it where you find it, bring related ideas together, give your AI the right
+  context. It appears once per device, only when you deliberately switch from Chats to
+  Work, and steps aside for anything you are in the middle of
+
+### Work — projects
+
+- Hold one card over another to group them into a project. A project has a name, one
+  of six colours, an optional brief (standing instructions for every conversation
+  started from it), a preferred gateway, its own layout, its own composer draft and
+  its own Canvas viewport. Projects can be pinned and previewed without leaving the
+  board
+- Home holds loose cards; All materials shows everything, including cards filed into
+  projects. A card can live in more than one project — Add to another project, Move,
+  Remove from this project, Move to Home — and a card's detail says "In N projects".
+  Filing, moving and removing can be undone from a banner
+- A capture made from inside an open project — composer, file picker, drop or
+  microphone — lands in that project; the destination is frozen at the moment you
+  submit, so a slow import does not follow you to wherever you navigated next. The
+  share sheet, Shortcuts, the menu bar, Watch and CarPlay have no project context and
+  still land on Home. The capture bar and drop overlays name where the material will
+  go, and a batch that saved but could not be filed says so with a count
+- Notes on any material — "Add notes…" — travel with it into a conversation. Text
+  cards and voice transcripts are editable, with the original kept behind Preview
+  original. A card shows "Used in N conversations" and opens the conversation it was
+  used in
+- Deleting a project is reviewed: keep its materials (those only in that project
+  return to Home; those used elsewhere stay put; notes are kept) or delete the project
+  and its materials everywhere. A project that changed underneath the review forces a
+  re-review
+
+### Work — briefing your AI
+
+- New conversation from a project opens a full review: your task, a checklist of
+  materials ("N of M included"), the gateway, and an exact preview of the outgoing
+  message before Send. What the gateway can take is stated up front — text, images and
+  attached files; text and images with file transfer not connected; or a hosted model
+  with no file workspace
+- Conversations started from a project stay nested under it in Work, and materials
+  from elsewhere in Work can be pulled in without moving them. Drafts persist per
+  project and survive an interrupted send, with explicit handling when another window
+  changed the same draft
+- With a self-hosted agent and file exchange set up, files your AI returns appear as
+  Result cards in the project, each linking back to its source conversation. A file
+  still on the gateway says so and tells you how to bring it in. On the hosted
+  OpenRouter lane there is no file workspace, and the brief says so
+- A conversation that belongs to a project is marked wherever it is listed: the
+  project's folder and name on a Chats row and in search; a line under the thread's
+  navigation bar with Show in Work; the project name on the Watch row's date line; and
+  "2 hr ago · Q3 launch" on the CarPlay Recent row, capped at 24 characters with no
+  colour and never any message content reaching the car screen
+- A project that cannot take a new turn says why. When a project is archived, or a
+  free-plan library holds more active projects than the allowance and no choice has
+  been made yet, the reason appears above the composer with a button into Work, every
+  send path refuses with the same sentence, and the draft, staged files and any capture
+  in flight are kept
+
+### Work — spoken notes
+
+- A spoken Work note reaches the desk as its words alone. Every voice lane bound for
+  Work — the in-app sheet, the Mac menu bar, a Shortcut, CarPlay, the Watch relay —
+  parks the recording in a device-local retry lane, transcribes it, writes a
+  words-only card and deletes the audio. Nothing reaches the desk or iCloud before the
+  words exist; a failed transcription leaves the desk untouched and the recording
+  waiting behind Try Again, with a confirmed Discard
+- The audio goes only to the speech provider you chose, and only to be turned into
+  words — never into a conversation, and never through a server of ours. Conduck has
+  no intermediary servers
+- Recordings are kept only when you add them yourself, through the attachment button
+  in Work or a drop into the Work pane; those become playable cards with one-at-a-time
+  playback. The share sheet, the Add Files Shortcut and Chat → Work refuse a recording
+  and name the door
+
+### Work — sync
+
+- With content sync on, the desk syncs through your own private iCloud, bytes
+  included, up to 30 MB per card. A larger file stays on the device that captured it;
+  a confirmation says so at capture time, the card reads "Available on this device"
+  elsewhere, and a Reattach action is offered. A card still arriving reads "Waiting for
+  iCloud…" and stays inert until its bytes are proven present
+- Card payloads live in a second store under their own iCloud container. The Watch
+  mounts only the conversations store and holds no card bytes, by construction
+- A named iCloud problem — signed out, storage full, restricted — gets its own banner
+  instead of a silently unsynced desk
+
+### Conduck Pro and the free plan
+
+- Conduck introduces a free plan and an optional Conduck Pro auto-renewing monthly
+  subscription, sold and managed entirely by Apple. There is no Conduck account and no
+  licensing server; access is derived on-device from Apple-signed transactions
+- The free plan is exactly two allowances: three active Work projects, and three
+  configured gateways in total across OpenClaw, Hermes and custom connections.
+  OpenRouter never uses a gateway slot and is always available. Pro removes both
+  limits
+- The gateway allowance changed shape. It used to cap custom gateways only; it now
+  counts built-in and custom gateways together. If you already have more than three
+  configured, Conduck asks you to choose which three stay active. The others are
+  retained with their credentials — they simply cannot dispatch until you pick them or
+  subscribe. Nothing is deleted
+- Archiving a project frees a slot and changes nothing else: every material,
+  conversation and byte stays. An archived project refuses new materials and new turns
+  until restored. Going over the project allowance — when a subscription ends, for
+  instance — opens a Choose projects sheet that archives only after you confirm
+- The paywall is Apple's native subscription sheet, so the price, billing period and
+  purchase button come from the App Store in your locale. It opens from a Conduck Pro
+  row in Settings and from wherever a limit is met; the "Set up a custom server" row is
+  no longer disabled at the cap, it opens the paywall with a Manage gateways escape.
+  Purchasing returns you to the same, unchanged editor and never saves, probes or
+  sends anything. Restore Purchases and Manage subscription sit on the sheet itself
+- The allowance is enforced on every dispatching surface — the Watch, CarPlay and the
+  Converse Shortcut all wait for the first verified entitlement read and refuse an
+  inactive gateway by name. The Watch never asks you to choose; it points you at
+  Work on iPhone, iPad or Mac. The Watch can be narrowed by the phone but never
+  granted Pro by it
+- AI and speech usage stay billed by your own providers, separately from the
+  subscription. A Community build from this repository has no product configured,
+  sells nothing, and says so on the paywall; the free-plan limits still apply unless
+  you change the source
+
+### Chats
+
+- A gateway presence dot in the chat toolbar on iPhone, iPad and the Mac window
+  answers "can this device reach the gateway I am about to talk to" before you type.
+  It does no polling, and its verdict expires on its own clock — red after 30 seconds,
+  green after five minutes — so a gateway you have since fixed stops reading red
+  forever. The label is "Connection check failed", because the probe cannot tell a
+  rejected key from an unreachable machine
+- Each message carries a visible actions menu — Copy message and Save message to Work
+  — kept off the message body so native text selection on long-press and right-click
+  still works. Check for returned files and Search for files this reply mentions
+  appear only beside a relevant file problem, not on every reply
+- The full-screen attachment gallery gains a header: filename, position counter,
+  Previous/Next, arrow keys and Share. On macOS it renders one page at a time instead
+  of falling through to a strip of unlabeled segments
+- On iPhone and iPad, tapping empty space or dragging a short list dismisses the
+  keyboard, in a chat thread and on the Work board. A one-message thread used to hold
+  the keyboard up with no way down
+- Deleting all conversations names what it does and does not touch: with content sync
+  on, the deletion reaches all devices; with it off, it can still propagate later, and
+  usage history is cleared account-wide either way. Work is untouched
+
+### Settings
+
+- Sign in with OpenRouter. Guided Setup's hosted step can create an API key in your
+  own OpenRouter account through the system web-auth sheet — nothing to copy. Pasting a
+  key remains an equal alternative and every failure path points back to it. Every
+  request to OpenRouter now identifies the app with attribution headers, sent to the
+  OpenRouter host only — a self-hosted gateway, a lookalike host or a speech vendor
+  never sees them, and they carry no content and no key material
+- Content sync is an explicit setting — General → Sync → "Sync content with iCloud".
+  It is on by default, the choice itself syncs across your devices, and both
+  directions are confirmed with a dialog that says what turning it off does not do:
+  it does not free iCloud storage, and it does not stop settings and keys from
+  syncing. Live per-device status sits beneath the toggle, and a Work file that is not
+  on this device says whether it is waiting for iCloud or content sync is off
+- Usage explains how it counts. A "How usage is counted" row states that a turn is one
+  message and a retry adds an attempt, that success rates use succeeded and failed
+  attempts, that reply times cover successful replies only, that token reporting may
+  be incomplete and is never a bill, and that removing a gateway or a conversation
+  keeps its history. A removed gateway keeps its last known name — "Acme box
+  (removed)", or "(unavailable)" when it merely vanished from a synced roster — and a
+  rename shows up live. Breakdown rows carry attempts and share only; the rates moved
+  into their detail cards
+- Usage figures now stay tied to the date range on screen; a fetch error or a range
+  change could previously leave figures from a different range in place
+- Diagnostics lists permission, sync and recording checks directly, invalidates stale
+  results instead of showing them, deduplicates repeated problems, adds a "Not tested"
+  state, and deep-links connect failures to the matching recipe at
+  conduck.com/setup/tls. Sync-history rows say plainly that history does not establish
+  current sync health
+- A quiet native App Store review request: after three separate days of use, during
+  a calm foreground moment, Apple's own prompt is shown once, ever. Write a Review in
+  About opens the store page directly and permanently retires the automatic prompt.
+  Community builds show neither
+- Gemini speech-to-text moves to the dedicated `gemini-3.5-transcribe` model on the
+  Interactions endpoint, asking Google not to retain the request and pinning verbatim
+  mode so a future default cannot silently tidy your disfluencies. Its errors say
+  something useful: an auth failure reads as one, a rejected request points at the
+  model name in Advanced settings, and rate-limiting is told apart from a billing
+  quota — defaulting to transient, so a rate-limited user is not told to top up an
+  account with money in it. Existing custom model overrides keep working untouched
+
+### macOS
+
+- Capture to Work from the menu bar, on ⌃⌘W: a region-capture overlay ("Drag to
+  capture · Return to skip · Esc to cancel"), then a spoken note, with a Work HUD that
+  mirrors the Ask HUD. A second hotkey press or a status-item click stops it, and a
+  screen-recording refusal offers Continue Without Screenshot. Keyboard Shortcuts in
+  Settings lists all three recorders
+- The menu-bar composer names its destination — Add to Work beside Ask — and the
+  popover gains Retry saved recording and Cancel transcription. Quitting with a
+  capture that has not reached the desk is guarded: "Quitting now loses what was
+  captured", with Keep the Capture
+- Work fills the window: switching to Work collapses the sidebar column, switching
+  back restores the column state you had. Work and Chats share the same full-height
+  native sidebar, search and Settings controls, and switching between them keeps
+  workspace state, capture focus and the menu-bar surface in step
+- The Canvas zooms with a mouse wheel and pans with trackpad scrolling; the two are
+  told apart by gesture phase, so a precise-scrolling mouse still zooms
+- The Conduck Pro sheet is 620 pt wide, clamped to the visible screen height so it can
+  never exceed a short display, with the close control overlaid instead of an empty
+  action bar beneath the purchase controls
+
+### iPhone / iPad
+
+- iPhone moves Chats | Work into an expandable header control in the navigation bar,
+  and iPad gains the Chats | Work switch in its toolbar. Before this, Work was
+  unreachable from Chats on iPad, and an external capture that landed in Work stranded
+  you there
+- The Conduck Pro row sits below About in iPhone Settings, and the paywall's type and
+  footer links scale and reflow with large accessibility text instead of clipping
+- The Pro sheet mounts one StoreKit view for its whole life, keyed on the product
+  identifier, so it no longer swaps layouts and jumps while the product loads
+
+### Apple Watch
+
+- Every Ask press opens a "Where to?" chooser listing your gateways first and Add to
+  Work last, even with a single gateway configured. Add to Work has its own capture
+  screen — Starting…, Tap to Stop, "1 min left", Saving to Work… — and ends with
+  "Saved to Work." or "Saved on your watch. It reaches Work when your iPhone is
+  nearby." Captures relay through the paired iPhone and queue durably on the wrist
+  until it is in range; with content sync off, the Watch says where the note went and
+  what to turn on to see it elsewhere
+- The launchpad no longer flashes a greyed Ask button and a "Recording…" caption while
+  the capture screen is being pushed
+
+### CarPlay
+
+- The gateway switcher in the navigation bar appears from the first configured
+  gateway (it used to need two), and the Choose AI list it opens ends with Add to
+  Work. The root list carries an Add to Work row only when no gateway exists at all
+- Spoken receipts for Work: "Saved to Work.", or "Kept on your iPhone. Open Conduck to
+  add it to Work." when the words have not landed yet
+- CarPlay pre-flights a thread before listening and speaks a project refusal —
+  "This project is archived. Restore it in Work on your iPhone to continue." —
+  instead of collapsing it into "couldn't reach your AI", which blamed the gateway
+  for a project fact
+
+### Shortcuts and the share sheet
+
+- Three Work intents: Add to Work (a thought), Add Files to Work, and Record a Note to
+  Work. The Converse intent gains a Destination parameter, Chat or Work, and the
+  bundled GigaAction shortcut gains a Send to Work branch that takes a screenshot,
+  records audio and lands both on the desk with no gateway step
+- The share sheet is rebuilt around one "Where to?" list of gateways and recent chats
+  with search, on iPhone, iPad and Mac. Add to Work sits on the floor beside Send,
+  captioned "Nothing is sent to AI"; Send names its target — "Send to <gateway>" or
+  "Send to <chat>" — and your default gateway opens highlighted, so nothing leaves
+  until you press the button that says where it goes. Recordings, folders and package
+  documents are refused with the reason
+
+### Files
+
+- The file lane speaks only when a file was in play. A plain text turn under a
+  stopped file server no longer draws a paragraph about lost files, opening a thread
+  with no network signal no longer paints "Couldn't read your file server" under the
+  replies or opens a backoff against a healthy server, and a reply that merely echoes
+  a filename you uploaded stays silent
+
+### Fixes
+
+- The app could deadlock permanently and silently. Three observers of the
+  conversations-changed notification each spawned a task per notification, all
+  reaching a fetch whose fault fulfilment parks a dispatch worker; a burst hit
+  libdispatch's 512-thread limit and the process could schedule nothing again — no
+  crash, no report. Each surface now coalesces to one in-flight refresh plus one
+  trailing pass, which also fixes an older share-targets snapshot committing over a
+  newer one
+- A signed macOS build could fail to open Chats and Work at all when a failed defaults
+  flush left the content-sync preference unreadable. The preference now has its own
+  store and an unreadable policy never blocks local database access
+- The first signed launch crashed once the payload store was added, because Core Data
+  refuses two stores mirroring one iCloud container. The payload store mirrors through
+  its own container and mounts local-only, with a log line, when that container is not
+  entitled
+- A released drag in Tiles or List shows its intended order immediately while the save
+  runs, instead of snapping back; a pane-wide drop receiver no longer outlines the
+  whole window and steals precise drops in populated layouts
+- The drop overlay drawn over an open project named the wrong destination, and its two
+  catalog rows were stuck in state `new` so they never compiled into the English
+  resources
+- A replay after Reattach could retire the replacement payload you had just attached;
+  a stale re-drain could revert a file attached afterwards
+- Usage hid the device and gateway sections entirely when every attempt was
+  unattributed, so the missing mass was invisible rather than explained
+- A note card could repeat its first line as its own body, and a share-sheet note
+  could show the wrong title
+
+### Project
+
+- The architecture document states the Work desk's boundaries as decisions: captures
+  never dispatch themselves, a spoken note is its words, the 30 MB sync ceiling, the
+  free-plan allowances and what archiving does, and the content-sync policy and its
+  limits — offline devices, older builds and fresh installs cannot be remotely
+  prevented from syncing
+- The Conversations data model advances seven versions; migration is additive
+  throughout and both parallel-branch lineages are kept so a TestFlight store from
+  either migrates forward
+- QA runbooks for content sync and for project threads record the device-level checks
+  the simulator suites do not cover: real CloudKit stop and resume, WatchConnectivity
+  delivery on hardware, and native StoreKit transactions
+- The pairing importer is tested against conduck-connect's frozen pairing vectors
+
+Verified: iOS 6722 tests / 0 failures · watchOS 318 / 0 · Release builds green on iOS and macOS · macOS test bundle compiles · six CI source guards clean
+
 ## [1.5-11] — the measurement release
 
 App Store release, 28 August 2026. Tagged `v1.5-11`.
