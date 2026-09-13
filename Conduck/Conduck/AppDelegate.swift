@@ -234,7 +234,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // not load-bearing: every seeded write posts `.conversationsDidChange`,
         // which refreshes `ConversationListViewModel`.
         if QAMode.isActive {
-            Task { await QAMode.seedConversationsIfNeeded() }
+            Task {
+                await QAMode.seedConversationsIfNeeded()
+                await QAMode.seedWorkDeskIfNeeded()
+                await QAMode.captureMainWindowIfRequested()
+            }
         }
         #endif
 

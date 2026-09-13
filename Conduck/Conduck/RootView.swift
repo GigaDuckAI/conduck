@@ -77,6 +77,7 @@ struct RootView: View {
             #if DEBUG
             if QAMode.isActive {
                 await QAMode.seedConversationsIfNeeded()
+                await QAMode.seedWorkDeskIfNeeded()
             }
             #endif
             await ConversationStore.shared.backfillTitleSnippetsIfNeeded()

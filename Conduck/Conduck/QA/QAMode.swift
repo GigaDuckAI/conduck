@@ -7,6 +7,9 @@ import OSLog
 import ImageIO
 import CoreGraphics
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
 
 /// Compile-and-runtime gate for Conduck's QA mode. Activated by the
 /// `-ConduckQAMode` launch argument.
@@ -955,6 +958,367 @@ enum QAMode {
             AppError.noInternetConnection.errorCode,
             AppError.remoteAgentUnreachable.errorCode
         ])
+    }
+
+    // MARK: - Work-desk seed (screenshot mode only)
+
+    /// `-ConduckQASeedWorkImagePath` — a SECOND host PNG, used for the picture
+    /// filed inside the seeded project so the desk does not show the same
+    /// artwork twice. Falls back to `-ConduckQASeedImagePath` when absent.
+    private static let workImagePathFlag = "-ConduckQASeedWorkImagePath"
+
+    #if os(macOS)
+    /// `-ConduckQAWindowCapturePath <file.png>` — screenshot mode only. Opens
+    /// the main window on Work, sizes it to the capture window (1320 x 872 pt:
+    /// the set's usual 1212 pt plus the width the wide desk needs) and writes the window's own pixels to the path, the way
+    /// `screencapture -o -w` would: title bar included, no shadow, transparent
+    /// corners, at the display's backing scale. It reads only this process's
+    /// own window, so no Screen Recording grant is involved — which is what
+    /// makes a headless Mac capture possible at all. Runs after the desk seed;
+    /// the waits let the scene mount, the desk lay out and the resize settle.
+    private static let windowCapturePathFlag = "-ConduckQAWindowCapturePath"
+
+    @MainActor
+    static func captureMainWindowIfRequested() async {
+        guard isScreenshotMode, let path = stringValue(for: windowCapturePathFlag) else { return }
+        try? await Task.sleep(for: .milliseconds(800))
+        NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.post(name: .showWorkboard, object: nil)
+        try? await Task.sleep(for: .seconds(2))
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.titled) }) else {
+            logger.error("QAMode window capture: no visible titled window")
+            return
+        }
+        var frame = window.frame
+        frame.size = NSSize(width: 1320, height: 872)
+        window.setFrame(frame, display: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .seconds(3))
+        // Key status is what colours the traffic lights; anything that took
+        // focus during the wait would leave the capture looking inactive.
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(500))
+        guard let image = ownWindowImage(window) else {
+            logger.error("QAMode window capture: no image")
+            return
+        }
+        let url = URL(fileURLWithPath: path)
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+            logger.error("QAMode window capture: cannot create destination")
+            return
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        let finished = CGImageDestinationFinalize(destination)
+        logger.notice("QAMode window capture written=\(finished, privacy: .public) \(image.width, privacy: .public)x\(image.height, privacy: .public)")
+    }
+
+    /// The window's pixels as the window server composes them. The Swift
+    /// overlay marks `CGWindowListCreateImage` unavailable from macOS 15, but
+    /// the C symbol is still exported, still the API `screencapture -w` rests
+    /// on, and still exempt from the Screen Recording grant for a process's
+    /// OWN windows — which is the whole point here. Resolved through `dlsym`
+    /// for that reason. Falls back to an AppKit view-tree render when the
+    /// symbol is gone; that path loses the window's rounded corners and any
+    /// glass, so the pipeline's `frame.py` input may need a corner mask.
+    @MainActor
+    private static func ownWindowImage(_ window: NSWindow) -> CGImage? {
+        typealias CreateImage = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+        if let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") {
+            let create = unsafeBitCast(symbol, to: CreateImage.self)
+            let options = CGWindowImageOption([.boundsIgnoreFraming, .bestResolution]).rawValue
+            if let image = create(.null, CGWindowListOption.optionIncludingWindow.rawValue,
+                                  CGWindowID(window.windowNumber), options)?.takeRetainedValue(),
+               image.width > 1 {
+                return image
+            }
+            logger.error("QAMode window capture: window-server image unavailable, falling back to a view render")
+        }
+        guard let frameView = window.contentView?.superview,
+              let rep = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) else { return nil }
+        frameView.cacheDisplay(in: frameView.bounds, to: rep)
+        return rep.cgImage
+    }
+    #endif
+
+    /// Marketing-grade Work desk, seeded through the SAME store API every real
+    /// capture lane uses (`upsertDeskMaterial` for cards,
+    /// `applyWorkDeskMutation(.createProject)` for folders), so the seeded desk
+    /// is byte-for-byte the shape a person's own desk takes — placement,
+    /// storage lane and image normalisation included.
+    ///
+    /// Screenshot mode only: plain QA mode keeps the REAL store, and a seeded
+    /// desk there would mix marketing cards into a founder's own CloudKit data.
+    /// Idempotent — a desk that already holds a card or a project is left
+    /// alone. Positions are deliberately not written: `WorkDeskCanvas` seeds a
+    /// readable spatial layout for every unpositioned card and folder on first
+    /// render, which is the arrangement a real first-run desk gets too.
+    /// Errors are logged and swallowed; a failed seed must never take down a
+    /// capture launch.
+    static func seedWorkDeskIfNeeded() async {
+        guard isScreenshotMode else { return }
+        do {
+            let desk = try await ConversationStore.shared.fetchWorkItem(id: Constants.workboardDeskItemID)
+            let organization = try await ConversationStore.shared.fetchWorkDeskOrganization()
+            guard desk?.materials.isEmpty ?? true, organization.projects.isEmpty else {
+                logger.notice("QAMode Work seed skipped — desk already populated")
+                return
+            }
+
+            var placements: [WorkDeskPositionSeed] = []
+            var projectPositions: [UUID: WorkDeskPoint] = [:]
+
+            for (index, loose) in workSeedHomeMaterials().enumerated() {
+                guard let id = await publishWorkSeed(loose, projectID: nil) else { continue }
+                placements.append(WorkDeskPositionSeed(
+                    materialID: id,
+                    projectID: nil,
+                    position: workSeedGridPoint(index),
+                    isHome: true
+                ))
+            }
+            for (slot, project) in workSeedProjects().enumerated() {
+                let record = WorkDeskProjectRecord(
+                    id: project.id,
+                    title: project.title,
+                    brief: project.brief,
+                    color: project.color
+                )
+                _ = try await ConversationStore.shared.applyWorkDeskMutation(
+                    .createProject(record, materialIDs: [], automaticallyAssignColor: false)
+                )
+                projectPositions[project.id] = workSeedFolderPoint(slot)
+                for (index, filed) in project.materials.enumerated() {
+                    guard let id = await publishWorkSeed(filed, projectID: project.id) else { continue }
+                    placements.append(WorkDeskPositionSeed(
+                        materialID: id,
+                        projectID: project.id,
+                        position: workSeedGridPoint(index),
+                        isHome: false
+                    ))
+                }
+            }
+            _ = try await ConversationStore.shared.applyWorkDeskMutation(
+                .seedPositions(materials: placements, projects: projectPositions)
+            )
+            logger.notice("QAMode seeded \(placements.count, privacy: .public) Work material(s)")
+        } catch {
+            logger.error("QAMode Work desk seed failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// One seeded card, already in the shape `upsertDeskMaterial` wants. Ages
+    /// are relative so the cards read as a working week rather than as a batch
+    /// written in the same second.
+    private struct WorkSeedMaterial {
+        let kind: WorkMaterialKind
+        let title: String
+        let textContent: String?
+        let urlString: String?
+        let imageFlag: String?
+        let filename: String?
+        let ageHours: Double
+
+        init(
+            kind: WorkMaterialKind,
+            title: String,
+            textContent: String? = nil,
+            urlString: String? = nil,
+            imageFlag: String? = nil,
+            filename: String? = nil,
+            ageHours: Double
+        ) {
+            self.kind = kind
+            self.title = title
+            self.textContent = textContent
+            self.urlString = urlString
+            self.imageFlag = imageFlag
+            self.filename = filename
+            self.ageHours = ageHours
+        }
+
+        /// A typed thought or a spoken one: both are text and nothing else, and
+        /// both take the title a real capture derives from their first line, so
+        /// the card face suppresses the repeated heading exactly as it does for
+        /// a card the person made.
+        static func words(_ kind: WorkMaterialKind, _ text: String, ageHours: Double) -> WorkSeedMaterial {
+            WorkSeedMaterial(
+                kind: kind,
+                title: WorkboardWorkspaceCaptureLogic.noteTitle(for: text),
+                textContent: text,
+                ageHours: ageHours
+            )
+        }
+    }
+
+    private struct WorkSeedProject {
+        let id: UUID
+        let title: String
+        let brief: String
+        let color: WorkDeskProjectColor
+        let materials: [WorkSeedMaterial]
+    }
+
+    /// Loose cards on Home — the "collect anything, sort it later" half of the
+    /// story, in one person's own words: a spoken reminder, a typed decision,
+    /// and something they want to read later. Nothing here is about Conduck;
+    /// a desk that talks about the app it is shipped in reads as a demo.
+    private static func workSeedHomeMaterials() -> [WorkSeedMaterial] {
+        [
+            .words(.transcript, "Ask Mia whether the Friday slot still works — if not, Monday morning.", ageHours: 20),
+            .words(.note, "Ship the newsletter Thursday. Lead with the pricing change.", ageHours: 27),
+            WorkSeedMaterial(
+                kind: .link,
+                title: "How we cut onboarding to three screens",
+                urlString: "https://blog.example.com/onboarding-three-screens",
+                ageHours: 6
+            )
+        ]
+    }
+
+    /// Three folders — the free plan's full allowance
+    /// (`Constants.maxActiveWorkProjects`), so the capture runs as a free
+    /// install with no subscription state and no plan banner. "Website
+    /// refresh" matches the example the in-app Work tour names, so a person
+    /// who saw the tour recognises the desk; the other two are deliberately
+    /// not all work, because a personal desk is not a task tracker and the
+    /// colours have to earn their variety.
+    private static func workSeedProjects() -> [WorkSeedProject] {
+        [
+            WorkSeedProject(
+                id: UUID(uuidString: "C0FFEE00-0000-4000-A000-000000000010")!,
+                title: "Website refresh",
+                brief: "Marketing site for a small iOS app. Keep copy plain, no jargon.",
+                color: .amber,
+                materials: [
+                    WorkSeedMaterial(
+                        kind: .image,
+                        title: "Homepage hero.png",
+                        imageFlag: workImagePathFlag,
+                        filename: "Homepage hero.png",
+                        ageHours: 30
+                    ),
+                    .words(.note, "Homepage headline: shorter, say what it does.", ageHours: 22),
+                    .words(.transcript, "Move the pricing FAQ above the download button.", ageHours: 9)
+                ]
+            ),
+            WorkSeedProject(
+                id: UUID(uuidString: "C0FFEE00-0000-4000-A000-000000000011")!,
+                title: "Q4 planning",
+                brief: "",
+                color: .sage,
+                materials: [
+                    .words(.note, "Two launches in October is one too many — pick one.", ageHours: 46),
+                    .words(.note, "Budget review with the accountant before the 15th.", ageHours: 34)
+                ]
+            ),
+            WorkSeedProject(
+                id: UUID(uuidString: "C0FFEE00-0000-4000-A000-000000000012")!,
+                title: "Kitchen renovation",
+                brief: "",
+                color: .coral,
+                materials: [
+                    .words(.note, "Get a second quote for the worktop before signing anything.", ageHours: 52),
+                    .words(.note, "Tiles: matte, not gloss. The sample arrives Tuesday.", ageHours: 41)
+                ]
+            )
+        ]
+    }
+
+    /// Publish one seeded card through the real desk write. Returns whether it
+    /// landed; a card whose picture cannot be read is skipped rather than
+    /// published empty, so a missing seed-image flag costs one card and not the
+    /// whole desk.
+    private static func publishWorkSeed(_ seed: WorkSeedMaterial, projectID: UUID?) async -> UUID? {
+        var payload: Data?
+        var mimeType: String?
+        var width: Int?
+        var height: Int?
+        if let flag = seed.imageFlag {
+            guard let image = workSeedImage(flag: flag) else { return nil }
+            payload = image.data
+            mimeType = image.mimeType
+            width = image.width
+            height = image.height
+        }
+        let draft = WorkMaterialDraft(
+            kind: seed.kind,
+            title: seed.title,
+            textContent: seed.textContent,
+            urlString: seed.urlString,
+            filename: seed.filename,
+            mimeType: mimeType,
+            payload: payload,
+            width: width,
+            height: height,
+            byteSize: payload.map { Int64($0.count) },
+            sourceDevice: SourceDevice.current,
+            createdAt: Date().addingTimeInterval(-seed.ageHours * 3_600)
+        )
+        do {
+            let record = try await ConversationStore.shared.upsertDeskMaterial(
+                draft,
+                sourceFileByteSize: payload.map { Int64($0.count) },
+                projectID: projectID
+            )
+            return record.id
+        } catch {
+            logger.error("QAMode Work seed card failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// A tight two-column grid for seeded cards, and one row for the folders
+    /// beneath them. The canvas seeds its OWN layout for anything unpositioned,
+    /// on a 264 x 340 pitch that leaves a card-height gap between rows — honest
+    /// for a desk a person filled one capture at a time, and far too tall to
+    /// read once Fit has to squeeze it onto a phone. These pitches are the card
+    /// and folder bodies (`WorkDeskCanvasGeometry.cardBodySize` /
+    /// `projectBodySize`) plus a 24 pt gutter, which is what lets the seeded
+    /// desk fit a portrait screen at a legible zoom.
+    ///
+    /// The Mac lays the same desk out wide instead of tall — three cards over
+    /// three folders, 988 pt across: the capture window is landscape and the
+    /// canvas opens at 100 % from the top-left corner, so a desk that fits the
+    /// viewport at that zoom needs no Fit press at all.
+    private static func workSeedGridPoint(_ index: Int) -> WorkDeskPoint {
+        #if os(macOS)
+        WorkDeskPoint(x: 28 + Double(index) * 256, y: 26)
+        #else
+        WorkDeskPoint(x: 28 + Double(index % 2) * 256, y: 26 + Double(index / 2) * 262)
+        #endif
+    }
+
+    /// Folders in two columns under the cards, on the folder body's own pitch.
+    /// Two rows rather than one keeps the desk's bounding box close to a
+    /// portrait screen's aspect, which is what decides how much Fit can zoom in.
+    private static func workSeedFolderPoint(_ slot: Int) -> WorkDeskPoint {
+        #if os(macOS)
+        WorkDeskPoint(x: 28 + Double(slot) * 332, y: 288)
+        #else
+        WorkDeskPoint(x: 28 + Double(slot % 2) * 332, y: 574 + Double(slot / 2) * 248)
+        #endif
+    }
+
+    /// Bytes + pixel dimensions for a seeded picture, read from the host path a
+    /// launch flag names. `workImagePathFlag` falls back to the shared seed
+    /// image so a one-flag launch still gets both pictures.
+    private static func workSeedImage(flag: String) -> (data: Data, mimeType: String, width: Int, height: Int)? {
+        let path = stringValue(for: flag) ?? (flag == workImagePathFlag ? stringValue(for: seedImagePathFlag) : nil)
+        guard let path else { return nil }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+            logger.error("QAMode Work seed image unreadable at supplied path")
+            return nil
+        }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int else {
+            logger.error("QAMode Work seed image failed to decode")
+            return nil
+        }
+        return (data, mimeType(forPath: path), width, height)
     }
 }
 
