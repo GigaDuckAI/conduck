@@ -1376,6 +1376,7 @@ final class CarPlayWorkNoteTests: XCTestCase {
         // that drifted below a side effect fails here.
         for anchor in [
             "effectiveCarPlayRef()",
+            "workProjectActivityRefusal(projectID: projectID)",
             "remoteAgentSnapshot(forConversationBackend: bound?.backend ?? \"\")",
             "newChatPickerSnapshot()"
         ] {

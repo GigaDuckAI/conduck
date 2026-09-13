@@ -75,6 +75,10 @@ struct MainWindowView: View {
     @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// The window's open thread and its Work project standing — ONE instance,
+    /// outside the thread's `.id` boundary (see `ConversationProjectContext`).
+    @State private var projectContext = ConversationProjectContext()
+
     @State private var selectedConversationID: UUID?
     /// Session-local gateway-picker selection for the NEXT new macOS
     /// conversation. Seeded by `NewChatGatewaySeed` (the gateway the last chat was
@@ -813,6 +817,11 @@ struct MainWindowView: View {
 
     var body: some View {
         windowLifecycleContent
+        .projectContextRefresh(
+            projectContext,
+            conversationID: coordinator.windowViewModel?.conversationID,
+            sendError: coordinator.windowViewModel?.sendError
+        )
         .appReviewBusy(showingSettings || guidedHost.presentation != nil
             || showDeleteAllConfirmation || !sidebarSearch.isEmpty
             || coordinator.dictationService.state == .recording
@@ -1350,7 +1359,28 @@ struct MainWindowView: View {
     /// Shared mint-on-first-turn send path. Both composer instances (active +
     /// new-chat branch) use the SAME closure so behavior is identical.
     private func sendTypedText(_ dispatch: ComposerTurnDispatch) async -> Bool {
-        await coordinator.handleTypedText(dispatch)
+        // A project thread that cannot take a new turn refuses here, with the
+        // lock notice's own sentence and the draft + staging untouched — the
+        // composer stays live so an unsent file survives an archive arriving
+        // through sync. A new-chat mint has no project and passes.
+        if let target = dispatch.conversationID, let refusal = projectContext.refusal(for: target) {
+            coordinator.windowViewModel?.setSendNotice(ProjectActivityRefusalCopy(refusal).sentence)
+            return false
+        }
+        return await coordinator.handleTypedText(dispatch)
+    }
+
+    // MARK: - Work project routes
+
+    private func showInWorkAction(for conversationID: UUID) -> (() -> Void)? {
+        guard let router = personalWorkbenchModel?.router, router.canShowInWork else { return nil }
+        return { router.showConversationInWork(conversationID) }
+    }
+
+    private func showWorkForRefusalAction(_ refusal: WorkProjectAccessError, conversationID: UUID) -> (() -> Void)? {
+        guard let router = personalWorkbenchModel?.router, router.canShowInWork,
+              let project = projectContext.liveProject(for: conversationID) else { return nil }
+        return { router.showWorkForRefusal(project.id, refusal) }
     }
 
     /// Route an STT result from the window mic — the mic-tap path (via the
@@ -1498,6 +1528,17 @@ struct MainWindowView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            // A project conversation says whose it is, under the bar and above
+            // the thread — capped to the transcript column like the banner.
+            if let vm = coordinator.windowViewModel,
+               let mark = projectContext.liveProject(for: vm.conversationID) {
+                ConversationProjectHeaderLine(
+                    mark: mark,
+                    onShowInWork: showInWorkAction(for: vm.conversationID)
+                )
+                .transition(.opacity)
             }
 
             Group {
@@ -1706,7 +1747,11 @@ struct MainWindowView: View {
         VStack(spacing: 0) {
             // Thread fills the pane width (scrollbar at the window edge); its
             // message column is capped + centered internally via contentMaxWidth.
-            ConversationThreadView(viewModel: vm, settingsVM: settingsVM, contentMaxWidth: Constants.Layout.chatContentWidth, emptyMascot: hostMascot)
+            ConversationThreadView(
+                viewModel: vm, settingsVM: settingsVM, contentMaxWidth: Constants.Layout.chatContentWidth,
+                emptyMascot: hostMascot,
+                allowsNewAttempts: projectContext.allowsNewTurns(for: vm.conversationID)
+            )
                 // INSIDE the `.id` boundary so a sidebar switch tears the
                 // reporter down/re-mounts it with the thread (clean
                 // appear/disappear per conversation, no onChange plumbing).
@@ -1721,6 +1766,19 @@ struct MainWindowView: View {
             voiceRecoveryRow
                 .frame(maxWidth: Constants.Layout.chatContentWidth)
                 .frame(maxWidth: .infinity)
+            // A project thread that cannot take a new turn says so ABOVE the
+            // composer, which stays mounted: its staged attachments are view
+            // state and would be torn down by a swap. `sendTypedText` refuses
+            // with the same sentence, so the draft and the staging survive.
+            if let refusal = projectContext.refusal(for: vm.conversationID) {
+                ProjectActivityLockNotice(
+                    refusal: refusal,
+                    onShowInWork: showWorkForRefusalAction(refusal, conversationID: vm.conversationID)
+                )
+                .frame(maxWidth: Constants.Layout.chatContentWidth)
+                .frame(maxWidth: .infinity)
+                .transition(.opacity)
+            }
             // Composer sits on the same readable column as the thread, centered.
             MessageComposerBar(
                 viewModel: vm,

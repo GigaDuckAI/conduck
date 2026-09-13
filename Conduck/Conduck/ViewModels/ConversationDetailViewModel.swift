@@ -4221,6 +4221,14 @@ final class ConversationDetailViewModel {
                 workMaterialInputs: workMaterialInputs
             )
             await reload()
+        } catch let refusal as WorkDeskStoreError where refusal == .projectArchived || refusal == .projectSelectionRequired {
+            // The project refused the turn (archived, or the free plan's active
+            // choice is pending) — a typed reason with the draft kept intact,
+            // never the generic line. The composer lock says this before a tap
+            // in the ordinary case; this is the turn that slipped between a
+            // refresh and the tap, and the lock re-syncs off this notice.
+            setSendNotice(refusal.localizedDescription)
+            userRecord = nil
         } catch {
             loadError = String(localized: "Couldn't send that message. Try again.")
             userRecord = nil

@@ -53,6 +53,7 @@
 // line leaves this whole file green and the wrist silently attention-blind.
 
 import XCTest
+import CoreData
 @testable import ConduckWatch_Watch_App
 
 final class WatchConversationRowStateTests: XCTestCase {
@@ -433,5 +434,97 @@ final class WatchConversationRowStateTests: XCTestCase {
             acknowledgedAttemptID: acknowledgedAttemptID,
             now: now
         )
+    }
+}
+
+// MARK: - Work project membership on the wrist
+
+// The wrist draws a folder for a project thread from IDENTIFIERS alone — the
+// one live-project resolver the phone's desk uses, compiled into the shared
+// store file — and only for projects it can vouch for. A deleted project's
+// ghost membership, and an id whose row has not synced yet, draw nothing.
+extension WatchConversationRowStateTests {
+    /// An isolated model holding just the project entity, so the resolver's
+    /// rules can be staged row by row: duplicates, tombstones, untitled rows.
+    private static func projectOnlyContext() throws -> NSManagedObjectContext {
+        let entity = NSEntityDescription()
+        entity.name = "WorkDeskProject"
+        entity.managedObjectClassName = "NSManagedObject"
+        entity.properties = [("id", NSAttributeType.UUIDAttributeType), ("title", .stringAttributeType),
+            ("updatedAt", .dateAttributeType), ("archivedAt", .dateAttributeType), ("deletedAt", .dateAttributeType)].map { name, type in
+                let attribute = NSAttributeDescription()
+                attribute.name = name
+                attribute.attributeType = type
+                attribute.isOptional = true
+                return attribute
+            }
+        let model = NSManagedObjectModel()
+        model.entities = [entity]
+        let coordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
+        try coordinator.addPersistentStore(ofType: NSInMemoryStoreType, configurationName: nil, at: nil)
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        context.persistentStoreCoordinator = coordinator
+        return context
+    }
+
+    private static func insertProject(
+        _ context: NSManagedObjectContext, id: UUID, title: String?, updatedAt: Date,
+        archivedAt: Date? = nil, deletedAt: Date? = nil
+    ) {
+        let row = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
+        row.setValue(id, forKey: "id")
+        row.setValue(title, forKey: "title")
+        row.setValue(updatedAt, forKey: "updatedAt")
+        row.setValue(archivedAt, forKey: "archivedAt")
+        row.setValue(deletedAt, forKey: "deletedAt")
+    }
+
+    func testLiveProjectIDsFollowTheOneResolver() throws {
+        let context = try Self.projectOnlyContext()
+        let now = Date()
+        let live = UUID(), archived = UUID(), ghost = UUID(), arriving = UUID(), duplicated = UUID()
+        Self.insertProject(context, id: live, title: "Live", updatedAt: now)
+        Self.insertProject(context, id: archived, title: "Paused", updatedAt: now, archivedAt: now)
+        // A tombstone beats its newer live duplicate.
+        Self.insertProject(context, id: ghost, title: nil, updatedAt: now, deletedAt: now)
+        Self.insertProject(context, id: ghost, title: "Ghost", updatedAt: now.addingTimeInterval(60))
+        // An untitled row is an import still arriving, not a project.
+        Self.insertProject(context, id: arriving, title: nil, updatedAt: now)
+        // Two live rows for one id are one project.
+        Self.insertProject(context, id: duplicated, title: "Twice", updatedAt: now)
+        Self.insertProject(context, id: duplicated, title: "Twice again", updatedAt: now.addingTimeInterval(1))
+
+        XCTAssertEqual(try ConversationStore.liveProjectIDs(in: context), [live, archived, duplicated],
+                       "archived is live — the folder marks membership, not whether a turn is allowed")
+    }
+
+    @MainActor
+    func testTheViewModelMarksOnlyProjectsItCanVouchFor() async throws {
+        ReadStateStore._resetForTesting()
+        let store = ConversationStore(inMemory: true)
+        let vm = WatchConversationViewModel(store: store)
+        let projectID = UUID()
+        // The wrist writes no project validation: a thread can name a project
+        // this device holds no row for yet.
+        let thread = try await store.createConversation(backend: "openclaw", projectID: projectID)
+        _ = await vm.reload()
+        XCTAssertTrue(vm.liveProjectIDs.isEmpty, "an id with no row is not vouched for")
+        XCTAssertFalse(vm.isInLiveProject(thread))
+
+        // The project row arrives; the conversation row itself is untouched,
+        // and the reload still reports a change so the list repaints.
+        let context = await store.newWriteContext()
+        try await context.perform {
+            let row = NSEntityDescription.insertNewObject(forEntityName: "WorkDeskProject", into: context)
+            row.setValue(projectID, forKey: "id")
+            row.setValue("Q3 launch", forKey: "title")
+            row.setValue(Date(), forKey: "updatedAt")
+            try context.save()
+        }
+        // The model's own notification-driven refresh may publish this first;
+        // the assertion is on the STATE, which both paths converge on.
+        _ = await vm.reload()
+        XCTAssertEqual(vm.liveProjectIDs, [projectID])
+        XCTAssertTrue(vm.isInLiveProject(thread))
     }
 }

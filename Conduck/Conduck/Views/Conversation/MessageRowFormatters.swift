@@ -188,6 +188,64 @@ enum MessageRowFormatters {
         ReplySanitizer.displayLine(text, maxLength: .max, fallback: "")
     }
 
+    // MARK: - Project membership (Work project conversations listed outside Work)
+
+    /// A Work project's name as one safe display line. Project names are the
+    /// person's own text and reach the list, the thread header and VoiceOver
+    /// through this one projection, like a title does.
+    static func projectDisplayName(_ title: String) -> String {
+        projectedLine(title)
+    }
+
+    /// The row's date slot for the settled states. A project conversation names
+    /// its project here — "Q3 launch · 10:14" — because the date arm is the one
+    /// arm with room: while a turn is working or failed the status words own
+    /// the slot and the name yields to them. An archived project's date gives
+    /// way to the word the Work sidebar uses, since "when" matters less than
+    /// "paused" for a thread that cannot take a new turn.
+    static func conversationDateLine(
+        projectName: String?, projectIsArchived: Bool, lastActivityAt: Date, now: Date = Date()
+    ) -> String {
+        let date = conversationListDate(from: lastActivityAt, now: now)
+        guard let projectName = projectName.map(projectedLine), !projectName.isEmpty else { return date }
+        if projectIsArchived {
+            return String(localized: "conversations.row.project.archived",
+                          defaultValue: "\(projectName) · \(archivedWord)")  // xcstrings: chat-ui
+        }
+        return String(localized: "conversations.row.project.date",
+                      defaultValue: "\(projectName) · \(date)")  // xcstrings: chat-ui
+    }
+
+    /// Whether the visible date slot carries the project name in this state —
+    /// the ONE rule the row and its spoken label share, so neither can show a
+    /// name the other omits.
+    static func showsProjectName(for activity: ConversationActivity) -> Bool {
+        switch activity {
+        case .idle, .answeredUnseen: true
+        case .working, .failed: false
+        }
+    }
+
+    /// The same word the Work sidebar draws for a paused project.
+    static var archivedWord: String {
+        String(localized: "workdesk.projects.archived", defaultValue: "Archived")
+    }
+
+    /// What VoiceOver says about a row's project membership. Spoken whenever
+    /// the row DRAWS a folder — in every state, unlike the name in the date
+    /// slot — because the glyph is hidden from VoiceOver and this is the only
+    /// place the membership can reach a listener.
+    enum ProjectMembershipSpeech: Equatable {
+        /// A folder with no name: the project's row has not synced yet.
+        case unsynced
+        case named(String, isArchived: Bool)
+
+        var isArchived: Bool {
+            if case .named(_, let isArchived) = self { return isArchived }
+            return false
+        }
+    }
+
     // MARK: - Conversation-list row
 
     /// The row SUBTITLE. `text` is the RAW tail preview, never a pre-prefixed
@@ -262,11 +320,30 @@ enum MessageRowFormatters {
         lastActivityAt: Date,
         showsGateway: Bool,
         phase: ThinkingPhase = .answering,
-        now: Date = Date()
+        now: Date = Date(),
+        projectMembership: ProjectMembershipSpeech? = nil
     ) -> String {
         var parts: [String] = []
         if let lead = stateLead(state) { parts.append(lead) }
         parts.append(projectedLine(title))
+        // Membership is spoken in EVERY state the row draws a folder in — the
+        // glyph is hidden from VoiceOver, so a working project row would
+        // otherwise announce no project at all while a sighted user sees one.
+        // It rides right after the title, before the gateway, so the "where"
+        // of the thread is heard before the "which agent".
+        if let projectMembership {
+            switch projectMembership {
+            case .unsynced:
+                parts.append(inAProject)
+            case .named(let name, let isArchived):
+                let projected = projectedLine(name)
+                parts.append(projected.isEmpty
+                    ? inAProject
+                    : String(localized: "conversations.row.a11y.inProject",
+                             defaultValue: "In project \(projected)"))  // xcstrings: chat-ui
+                if isArchived { parts.append(archivedWord) }
+            }
+        }
 
         // `projectedLine` trims and collapses as part of the projection, so it
         // subsumes the whitespace trim this name needs on its own account.
@@ -297,10 +374,20 @@ enum MessageRowFormatters {
         switch state.activity {
         case .failed:
             break
-        case .idle, .working, .answeredUnseen:
+        case .idle, .answeredUnseen:
+            // An archived project's settled row shows "Archived" where the date
+            // was, so the label stops at the same word the eye does.
+            if projectMembership?.isArchived != true {
+                parts.append(sentPhrase(lastActivityAt, now: now))
+            }
+        case .working:
             parts.append(sentPhrase(lastActivityAt, now: now))
         }
         return parts.joined(separator: ". ")
+    }
+
+    private static var inAProject: String {
+        String(localized: "conversations.row.a11y.inUnsyncedProject", defaultValue: "In a project")  // xcstrings: chat-ui
     }
 
     /// Trailing ellipsis + full stop, trimmed off a status sentence before it is

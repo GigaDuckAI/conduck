@@ -39,6 +39,12 @@ final class ConversationListViewModel {
     /// new turn landed would show a stale match set).
     private(set) var changeGeneration = 0
 
+    /// The Work projects the rows may belong to, read beside the list. A
+    /// rename, recolour, archive or deletion arrives on the same
+    /// `.conversationsDidChange` bus as a row write (every desk mutation ends
+    /// in `postDidChange()`), so this refreshes on the reload it already runs.
+    private(set) var projectMarks = WorkProjectMarkSet()
+
     /// Holder so the observer can be detached on `deinit` without touching
     /// main-actor state from a nonisolated context (verbatim NotesViewModel).
     private final class ObserverBox {
@@ -127,11 +133,24 @@ final class ConversationListViewModel {
             // Third pass over the same records, and the only one that writes to
             // the store: rewrite the tail envelopes that came back unusable.
             scheduleTailProjectionRepairs(for: fetched)
+            // Project marks: one extra read, and only for a list that holds a
+            // project conversation at all. A failed read keeps the marks the
+            // rows already wear rather than stripping every folder for a beat.
+            let marks: WorkProjectMarkSet
+            if fetched.contains(where: { $0.projectID != nil }) {
+                marks = (try? await ConversationStore.shared.fetchWorkProjectMarks()) ?? projectMarks
+            } else {
+                marks = WorkProjectMarkSet()
+            }
             // Skip the reassignment + `changeGeneration` bump when a no-op import
             // echo re-fetches an identical list (the storm's cheapest exit); the
             // generation bump only needs to fire when the data actually changed.
-            if fetched != conversations {
+            // A mark change alone (a rename) bumps it too: the Tier-1 search
+            // matches the displayed project name, so an in-flight search must
+            // re-run for the same reason it does when a row changes.
+            if fetched != conversations || marks != projectMarks {
                 conversations = fetched
+                projectMarks = marks
                 changeGeneration += 1
             }
         } catch {

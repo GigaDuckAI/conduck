@@ -333,6 +333,13 @@ struct ConversationActivityLine: View {
     /// on the smallest subtree that cares: the words repaint on a radio change
     /// without the whole list re-running its filters.
     let conversationID: UUID
+    /// The Work project this thread lives in, named ONLY in the settled date
+    /// arm ("Q3 launch · 10:14"). The working and failed arms keep their status
+    /// words — the most actionable text on the row — and drop the name; the
+    /// leading folder glyph still marks membership there. Nil for an unfiled
+    /// chat and on the surfaces that draw no name.
+    var projectName: String? = nil
+    var projectIsArchived: Bool = false
 
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -345,7 +352,9 @@ struct ConversationActivityLine: View {
     private func content(_ resolved: ConversationRowState, at date: Date) -> some View {
         switch resolved.activity {
         case .idle, .answeredUnseen:
-            Text(MessageRowFormatters.conversationListDate(from: lastActivityAt))
+            Text(MessageRowFormatters.conversationDateLine(
+                projectName: projectName, projectIsArchived: projectIsArchived, lastActivityAt: lastActivityAt
+            ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

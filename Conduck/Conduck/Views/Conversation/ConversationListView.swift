@@ -425,7 +425,10 @@ struct ConversationListView: View {
         // un-scrolled conversations match too).
         return viewModel.conversations.filter { convo in
             ConversationSearchFilter.titleMatches(
-                query: query, title: convo.title, titleSnippet: convo.titleSnippet
+                query: query, title: convo.title, titleSnippet: convo.titleSnippet,
+                // The project name the row DISPLAYS is searchable too — what a
+                // person can read beside a row, they can type to find it.
+                projectName: viewModel.projectMarks.resolve(convo.projectID).liveMark?.title
             ) || contentMatchIDs.contains(convo.id)
         }
     }
@@ -598,6 +601,18 @@ struct ConversationListView: View {
             lastMessagePreview: tail?.text
         )
         let subtitle = MessageRowFormatters.conversationSubtitle(text: tail?.text, role: tail?.role)
+        // Work project membership — the same folder the Work sidebar draws for
+        // the project, tinted its colour; a neutral folder for a project whose
+        // row has not synced; nothing at all (no reserved slot) for an unfiled
+        // chat, so ordinary rows keep their exact title geometry.
+        let projectMark = viewModel.projectMarks.resolve(convo.projectID)
+        let projectName = projectMark.liveMark.map { MessageRowFormatters.projectDisplayName($0.title) }
+        let projectIsArchived = projectMark.liveMark?.isArchived ?? false
+        let projectSpeech: MessageRowFormatters.ProjectMembershipSpeech? = switch projectMark {
+        case .none: nil
+        case .unsynced: .unsynced
+        case .live(let mark): .named(mark.title, isArchived: mark.isArchived)
+        }
 
         return HStack(spacing: 12) {
             // Leading gateway badge — only when the list spans two gateway
@@ -623,6 +638,17 @@ struct ConversationListView: View {
                     // `.center`, not `.firstTextBaseline`: the mark has no text
                     // baseline and would float low against the headline.
                     HStack(alignment: .center, spacing: 8) {
+                        if let symbol = projectMark.symbolName {
+                            // Decorative: the composed row label speaks the
+                            // membership (`projectMembership`), in every state.
+                            // `.subheadline` keeps it no taller than the
+                            // headline beside it, so a project row is exactly
+                            // as tall as any other.
+                            Image(systemName: symbol)
+                                .font(.subheadline)
+                                .foregroundStyle(projectMark.liveMark?.color.tint ?? AppColors.textSecondary)
+                                .accessibilityHidden(true)
+                        }
                         Text(title)
                             .font(.headline)
                             // Bold is the unseen treatment, and it is INDEPENDENT
@@ -655,7 +681,9 @@ struct ConversationListView: View {
                         now: tick,
                         gatewayName: gatewayName,
                         lastActivityAt: convo.lastActivityAt,
-                        conversationID: convo.id
+                        conversationID: convo.id,
+                        projectName: projectName,
+                        projectIsArchived: projectIsArchived
                     )
                     .padding(.top, 2)
                 }
@@ -681,7 +709,8 @@ struct ConversationListView: View {
             // must not name the gateway. Resolved OUTSIDE the row's clock, like
             // the rest of this label — a label that rewrites on a timer produces
             // repeated announcements.
-            phase: ConversationRowActivity.livePhase(convo.id)?.phase ?? .answering
+            phase: ConversationRowActivity.livePhase(convo.id)?.phase ?? .answering,
+            projectMembership: projectSpeech
         )))
         // Keyed on the PAIR, not the id: the tail changes only when a message is
         // appended, and that bumps `lastActivityAt`. Keying on the id alone froze

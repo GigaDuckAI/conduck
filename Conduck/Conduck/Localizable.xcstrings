@@ -1,6 +1,127 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "conversations.row.project.date" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "conversations.row.project.archived" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "conversations.row.a11y.inProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In project %@"
+          }
+        }
+      }
+    },
+    "conversations.row.a11y.inUnsyncedProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In a project"
+          }
+        }
+      }
+    },
+    "conversations.thread.showInWork" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show in Work"
+          }
+        }
+      }
+    },
+    "composer.locked.project.archived.a11yLabel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open this project in Work"
+          }
+        }
+      }
+    },
+    "composer.locked.project.archived.a11yHint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This project is archived. Restore it in Work to send messages."
+          }
+        }
+      }
+    },
+    "composer.locked.project.selection.a11yLabel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose active projects in Work"
+          }
+        }
+      }
+    },
+    "composer.locked.project.selection.a11yHint" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose your active projects in Work to send messages."
+          }
+        }
+      }
+    },
+    "carplay.project.archived.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This project is archived. Restore it in Work on your iPhone to continue."
+          }
+        }
+      }
+    },
+    "carplay.project.selectionRequired.speak" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose your active projects in Work on your iPhone to continue."
+          }
+        }
+      }
+    },
     "settings.usage.share.caption": {
       "extractionState": "manual",
       "localizations": {

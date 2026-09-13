@@ -542,6 +542,21 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 // and REFUSE on failure — never reroute, never re-point. The
                 // driver's exit is a new chat, which the picker already offers.
                 let bound = try? await ConversationStore.shared.fetchConversation(id: conversationID)
+                // A Work project's thread first: an archived project, or a free
+                // library still to choose its active projects, refuses a new
+                // turn at the write. Say so HERE — nothing presented, nothing
+                // recorded, the claim released by the `defer` — rather than
+                // letting the driver speak into a turn the store will reject.
+                // The same await → re-validation contract as every other hop in
+                // this pre-flight: the very next statement re-checks the claim.
+                if let projectID = bound?.projectID {
+                    let refusal = await ConversationStore.shared.workProjectActivityRefusal(projectID: projectID)
+                    guard self.startIsLive(serial, service: service) else { return }
+                    if let refusal {
+                        CarPlaySpeechService.shared.speak(CarPlayProjectRefusalCopy.phrase(refusal)) { }
+                        return
+                    }
+                }
                 let snapshot = await SettingsManager.shared
                     .remoteAgentSnapshot(forConversationBackend: bound?.backend ?? "")
                 guard self.startIsLive(serial, service: service) else { return }
@@ -1190,6 +1205,15 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                     if showGatewayBadge, let ref = RemoteAgentRef(rawString: recent.backend),
                        let badge = GatewayBadge.image(for: ref, customs: customs) {
                         item.setImage(badge)
+                    }
+                    // A Work project's thread wears a trailing folder — the
+                    // TRAILING slot, so the leading gateway badge keeps its
+                    // meaning, and an annotation only: no name, no colour, no
+                    // new text on the car screen, and the tap still resumes
+                    // the thread. Live projects only; a deleted project's
+                    // ghost membership draws nothing.
+                    if recent.inLiveProject {
+                        item.setAccessoryImage(UIImage(systemName: "folder"))
                     }
                     item.handler = { [weak self, weak service] _, completion in
                         defer { completion() }

@@ -130,6 +130,60 @@ nonisolated struct WorkDeskProjectRecord: Identifiable, Hashable, Sendable {
     }
 }
 
+/// A project's identity as it stands beside one of its conversations OUTSIDE
+/// Work — the Chats row, the thread header. It says membership and nothing
+/// more: never that the gateway knows the project's current materials (the
+/// brief ages out of a trimmed history like any other turn).
+nonisolated struct WorkProjectMark: Hashable, Sendable {
+    let id: UUID
+    let title: String
+    let color: WorkDeskProjectColor
+    let isArchived: Bool
+}
+
+/// What a conversation's `projectID` means on THIS device right now. The three
+/// answers draw differently, and two of them come from the same absence: a
+/// deleted project leaves an identity-only tombstone while its conversations
+/// keep the identifier forever, so "no mark for this id" alone cannot tell a
+/// ghost from a project whose row has simply not synced yet.
+nonisolated enum WorkProjectMarkResolution: Hashable, Sendable {
+    /// No membership, or a project whose deletion this device has seen.
+    case none
+    /// Membership in a project this device holds no row for yet — a neutral
+    /// folder with no name, never hidden.
+    case unsynced
+    case live(WorkProjectMark)
+
+    var liveMark: WorkProjectMark? {
+        if case .live(let mark) = self { return mark }
+        return nil
+    }
+
+    /// The SF Symbol the Work sidebar already uses for the same project, or
+    /// nil for no glyph at all — non-project rows reserve no slot.
+    var symbolName: String? {
+        switch self {
+        case .none: nil
+        case .unsynced: "folder"
+        case .live(let mark): mark.isArchived ? "archivebox" : "folder"
+        }
+    }
+}
+
+/// Every live project's mark plus the tombstones, read in one pass so
+/// `resolve` can give all three answers from one snapshot.
+nonisolated struct WorkProjectMarkSet: Hashable, Sendable {
+    var marks: [UUID: WorkProjectMark] = [:]
+    var tombstonedIDs: Set<UUID> = []
+
+    func resolve(_ projectID: UUID?) -> WorkProjectMarkResolution {
+        guard let projectID else { return .none }
+        if let mark = marks[projectID] { return .live(mark) }
+        if tombstonedIDs.contains(projectID) { return .none }
+        return .unsynced
+    }
+}
+
 nonisolated struct WorkDeskPlacementRecord: Identifiable, Hashable, Sendable {
     var id: UUID { materialID }
     let materialID: UUID

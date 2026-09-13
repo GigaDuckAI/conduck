@@ -83,6 +83,51 @@ extension ConversationStore {
         return try await context.perform { try Self.deskOrganization(in: context) }
     }
 
+    func fetchWorkProjectMarks() async throws -> WorkProjectMarkSet {
+        try await ensureLoaded()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
+        return try await context.perform { [context] in try Self.workProjectMarks(in: context) }
+    }
+
+    /// One thread's project standing for the screen that shows it: the mark to
+    /// draw and, for a live project, why a new turn would be refused. One hop.
+    /// Throws rather than answering "ordinary chat" on a read failure or a
+    /// missing conversation — a screen that cannot know keeps what it last
+    /// knew, and the write path still refuses on its own.
+    struct WorkProjectThreadMark: Equatable, Sendable {
+        let resolution: WorkProjectMarkResolution
+        let refusal: WorkProjectAccessError?
+    }
+
+    enum WorkProjectThreadMarkError: Error, Equatable {
+        case conversationMissing
+    }
+
+    func workProjectThreadMark(conversationID: UUID) async throws -> WorkProjectThreadMark {
+        if usesSharedProAccess { await ProSubscriptionStore.shared.awaitInitialAccess() }
+        try await ensureLoaded()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
+        let access = proAccessProvider()
+        return try await context.perform { [context] in
+            let request = NSFetchRequest<NSManagedObject>(entityName: "Conversation")
+            request.predicate = NSPredicate(format: "id == %@", conversationID as CVarArg)
+            request.fetchLimit = 1
+            guard let row = try context.fetch(request).first else { throw WorkProjectThreadMarkError.conversationMissing }
+            let projectID = row.entity.attributesByName["projectID"] == nil
+                ? nil : row.value(forKey: "projectID") as? UUID
+            let resolution = try Self.workProjectMarks(in: context).resolve(projectID)
+            var refusal: WorkProjectAccessError?
+            if let mark = resolution.liveMark {
+                refusal = try Self.workDeskProjectActivityError(mark.id, access: access, in: context)
+            }
+            return WorkProjectThreadMark(resolution: resolution, refusal: refusal)
+        }
+    }
+
     func reviewWorkDeskProjectDeletion(id: UUID) async throws -> WorkDeskProjectDeletionReview {
         try await ensureLoaded()
         let contextLease = try await newReadContextLease()
@@ -825,19 +870,19 @@ extension ConversationStore {
         return WorkDeskPoint(x: x, y: y)
     }
 
-    private nonisolated static func deskOrganization(in context: NSManagedObjectContext) throws -> WorkDeskOrganizationSnapshot {
-        let projectRows = try context.fetch(NSFetchRequest<NSManagedObject>(entityName: "WorkDeskProject"))
-            .sorted(by: deskRowPrecedes)
-        let tombstones = Set(projectRows.filter { $0.value(forKey: "deletedAt") != nil }
-            .compactMap { $0.value(forKey: "id") as? UUID })
-        var seen: Set<UUID> = []
+    /// Every live project as a record, in creation order, legacy colours
+    /// resolved. The one reader of `canonicalLiveProjectRows` that names and
+    /// colours projects — the desk snapshot and the list marks both build on
+    /// it, so a project can never be amber on the desk and sage in Chats.
+    private nonisolated static func resolvedDeskProjects(
+        in context: NSManagedObjectContext
+    ) throws -> (projects: [WorkDeskProjectRecord], tombstonedIDs: Set<UUID>) {
+        let rows = try canonicalLiveProjectRows(in: context)
         var projects: [WorkDeskProjectRecord] = []
         var uncoloredProjectIDs: Set<UUID> = []
-        for row in projectRows {
+        for row in rows.live {
             guard let id = row.value(forKey: "id") as? UUID,
-                  !tombstones.contains(id), !seen.contains(id),
                   let title = row.value(forKey: "title") as? String else { continue }
-            seen.insert(id)
             if row.value(forKey: "colorID") == nil { uncoloredProjectIDs.insert(id) }
             projects.append(WorkDeskProjectRecord(
                 id: id, title: title, brief: row.value(forKey: "brief") as? String ?? "",
@@ -863,6 +908,24 @@ extension ConversationStore {
             }
             earlierColors.append(projects[index].color)
         }
+        return (projects, rows.tombstonedIDs)
+    }
+
+    /// The marks every Chats surface draws beside a project's conversation.
+    nonisolated static func workProjectMarks(in context: NSManagedObjectContext) throws -> WorkProjectMarkSet {
+        let resolved = try resolvedDeskProjects(in: context)
+        var marks: [UUID: WorkProjectMark] = [:]
+        for project in resolved.projects {
+            marks[project.id] = WorkProjectMark(
+                id: project.id, title: project.title, color: project.color, isArchived: project.isArchived
+            )
+        }
+        return WorkProjectMarkSet(marks: marks, tombstonedIDs: resolved.tombstonedIDs)
+    }
+
+    private nonisolated static func deskOrganization(in context: NSManagedObjectContext) throws -> WorkDeskOrganizationSnapshot {
+        let (projects, tombstones) = try resolvedDeskProjects(in: context)
+        let seen = Set(projects.map(\.id))
         let materials = NSFetchRequest<NSManagedObject>(entityName: "WorkMaterial")
         materials.propertiesToFetch = ["id"]
         materials.predicate = NSPredicate(format: "workItemID == %@", Constants.workboardDeskItemID as CVarArg)

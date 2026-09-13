@@ -240,6 +240,13 @@ struct ContentView: View {
     #if os(iOS)
     @Environment(\.phoneWorkbenchRouter) private var phoneWorkbenchRouter
     #endif
+    /// The wide shell's model (iPad); the phone reaches the same router
+    /// through `phoneWorkbenchRouter`. Read only for "Show in Work".
+    @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
+    /// The open thread's Work project standing — ONE instance for this host,
+    /// outside the thread's `.id` boundary (see `ConversationProjectContext`).
+    /// The iPad library borrows it rather than minting a second one.
+    @State private var projectContext = ConversationProjectContext()
 
     var body: some View {
         #if os(iOS)
@@ -258,6 +265,7 @@ struct ContentView: View {
             ConversationLibraryView(
                 selectedConversationID: $currentConversationID,
                 recorder: recorder,
+                projectContext: projectContext,
                 onSendTurn: { dispatch, modality in
                     await sendTurn(
                         dispatch.text,
@@ -315,6 +323,7 @@ struct ContentView: View {
                 .id(route.id)   // fresh auto-open latch per presentation
             }
             .task { await initialLoad() }
+            .projectContextRefresh(projectContext, conversationID: currentConversationID, sendError: detailVM?.sendError)
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .active {
                     Task { await refreshOnForeground() }
@@ -578,6 +587,18 @@ struct ContentView: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
+                    // A project conversation says whose it is, under the bar
+                    // and above the thread — the row's mark scrolled away with
+                    // the list. Inside Work the workspace frames the thread
+                    // instead; this host never mounts there.
+                    if let mark = projectContext.liveProject(for: currentConversationID) {
+                        ConversationProjectHeaderLine(
+                            mark: mark,
+                            onShowInWork: showInWorkAction(for: currentConversationID)
+                        )
+                        .transition(.opacity)
+                    }
+
                     threadContent
                 }
 
@@ -599,6 +620,19 @@ struct ContentView: View {
                             openGuidedSetupFromEmptyState()
                         }
                     } else {
+                        // A project thread that cannot take a new turn says so
+                        // ABOVE the composer, which stays mounted: a swap would
+                        // drop a recording's Stop button mid-capture and reset
+                        // the attachment container's resolved route under
+                        // preserved staging. Voice lands in the draft, and
+                        // `sendTurn` refuses with this same sentence.
+                        if let refusal = projectContext.refusal(for: currentConversationID) {
+                            ProjectActivityLockNotice(
+                                refusal: refusal,
+                                onShowInWork: showWorkForRefusalAction(refusal, conversationID: currentConversationID)
+                            )
+                            .transition(.opacity)
+                        }
                         // Contextual voice hard-failure recovery — sits just above the
                         // composer (whose inline `.error` banner names the failure), a
                         // single user-tapped button. Never an automatic teleport.
@@ -764,6 +798,7 @@ struct ContentView: View {
             }
             #endif
             .task { await initialLoad() }
+            .projectContextRefresh(projectContext, conversationID: currentConversationID, sendError: detailVM?.sendError)
             // Presence dot lifecycle. On the host body, NOT inside the
             // `ToolbarItem` — a `.task` attached to toolbar content is not
             // reliably run. `id:` re-fires whenever the reported ref changes
@@ -946,7 +981,12 @@ struct ContentView: View {
         if !isRemoteAgentConfigured {
             unconfiguredEmptyState
         } else if let vm = detailVM {
-            ConversationThreadView(viewModel: vm, settingsVM: settingsVM, emptyMascot: hostMascot)
+            ConversationThreadView(
+                viewModel: vm, settingsVM: settingsVM, emptyMascot: hostMascot,
+                // A refused project thread offers no Retry chip either — an
+                // explicit retry is a new turn the store would refuse the same.
+                allowsNewAttempts: projectContext.allowsNewTurns(for: vm.conversationID)
+            )
                 .id(vm.conversationID)
         } else {
             startEmptyState
@@ -1560,6 +1600,36 @@ struct ContentView: View {
     /// this visible conversation", and conflating them turns every new-chat send
     /// into a rejected dispatch. The voice path has no dispatch and passes
     /// neither, so its mint takes a fresh identifier.
+    // MARK: - Work project routes
+
+    /// The router that can reveal Work from this shell: the phone's own, or
+    /// the wide shell's (iPad). Nil in a shell without a desk → the header
+    /// names the project but is not a control.
+    private var workRouter: PersonalWorkbenchRouter? {
+        #if os(iOS)
+        if let phoneWorkbenchRouter { return phoneWorkbenchRouter }
+        #endif
+        return personalWorkbenchModel?.router
+    }
+
+    private func showInWorkAction(for conversationID: UUID?) -> (() -> Void)? {
+        guard let conversationID, let router = workRouter, router.canShowInWork else { return nil }
+        return {
+            // The list sheet would otherwise sit over Work.
+            showingList = false
+            router.showConversationInWork(conversationID)
+        }
+    }
+
+    private func showWorkForRefusalAction(_ refusal: WorkProjectAccessError, conversationID: UUID?) -> (() -> Void)? {
+        guard let router = workRouter, router.canShowInWork,
+              let project = projectContext.liveProject(for: conversationID) else { return nil }
+        return {
+            showingList = false
+            router.showWorkForRefusal(project.id, refusal)
+        }
+    }
+
     private func sendTurn(
         _ text: String,
         modality: TurnModality = .voice,
@@ -1569,6 +1639,16 @@ struct ContentView: View {
         expectedConversationID: UUID? = nil,
         mintConversationID: UUID? = nil
     ) async -> Bool {
+        // A project thread that cannot take a new turn refuses HERE, before
+        // any mint or upload — every iPhone and iPad send (composer, mic,
+        // hardware ⌘Return) funnels through this function, so the visible lock
+        // is not the only gate. The draft and staging stay; the typed reason
+        // lands as the notice the locked bar would have shown.
+        if let target = expectedConversationID ?? currentConversationID,
+           let refusal = projectContext.refusal(for: target) {
+            detailVM?.setSendNotice(ProjectActivityRefusalCopy(refusal).sentence)
+            return false
+        }
         // A sealed composer dispatch may target either one established
         // conversation or a genuine new-chat mint. Never reinterpret nil as
         // "whatever thread happens to be visible now".

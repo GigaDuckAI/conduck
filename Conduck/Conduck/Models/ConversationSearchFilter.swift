@@ -49,9 +49,14 @@ enum ConversationSearchFilter {
     /// server `title` was not findable by its first-user-line `titleSnippet`,
     /// and vice-versa. Both are now searched, identically on every platform.
     ///
+    /// `projectName` is the Work project name the row DISPLAYS beside a project
+    /// conversation, so that what a person can read they can also search for.
+    /// Nil on the surfaces that draw no name (the wrist), and for every
+    /// unfiled chat — the default keeps those call sites byte-identical.
+    ///
     /// Precondition: `query` is already `normalizedQuery`-normalized (non-empty,
     /// trimmed). Callers pass the normalized value.
-    static func titleMatches(query: String, title: String?, titleSnippet: String?) -> Bool {
+    static func titleMatches(query: String, title: String?, titleSnippet: String?, projectName: String? = nil) -> Bool {
         if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines),
            !title.isEmpty,
            foldedContains(title, query) {
@@ -60,6 +65,11 @@ enum ConversationSearchFilter {
         if let snippet = titleSnippet?.trimmingCharacters(in: .whitespacesAndNewlines),
            !snippet.isEmpty,
            foldedContains(snippet, query) {
+            return true
+        }
+        if let projectName = projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !projectName.isEmpty,
+           foldedContains(projectName, query) {
             return true
         }
         return false

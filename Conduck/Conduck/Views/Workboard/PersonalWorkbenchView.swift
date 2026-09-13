@@ -427,6 +427,9 @@ final class PersonalWorkbenchRouter {
             dismissPhoneSection()
             #endif
             guard destination != .work else { return }
+            // Leaving Work retires any reveal still loading, so it cannot
+            // select a thread under the Chats the person just returned to.
+            workRevealRequestID = nil
             // A Work preview is transient presentation, not workspace state.
             // Switching to Chats cancels an in-flight load and removes any
             // disposable preview copy so it cannot surface over the other app
@@ -525,6 +528,34 @@ final class PersonalWorkbenchRouter {
     private var textEditorSessions: [WorkMaterialTextEditorID: WorkMaterialTextEditorSession] = [:]
     @ObservationIgnored var openSourceConversation: @MainActor (UUID) -> Void = { _ in }
     @ObservationIgnored var hasSourceConversation: @MainActor (UUID) -> Bool = { _ in false }
+
+    /// "Show in Work" from a project conversation opened in Chats: reveal Work
+    /// at the thread's project with the thread selected. Installed by
+    /// `PersonalWorkbenchModel`; a shell without a desk leaves the default
+    /// and `canShowInWork` false, so no host draws a dead control.
+    @ObservationIgnored var showConversationInWork: @MainActor (UUID) -> Void = { _ in }
+    /// The composer lock's tap: reveal Work where the refusal is resolved — an
+    /// archived project's own scope (Restore lives there), or Home with the
+    /// free plan's active-project choice requested.
+    @ObservationIgnored var showWorkForRefusal: @MainActor (UUID, WorkProjectAccessError) -> Void = { _, _ in }
+    @ObservationIgnored var canShowInWork = false
+
+    /// The reveal in flight, if any. A reveal loads the organization and the
+    /// project threads BEFORE it selects, and those awaits can outlive the
+    /// person's patience: a later reveal, or leaving Work, retires the token so
+    /// the earlier one selects nothing on return.
+    @ObservationIgnored private(set) var workRevealRequestID: UUID?
+
+    func beginWorkReveal() -> UUID {
+        let request = UUID()
+        workRevealRequestID = request
+        destination = .work
+        return request
+    }
+
+    func workRevealIsCurrent(_ request: UUID) -> Bool {
+        workRevealRequestID == request && destination == .work
+    }
 
     func textEditor(for material: WorkboardMaterialSnapshot, field: WorkMaterialTextField) -> WorkMaterialTextEditorSession {
         let key = WorkMaterialTextEditorID(materialID: material.id, field: field)
@@ -1089,6 +1120,84 @@ final class PersonalWorkbenchModel {
         }
         router.share.currentMaterial = { materialID in
             try await WorkboardLiveRepository.currentMaterialSnapshot(id: materialID)
+        }
+        // "Show in Work" and the composer lock's tap. Both REVEAL FIRST — the
+        // destination is set synchronously, like every deep link (never
+        // `selectDestination`, which would introduce the tour) — and on the Mac
+        // post `.showWorkboard` too, since a router poke alone opens no window.
+        // Then reload-then-verify, the shape `WorkDeskWorkspaceView`'s own
+        // in-Work reveal uses: the FIRST snapshot (a throw aborts), a FRESH one
+        // (`prepareForFirstPresentation` returns at once once ever loaded, and
+        // a project archived or deleted on another device must be judged by
+        // the current organization), then the project threads — and only
+        // then a selection, re-checking after every await that this reveal is
+        // still the one wanted and Work is still where the person is. Loading
+        // before selecting is also what keeps `reconcile(materials:)` from
+        // resetting an unloaded scope back to Home under the selection.
+        router.canShowInWork = true
+        router.showConversationInWork = { [weak router, weak workboardViewModel] conversationID in
+            guard let router, let workboardViewModel else { return }
+            let request = router.beginWorkReveal()
+            #if os(macOS)
+            NotificationCenter.default.post(name: .showWorkboard, object: nil)
+            #endif
+            Task { @MainActor in
+                let workspace = workboardViewModel.deskWorkspace
+                // Navigation the person does INSIDE Work while these reads
+                // suspend wins over the reveal: a scope or thread that moved
+                // under the awaits retires it, like leaving Work does.
+                let scopeBefore = workspace.scope, selectionBefore = workspace.selectedConversationID
+                @MainActor func stillWanted() -> Bool {
+                    router.workRevealIsCurrent(request)
+                        && workspace.scope == scopeBefore && workspace.selectedConversationID == selectionBefore
+                }
+                do { try await workspace.prepareForFirstPresentation() } catch { return }
+                guard stillWanted() else { return }
+                await workspace.organization.reload()
+                await workspace.reloadProjectActivity()
+                // The thread's project comes from the STORE when the workspace's
+                // own list has not published yet — `reloadProjectActivity` yields
+                // to a newer generation, and Work's first presentation starts
+                // one. The organization decides whether the project is live.
+                let projectID: UUID?
+                if let listed = workspace.projectConversations.first(where: { $0.id == conversationID }) {
+                    projectID = listed.projectID
+                } else {
+                    projectID = (try? await ConversationStore.shared.fetchConversation(id: conversationID))?.projectID
+                }
+                guard stillWanted(), let projectID,
+                      workspace.organization.project(id: projectID) != nil else { return }
+                workspace.selectConversation(conversationID, projectID: projectID)
+            }
+        }
+        router.showWorkForRefusal = { [weak router, weak workboardViewModel] projectID, refusal in
+            guard let router, let workboardViewModel else { return }
+            let request = router.beginWorkReveal()
+            #if os(macOS)
+            NotificationCenter.default.post(name: .showWorkboard, object: nil)
+            #endif
+            Task { @MainActor in
+                let workspace = workboardViewModel.deskWorkspace
+                let scopeBefore = workspace.scope, selectionBefore = workspace.selectedConversationID
+                @MainActor func stillWanted() -> Bool {
+                    router.workRevealIsCurrent(request)
+                        && workspace.scope == scopeBefore && workspace.selectedConversationID == selectionBefore
+                }
+                do { try await workspace.prepareForFirstPresentation() } catch { return }
+                guard stillWanted() else { return }
+                await workspace.organization.reload()
+                guard stillWanted() else { return }
+                switch refusal {
+                case .archived:
+                    guard workspace.organization.project(id: projectID) != nil else { return }
+                    workspace.selectScope(.project(projectID))
+                case .selectionRequired:
+                    workspace.selectScope(.all)
+                    if workspace.organization.requiresFreeProjectSelection {
+                        workspace.organization.projectSelectionRequested = true
+                    }
+                }
+            }
         }
     }
 

@@ -1472,19 +1472,51 @@ actor ConversationStore {
         try workDeskProjectActivityError(projectID, access: access, in: context) == .selectionRequired
     }
 
-    nonisolated static func workDeskProjectActivityError(
-        _ projectID: UUID, access: ProAccessSnapshot, in context: NSManagedObjectContext
-    ) throws -> WorkProjectAccessError? {
+    /// The live Work projects as EVERY surface must see them — one row per
+    /// identifier, a tombstone beating each of its duplicates, an untitled row
+    /// (a CloudKit import still arriving) not yet a project. This is the one
+    /// loop; the desk snapshot, the activity gate, the list marks and the
+    /// wrist's glyph all read it, so a deleted project cannot be "in a project"
+    /// on one surface and gone on another.
+    ///
+    /// Synchronous and context-confined: consume `live` inside the same
+    /// `perform` that produced it and hand only value snapshots across the
+    /// actor boundary. Read-only — never `normalizeDeskDuplicates`, which
+    /// belongs to the write paths.
+    nonisolated struct LiveWorkDeskProjectRows {
+        let live: [NSManagedObject]
+        let tombstonedIDs: Set<UUID>
+    }
+
+    nonisolated static func canonicalLiveProjectRows(in context: NSManagedObjectContext) throws -> LiveWorkDeskProjectRows {
         let rows = try context.fetch(NSFetchRequest<NSManagedObject>(entityName: "WorkDeskProject"))
             .sorted(by: deskRowPrecedes)
         let deleted = Set(rows.filter { $0.value(forKey: "deletedAt") != nil }.compactMap { $0.value(forKey: "id") as? UUID })
         var seen: Set<UUID> = []
-        var active: Set<UUID> = []
-        var archived: Set<UUID> = []
+        var live: [NSManagedObject] = []
         for row in rows {
             guard let id = row.value(forKey: "id") as? UUID,
                   !deleted.contains(id), !seen.contains(id), row.value(forKey: "title") as? String != nil else { continue }
             seen.insert(id)
+            live.append(row)
+        }
+        return LiveWorkDeskProjectRows(live: live, tombstonedIDs: deleted)
+    }
+
+    /// Identifiers only — what a surface needs to say "this thread is in a
+    /// project" without naming it. Archived projects are live: the glyph
+    /// answers membership, not whether new activity is allowed.
+    nonisolated static func liveProjectIDs(in context: NSManagedObjectContext) throws -> Set<UUID> {
+        Set(try canonicalLiveProjectRows(in: context).live.compactMap { $0.value(forKey: "id") as? UUID })
+    }
+
+    nonisolated static func workDeskProjectActivityError(
+        _ projectID: UUID, access: ProAccessSnapshot, in context: NSManagedObjectContext
+    ) throws -> WorkProjectAccessError? {
+        var active: Set<UUID> = []
+        var archived: Set<UUID> = []
+        for row in try canonicalLiveProjectRows(in: context).live {
+            guard let id = row.value(forKey: "id") as? UUID else { continue }
             if row.value(forKey: "archivedAt") == nil { active.insert(id) }
             else { archived.insert(id) }
         }
@@ -3100,6 +3132,40 @@ actor ConversationStore {
         }
     }
 
+    /// The live Work project identifiers (`liveProjectIDs(in:)`), for the
+    /// surfaces that mark membership without naming it — the wrist's list and
+    /// the CarPlay picker. One whole-table read; no names, no colours.
+    func fetchLiveWorkProjectIDs() async throws -> Set<UUID> {
+        try await ensureLoaded()
+        let contextLease = try await newReadContextLease()
+        defer { contextLease.finish() }
+        let context = contextLease.context
+        return try await context.perform { [context] in try Self.liveProjectIDs(in: context) }
+    }
+
+    /// Why a NEW user turn in this project would be refused right now, or nil.
+    /// Advisory, for a surface that wants to say so BEFORE recording or typing
+    /// (the CarPlay pre-flight, the Chats composer lock); the same check inside
+    /// `appendMessage`'s write stays the one that decides. Waits for the first
+    /// signed entitlement read like every other free-plan gate, so a launch
+    /// never locks a thread on a not-yet-loaded "no access". A read failure is
+    /// nil — this hop may not refuse on its own account.
+    func workProjectActivityRefusal(projectID: UUID) async -> WorkProjectAccessError? {
+        if usesSharedProAccess { await ProSubscriptionStore.shared.awaitInitialAccess() }
+        do {
+            try await ensureLoaded()
+            let contextLease = try await newReadContextLease()
+            defer { contextLease.finish() }
+            let context = contextLease.context
+            let access = proAccessProvider()
+            return try await context.perform { [context] in
+                try Self.workDeskProjectActivityError(projectID, access: access, in: context)
+            }
+        } catch {
+            return nil
+        }
+    }
+
     /// Fetch a single conversation by UUID, or nil if no row matches. One
     /// actor hop (predicate `id == %@`, `fetchLimit 1`). Required by the
     /// routing resolver to read a conversation's bound `backend` and route the
@@ -3305,6 +3371,11 @@ actor ConversationStore {
         let lastViewedAt: Date?
         let failureSeenAttemptID: UUID?
         let tailProjection: String?
+        /// The thread belongs to a LIVE Work project (`liveProjectIDs(in:)`):
+        /// a deleted project's ghost membership reads false. The CarPlay row
+        /// draws a folder accessory from it and nothing else — no name, no
+        /// colour, no new text on the car screen.
+        let inLiveProject: Bool
 
         init(
             id: UUID,
@@ -3315,7 +3386,8 @@ actor ConversationStore {
             newestFailed: FailedTurnProjection? = nil,
             lastViewedAt: Date? = nil,
             failureSeenAttemptID: UUID? = nil,
-            tailProjection: String? = nil
+            tailProjection: String? = nil,
+            inLiveProject: Bool = false
         ) {
             self.id = id
             self.label = label
@@ -3326,6 +3398,7 @@ actor ConversationStore {
             self.lastViewedAt = lastViewedAt
             self.failureSeenAttemptID = failureSeenAttemptID
             self.tailProjection = tailProjection
+            self.inLiveProject = inLiveProject
         }
     }
 
@@ -3360,8 +3433,14 @@ actor ConversationStore {
             ]
             request.fetchLimit = limit
             let objects = try context.fetch(request)
-            return objects.map { object -> RecentConversation in
-                let record = ConversationRecord(managedObject: object)
+            // Membership is resolved against the LIVE projects, once for the
+            // whole slice and inside this same round trip — and only when a row
+            // carries a project at all, so a picker without Work pays nothing.
+            let records = objects.map { ConversationRecord(managedObject: $0) }
+            let liveProjectIDs: Set<UUID> = records.contains { $0.projectID != nil }
+                ? try Self.liveProjectIDs(in: context)
+                : []
+            return zip(objects, records).map { object, record -> RecentConversation in
                 // First user turn (oldest) for the snippet fallback. Read
                 // inline off the to-many relationship — no extra fetch round-
                 // trip, no actor re-entry.
@@ -3418,7 +3497,8 @@ actor ConversationStore {
                     // them from the row this loop is standing on.
                     lastViewedAt: record.lastViewedAt,
                     failureSeenAttemptID: record.failureSeenAttemptID,
-                    tailProjection: record.tailProjection
+                    tailProjection: record.tailProjection,
+                    inLiveProject: record.projectID.map(liveProjectIDs.contains) ?? false
                 )
             }
         }

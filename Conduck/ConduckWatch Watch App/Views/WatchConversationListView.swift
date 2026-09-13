@@ -300,6 +300,18 @@ struct WatchConversationListView: View {
         let state = viewModel.rowState(for: conversation)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
+                // A Work project's thread wears the folder the phone draws for
+                // it — shape, not colour, and no name: the wrist reads only
+                // identifiers, and one glyph is all the row's height allows.
+                // It carries its own label because this row composes none.
+                if viewModel.isInLiveProject(conversation) {
+                    Image(systemName: "folder")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(Text(LocalizedStringResource(
+                            "watch.row.a11y.inProject", defaultValue: "In a project"
+                        )))  // xcstrings
+                }
                 Text(Self.displayTitle(for: conversation))
                     // BOLD ON AN UNSEEN REPLY — the same cue the iPhone, iPad
                     // and Mac lists use, and the wrist's only whole-row one. It

@@ -30,6 +30,16 @@ import Foundation
 @MainActor
 final class WatchConversationViewModel {
     var conversations: [ConversationRecord] = []
+    /// The LIVE Work projects (`ConversationStore.liveProjectIDs`), so a row
+    /// can wear a folder for the project it belongs to — identifiers only,
+    /// read in the same refresh, and only when some row names a project at
+    /// all, so a wrist without Work pays nothing. A deleted project's ghost
+    /// membership resolves to no folder.
+    private(set) var liveProjectIDs: Set<UUID> = []
+
+    func isInLiveProject(_ conversation: ConversationRecord) -> Bool {
+        conversation.projectID.map(liveProjectIDs.contains) ?? false
+    }
     var isLoading = false
     var loadError: String?
 
@@ -208,6 +218,16 @@ final class WatchConversationViewModel {
             // of the wrist's own export) would re-render the whole list.
             if fresh != conversations {
                 conversations = fresh
+                changed = true
+            }
+            // Membership after the rows, same turn. A project row arriving or
+            // its tombstone landing changes what a row draws without touching
+            // the row itself, so it counts as a change on its own.
+            let live: Set<UUID> = fresh.contains(where: { $0.projectID != nil })
+                ? ((try? await store.fetchLiveWorkProjectIDs()) ?? liveProjectIDs)
+                : []
+            if live != liveProjectIDs {
+                liveProjectIDs = live
                 changed = true
             }
         } catch {

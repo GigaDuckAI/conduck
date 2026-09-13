@@ -2569,6 +2569,14 @@ final class CarPlayRecordingService {
                 await terminalizeAbandonedUserTurn(appendedUserMessageID)
             }
             guard isCurrentListen(attemptID) else { return }
+            // A Work project's refusal (archived, or the free plan's active
+            // choice still pending) is not an `AppError` and used to collapse
+            // into "couldn't reach your AI" below — a lie about the gateway for
+            // a fact about the project. Probe it first and end on ITS line.
+            if let phrase = CarPlayProjectRefusalCopy.phrase(for: error) {
+                endSession(speak: phrase)
+                return
+            }
             let mapped = (error as? AppError) ?? .remoteAgentUnreachable
             // The routing forks above set `sessionBoundRef` before anything in
             // this `do` can throw, so the spoken line dispatches on the failing

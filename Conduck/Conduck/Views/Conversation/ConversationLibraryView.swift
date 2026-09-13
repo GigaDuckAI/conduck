@@ -31,6 +31,10 @@ struct ConversationLibraryView: View {
     @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
     @Binding var selectedConversationID: UUID?
     var recorder: InAppAudioRecorder
+    /// The host's project context — the open thread's Work project standing.
+    /// Borrowed from `ContentView`, never minted here: one context per shell,
+    /// so the header line and the composer lock can never disagree.
+    let projectContext: ConversationProjectContext
     /// Forward a user turn (typed or spoken, with optional attachments) to the
     /// converse path (ContentView owns the conversation-minting + shared detail
     /// VM). The `modality` tags the turn (`.text` typed / `.voice` spoken) for
@@ -424,6 +428,16 @@ struct ConversationLibraryView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
 
+                // A project conversation says whose it is, under the bar and
+                // above the thread (see `ContentView.phoneLayout`).
+                if let mark = projectContext.liveProject(for: selectedConversationID) {
+                    ConversationProjectHeaderLine(
+                        mark: mark,
+                        onShowInWork: showInWorkAction(for: selectedConversationID)
+                    )
+                    .transition(.opacity)
+                }
+
                 threadContent
             }
 
@@ -446,6 +460,16 @@ struct ConversationLibraryView: View {
                         onOpenGuidedSetup()
                     }
                 } else {
+                    // A refused project thread says so ABOVE the composer, which
+                    // stays mounted (see `ContentView.phoneLayout`); the host's
+                    // send path and ⌘Return refuse with the same sentence.
+                    if let refusal = projectContext.refusal(for: selectedConversationID) {
+                        ProjectActivityLockNotice(
+                            refusal: refusal,
+                            onShowInWork: showWorkForRefusalAction(refusal)
+                        )
+                        .transition(.opacity)
+                    }
                     // Contextual voice hard-failure recovery — sits just above the
                     // composer (whose inline `.error` banner names the failure), a
                     // single user-tapped button. Never an automatic teleport.
@@ -687,11 +711,32 @@ struct ConversationLibraryView: View {
     /// send: trim, guard non-empty + not in-flight, clear, forward to the host.
     /// A nil `detailVM` is allowed — the host mints a fresh conversation on the
     /// first send.
+    // MARK: - Work project routes
+
+    private func showInWorkAction(for conversationID: UUID?) -> (() -> Void)? {
+        guard let conversationID, let router = personalWorkbenchModel?.router, router.canShowInWork else { return nil }
+        return { router.showConversationInWork(conversationID) }
+    }
+
+    private func showWorkForRefusalAction(_ refusal: WorkProjectAccessError) -> (() -> Void)? {
+        guard let router = personalWorkbenchModel?.router, router.canShowInWork,
+              let project = projectContext.liveProject(for: selectedConversationID) else { return nil }
+        return { router.showWorkForRefusal(project.id, refusal) }
+    }
+
     private func sendCurrentDraft() {
         // No gateway → the composer is the locked CTA, not a live field. A
         // hardware ⌘Return must NOT hit the `remoteAgentNotConfigured` send path;
         // the user reaches setup via the locked bar / empty-state CTA instead.
         guard workbenchDestinationIsActive, isRemoteAgentConfigured else { return }
+        // Same for a project thread that cannot take a new turn: ⌘Return is
+        // not a way around the locked bar. The host's send path refuses too;
+        // this keeps the draft where it is without a notice for a key press
+        // on a field the person can see is locked.
+        if let refusal = projectContext.refusal(for: selectedConversationID) {
+            detailVM?.setSendNotice(ProjectActivityRefusalCopy(refusal).sentence)
+            return
+        }
         let text = composerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         // An attachment-only turn is valid; block only when nothing is staged
         // and there's no text, or a turn/load is in flight. Also block while a
@@ -851,7 +896,11 @@ struct ConversationLibraryView: View {
             unconfiguredEmptyState
         } else if let vm = detailVM {
             // Cap + center bubbles on the same 720pt axis as the composer card.
-            ConversationThreadView(viewModel: vm, settingsVM: settingsVM, contentMaxWidth: Constants.Layout.chatContentWidth, emptyMascot: hostMascot)
+            ConversationThreadView(
+                viewModel: vm, settingsVM: settingsVM, contentMaxWidth: Constants.Layout.chatContentWidth,
+                emptyMascot: hostMascot,
+                allowsNewAttempts: projectContext.allowsNewTurns(for: vm.conversationID)
+            )
                 .id(vm.conversationID)
         } else {
             startEmptyState
