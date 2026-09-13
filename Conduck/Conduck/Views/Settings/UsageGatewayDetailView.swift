@@ -60,9 +60,8 @@ struct UsageGatewayDetailView: View {
     /// recorded no slot at all.
     let ref: String?
 
-    /// Display names for gateway slots, read once when the screen opens — the
-    /// badge roster, so a slot the user has since removed still reads as itself.
-    @State private var gatewayRoster: [CustomGateway] = []
+    /// Usage identities follow the model's refreshed settings snapshot.
+    private var gatewayRoster: [CustomGateway] { model.gatewayIdentity.roster }
 
     /// Shared with the overview's reliability card on purpose — see the file
     /// header. Closed by default: the headline is the answer, the rest is the
@@ -94,6 +93,17 @@ struct UsageGatewayDetailView: View {
             // the screen behind this one too. Above the empty state on purpose:
             // an empty range is escaped in place, not by walking back.
             UsageRangeSection(model: model)
+            if model.gatewayIdentity.display(for: ref).statusText != nil {
+                Section {
+                    Text(LocalizedStringResource(
+                        "settings.usage.gateway.history.explanation",
+                        defaultValue: "Past usage stays here when a gateway is removed or unavailable."))
+                        .font(.subheadline)
+                        .foregroundStyle(AppColors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .settingsCardPassiveRow()
+                }
+            }
 
             if let loadError = model.loadError {
                 UsageLoadSections.error(loadError, retry: model.refresh)
@@ -113,7 +123,7 @@ struct UsageGatewayDetailView: View {
                 if !summary.byRequestedModel.isEmpty {
                     modelsSection
                 }
-                if !summary.attributedDeviceGroups.isEmpty {
+                if !summary.attributedDeviceGroups.isEmpty || summary.unattributedDeviceAttempts > 0 {
                     deviceSection
                 }
                 if summary.attachmentContext.measuredAttempts > 0 {
@@ -130,7 +140,6 @@ struct UsageGatewayDetailView: View {
         // Settings sidebar never shifts on push. See `MacSettingsSubScreenChrome`.
         .macSettingsSubScreenChrome(title: title)
         #endif
-        .task { gatewayRoster = await SettingsManager.shared.gatewayBadgeRoster() }
     }
 
     // MARK: - Empty
@@ -384,18 +393,13 @@ struct UsageGatewayDetailView: View {
 
         return Section {
             ForEach(summary.byRequestedModel) { group in
-                // Same caption sentence as the gateway rows: the sample, the
-                // success rate, the average reply time, then the token volume —
-                // model choice is the cost lever. The trailing value is the
-                // model's SHARE of this gateway's attempts; the absolute count
-                // sits at the caption's front. Rows stay RANKED BY ATTEMPTS,
-                // so partial token data never decides visibility.
+                // Compact breakdowns compare attempt volume; the dedicated
+                // cards carry performance and token reporting qualifications.
                 UsageValueRow(
                     verbatimLabel: UsageDetailFormat.modelLabel(for: group.key),
                     value: UsageDetailFormat.shareText(
                         group.attempts, of: summary.recordedAttempts) ?? "",
-                    verbatimCaption: UsageDetailFormat.rankedRowCaption(
-                        group, includeTokens: true)
+                    verbatimCaption: UsageDetailFormat.rankedRowCaption(group)
                 )
             }
 
@@ -412,25 +416,13 @@ struct UsageGatewayDetailView: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.detail.models.header", defaultValue: "Models"))
+                "settings.usage.detail.models.header", defaultValue: "Requested models"))
         } footer: {
-            // Each line earns its place separately. The volume line appears
-            // with the first token figure, because tokens beside model names
-            // invite a billing comparison the numbers cannot support. The
-            // reported-model line appears only beside its row, which is the
-            // only thing here that can alarm: an alias resolving or a router
-            // choosing makes the served name differ from the asked-for one,
-            // and two disagreeing model names read as a fault.
             VStack(alignment: .leading, spacing: 6) {
-                if summary.byRequestedModel
-                    .contains(where: { UsageDetailFormat.tokensFragment($0) != nil }) {
-                    Text(LocalizedStringResource(
-                        "settings.usage.detail.models.footer.tokens",
-                        defaultValue: """
-                            Token figures are volume, not what your provider \
-                            bills.
-                            """))
-                }
+                Text(UsageDetailFormat.shareCaption)
+                Text(LocalizedStringResource(
+                    "settings.usage.byModel.footer",
+                    defaultValue: "Based on the model each request asked for."))
                 if reading != nil {
                     Text(LocalizedStringResource(
                         "settings.usage.detail.models.footer.reported",
@@ -484,6 +476,12 @@ struct UsageGatewayDetailView: View {
     /// there are five devices, and a sixth row reads as one of them.
     private var deviceSection: some View {
         Section {
+            if summary.attributedDeviceGroups.isEmpty {
+                Text(UsageDetailFormat.unattributedDeviceFooter(
+                    summary.unattributedDeviceAttempts, of: summary.recordedAttempts))
+                    .foregroundStyle(AppColors.textSecondary)
+                    .settingsCardPassiveRow()
+            }
             ForEach(summary.attributedDeviceGroups) { group in
                 UsageGroupCompactRow(
                     label: UsageDeviceBucketDisplay.label(forKey: group.key),
@@ -497,12 +495,12 @@ struct UsageGatewayDetailView: View {
             Text(LocalizedStringResource(
                 "settings.usage.detail.byDevice.header", defaultValue: "By device"))
         } footer: {
-            // ONLY the missing mass, and only when there is some — this
-            // screen's scope has its own denominator, so the overview cannot
-            // have said it. Anything else worth a footer was said there.
-            if summary.unattributedDeviceAttempts > 0 {
-                Text(UsageDetailFormat.unattributedDeviceFooter(
-                    summary.unattributedDeviceAttempts, of: summary.recordedAttempts))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(UsageDetailFormat.shareCaption)
+                if summary.unattributedDeviceAttempts > 0 && !summary.attributedDeviceGroups.isEmpty {
+                    Text(UsageDetailFormat.unattributedDeviceFooter(
+                        summary.unattributedDeviceAttempts, of: summary.recordedAttempts))
+                }
             }
         }
     }
@@ -1063,19 +1061,8 @@ struct UsageValueRow: View {
     }
 }
 
-/// One slice of a range — a gateway inside a device, or a device inside a
-/// gateway. No chevron: a drill-down inside a drill-down would be the same
-/// numbers a third time, reached two different ways.
-///
-/// NAME ON THE TOP LINE, RATES UNDERNEATH, and no count at the trailing edge:
-/// the slice is read against its siblings on how well and how fast it went, and
-/// the caption already states the sample those rates come from. The screen's own
-/// Activity card holds the attempt total for the whole scope.
-/// The trailing share figure on a ranked row. One view so every list styles
-/// and announces it the same way: monospaced beside its siblings, and read to
-/// VoiceOver with its denominator said in words — a bare "52 percent" right
-/// after a caption's own success percentage is two rates with nothing telling
-/// them apart.
+/// Share of recorded attempts, styled consistently across compact breakdowns.
+/// VoiceOver announces the denominator alongside the percentage.
 struct UsageShareLabel: View {
     let share: String
 
@@ -1091,6 +1078,7 @@ struct UsageShareLabel: View {
 
 struct UsageGroupCompactRow: View {
     let label: String
+    var gatewayIdentity: UsageGatewayIdentity? = nil
     var icon: String? = nil
     let group: GatewayUsageGroup
     /// The group's share of the screen's scope, already formatted. Optional
@@ -1107,8 +1095,12 @@ struct UsageGroupCompactRow: View {
                         .foregroundStyle(AppColors.usageIconBlue)
                         .accessibilityHidden(true)
                 }
-                Text(verbatim: label)
-                    .foregroundStyle(AppColors.textPrimary)
+                if let gatewayIdentity {
+                    UsageGatewayName(identity: gatewayIdentity)
+                } else {
+                    Text(verbatim: label)
+                        .foregroundStyle(AppColors.textPrimary)
+                }
                 Spacer(minLength: 12)
                 if let share {
                     UsageShareLabel(share: share)
@@ -1125,11 +1117,21 @@ struct UsageGroupCompactRow: View {
     }
 }
 
+/// State is secondary text rather than part of the saved gateway name.
+struct UsageGatewayName: View {
+    let identity: UsageGatewayIdentity
+
+    var body: some View {
+        Text("\(Text(verbatim: identity.name).foregroundColor(AppColors.textPrimary))\(Text(verbatim: identity.statusText.map { " (\($0))" } ?? "").foregroundColor(AppColors.textSecondary).fontWeight(.regular))")
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(Text(verbatim: identity.label))
+    }
+}
+
 // MARK: - Shared labels
 
-/// Slot display names, resolved at RENDER time from the badge roster. A stored
-/// name would be a stale copy of a setting the user can edit; the raw token is
-/// the fallback only when the string is not a ref this build understands.
+/// Resolves the model's Usage-only roster projection, including retained
+/// names and status. Unknown custom identities get a neutral unavailable label.
 enum UsageGatewayLabel {
     static func name(for key: String?, roster: [CustomGateway]) -> String {
         guard let key else {
@@ -1137,6 +1139,10 @@ enum UsageGatewayLabel {
                           defaultValue: "Not recorded")
         }
         guard let ref = RemoteAgentRef(rawString: key) else { return key }
+        if case .custom(let id) = ref, !roster.contains(where: { $0.id == id }) {
+            return UsageGatewayIdentity(
+                name: RemoteAgentRefMetadata.genericCustomName, status: .unavailable).label
+        }
         return RemoteAgentRefMetadata.displayName(for: ref, customs: roster)
     }
 }
@@ -1298,43 +1304,23 @@ enum UsageDetailFormat {
         }
     }
 
-    /// A requested model is DATA, not copy — it renders verbatim. Only its
-    /// absence has a translation, and that absence means the request carried no
-    /// model and the gateway's own default answered.
+    /// Missing model metadata cannot distinguish a default request from an
+    /// older record that never captured the requested model.
     static func modelLabel(for key: String?) -> String {
         key ?? String(localized: "settings.usage.model.default",
-                      defaultValue: "Gateway default")
+                      defaultValue: "Default / not recorded")
     }
 
-    /// SAME RULE AS THE TOKENS CARD: a gateway-reported total renders bare, a
-    /// client sum of the components never does — so a compact row never presents
-    /// a Conduck-computed figure as the gateway's own number.
-    static func groupDetailText(_ group: GatewayUsageGroup) -> String {
-        var parts: [String] = [
-            String(localized: "settings.usage.byGateway.successRate",
-                   defaultValue: "\(percentText(group.successRate)) succeeded")
-        ]
-        if let mean = group.meanResponseTime {
-            parts.append(String(
-                localized: "settings.usage.detail.groupAverage",
-                defaultValue: "average \(durationText(mean))"))
-        }
-        return parts.joined(separator: " · ")
-    }
+    static let shareCaption = LocalizedStringResource(
+        "settings.usage.share.caption", defaultValue: "Share of recorded attempts")
 
-    /// The caption every ranked group row prints: the group's sample first,
-    /// then its rates. The attempt count leads because the trailing share these
-    /// rows carry is meaningless without it — a bare percentage hides whether
-    /// the comparison is 1 of 2 or 500 of 1,000. Tokens join only for rows that
-    /// compare cost as well as health (gateway rows, model rows) — tokens are
-    /// not a property of the keyboard a turn was typed on.
-    static func rankedRowCaption(
-        _ group: GatewayUsageGroup,
-        includeTokens: Bool = false
-    ) -> String {
-        var parts = [attemptsText(group.attempts), groupDetailText(group)]
-        if includeTokens, let tokens = tokensFragment(group) {
-            parts.append(tokens)
+    /// Compact breakdowns show volume. Success rates, timing samples and token
+    /// coverage belong to their dedicated cards, whose denominators differ.
+    static func rankedRowCaption(_ group: GatewayUsageGroup) -> String {
+        var parts = [attemptsText(group.attempts)]
+        if group.failed > 0 {
+            parts.append(String(localized: "settings.usage.group.failed",
+                                defaultValue: "\(group.failed) failed"))
         }
         return parts.joined(separator: " · ")
     }
@@ -1373,32 +1359,6 @@ enum UsageDetailFormat {
     static func unattributedGatewayFooter(_ missing: Int, of total: Int) -> String {
         String(localized: "settings.usage.byGateway.footer.unattributed",
                defaultValue: "Gateway was not recorded on \(missing) of \(total) attempts.")
-    }
-
-    /// The group's token volume with its coverage said beside it. SAME BASIS
-    /// RULE AS THE TOKENS CARD: a gateway-reported total renders bare, a client
-    /// sum of the components never does — dropping the qualifier would present
-    /// a Conduck-computed figure as the gateway's own number in the one place
-    /// groups are compared against each other.
-    ///
-    /// A group that reported nothing renders no token figure at all — absence,
-    /// never "0 tokens". A partial sum renders like a full one on purpose: a
-    /// per-row coverage clause was tried and read as noise beside the volume,
-    /// so the honest hedges live at the card level — the qualifier on a
-    /// component sum here, the chart's own coverage caption, and the Tokens
-    /// card's per-field coverage.
-    static func tokensFragment(_ group: GatewayUsageGroup) -> String? {
-        if let total = group.tokens.reportedTotal.sum {
-            return String(
-                localized: "settings.usage.byGateway.tokens",
-                defaultValue: "\(total.formatted(.number)) tokens")
-        }
-        if let components = group.tokens.calculatedKnownComponents {
-            return String(
-                localized: "settings.usage.byGateway.tokens.components",
-                defaultValue: "\(components.formatted(.number)) tokens (input + output)")
-        }
-        return nil
     }
 
     /// The ranking basis, named honestly. ONE basis per list: a list mixing

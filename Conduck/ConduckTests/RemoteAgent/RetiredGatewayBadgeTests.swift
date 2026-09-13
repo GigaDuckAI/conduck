@@ -84,6 +84,9 @@ final class RetiredGatewayBadgeTests: XCTestCase {
         XCTAssertEqual(retired.first?.monogram, "LI",
                        "The monogram is DERIVED from the name here, so freezing after the delete would capture nothing.")
         XCTAssertEqual(retired.first?.colorID, "indigo")
+        XCTAssertEqual(retired.first?.lastKnownName, "LiteLLM")
+        XCTAssertNil(retired.first?.explicitlyRemovedAt,
+                     "A captured identity alone is not evidence of explicit removal.")
     }
 
     func testRetiringPrefersAnExplicitMonogramOverTheDerivedOne() async {
@@ -106,14 +109,76 @@ final class RetiredGatewayBadgeTests: XCTestCase {
                       "Storing nil would leave the hue to a runtime fallback — 'frozen' has to survive a palette reorder.")
     }
 
-    func testAGatewayWithNoRenderableMonogramIsNotRetired() async {
-        let id = await addCustom(name: "!!!", monogram: nil)
+    func testNamesWithoutRenderableInitialsStillIdentifyUsageHistory() async {
+        for name in ["!!!", "🦆"] {
+            let id = await addCustom(name: name, monogram: nil)
+            await SettingsManager.shared.retireCustomGatewayBadge(id: id)
+            await SettingsManager.shared.deleteCustomGateway(id: id)
 
-        await SettingsManager.shared.retireCustomGatewayBadge(id: id)
+            let retired = await SettingsManager.shared.retiredGatewayBadges()
+            let identity = retired.first { $0.id == id }
+            XCTAssertEqual(identity?.lastKnownName, name)
+            XCTAssertEqual(identity?.monogram, "")
+        }
+    }
+
+    func testAnEntirelyEmptyIdentityDoesNotConsumeRetention() {
+        let gateway = CustomGateway(id: UUID(), name: " \n ")
+        XCTAssertNil(RetiredGatewayBadge.freeze(gateway, at: Date()))
+    }
+
+    func testLegacyRecordsDecodeWithoutInventingNameOrRemovalEvidence() throws {
+        let id = UUID()
+        let legacy = Data("""
+            [{"id":"\(id.uuidString)","monogram":"LI","colorID":"indigo","retiredAt":1000}]
+            """.utf8)
+        let retired = try JSONDecoder().decode([RetiredGatewayBadge].self, from: legacy)
+
+        XCTAssertEqual(retired.first?.id, id)
+        XCTAssertEqual(retired.first?.monogram, "LI")
+        XCTAssertNil(retired.first?.lastKnownName)
+        XCTAssertNil(retired.first?.explicitlyRemovedAt)
+    }
+
+    func testExplicitLocalRemovalRetainsItsNameAndEvidenceAcrossDecoding() async throws {
+        let id = await addCustom(name: "  Latest name  ")
+        let removedAt = Date(timeIntervalSince1970: 1000)
+        await SettingsManager.shared.retireCustomGatewayBadge(
+            id: id, at: removedAt, explicitRemoval: true
+        )
+        await SettingsManager.shared.deleteCustomGateway(id: id)
+
+        let data = try XCTUnwrap(defaults.data(forKey: Constants.retiredGatewayBadgesKey))
+        let retired = try JSONDecoder().decode([RetiredGatewayBadge].self, from: data)
+        XCTAssertEqual(retired.first?.lastKnownName, "Latest name")
+        XCTAssertEqual(retired.first?.explicitlyRemovedAt, removedAt)
+        XCTAssertNil(TestStores.kvs.data(forKey: Constants.retiredGatewayBadgesKey))
+    }
+
+    func testDeletionUsedForFailedSaveRollbackCreatesNoHistoricalIdentity() async {
+        let id = await addCustom(name: "Unsaved draft")
+        await SettingsManager.shared.deleteCustomGateway(id: id)
 
         let retired = await SettingsManager.shared.retiredGatewayBadges()
         XCTAssertTrue(retired.isEmpty,
-                      "`GatewayBadge` renders nothing for an empty monogram, so such a record could never draw — it would only consume a cap slot.")
+                      "Only explicit Forget freezes a local removal; the rollback helper must not.")
+    }
+
+    func testExplicitRemovalStrengthensDerivedRecordWithoutReorderingHistory() throws {
+        let gateway = CustomGateway(id: UUID(), name: "Original name", colorID: "indigo")
+        let observedAt = Date(timeIntervalSince1970: 1000)
+        let removedAt = Date(timeIntervalSince1970: 2000)
+        let derived = try XCTUnwrap(RetiredGatewayBadge.freeze(gateway, at: observedAt))
+        let explicit = try XCTUnwrap(RetiredGatewayBadge.freeze(
+            gateway, at: removedAt, explicitRemoval: true
+        ))
+
+        let updated = try XCTUnwrap([derived].retiring(explicit))
+        XCTAssertEqual(updated.first?.retiredAt, observedAt)
+        XCTAssertEqual(updated.first?.lastKnownName, "Original name")
+        XCTAssertEqual(updated.first?.explicitlyRemovedAt, removedAt)
+        XCTAssertNil(updated.retiring(derived), "A later inferred disappearance cannot weaken evidence.")
+        XCTAssertNil(updated.retiring(explicit), "Repeated explicit retirement is idempotent.")
     }
 
     func testRetiringTwiceKeepsTheOriginalRecord() async {
@@ -189,7 +254,10 @@ final class RetiredGatewayBadgeTests: XCTestCase {
         let retired = await SettingsManager.shared.retiredGatewayBadges()
         XCTAssertEqual(retired.first?.monogram, "LI")
         XCTAssertEqual(retired.first?.colorID, "green",
-                       "Read from the OUTGOING entry — after the overwrite the identity is gone.")
+                      "Read from the OUTGOING entry — after the overwrite the identity is gone.")
+        XCTAssertEqual(retired.first?.lastKnownName, "LiteLLM")
+        XCTAssertNil(retired.first?.explicitlyRemovedAt,
+                     "A roster shrink could be stale sync, so it must not assert removal.")
     }
 
     func testASurvivingGatewayIsNotRetired() async {

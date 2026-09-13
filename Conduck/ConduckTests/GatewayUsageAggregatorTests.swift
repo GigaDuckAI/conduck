@@ -1545,25 +1545,6 @@ final class GatewayUsageAggregatorTests: XCTestCase {
             "attributed rows plus the complement must be the whole")
     }
 
-    /// The fragment is the bare volume on every basis — a reported total
-    /// renders unqualified, a client sum never does, and no per-row coverage
-    /// clause exists: partial data reads the same as full, by decision.
-    func testTokensFragmentIsTheBareVolume() {
-        let summary = summarize([
-            attempt(gateway: "openclaw", outcome: .succeeded, total: 120),
-            attempt(gateway: "openclaw", outcome: .failed),
-            attempt(gateway: "hermes", outcome: .succeeded, input: 5, output: 7),
-        ])
-        let byKey = Dictionary(
-            uniqueKeysWithValues: summary.byGateway.map { ($0.key, $0) })
-
-        XCTAssertEqual(UsageDetailFormat.tokensFragment(byKey["openclaw"]!), "120 tokens")
-        XCTAssertEqual(
-            UsageDetailFormat.tokensFragment(byKey["hermes"]!),
-            "12 tokens (input + output)",
-            "a client sum keeps its qualifier")
-    }
-
     // MARK: - 9. Turn reliability
 
     /// A range can begin between a failed dispatch and its retry. Earlier

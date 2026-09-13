@@ -55,10 +55,9 @@
 // rather than "deleted".
 //
 // CONTENT-FREE, AND THAT IS RELEASE-BLOCKING. Nothing this model holds or
-// renders touches prompt or reply text, a URL, a host, a token, a display name,
-// a provider error string or an HTTP status. `gatewayRef` is a
-// `RemoteAgentRef.rawString` — resolve it to a display name at render time, and
-// never store the resolved name here.
+// renders touches prompt or reply text, a URL, a host, a token, a provider
+// error string or an HTTP status. Display names come from a separate settings
+// snapshot refreshed with the screen; they never enter the attempt ledger.
 
 import Foundation
 import Observation
@@ -91,6 +90,9 @@ protocol UsageDashboardSource: Sendable {
     /// Conversations this device can currently resolve. Gates thread
     /// navigation only — never the counting.
     func liveConversationIDs() async -> Set<UUID>
+
+    /// Local display identity, separate from the measurement ledger.
+    func gatewayIdentity() async -> UsageGatewayIdentitySnapshot
 
     /// The synced clear cutoff, or nil when the user has never cleared.
     func clearedThrough() async -> Date?
@@ -155,6 +157,10 @@ nonisolated struct LiveUsageDashboardSource: UsageDashboardSource {
 
     func liveConversationIDs() async -> Set<UUID> {
         await ConversationStore.shared.liveConversationIDs()
+    }
+
+    func gatewayIdentity() async -> UsageGatewayIdentitySnapshot {
+        await SettingsManager.shared.usageGatewayIdentitySnapshot()
     }
 
     func clearedThrough() async -> Date? {
@@ -265,6 +271,9 @@ final class UsageDashboardModel {
     /// Everything the cards draw. `.empty` until the first load resolves, so
     /// the screen renders zeros rather than nil-checking every field.
     private(set) var summary: GatewayUsageSummary = .empty
+
+    /// All Usage surfaces read the same identity, including after settings sync.
+    private(set) var gatewayIdentity = UsageGatewayIdentitySnapshot()
 
     /// The records behind `summary`, kept so a drill-down can re-slice the
     /// range it is already showing instead of re-reading the store.
@@ -481,7 +490,9 @@ final class UsageDashboardModel {
         // The cutoff must invalidate an older snapshot even if the ledger read
         // below fails and there is no replacement snapshot to publish.
         let observedCutoff = await source.clearedThrough()
+        let identity = await source.gatewayIdentity()
         guard generation == loadGeneration else { return }
+        gatewayIdentity = identity
         rememberClearCutoff(observedCutoff)
         isCheckingClearCutoff = false
         let cutoff = clearedThrough

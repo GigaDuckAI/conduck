@@ -44,10 +44,9 @@
 // unmeasured bucket deserves a name, but because the alternative is a bar
 // quietly shorter than the number it claims to draw. It is never a legend peer,
 // and it does not reopen the by-device LIST rule, which governs rows rather
-// than heights. The model split is the one dimension whose nil is NOT a capture
-// gap: a request that named no model let the gateway's default answer, which is
-// a real choice — so it ranks, takes a colour and sits in the legend as
-// "Gateway default" instead of joining the grey not-recorded cap.
+// than heights. A missing requested model may mean a default request or older
+// metadata that was not recorded. That combined bucket remains ranked and
+// visible in the legend as "Default / not recorded".
 //
 // AND AN ABSENT BAR MUST NOT COLLAPSE THE CALENDAR. Swift Charts derives a scale
 // from the marks it was given, so a metric that skips periods would shrink the x
@@ -665,7 +664,7 @@ struct UsageActivityChart: View {
             case .models:
                 // Verbatim wire strings, through the ONE site that words their
                 // absence — the sentinel maps back to nil, which that site
-                // renders as "Gateway default".
+                // renders as "Default / not recorded".
                 return UsageDetailFormat.modelLabel(
                     for: key == UsageChartSegments.gatewayDefaultModelKey ? nil : key)
             default:

@@ -90,7 +90,7 @@ enum GatewayForget {
             // reason the file-lane wipe above is: that method doubles as the
             // failed-save rollback for a brand-new draft, and retiring there
             // would leave a tombstone for a gateway that never existed.
-            await SettingsManager.shared.retireCustomGatewayBadge(id: id)
+            await SettingsManager.shared.retireCustomGatewayBadge(id: id, explicitRemoval: true)
             // `deleteCustomGateway` clears the per-ref url/token/cert slots +
             // the roster entry + re-points the default if it pointed here — the
             // whole "forget a custom" operation. Don't double-wipe the per-ref

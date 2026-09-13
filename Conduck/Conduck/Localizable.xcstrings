@@ -1,6 +1,116 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "settings.usage.share.caption": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share of recorded attempts"
+          }
+        }
+      }
+    },
+    "settings.usage.counting.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "How usage is counted"
+          }
+        }
+      }
+    },
+    "settings.usage.counting.expanded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expanded"
+          }
+        }
+      }
+    },
+    "settings.usage.counting.collapsed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapsed"
+          }
+        }
+      }
+    },
+    "settings.usage.counting.body": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A turn is one message; a retry adds another attempt. Shares include all recorded attempts. Success rates use succeeded and failed attempts. Reply times cover successful replies. Token reporting may be incomplete and is not a bill. Removing gateways or conversations keeps their usage history."
+          }
+        }
+      }
+    },
+    "settings.usage.gateway.history.explanation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Past usage stays here when a gateway is removed or unavailable."
+          }
+        }
+      }
+    },
+    "settings.usage.group.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld failed"
+          }
+        }
+      }
+    },
+    "settings.usage.gateway.removed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "removed"
+          }
+        }
+      }
+    },
+    "settings.usage.gateway.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "unavailable"
+          }
+        }
+      }
+    },
+    "settings.usage.gateway.statusLabel": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@)"
+          }
+        }
+      }
+    },
     "workdesk.tour.capture.mac.action" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -16399,7 +16509,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "By model"
+            "value" : "Requested models"
           }
         }
       }
@@ -17334,7 +17444,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Models"
+            "value" : "Requested models"
           }
         }
       }
@@ -17939,7 +18049,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Gateway default"
+            "value" : "Default / not recorded"
           }
         }
       }

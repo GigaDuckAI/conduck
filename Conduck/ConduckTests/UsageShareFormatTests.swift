@@ -93,8 +93,19 @@ final class UsageShareFormatTests: XCTestCase {
         )
 
         let caption = UsageDetailFormat.rankedRowCaption(summary.byGateway[0])
-        XCTAssertTrue(
-            caption.hasPrefix("1 attempt · "),
-            "caption should open with the sample, got: \(caption)")
+        XCTAssertEqual(caption, "1 attempt")
     }
+    func testMixedOutcomesDoNotAdvertiseSuccessOnADifferentDenominator() {
+        let now = Date(timeIntervalSince1970: 1_700_000_100)
+        let attempts = [GatewayAttemptOutcome.succeeded, .cancelled, .failed].map { outcome in
+            GatewayAttemptRecord(id: UUID(), conversationID: UUID(), userMessageID: UUID(),
+                                 gatewayRef: "hermes", startedAt: now.addingTimeInterval(-10),
+                                 completedAt: now, outcome: outcome, origin: .app)
+        }
+        let summary = GatewayUsageAggregator.summarize(
+            attempts: attempts, liveAttemptIDs: [], now: now,
+            activityRange: nil, calendar: Calendar(identifier: .gregorian), grace: 300)
+        XCTAssertEqual(UsageDetailFormat.rankedRowCaption(summary.byGateway[0]), "3 attempts · 1 failed")
+    }
+
 }

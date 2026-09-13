@@ -123,6 +123,37 @@ final class UsageDashboardModelTests: XCTestCase {
         try? await Task.sleep(for: duration)
     }
 
+    /// Names belong to settings and must refresh even when measurement reads fail.
+    func testSettingsChangeRefreshesIdentityWithoutChangingHistoricalCounts() async {
+        let source = FakeUsageDashboardSource()
+        let gateway = CustomGateway(id: UUID(), name: "Pi")
+        source.rows = [attempt(gateway: gateway.ref.rawString)]
+        source.identity = .init(live: [gateway], retired: [])
+        let model = makeModel(source)
+        await model.start()
+        XCTAssertEqual(model.gatewayIdentity.display(for: gateway.ref.rawString).label, "Pi")
+
+        source.identity = .init(live: [], retired: [
+            RetiredGatewayBadge.freeze(gateway, at: now, explicitRemoval: true)!
+        ])
+        source.attemptsFailure = NSError(domain: "UsageTest", code: 1)
+        NotificationCenter.default.post(name: .settingsDidChangeRemotely, object: nil)
+        await waitUntil("removed identity") {
+            model.gatewayIdentity.display(for: gateway.ref.rawString).status == .removed
+        }
+        await waitUntil("failed measurement refresh") { model.loadError != nil }
+        XCTAssertEqual(model.summary.recordedAttempts, 1)
+        XCTAssertEqual(model.gatewayIdentity.display(for: gateway.ref.rawString).name, "Pi")
+
+        source.identity = .init(live: [CustomGateway(id: gateway.id, name: "Pi restored")], retired: [])
+        source.attemptsFailure = nil
+        NotificationCenter.default.post(name: .settingsDidChangeRemotely, object: nil)
+        await waitUntil("restored identity") {
+            model.gatewayIdentity.display(for: gateway.ref.rawString).label == "Pi restored"
+        }
+        XCTAssertNil(model.gatewayIdentity.display(for: gateway.ref.rawString).status)
+    }
+
     // MARK: - 1. Loading state, and the empty flash that must never happen
 
     /// The whole load choreography in one case, because the property is about
@@ -863,6 +894,7 @@ private final class FakeUsageDashboardSource: UsageDashboardSource, @unchecked S
 
     private let lock = NSLock()
     private var storedRows: [GatewayAttemptRecord] = []
+    private var storedIdentity = UsageGatewayIdentitySnapshot()
     private var storedCutoff: Date?
     private var storedLiveThreads: Set<UUID> = []
     private var storedLiveAttempts: Set<UUID> = []
@@ -881,6 +913,11 @@ private final class FakeUsageDashboardSource: UsageDashboardSource, @unchecked S
     var rows: [GatewayAttemptRecord] {
         get { lock.lock(); defer { lock.unlock() }; return storedRows }
         set { lock.lock(); storedRows = newValue; lock.unlock() }
+    }
+
+    var identity: UsageGatewayIdentitySnapshot {
+        get { lock.lock(); defer { lock.unlock() }; return storedIdentity }
+        set { lock.lock(); storedIdentity = newValue; lock.unlock() }
     }
 
     var cutoff: Date? {
@@ -1040,6 +1077,8 @@ private final class FakeUsageDashboardSource: UsageDashboardSource, @unchecked S
         storedEvents.append(.liveConversationIDs)
         return storedLiveThreads
     }
+
+    func gatewayIdentity() async -> UsageGatewayIdentitySnapshot { identity }
 
     func clearedThrough() async -> Date? {
         lock.lock(); defer { lock.unlock() }

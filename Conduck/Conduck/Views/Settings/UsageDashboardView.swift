@@ -54,9 +54,9 @@
 //
 // CONTENT-FREE, AND THAT IS RELEASE-BLOCKING. Nothing rendered here is prompt or
 // reply text, a URL, a host, a token, a provider error string or an HTTP status.
-// The gateway rows show a SLOT's display name resolved from the roster at render
-// time — never a stored name, which would be a stale copy of a setting the user
-// can edit, and never the endpoint behind it. The thread rows carry no title and
+// Gateway rows use the current settings name while active and a separately
+// retained identity after removal; neither comes from the usage ledger or
+// reveals the endpoint behind it. The thread rows carry no title and
 // no snippet: a date span, a gateway name and counts. A title is content, and the
 // only place one may appear is the conversation itself, which the row navigates
 // to rather than quoting.
@@ -223,11 +223,9 @@ enum UsageLoadSections {
 struct UsageDashboardContent: View {
     @State private var model: UsageDashboardModel
 
-    /// The display roster for gateway slots, read once when the screen opens.
-    /// `gatewayBadgeRoster()` rather than the live roster on purpose: usage
-    /// history outlives a gateway the user has since forgotten, and a retired
-    /// slot still deserves its name rather than its raw token.
-    @State private var gatewayRoster: [CustomGateway] = []
+    /// The model refreshes this Usage-only identity projection with settings.
+    /// Retained names and availability never change connection configuration.
+    private var gatewayRoster: [CustomGateway] { model.gatewayIdentity.roster }
 
     /// Whether the Reliability card's detail is open. Collapsed by default and
     /// remembered per device: the headline answers the question most users
@@ -248,6 +246,7 @@ struct UsageDashboardContent: View {
     /// presentation state, and a model that owned it would have to be reset by
     /// whichever host dismissed the dialog.
     @State private var showingClearConfirmation = false
+    @State private var showingCountingExplanation = false
 
     /// Drives the stat-row layout: side by side at normal text sizes, stacked at
     /// accessibility sizes where three columns would crush every value.
@@ -303,10 +302,10 @@ struct UsageDashboardContent: View {
                 reliabilitySection
                 responseTimeSection
                 tokensSection
-                if !model.summary.attributedDeviceGroups.isEmpty {
+                if !model.summary.attributedDeviceGroups.isEmpty || model.summary.unattributedDeviceAttempts > 0 {
                     deviceSection
                 }
-                if !model.summary.attributedGatewayGroups.isEmpty {
+                if !model.summary.attributedGatewayGroups.isEmpty || model.summary.unattributedGatewayAttempts > 0 {
                     gatewaySection
                 }
                 // Only worth a card when there is a MIX to describe — the
@@ -344,9 +343,6 @@ struct UsageDashboardContent: View {
         // opens Usage, so the whole-ledger sweep waits until the screen is on
         // screen. Latched inside the model, so a re-fired `.task` costs nothing.
         .task { await model.start() }
-        // Display names only. Read once: a roster change while the screen is
-        // open renames a row, which is not worth an observer.
-        .task { gatewayRoster = await SettingsManager.shared.gatewayBadgeRoster() }
     }
 
     // MARK: - Transient states
@@ -393,6 +389,34 @@ struct UsageDashboardContent: View {
         }
     }
 
+    @ViewBuilder
+    private var countingExplanationRows: some View {
+        Button {
+            showingCountingExplanation.toggle()
+        } label: {
+            HStack {
+                Text(LocalizedStringResource(
+                    "settings.usage.counting.title", defaultValue: "How usage is counted"))
+                Spacer()
+                Image(systemName: showingCountingExplanation ? "chevron.up" : "chevron.down")
+                    .accessibilityHidden(true)
+            }
+        }
+        .settingsCardRowButton()
+        .accessibilityValue(Text(showingCountingExplanation
+            ? LocalizedStringResource("settings.usage.counting.expanded", defaultValue: "Expanded")
+            : LocalizedStringResource("settings.usage.counting.collapsed", defaultValue: "Collapsed")))
+        if showingCountingExplanation {
+            Text(LocalizedStringResource(
+                "settings.usage.counting.body",
+                defaultValue: "A turn is one message; a retry adds another attempt. Shares include all recorded attempts. Success rates use succeeded and failed attempts. Reply times cover successful replies. Token reporting may be incomplete and is not a bill. Removing gateways or conversations keeps their usage history."))
+                .font(.subheadline)
+                .foregroundStyle(AppColors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .settingsCardPassiveRow()
+        }
+    }
+
     // MARK: - Activity
 
     private var activitySection: some View {
@@ -412,13 +436,11 @@ struct UsageDashboardContent: View {
                 )
                 .settingsCardPassiveRow()
             }
+            countingExplanationRows
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.activity.header", defaultValue: "Activity"))
         }
-        // NO FOOTER. The tiles and the chart's own captions carry everything
-        // this card claims; a definition of "turn" under it answered a
-        // question nobody asks until they already distrust the number.
     }
 
     private var statRow: some View {
@@ -1080,6 +1102,12 @@ struct UsageDashboardContent: View {
     /// about the ledger rather than about the user's setup.
     private var deviceSection: some View {
         Section {
+            if model.summary.attributedDeviceGroups.isEmpty {
+                Text(UsageDetailFormat.unattributedDeviceFooter(
+                    model.summary.unattributedDeviceAttempts, of: model.summary.recordedAttempts))
+                    .foregroundStyle(AppColors.textSecondary)
+                    .settingsCardPassiveRow()
+            }
             ForEach(model.summary.attributedDeviceGroups) { group in
                 deviceGroupRow(group)
             }
@@ -1087,14 +1115,13 @@ struct UsageDashboardContent: View {
             Text(LocalizedStringResource(
                 "settings.usage.byDevice.header", defaultValue: "By device"))
         } footer: {
-            // ONLY the missing mass, and only when there is some: dropping the
-            // "Not recorded" bucket from the list is right — it is not a sixth
-            // device — but it leaves the rows' shares summing short, and that
-            // is the one arithmetic on this card that must not go unexplained.
-            if model.summary.unattributedDeviceAttempts > 0 {
-                Text(UsageDetailFormat.unattributedDeviceFooter(
-                    model.summary.unattributedDeviceAttempts,
-                    of: model.summary.recordedAttempts))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(UsageDetailFormat.shareCaption)
+                if model.summary.unattributedDeviceAttempts > 0 && !model.summary.attributedDeviceGroups.isEmpty {
+                    Text(UsageDetailFormat.unattributedDeviceFooter(
+                        model.summary.unattributedDeviceAttempts,
+                        of: model.summary.recordedAttempts))
+                }
             }
         }
     }
@@ -1166,6 +1193,12 @@ struct UsageDashboardContent: View {
 
     private var gatewaySection: some View {
         Section {
+            if model.summary.attributedGatewayGroups.isEmpty {
+                Text(UsageDetailFormat.unattributedGatewayFooter(
+                    model.summary.unattributedGatewayAttempts, of: model.summary.recordedAttempts))
+                    .foregroundStyle(AppColors.textSecondary)
+                    .settingsCardPassiveRow()
+            }
             ForEach(model.summary.attributedGatewayGroups) { group in
                 gatewayGroupRow(group)
             }
@@ -1174,18 +1207,10 @@ struct UsageDashboardContent: View {
                 "settings.usage.byGateway.header", defaultValue: "By gateway"))
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
-                // KEPT: a gateway the user deleted still having a row is the
-                // one thing on this card that looks like a bug. Which gateway
-                // a conversation was bound to needs no explaining.
-                Text(LocalizedStringResource(
-                    "settings.usage.byGateway.footer.history",
-                    defaultValue: """
-                        A gateway you have since edited or removed still appears for \
-                        the history it made.
-                        """))
+                Text(UsageDetailFormat.shareCaption)
                 // The by-device card's missing-mass rule, applied to the same
                 // shape of problem.
-                if model.summary.unattributedGatewayAttempts > 0 {
+                if model.summary.unattributedGatewayAttempts > 0 && !model.summary.attributedGatewayGroups.isEmpty {
                     Text(UsageDetailFormat.unattributedGatewayFooter(
                         model.summary.unattributedGatewayAttempts,
                         of: model.summary.recordedAttempts))
@@ -1203,16 +1228,14 @@ struct UsageDashboardContent: View {
     /// list, and the mix is a question about ONE gateway rather than about the
     /// range.
     ///
-    /// Name and chevron only on the top line, matching the device rows: the
-    /// figures a gateway is compared on are the rates in the caption, and the
-    /// sample they are taken over is already stated there.
+    /// Name, state and share lead; the caption gives the attempt count and any
+    /// failures. Performance measurements belong in the dedicated detail cards.
     private func gatewayGroupRow(_ group: GatewayUsageGroup) -> some View {
         navigationRow(value: UsageRoute.gateway(group.key)) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(gatewayLabel(for: group.key))
+                    UsageGatewayName(identity: model.gatewayIdentity.display(for: group.key))
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(AppColors.textPrimary)
                     Spacer(minLength: 8)
                     if let share = UsageDetailFormat.shareText(
                         group.attempts, of: model.summary.recordedAttempts) {
@@ -1220,10 +1243,9 @@ struct UsageDashboardContent: View {
                     }
                 }
 
-                // The sample, the rates and the bare token volume from the
-                // shared formatter, so a gateway row here, its own drill-down
-                // and the model rows all answer with one sentence.
-                Text(UsageDetailFormat.rankedRowCaption(group, includeTokens: true))
+                // Counts compare the same recorded-attempt sample as the share.
+                // Dedicated detail cards explain performance and token coverage.
+                Text(UsageDetailFormat.rankedRowCaption(group))
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(AppColors.textTertiary)
@@ -1278,13 +1300,14 @@ struct UsageDashboardContent: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.byModel.header", defaultValue: "By model"))
+                "settings.usage.byModel.header", defaultValue: "Requested models"))
         } footer: {
-            // The one thing the rows cannot say about themselves: which of the
-            // two model names in play these are.
-            Text(LocalizedStringResource(
-                "settings.usage.byModel.footer",
-                defaultValue: "Based on the model each request asked for."))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(UsageDetailFormat.shareCaption)
+                Text(LocalizedStringResource(
+                    "settings.usage.byModel.footer",
+                    defaultValue: "Based on the model each request asked for."))
+            }
         }
     }
 
@@ -1911,12 +1934,8 @@ struct UsageDashboardContent: View {
 
     // MARK: - Slot + model labels
 
-    /// Resolved at RENDER time from the badge roster. A stored name would be a
-    /// stale copy of a setting the user can edit; the raw token is the fallback
-    /// only when the string is not a ref this build understands.
+    /// Uses the same current and retained identity projection as every drill-down.
     private func gatewayLabel(for key: String?) -> String {
-        guard let key else { return unattributedLabel }
-        guard let ref = RemoteAgentRef(rawString: key) else { return key }
-        return RemoteAgentRefMetadata.displayName(for: ref, customs: gatewayRoster)
+        UsageGatewayLabel.name(for: key, roster: gatewayRoster)
     }
 }

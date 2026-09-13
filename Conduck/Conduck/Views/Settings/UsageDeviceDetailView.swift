@@ -27,8 +27,8 @@ struct UsageDeviceDetailView: View {
     let model: UsageDashboardModel
     let bucket: UsageDeviceBucket
 
-    /// Display names for gateway slots, read once when the screen opens.
-    @State private var gatewayRoster: [CustomGateway] = []
+    /// Usage identities follow the model’s refreshed settings snapshot.
+    private var gatewayRoster: [CustomGateway] { model.gatewayIdentity.roster }
 
     private var summary: GatewayUsageSummary { model.summary(forDevice: bucket) }
 
@@ -62,7 +62,7 @@ struct UsageDeviceDetailView: View {
                 if inputModes.count > 1 {
                     inputSection
                 }
-                if !summary.attributedGatewayGroups.isEmpty {
+                if !summary.attributedGatewayGroups.isEmpty || summary.unattributedGatewayAttempts > 0 {
                     gatewaySection
                 }
             }
@@ -76,7 +76,6 @@ struct UsageDeviceDetailView: View {
         // Settings sidebar never shifts on push. See `MacSettingsSubScreenChrome`.
         .macSettingsSubScreenChrome(title: title)
         #endif
-        .task { gatewayRoster = await SettingsManager.shared.gatewayBadgeRoster() }
     }
 
     // MARK: - Empty
@@ -290,9 +289,16 @@ struct UsageDeviceDetailView: View {
 
     private var gatewaySection: some View {
         Section {
+            if summary.attributedGatewayGroups.isEmpty {
+                Text(UsageDetailFormat.unattributedGatewayFooter(
+                    summary.unattributedGatewayAttempts, of: summary.recordedAttempts))
+                    .foregroundStyle(AppColors.textSecondary)
+                    .settingsCardPassiveRow()
+            }
             ForEach(summary.attributedGatewayGroups) { group in
                 UsageGroupCompactRow(
                     label: UsageGatewayLabel.name(for: group.key, roster: gatewayRoster),
+                    gatewayIdentity: model.gatewayIdentity.display(for: group.key),
                     group: group,
                     share: UsageDetailFormat.shareText(
                         group.attempts, of: summary.recordedAttempts)
@@ -302,13 +308,12 @@ struct UsageDeviceDetailView: View {
             Text(LocalizedStringResource(
                 "settings.usage.byGateway.header", defaultValue: "By gateway"))
         } footer: {
-            // ONLY the missing mass, and only when there is some — this
-            // screen's scope has its own denominator, so the overview cannot
-            // have said it. Everything else worth a footer (that a removed
-            // gateway keeps its history) was said there.
-            if summary.unattributedGatewayAttempts > 0 {
-                Text(UsageDetailFormat.unattributedGatewayFooter(
-                    summary.unattributedGatewayAttempts, of: summary.recordedAttempts))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(UsageDetailFormat.shareCaption)
+                if summary.unattributedGatewayAttempts > 0 && !summary.attributedGatewayGroups.isEmpty {
+                    Text(UsageDetailFormat.unattributedGatewayFooter(
+                        summary.unattributedGatewayAttempts, of: summary.recordedAttempts))
+                }
             }
         }
     }

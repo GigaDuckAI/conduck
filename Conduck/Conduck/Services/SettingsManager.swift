@@ -5000,16 +5000,17 @@ actor SettingsManager {
     /// often DERIVED from the name, so after `deleteCustomGateway` there is
     /// nothing left to freeze.
     ///
-    /// Returns whether a record for `id` is retained afterwards. False covers
-    /// three cases that are all "no badge will draw": the gateway is already
-    /// retired, it resolves to no monogram, or the record fell straight out of
-    /// the retention trim because `date` predates every kept record.
+    /// Returns whether a changed record for `id` is retained afterwards.
+    /// False covers unchanged records, empty identities and immediate eviction
+    /// when `date` predates every record kept by the retention trim.
     @discardableResult
-    func retireCustomGatewayBadge(id: UUID, at date: Date = Date()) -> Bool {
+    func retireCustomGatewayBadge(
+        id: UUID, at date: Date = Date(), explicitRemoval: Bool = false
+    ) -> Bool {
         guard let gateway = persistedCustomGateways().first(where: { $0.id == id }) else {
             return false
         }
-        return retireCustomGatewayBadge(gateway, at: date)
+        return retireCustomGatewayBadge(gateway, at: date, explicitRemoval: explicitRemoval)
     }
 
     /// Freeze from an entry the CALLER already holds. The inbound roster paths
@@ -5020,8 +5021,10 @@ actor SettingsManager {
     /// instead; the by-id overload above stays for the Forget site, which runs
     /// while the entry still exists.
     @discardableResult
-    func retireCustomGatewayBadge(_ gateway: CustomGateway, at date: Date = Date()) -> Bool {
-        guard let badge = RetiredGatewayBadge.freeze(gateway, at: date),
+    func retireCustomGatewayBadge(
+        _ gateway: CustomGateway, at date: Date = Date(), explicitRemoval: Bool = false
+    ) -> Bool {
+        guard let badge = RetiredGatewayBadge.freeze(gateway, at: date, explicitRemoval: explicitRemoval),
               let updated = retiredGatewayBadges().retiring(badge)
         else { return false }
         persistRetiredGatewayBadges(updated)
@@ -5031,9 +5034,8 @@ actor SettingsManager {
     /// App Group ONLY — never iCloud KVS (`RetiredGatewayBadge` carries the
     /// rationale).
     ///
-    /// Deliberately does NOT post `.settingsDidChangeRemotely`. Nothing the
-    /// Watch reads and nothing any Settings screen renders changes here, and
-    /// that notification wakes `PhoneSessionManager` into a full token-bearing
+    /// Deliberately does NOT post `.settingsDidChangeRemotely` itself. That
+    /// notification wakes `PhoneSessionManager` into a full token-bearing
     /// broadcast — which retiring N gateways during one iCloud change would fire
     /// N times. The callers that DO change visible state (`deleteCustomGateway`
     /// and the two inbound roster paths) already post for their own reasons.
@@ -5096,6 +5098,12 @@ actor SettingsManager {
     /// cannot accidentally receive one.
     func gatewayBadgeRoster() -> [CustomGateway] {
         customGateways().unioningRetired(retiredGatewayBadges())
+    }
+
+    /// One actor-consistent display snapshot for Usage. Historical identities
+    /// stay separate from the roster used for routing and gateway allowances.
+    func usageGatewayIdentitySnapshot() -> UsageGatewayIdentitySnapshot {
+        UsageGatewayIdentitySnapshot(live: customGateways(), retired: retiredGatewayBadges())
     }
 
     private func persistCustomGateways(_ list: [CustomGateway]) {

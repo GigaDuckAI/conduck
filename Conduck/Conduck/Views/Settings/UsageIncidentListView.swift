@@ -270,9 +270,8 @@ struct UsageIncidentListView: View {
     let model: UsageDashboardModel
     let filter: UsageIncidentFilter
 
-    /// Display names for gateway slots, read once when the screen opens — the
-    /// badge roster, so a slot the user has since removed still reads as itself.
-    @State private var gatewayRoster: [CustomGateway] = []
+    /// Usage identities follow the model's refreshed settings snapshot.
+    private var gatewayRoster: [CustomGateway] { model.gatewayIdentity.roster }
 
     /// How many groups are rendered. Local to this push and reset by leaving it:
     /// "Show more" is a reading choice about one visit, not a preference.
@@ -310,7 +309,6 @@ struct UsageIncidentListView: View {
         // Settings sidebar never shifts on push. See `MacSettingsSubScreenChrome`.
         .macSettingsSubScreenChrome(title: title)
         #endif
-        .task { gatewayRoster = await SettingsManager.shared.gatewayBadgeRoster() }
     }
 
     // MARK: - Sections

@@ -30,8 +30,8 @@ import SwiftUI
 struct UsageAllThreadsView: View {
     let model: UsageDashboardModel
 
-    /// Display names for gateway slots, read once when the screen opens.
-    @State private var gatewayRoster: [CustomGateway] = []
+    /// Usage identities follow the model’s refreshed settings snapshot.
+    private var gatewayRoster: [CustomGateway] { model.gatewayIdentity.roster }
 
     private var ranking: ThreadRanking { model.summary.threadRanking }
 
@@ -62,7 +62,6 @@ struct UsageAllThreadsView: View {
         // Settings sidebar never shifts on push. See `MacSettingsSubScreenChrome`.
         .macSettingsSubScreenChrome(title: title)
         #endif
-        .task { gatewayRoster = await SettingsManager.shared.gatewayBadgeRoster() }
     }
 
     // MARK: - Sections

@@ -992,8 +992,8 @@ final class WatchSettingsReader {
         customGateways.unioningRetired(retiredGatewayBadges)
     }
 
-    /// Freeze a departing custom's monogram + colour. Idempotent and a no-op
-    /// when the entry resolves to no monogram, since nothing could ever draw it.
+    /// Retain a departing custom's local display identity. The shared record
+    /// can preserve a name even when no initials can be drawn.
     private func retireGatewayBadge(from gateway: CustomGateway) {
         guard let badge = RetiredGatewayBadge.freeze(gateway, at: Date()),
               let updated = retiredGatewayBadges.retiring(badge)
@@ -1455,8 +1455,8 @@ final class WatchSettingsReader {
 
         // Retirement records hydrate UNCONDITIONALLY — outside the teardown
         // suppression above and outside its `== 0` guard. They hand back no
-        // address and no credential, only two characters and a colour, so they
-        // cannot resurrect anything; and a teardown is precisely the moment they
+        // address and no credential, only display identity, so they cannot
+        // restore a connection; and a teardown is precisely the moment they
         // matter most, since every gateway that could name a conversation is now
         // forgotten.
         if let data = appGroupDefaults.data(forKey: Constants.retiredGatewayBadgesKey),

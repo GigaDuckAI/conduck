@@ -247,7 +247,7 @@ final class UsageActivityChartCopyTests: XCTestCase {
     }
 
     /// The model split's nil is a CHOICE, not a capture gap: the sentinel makes
-    /// "Gateway default" an ordinary ranked segment, so it competes for the top
+    /// "Default / not recorded" an ordinary ranked segment, so it competes for the top
     /// colours by volume and never falls into the grey "not recorded" role.
     func testModelTotalsPromoteTheGatewayDefaultToARankedSegment() {
         let totals = UsageChartSegments.modelTotals(["gpt-5.6-luna": 1, nil: 5])
@@ -263,7 +263,7 @@ final class UsageActivityChartCopyTests: XCTestCase {
         XCTAssertEqual(
             segments.first?.keys, [UsageChartSegments.gatewayDefaultModelKey],
             "five default-answered attempts outrank one named model")
-        XCTAssertEqual(segments.map(\.label), ["Gateway default", "gpt-5.6-luna"])
+        XCTAssertEqual(segments.map(\.label), ["Default / not recorded", "gpt-5.6-luna"])
     }
 
     /// The Models sentence spends the attempt total across verbatim model ids,
@@ -283,9 +283,10 @@ final class UsageActivityChartCopyTests: XCTestCase {
             split: split, segments: segments, calendar: calendar)
 
         XCTAssertTrue(
-            sentence.contains("· 6 attempts · 4 gpt-5.6-luna · 2 Gateway default"),
+            sentence.contains("· 6 attempts · 4 gpt-5.6-luna · 2 Default / not recorded"),
             sentence)
-        XCTAssertFalse(sentence.contains("not recorded"))
+        XCTAssertFalse(sentence.contains(" · 2 not recorded"),
+                       "Missing model metadata stays in its named model bucket.")
     }
 
     /// The old Results measure's stored preference must strand, not crash or

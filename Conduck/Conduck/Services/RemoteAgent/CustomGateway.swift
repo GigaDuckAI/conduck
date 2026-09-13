@@ -43,8 +43,9 @@ struct CustomGateway: Codable, Sendable, Identifiable, Hashable {
     var ref: RemoteAgentRef { .custom(id) }
 }
 
-/// What survives forgetting a custom gateway: the two characters and the colour
-/// that told its conversations apart, and nothing else.
+/// Local display identity retained when a custom gateway leaves the roster.
+/// Its last known name helps Usage identify the history; other surfaces retain
+/// their existing generic-name badge adapter below. No connection details live here.
 ///
 /// Forgetting a BUILT-IN keeps its badge for free — `RemoteAgentBackend.shortCode`
 /// and the reserved palette hues are compiled in. Forgetting a CUSTOM used to
@@ -59,38 +60,51 @@ struct CustomGateway: Codable, Sendable, Identifiable, Hashable {
 /// user thought were gone. Instead every device DERIVES the same tombstone
 /// independently: the device where the user forgot retires at the Forget site,
 /// and peers retire when they observe the gateway disappear from the synced
-/// roster. Same outcome, nothing on the wire.
+/// roster. A disappearance preserves identity but is not proof of deletion:
+/// only an explicit local Forget records `explicitlyRemovedAt`.
 struct RetiredGatewayBadge: Codable, Sendable, Identifiable, Hashable {
     /// The forgotten gateway's uuid — matches `RemoteAgentRef.custom(id)` and
     /// the `Conversation.backend` string its conversations still carry.
     let id: UUID
-    /// Frozen at retirement, 1–2 chars, never empty. Captured BEFORE the name is
-    /// erased (the monogram may have been derived from it).
+    /// Frozen at retirement, up to two chars. Empty when a retained name has
+    /// no drawable initials, such as an emoji-only label.
     var monogram: String
     /// Frozen RESOLVED palette id — never nil, so the colour is genuinely fixed
     /// rather than relying on today's happens-to-be-first fallback.
     var colorID: String
-    /// When it was forgotten. Orders the retention trim.
+    /// When this device observed retirement. Orders the retention trim;
+    /// a synced roster disappearance does not prove when or why it disappeared.
     var retiredAt: Date
+    /// Last name known on this device. Absent in records saved by older builds.
+    var lastKnownName: String? = nil
+    /// Set only by explicit local Forget, never inferred from a roster shrink.
+    var explicitlyRemovedAt: Date? = nil
 
     var ref: RemoteAgentRef { .custom(id) }
 
-    /// Freeze a departing gateway's badge identity, or nil when it resolves to
-    /// no monogram (a name with no alphanumerics) — `GatewayBadge` draws nothing
-    /// for an empty monogram, so such a record could only ever consume a
-    /// retention slot.
+    /// Freeze a departing gateway's display identity. A valid name survives
+    /// even without a drawable monogram; an entirely empty identity is skipped.
     ///
     /// The colour is resolved to a CONCRETE palette id rather than carrying the
     /// roster's optional: a nil / unknown `colorID` renders through a fallback,
     /// which would silently change hue if the palette were ever reordered, and
     /// "frozen" has to mean frozen.
-    static func freeze(_ gateway: CustomGateway, at date: Date) -> RetiredGatewayBadge? {
+    static func freeze(
+        _ gateway: CustomGateway,
+        at date: Date,
+        explicitRemoval: Bool = false
+    ) -> RetiredGatewayBadge? {
         let monogram = RemoteAgentRefMetadata.monogram(for: gateway.ref, customs: [gateway])
-        guard !monogram.isEmpty else { return nil }
+        let name = gateway.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !monogram.isEmpty || !name.isEmpty else { return nil }
         let colorID = RemoteAgentBadgePalette.customPalette
             .first(where: { $0.id == gateway.colorID })?.id
             ?? RemoteAgentBadgePalette.customPalette[0].id
-        return RetiredGatewayBadge(id: gateway.id, monogram: monogram, colorID: colorID, retiredAt: date)
+        return RetiredGatewayBadge(
+            id: gateway.id, monogram: monogram, colorID: colorID, retiredAt: date,
+            lastKnownName: name.isEmpty ? nil : name,
+            explicitlyRemovedAt: explicitRemoval ? date : nil
+        )
     }
 }
 
@@ -105,12 +119,22 @@ extension Array where Element == RetiredGatewayBadge {
     /// Insert a frozen record, newest first, trimmed to
     /// `Constants.maxRetiredGatewayBadges`.
     ///
-    /// Idempotent: an already-retired uuid keeps its ORIGINAL record, so a
+    /// Idempotent: an already-retired uuid keeps its ORIGINAL identity, so a
     /// re-observed deletion (a peer's roster sync arriving after the local
     /// Forget) cannot rewrite history or reorder the trim. Returns nil when the
-    /// list is unchanged, so a caller can skip a pointless persist.
+    /// list is unchanged, so a caller can skip a pointless persist. Explicit
+    /// local intent can strengthen an uncertain record without reordering it.
     func retiring(_ badge: RetiredGatewayBadge) -> [RetiredGatewayBadge]? {
-        guard !contains(where: { $0.id == badge.id }) else { return nil }
+        if let index = firstIndex(where: { $0.id == badge.id }) {
+            guard self[index].explicitlyRemovedAt == nil,
+                  let removedAt = badge.explicitlyRemovedAt else { return nil }
+            var updated = self
+            updated[index].explicitlyRemovedAt = removedAt
+            if updated[index].lastKnownName == nil {
+                updated[index].lastKnownName = badge.lastKnownName
+            }
+            return updated
+        }
         return (self + [badge])
             .sorted { ($0.retiredAt, $0.id.uuidString) > ($1.retiredAt, $1.id.uuidString) }
             .prefix(Constants.maxRetiredGatewayBadges)
@@ -138,9 +162,9 @@ extension Array where Element == CustomGateway {
     /// gateway retired and later recreated under the same uuid is live again,
     /// not a memory of one.
     ///
-    /// Retired entries carry the SAME generic name a missing roster entry
-    /// resolves to, deliberately: forgetting keeps the colour tag, not the name,
-    /// and a distinct label would put a placeholder where every surface expects
+    /// This badge adapter keeps the SAME generic name a missing roster entry
+    /// resolves to. Usage reads the historical identity separately; changing
+    /// this adapter would change every existing surface that expects
     /// a real gateway name — "Gateway 'Forgotten gateway' is no longer
     /// available" in the recovery banner, and a placeholder in the Watch thread
     /// header. Only the monogram and colour are restored.

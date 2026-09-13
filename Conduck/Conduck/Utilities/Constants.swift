@@ -1456,7 +1456,7 @@ enum Constants {
     /// `maxCustomGateways`, which caps SIMULTANEOUSLY ACTIVE gateways: this is
     /// lifetime history, so reusing that value would silently start dropping
     /// badges on the first forget past the active-roster cap. Generous because each
-    /// record is a uuid, two characters and a date, and the oldest is dropped
+    /// record holds bounded display identity, and the oldest is dropped
     /// first — so a conversation older than the last `maxRetiredGatewayBadges`
     /// forgotten gateways can still lose its badge.
     static let maxRetiredGatewayBadges = 32
