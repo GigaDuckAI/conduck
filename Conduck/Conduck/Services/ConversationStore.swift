@@ -1507,7 +1507,22 @@ actor ConversationStore {
     /// project" without naming it. Archived projects are live: the glyph
     /// answers membership, not whether new activity is allowed.
     nonisolated static func liveProjectIDs(in context: NSManagedObjectContext) throws -> Set<UUID> {
-        Set(try canonicalLiveProjectRows(in: context).live.compactMap { $0.value(forKey: "id") as? UUID })
+        Set(try liveProjectTitles(in: context).keys)
+    }
+
+    /// The live projects' STORED titles by id — every canonical live row has
+    /// one, since an untitled row is an import still arriving. Stored, not
+    /// projected: a title is user text that can arrive from any device, so the
+    /// surface that draws or speaks it projects it through
+    /// `ReplySanitizer.displayLine` at the render, as the row's own title is.
+    nonisolated static func liveProjectTitles(in context: NSManagedObjectContext) throws -> [UUID: String] {
+        var titles: [UUID: String] = [:]
+        for row in try canonicalLiveProjectRows(in: context).live {
+            guard let id = row.value(forKey: "id") as? UUID,
+                  let title = row.value(forKey: "title") as? String else { continue }
+            titles[id] = title
+        }
+        return titles
     }
 
     nonisolated static func workDeskProjectActivityError(
@@ -3132,15 +3147,21 @@ actor ConversationStore {
         }
     }
 
-    /// The live Work project identifiers (`liveProjectIDs(in:)`), for the
-    /// surfaces that mark membership without naming it — the wrist's list and
-    /// the CarPlay picker. One whole-table read; no names, no colours.
+    /// The live Work project identifiers (`liveProjectIDs(in:)`). One
+    /// whole-table read; no names, no colours.
     func fetchLiveWorkProjectIDs() async throws -> Set<UUID> {
+        Set(try await fetchLiveWorkProjectTitles().keys)
+    }
+
+    /// The live Work projects' stored titles by id (`liveProjectTitles(in:)`),
+    /// for the surfaces that name a thread's project without Work's colours —
+    /// the wrist's list. One whole-table read.
+    func fetchLiveWorkProjectTitles() async throws -> [UUID: String] {
         try await ensureLoaded()
         let contextLease = try await newReadContextLease()
         defer { contextLease.finish() }
         let context = contextLease.context
-        return try await context.perform { [context] in try Self.liveProjectIDs(in: context) }
+        return try await context.perform { [context] in try Self.liveProjectTitles(in: context) }
     }
 
     /// Why a NEW user turn in this project would be refused right now, or nil.
@@ -3371,11 +3392,15 @@ actor ConversationStore {
         let lastViewedAt: Date?
         let failureSeenAttemptID: UUID?
         let tailProjection: String?
-        /// The thread belongs to a LIVE Work project (`liveProjectIDs(in:)`):
-        /// a deleted project's ghost membership reads false. The CarPlay row
-        /// draws a folder accessory from it and nothing else — no name, no
-        /// colour, no new text on the car screen.
-        let inLiveProject: Bool
+        /// The STORED title of the LIVE Work project the thread belongs to
+        /// (`liveProjectTitles(in:)`), nil for an ordinary thread, a project
+        /// this device holds no row for yet, and a deleted project's ghost
+        /// membership. The CarPlay row projects it into its detail line and
+        /// draws a folder accessory beside it; no colour crosses to the car.
+        let projectTitle: String?
+
+        /// The thread belongs to a live project — the folder's question.
+        var inLiveProject: Bool { projectTitle != nil }
 
         init(
             id: UUID,
@@ -3387,7 +3412,7 @@ actor ConversationStore {
             lastViewedAt: Date? = nil,
             failureSeenAttemptID: UUID? = nil,
             tailProjection: String? = nil,
-            inLiveProject: Bool = false
+            projectTitle: String? = nil
         ) {
             self.id = id
             self.label = label
@@ -3398,7 +3423,7 @@ actor ConversationStore {
             self.lastViewedAt = lastViewedAt
             self.failureSeenAttemptID = failureSeenAttemptID
             self.tailProjection = tailProjection
-            self.inLiveProject = inLiveProject
+            self.projectTitle = projectTitle
         }
     }
 
@@ -3437,9 +3462,9 @@ actor ConversationStore {
             // whole slice and inside this same round trip — and only when a row
             // carries a project at all, so a picker without Work pays nothing.
             let records = objects.map { ConversationRecord(managedObject: $0) }
-            let liveProjectIDs: Set<UUID> = records.contains { $0.projectID != nil }
-                ? try Self.liveProjectIDs(in: context)
-                : []
+            let liveProjectTitles: [UUID: String] = records.contains { $0.projectID != nil }
+                ? try Self.liveProjectTitles(in: context)
+                : [:]
             return zip(objects, records).map { object, record -> RecentConversation in
                 // First user turn (oldest) for the snippet fallback. Read
                 // inline off the to-many relationship — no extra fetch round-
@@ -3498,7 +3523,7 @@ actor ConversationStore {
                     lastViewedAt: record.lastViewedAt,
                     failureSeenAttemptID: record.failureSeenAttemptID,
                     tailProjection: record.tailProjection,
-                    inLiveProject: record.projectID.map(liveProjectIDs.contains) ?? false
+                    projectTitle: record.projectID.flatMap { liveProjectTitles[$0] }
                 )
             }
         }

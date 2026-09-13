@@ -30,15 +30,29 @@ import Foundation
 @MainActor
 final class WatchConversationViewModel {
     var conversations: [ConversationRecord] = []
-    /// The LIVE Work projects (`ConversationStore.liveProjectIDs`), so a row
-    /// can wear a folder for the project it belongs to — identifiers only,
-    /// read in the same refresh, and only when some row names a project at
-    /// all, so a wrist without Work pays nothing. A deleted project's ghost
-    /// membership resolves to no folder.
-    private(set) var liveProjectIDs: Set<UUID> = []
+    /// The LIVE Work projects' stored titles by id
+    /// (`ConversationStore.liveProjectTitles`), so a row can name the project
+    /// it belongs to — read in the same refresh, and only when some row names
+    /// a project at all, so a wrist without Work pays nothing. A deleted
+    /// project's ghost membership resolves to no project. No colours: the
+    /// wrist draws shape, not Work's palette.
+    private(set) var liveProjectTitles: [UUID: String] = [:]
+
+    var liveProjectIDs: Set<UUID> { Set(liveProjectTitles.keys) }
 
     func isInLiveProject(_ conversation: ConversationRecord) -> Bool {
-        conversation.projectID.map(liveProjectIDs.contains) ?? false
+        conversation.projectID.map { liveProjectTitles[$0] != nil } ?? false
+    }
+
+    /// The project's name as one safe display line, or nil for a thread in
+    /// no live project. Projected at the render like the row's own title —
+    /// a stored title is user text from any device — and never empty: a
+    /// title that projects away to nothing names the project by the folder
+    /// alone, which is still a live membership.
+    func liveProjectName(for conversation: ConversationRecord) -> String? {
+        guard let title = conversation.projectID.flatMap({ liveProjectTitles[$0] }) else { return nil }
+        let line = ReplySanitizer.displayLine(title, maxLength: .max, fallback: "")
+        return line.isEmpty ? nil : line
     }
     var isLoading = false
     var loadError: String?
@@ -223,11 +237,11 @@ final class WatchConversationViewModel {
             // Membership after the rows, same turn. A project row arriving or
             // its tombstone landing changes what a row draws without touching
             // the row itself, so it counts as a change on its own.
-            let live: Set<UUID> = fresh.contains(where: { $0.projectID != nil })
-                ? ((try? await store.fetchLiveWorkProjectIDs()) ?? liveProjectIDs)
-                : []
-            if live != liveProjectIDs {
-                liveProjectIDs = live
+            let live: [UUID: String] = fresh.contains(where: { $0.projectID != nil })
+                ? ((try? await store.fetchLiveWorkProjectTitles()) ?? liveProjectTitles)
+                : [:]
+            if live != liveProjectTitles {
+                liveProjectTitles = live
                 changed = true
             }
         } catch {

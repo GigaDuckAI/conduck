@@ -300,18 +300,6 @@ struct WatchConversationListView: View {
         let state = viewModel.rowState(for: conversation)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
-                // A Work project's thread wears the folder the phone draws for
-                // it — shape, not colour, and no name: the wrist reads only
-                // identifiers, and one glyph is all the row's height allows.
-                // It carries its own label because this row composes none.
-                if viewModel.isInLiveProject(conversation) {
-                    Image(systemName: "folder")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel(Text(LocalizedStringResource(
-                            "watch.row.a11y.inProject", defaultValue: "In a project"
-                        )))  // xcstrings
-                }
                 Text(Self.displayTitle(for: conversation))
                     // BOLD ON AN UNSEEN REPLY — the same cue the iPhone, iPad
                     // and Mac lists use, and the wrist's only whole-row one. It
@@ -332,13 +320,65 @@ struct WatchConversationListView: View {
                 // keeps the attention glyph in the same place on every row.
                 WatchConversationActivityMark(state: state)
             }
-            Text(Self.metadataText(for: state.activity, lastActivityAt: conversation.lastActivityAt))
-                .font(.caption2)
-                .foregroundStyle(Self.metadataTint(for: state))
-                // ALWAYS one line: "Waiting for a reply…" is far longer than a
-                // relative date and would wrap on a 40 mm watch, changing the
-                // row's height the moment its state changed.
-                .lineLimit(1)
+            HStack(spacing: 4) {
+                Text(Self.metadataText(for: state.activity, lastActivityAt: conversation.lastActivityAt))
+                    .font(.caption2)
+                    .foregroundStyle(Self.metadataTint(for: state))
+                    // ALWAYS one line: "Waiting for a reply…" is far longer than a
+                    // relative date and would wrap on a 40 mm watch, changing the
+                    // row's height the moment its state changed.
+                    .lineLimit(1)
+                    // The date is never the part that gives way: a long project
+                    // name truncates, the row's age does not.
+                    .layoutPriority(1)
+                // A Work project's thread names its project at the row's far
+                // edge of the DATE line — the same folder the phone draws, at
+                // the metadata's own size and grey, so the bold title keeps
+                // every character it had. Only while the slot shows a date:
+                // the state words need the whole line, so the project steps
+                // aside while a turn is working and returns when the reply
+                // lands, exactly as the phone row's name does. Shape and name,
+                // never Work's colour. Live projects only; a deleted project's
+                // ghost membership draws nothing. The folder is the MEMBERSHIP
+                // and the name is extra: a live title that projects away to
+                // nothing still draws the folder, so the row never loses its
+                // mark to a bad title.
+                if Self.showsProject(for: state.activity), viewModel.isInLiveProject(conversation) {
+                    let projectName = viewModel.liveProjectName(for: conversation)
+                    Spacer(minLength: 4)
+                    HStack(spacing: 2) {
+                        Image(systemName: "folder")
+                        if let projectName {
+                            Text(projectName)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(Self.projectAccessibilityLabel(projectName)))
+                }
+            }
+        }
+    }
+
+    /// What VoiceOver says for the folder: the project by name, or membership
+    /// alone when the title projects away to nothing.
+    static func projectAccessibilityLabel(_ projectName: String?) -> LocalizedStringResource {
+        if let projectName {
+            return LocalizedStringResource("watch.row.a11y.inProject", defaultValue: "In project \(projectName)")  // xcstrings
+        }
+        return LocalizedStringResource("watch.row.a11y.inUnnamedProject", defaultValue: "In a project")  // xcstrings
+    }
+
+    /// Whether the date slot carries the project in this state — the wrist's
+    /// copy of the phone row's rule: the settled states show a date and have
+    /// room; the working and failed states spend the line on their words.
+    static func showsProject(for activity: ConversationActivity) -> Bool {
+        switch activity {
+        case .idle, .answeredUnseen: return true
+        case .working, .failed: return false
         }
     }
 

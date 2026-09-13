@@ -263,6 +263,13 @@ final class WorkProjectMarkResolutionTests: XCTestCase {
         XCTAssertEqual(byID[inDoomed.id], false, "a deleted project's ghost draws no folder in the car")
         XCTAssertEqual(byID[plain.id], false)
         XCTAssertEqual(byID[unsynced.id], false, "the car marks only what it can vouch for")
+        // The name rides with the membership, stored as typed: the car's own
+        // detail line projects and caps it.
+        let titles = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.projectTitle) })
+        XCTAssertEqual(titles[inLive.id], "Live")
+        XCTAssertEqual(titles[inArchived.id], "Archived")
+        XCTAssertEqual(titles[inDoomed.id], .some(nil))
+        XCTAssertEqual(titles[unsynced.id], .some(nil))
     }
 
     /// A mark can change under an UNCHANGED conversation list — the project

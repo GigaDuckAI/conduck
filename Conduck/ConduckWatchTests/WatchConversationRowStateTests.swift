@@ -496,6 +496,45 @@ extension WatchConversationRowStateTests {
 
         XCTAssertEqual(try ConversationStore.liveProjectIDs(in: context), [live, archived, duplicated],
                        "archived is live — the folder marks membership, not whether a turn is allowed")
+        XCTAssertEqual(try ConversationStore.liveProjectTitles(in: context),
+                       [live: "Live", archived: "Paused", duplicated: "Twice again"],
+                       "the name comes off the same canonical row the id does — the newest duplicate")
+    }
+
+    func testTheDateLineNamesTheProjectOnlyWhileItShowsADate() {
+        XCTAssertTrue(WatchConversationListView.showsProject(for: .idle))
+        XCTAssertTrue(WatchConversationListView.showsProject(for: .answeredUnseen))
+        XCTAssertFalse(WatchConversationListView.showsProject(for: .working(.live, since: Date())),
+                       "the state words need the whole line; the project steps aside and returns")
+        XCTAssertFalse(WatchConversationListView.showsProject(for: .failed))
+    }
+
+    @MainActor
+    func testTheProjectNameIsProjectedLikeTheTitle() async throws {
+        ReadStateStore._resetForTesting()
+        let store = ConversationStore(inMemory: true)
+        let vm = WatchConversationViewModel(store: store)
+        let bidi = UUID(), blank = UUID()
+        let inBidi = try await store.createConversation(backend: "openclaw", projectID: bidi)
+        let inBlank = try await store.createConversation(backend: "openclaw", projectID: blank)
+        let plain = try await store.createConversation(backend: "openclaw")
+        let context = await store.newWriteContext()
+        try await context.perform {
+            Self.insertProject(context, id: bidi, title: "Q3\u{202E} launch\nplan", updatedAt: Date())
+            // The desk's own validation never stores this, but a synced row is
+            // not validated here — and it must not draw an empty label.
+            Self.insertProject(context, id: blank, title: "\u{202E}\u{202C}", updatedAt: Date())
+            try context.save()
+        }
+        _ = await vm.reload()
+        XCTAssertEqual(vm.liveProjectName(for: inBidi), "Q3 launch plan",
+                       "one safe display line — the override is dropped and the newline collapsed")
+        XCTAssertTrue(vm.isInLiveProject(inBlank), "membership is the row's, whatever its title projects to")
+        XCTAssertNil(vm.liveProjectName(for: inBlank), "a name that projects away draws no empty label")
+        XCTAssertNil(vm.liveProjectName(for: plain))
+        XCTAssertNotEqual(String(localized: WatchConversationListView.projectAccessibilityLabel(nil)),
+                          String(localized: WatchConversationListView.projectAccessibilityLabel("Q3 launch")),
+                          "the folder alone still speaks membership; a name adds the name")
     }
 
     @MainActor
@@ -526,5 +565,6 @@ extension WatchConversationRowStateTests {
         _ = await vm.reload()
         XCTAssertEqual(vm.liveProjectIDs, [projectID])
         XCTAssertTrue(vm.isInLiveProject(thread))
+        XCTAssertEqual(vm.liveProjectName(for: thread), "Q3 launch")
     }
 }

@@ -4,7 +4,7 @@ Build state at hand-off: iOS suite, Watch suite and macOS compile results are in
 
 ## What changed, in one breath
 
-A conversation started from a Work project now says so wherever it is listed outside Work: a folder (the project's colour, `archivebox` when archived) before the title in Chats, the project name in the date slot while the row is idle, a line under the navigation bar with "Show in Work" once the thread is open, a plain folder on the Watch row and a trailing folder on the CarPlay row. A project that cannot take a new turn (archived, or a free library over its allowance with no choice made) now says why above the composer, with a way to Work, and refuses the send with that same sentence instead of a generic failure, and CarPlay speaks that reason instead of "couldn't reach your AI".
+A conversation started from a Work project now says so wherever it is listed outside Work: a folder (the project's colour, `archivebox` when archived) before the title in Chats, the project name in the date slot while the row is idle, a line under the navigation bar with "Show in Work" once the thread is open, a small folder plus the project name at the right end of the Watch row's date line, and on CarPlay the project name after the date with a trailing folder on the same line. A project that cannot take a new turn (archived, or a free library over its allowance with no choice made) now says why above the composer, with a way to Work, and refuses the send with that same sentence instead of a generic failure, and CarPlay speaks that reason instead of "couldn't reach your AI".
 
 ## Setup
 
@@ -36,16 +36,17 @@ A conversation started from a Work project now says so wherever it is listed out
 
 ## CarPlay
 
-14. Recent list: the Q3 launch row carries a trailing folder; the gateway badge is where it was; the title is not truncated worse than before (check the longest title you have). Tapping the row still resumes the thread.
+14. Recent list: the Q3 launch row's grey line reads `1 day ago · Q3 launch` with a trailing folder at its right end; the gateway badge is where it was; the title is not truncated worse than before (check the longest title you have). Tapping the row still resumes the thread. Rename the project to something very long (30+ characters): the name is cut with `…` and the date still shows after it.
 15. Archive Q3 launch, tap its row: the car speaks `This project is archived. Restore it in Work on your iPhone to continue.` and nothing is presented or recorded. The picker still works afterwards.
 16. Restore, start the thread, and archive it on the Mac mid-session, then speak: the reply is the same spoken line, not "couldn't reach your AI".
 
 ## Watch
 
-17. The Q3 launch thread's row shows a small folder before its title; VoiceOver says "In a project". Ordinary rows: nothing.
+17. The Q3 launch thread's row shows the full title up top (no folder in front of it any more) and, at the right end of its date line, a small grey folder plus `Q3 launch`; the date stays at the left. VoiceOver says "In project Q3 launch". Ordinary rows: nothing, and their height matches. Send a turn from the phone: while the row says "Answering…" the folder and name are gone; when the reply lands they are back. Rename the project to something very long: the name is cut with `…` and the date is still whole.
 18. Delete the project in Work (keep the conversations): folders vanish on the Watch, in Chats and in the car; the threads stay listed and open.
 
 ## Things that look wrong and are not
 
 - A project thread whose project has not synced to this device yet shows a grey folder and no name in Chats; it names itself once the project arrives. On Watch and CarPlay it shows nothing until then.
+- CarPlay puts the date first and caps the project name at 24 characters; the Watch lets the name run to the row's edge. Both are by design: the car's grey line clips at its end, and the date must never be what it clips.
 - Archived idle rows show `Q3 launch · Archived` in place of the time.

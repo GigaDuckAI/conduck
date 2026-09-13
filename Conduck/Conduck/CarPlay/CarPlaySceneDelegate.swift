@@ -1194,9 +1194,14 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                     customs: customs
                 )
                 let recentItems: [CPListItem] = recents.map { recent in
+                    // A Work project's thread names its project after the
+                    // date — the detail line is the row's only second text
+                    // slot; the date leads so a clip only ever takes the name.
                     let item = CPListItem(
                         text: recent.label,
-                        detailText: CarPlayConversationLabel.relativeDate(recent.lastActivityAt, now: now)
+                        detailText: CarPlayConversationLabel.detailLine(
+                            projectTitle: recent.projectTitle, lastActivityAt: recent.lastActivityAt, now: now
+                        )
                     )
                     // Leading gateway badge (multi-gateway only) — color-codes
                     // which agent a thread belongs to where the thread text
@@ -1206,12 +1211,11 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                        let badge = GatewayBadge.image(for: ref, customs: customs) {
                         item.setImage(badge)
                     }
-                    // A Work project's thread wears a trailing folder — the
+                    // …and wears a trailing folder on that same line — the
                     // TRAILING slot, so the leading gateway badge keeps its
-                    // meaning, and an annotation only: no name, no colour, no
-                    // new text on the car screen, and the tap still resumes
-                    // the thread. Live projects only; a deleted project's
-                    // ghost membership draws nothing.
+                    // meaning; no colour crosses to the car, and the tap still
+                    // resumes the thread. Live projects only; a deleted
+                    // project's ghost membership draws and names nothing.
                     if recent.inLiveProject {
                         item.setAccessoryImage(UIImage(systemName: "folder"))
                     }

@@ -85,6 +85,47 @@ enum CarPlayConversationLabel {
         return head + "…"
     }
 
+    /// Maximum characters of a project name in the row's detail line. The
+    /// detail line is ONE line that clips at its end; the date leads, so the
+    /// clip can only ever take the name, and the cap keeps what is left a
+    /// glanceable identifier rather than a sentence the driver reads.
+    static let maxProjectNameLength = 24
+
+    /// A project name as the detail line carries it: projected to one safe
+    /// display line and capped at `maxProjectNameLength` with an ellipsis, on
+    /// the snippet's own two-pass cap. Nil when there is no project, or when
+    /// the stored title projects away to nothing — then the line is the date
+    /// alone and the folder accessory still marks the row.
+    ///
+    /// TWO characters of lookahead, not one: the projection never ends on a
+    /// separator, so a name whose cap falls exactly on a word boundary would
+    /// come back one short of the lookahead and read as uncut — and its next
+    /// word would vanish without an ellipsis to say so.
+    static func projectName(from title: String?) -> String? {
+        guard let title else { return nil }
+        let projected = ReplySanitizer.displayLine(
+            title, maxLength: maxProjectNameLength + 2, fallback: ""
+        )
+        guard !projected.isEmpty else { return nil }
+        guard projected.count > maxProjectNameLength else { return projected }
+        let head = ReplySanitizer.displayLine(
+            projected, maxLength: maxProjectNameLength, fallback: ""
+        )
+        return head + "…"
+    }
+
+    /// The recent row's detail line: the relative date, followed by the
+    /// project name when the thread is in a live project — "2 hr ago · Q3
+    /// launch". Date FIRST, unlike the phone row's slot: the car's line clips
+    /// at its end and a display can be narrow, so the one fact every row has
+    /// (its age) sits where nothing can take it, and the name is what gives.
+    static func detailLine(projectTitle: String?, lastActivityAt: Date, now: Date = Date()) -> String {
+        let date = relativeDate(lastActivityAt, now: now)
+        guard let name = projectName(from: projectTitle) else { return date }
+        return String(localized: "carplay.recent.project.detail",
+                      defaultValue: "\(date) · \(name)")  // xcstrings
+    }
+
     /// Format a conversation's `lastActivityAt` as a short relative date for
     /// the row's `detailText` (e.g. "2 hr ago", "Yesterday", "3 days ago").
     /// `RelativeDateTimeFormatter` is locale-aware and glanceable — the right

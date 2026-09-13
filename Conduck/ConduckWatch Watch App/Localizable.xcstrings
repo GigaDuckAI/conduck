@@ -1,106 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "intent.workboardCapture.relay.confirmation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Saved for Work on your paired phone. Open Conduck there to see it."
-          }
-        }
-      }
-    },
-    "intent.workboardCapture.relay.refused" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your paired phone couldn’t save this note. Open Conduck there and check available storage, then try again."
-          }
-        }
-      }
-    },
-    "intent.workboardCapture.relay.retainedOnWatch" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Saved on your Watch. Turn on content sync in General settings to make it available on your other devices."
-          }
-        }
-      }
-    },
-    "intent.workboardCapture.relay.retainedUnconfirmedPhone" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Saved on your Watch; it may also be on your paired phone. Turn on content sync in General settings to make the saved note available on your other devices."
-          }
-        }
-      }
-    },
-    "intent.workboardCapture.relay.starting" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your Watch connection is still starting. Try again in a moment."
-          }
-        }
-      }
-    },
-    "intent.workboardCapture.relay.tooLong" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "This note is too long to send from your watch. Shorten it, then try again."
-          }
-        }
-      }
-    },
-    "intent.workboardCapture.relay.unavailable" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Your paired phone is unavailable. Open Conduck there, then try again, or turn on content sync in General settings."
-          }
-        }
-      }
-    },
-    "intent.workboardCapture.relay.unconfirmed" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Couldn’t confirm that your paired phone saved the note. Check Work there before trying again."
-          }
-        }
-      }
-    },
-    "intent.workboardCapture.relay.unsupported" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Update Conduck on your paired phone to add this note while content sync is off."
-          }
-        }
-      }
-    },
     "" : {
+
+    },
+    "…" : {
+
+    },
+    "[File attached]" : {
+
+    },
+    "[Image attached]" : {
 
     },
     "%@ is answering…" : {
@@ -127,618 +37,6 @@
           }
         }
       }
-    },
-    "Add ${thought} to Work" : {
-
-    },
-    "Add to Work" : {
-
-    },
-    "Answering…" : {
-
-    },
-    "Ask" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Ask"
-          }
-        }
-      }
-    },
-    "Cancel" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Cancel"
-          }
-        }
-      }
-    },
-    "Capture a voice note with Conduck" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Capture a voice note with Conduck"
-          }
-        }
-      }
-    },
-    "CarPlay" : {
-
-    },
-    "Clear search" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Clear search"
-          }
-        }
-      }
-    },
-    "Conduck" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck"
-          }
-        }
-      }
-    },
-    "Conduck is turned off for Apple Watch. Enable it in iPhone Settings." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conduck is turned off for Apple Watch. Enable it in iPhone Settings."
-          }
-        }
-      }
-    },
-    "Conversation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conversation"
-          }
-        }
-      }
-    },
-    "Conversations" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Conversations"
-          }
-        }
-      }
-    },
-    "Could not prepare recording for iPhone." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Could not prepare recording for iPhone."
-          }
-        }
-      }
-    },
-    "Could not process response." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Could not process response."
-          }
-        }
-      }
-    },
-    "Could not read recording." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Could not read recording."
-          }
-        }
-      }
-    },
-    "Could not send recording. Please try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Could not send recording. Please try again."
-          }
-        }
-      }
-    },
-    "Could not start recording." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Could not start recording."
-          }
-        }
-      }
-    },
-    "Couldn't connect to the internet. If your iPhone is nearby, your watch may be using its connection. Make sure the iPhone is online, or turn it off, then try again so your watch uses its own Wi-Fi." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't connect to the internet. If your iPhone is nearby, your watch may be using its connection. Make sure the iPhone is online, or turn it off, then try again so your watch uses its own Wi-Fi."
-          }
-        }
-      }
-    },
-    "Couldn't load your conversations." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't load your conversations."
-          }
-        }
-      }
-    },
-    "Couldn't reach the internet. Check your connection and try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Couldn't reach the internet. Check your connection and try again."
-          }
-        }
-      }
-    },
-    "Custom gateway" : {
-
-    },
-    "Done." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Done."
-          }
-        }
-      }
-    },
-    "GigaAction" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "GigaAction"
-          }
-        }
-      }
-    },
-    "Got it" : {
-
-    },
-    "Loading" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Loading"
-          }
-        }
-      }
-    },
-    "Mac" : {
-
-    },
-    "Message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Message"
-          }
-        }
-      }
-    },
-    "Microphone access is required. Please enable it in Settings." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Microphone access is required. Please enable it in Settings."
-          }
-        }
-      }
-    },
-    "New conversation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "New conversation"
-          }
-        }
-      }
-    },
-    "No conversations yet" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No conversations yet"
-          }
-        }
-      }
-    },
-    "No matches" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No matches"
-          }
-        }
-      }
-    },
-    "No response received from server." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "No response received from server."
-          }
-        }
-      }
-    },
-    "Nothing matches that search." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Nothing matches that search."
-          }
-        }
-      }
-    },
-    "On-device voice isn't ready on your iPhone yet. Open Conduck there to set it up." : {
-
-    },
-    "Open Conduck on iPhone to get started" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Open Conduck on iPhone to get started"
-          }
-        }
-      }
-    },
-    "Pause" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Pause"
-          }
-        }
-      }
-    },
-    "Raise to ask" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Raise to ask"
-          }
-        }
-      }
-    },
-    "Read aloud" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Read aloud"
-          }
-        }
-      }
-    },
-    "Record voice message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Record voice message"
-          }
-        }
-      }
-    },
-    "Recording could not be sent. Please try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Recording could not be sent. Please try again."
-          }
-        }
-      }
-    },
-    "Recording file not found." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Recording file not found."
-          }
-        }
-      }
-    },
-    "Recording…" : {
-
-    },
-    "Resume" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Resume"
-          }
-        }
-      }
-    },
-    "Saved." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Saved."
-          }
-        }
-      }
-    },
-    "Search conversations" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Search conversations"
-          }
-        }
-      }
-    },
-    "Send message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Send message"
-          }
-        }
-      }
-    },
-    "Sending…" : {
-
-    },
-    "Sent to iPhone. Your transcript will arrive when it reconnects." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Sent to iPhone. Your transcript will arrive when it reconnects."
-          }
-        }
-      }
-    },
-    "Set up your personal AI on iPhone first." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Set up your personal AI on iPhone first."
-          }
-        }
-      }
-    },
-    "Starting…" : {
-
-    },
-    "Still answering your last question." : {
-
-    },
-    "Stop" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Stop"
-          }
-        }
-      }
-    },
-    "Tap to Stop" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Tap to Stop"
-          }
-        }
-      }
-    },
-    "Thinking…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Thinking…"
-          }
-        }
-      }
-    },
-    "This conversation is empty." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "This conversation is empty."
-          }
-        }
-      }
-    },
-    "Transcribe" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Transcribe"
-          }
-        }
-      }
-    },
-    "Transcribing…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Transcribing…"
-          }
-        }
-      }
-    },
-    "Transcription complete. Sending to your AI." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Transcription complete. Sending to your AI."
-          }
-        }
-      }
-    },
-    "Try Again" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Try Again"
-          }
-        }
-      }
-    },
-    "Turned off for Apple Watch. Enable it in iPhone Settings." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Turned off for Apple Watch. Enable it in iPhone Settings."
-          }
-        }
-      }
-    },
-    "Waiting for iPhone to set up Conduck…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Waiting for iPhone to set up Conduck…"
-          }
-        }
-      }
-    },
-    "Watch" : {
-
-    },
-    "Yesterday" : {
-
-    },
-    "Your first one or two interactions may need a moment to warm up. It settles after that." : {
-
-    },
-    "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again."
-          }
-        }
-      }
-    },
-    "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive."
-          }
-        }
-      }
-    },
-    "[File attached]" : {
-
-    },
-    "[Image attached]" : {
-
     },
     "activity.a11y.newReply" : {
       "extractionState" : "extracted_with_value",
@@ -839,6 +137,15 @@
         }
       }
     },
+    "Add ${thought} to Work" : {
+
+    },
+    "Add to Work" : {
+
+    },
+    "Answering…" : {
+
+    },
     "api.error.failure" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -890,6 +197,17 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Try again."
+          }
+        }
+      }
+    },
+    "Ask" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Ask"
           }
         }
       }
@@ -1015,6 +333,31 @@
         }
       }
     },
+    "Cancel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "Capture a voice note with Conduck" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Capture a voice note with Conduck"
+          }
+        }
+      }
+    },
+    "CarPlay" : {
+
+    },
     "chat.waitingForConnection" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -1026,6 +369,50 @@
         }
       }
     },
+    "Clear search" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Clear search"
+          }
+        }
+      }
+    },
+    "Conduck" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck"
+          }
+        }
+      }
+    },
+    "Conduck is turned off for Apple Watch. Enable it in iPhone Settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conduck is turned off for Apple Watch. Enable it in iPhone Settings."
+          }
+        }
+      }
+    },
+    "Conversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conversation"
+          }
+        }
+      }
+    },
     "conversation.row.youSaid" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -1033,6 +420,163 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "You: %@"
+          }
+        }
+      }
+    },
+    "Conversations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conversations"
+          }
+        }
+      }
+    },
+    "conversations.row.a11y.inProject" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "In project %@"
+          }
+        }
+      }
+    },
+    "conversations.row.a11y.inUnsyncedProject" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "In a project"
+          }
+        }
+      }
+    },
+    "conversations.row.project.archived" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "conversations.row.project.date" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "Could not prepare recording for iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not prepare recording for iPhone."
+          }
+        }
+      }
+    },
+    "Could not process response." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not process response."
+          }
+        }
+      }
+    },
+    "Could not read recording." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not read recording."
+          }
+        }
+      }
+    },
+    "Could not send recording. Please try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not send recording. Please try again."
+          }
+        }
+      }
+    },
+    "Could not start recording." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Could not start recording."
+          }
+        }
+      }
+    },
+    "Couldn't connect to the internet. If your iPhone is nearby, your watch may be using its connection. Make sure the iPhone is online, or turn it off, then try again so your watch uses its own Wi-Fi." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't connect to the internet. If your iPhone is nearby, your watch may be using its connection. Make sure the iPhone is online, or turn it off, then try again so your watch uses its own Wi-Fi."
+          }
+        }
+      }
+    },
+    "Couldn't load your conversations." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't load your conversations."
+          }
+        }
+      }
+    },
+    "Couldn't reach the internet. Check your connection and try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Couldn't reach the internet. Check your connection and try again."
+          }
+        }
+      }
+    },
+    "Custom gateway" : {
+
+    },
+    "Done." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Done."
           }
         }
       }
@@ -1235,10 +779,29 @@
         }
       }
     },
-    "iPad" : {
-
+    "gateway.plan.inactive" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This gateway is inactive on your free plan. Choose active gateways in Personal AI settings, or renew Conduck Pro."
+          }
+        }
+      }
     },
-    "iPhone" : {
+    "GigaAction" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "GigaAction"
+          }
+        }
+      }
+    },
+    "Got it" : {
 
     },
     "intent.workboardCapture.confirmation" : {
@@ -1285,6 +848,105 @@
         }
       }
     },
+    "intent.workboardCapture.relay.confirmation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved for Work on your paired phone. Open Conduck there to see it."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.refused" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your paired phone couldn’t save this note. Open Conduck there and check available storage, then try again."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.retainedOnWatch" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved on your Watch. Turn on content sync in General settings to make it available on your other devices."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.retainedUnconfirmedPhone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved on your Watch; it may also be on your paired phone. Turn on content sync in General settings to make the saved note available on your other devices."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.starting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your Watch connection is still starting. Try again in a moment."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.tooLong" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This note is too long to send from your watch. Shorten it, then try again."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your paired phone is unavailable. Open Conduck there, then try again, or turn on content sync in General settings."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.unconfirmed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t confirm that your paired phone saved the note. Check Work there before trying again."
+          }
+        }
+      }
+    },
+    "intent.workboardCapture.relay.unsupported" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update Conduck on your paired phone to add this note while content sync is off."
+          }
+        }
+      }
+    },
     "intent.workboardCapture.thought" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -1303,6 +965,48 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Add to Work"
+          }
+        }
+      }
+    },
+    "iPad" : {
+
+    },
+    "iPhone" : {
+
+    },
+    "Loading" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Loading"
+          }
+        }
+      }
+    },
+    "Mac" : {
+
+    },
+    "Message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Message"
+          }
+        }
+      }
+    },
+    "Microphone access is required. Please enable it in Settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Microphone access is required. Please enable it in Settings."
           }
         }
       }
@@ -1383,6 +1087,232 @@
           }
         }
       }
+    },
+    "New conversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New conversation"
+          }
+        }
+      }
+    },
+    "No conversations yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No conversations yet"
+          }
+        }
+      }
+    },
+    "No matches" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No matches"
+          }
+        }
+      }
+    },
+    "No response received from server." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No response received from server."
+          }
+        }
+      }
+    },
+    "Nothing matches that search." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Nothing matches that search."
+          }
+        }
+      }
+    },
+    "On-device voice isn't ready on your iPhone yet. Open Conduck there to set it up." : {
+
+    },
+    "Open Conduck on iPhone to get started" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Conduck on iPhone to get started"
+          }
+        }
+      }
+    },
+    "Pause" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Pause"
+          }
+        }
+      }
+    },
+    "pro.purchase.checking" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your purchase is being checked. Try Restore Purchases if access does not appear."
+          }
+        }
+      }
+    },
+    "pro.purchase.failed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The purchase could not be completed. Please try again."
+          }
+        }
+      }
+    },
+    "pro.purchase.pending" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your purchase is awaiting approval. Pro will become available when Apple confirms it."
+          }
+        }
+      }
+    },
+    "pro.purchase.unverified" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Apple could not verify this purchase. Try Restore Purchases before purchasing again."
+          }
+        }
+      }
+    },
+    "pro.restore.failed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Purchases could not be restored. Please try again."
+          }
+        }
+      }
+    },
+    "pro.restore.none" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No active Conduck Pro subscription was found for this Apple Account."
+          }
+        }
+      }
+    },
+    "pro.restore.unavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your subscription could not be checked. Please try again."
+          }
+        }
+      }
+    },
+    "pro.store.unavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Subscriptions are unavailable right now. Please try again later."
+          }
+        }
+      }
+    },
+    "Raise to ask" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Raise to ask"
+          }
+        }
+      }
+    },
+    "Read aloud" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Read aloud"
+          }
+        }
+      }
+    },
+    "Record voice message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Record voice message"
+          }
+        }
+      }
+    },
+    "Recording could not be sent. Please try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recording could not be sent. Please try again."
+          }
+        }
+      }
+    },
+    "Recording file not found." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Recording file not found."
+          }
+        }
+      }
+    },
+    "Recording…" : {
+
     },
     "remoteAgent.error.authFailed.recovery.hosted" : {
       "extractionState" : "manual",
@@ -2264,6 +2194,75 @@
         }
       }
     },
+    "Resume" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Resume"
+          }
+        }
+      }
+    },
+    "Saved." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Saved."
+          }
+        }
+      }
+    },
+    "Search conversations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Search conversations"
+          }
+        }
+      }
+    },
+    "Send message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Send message"
+          }
+        }
+      }
+    },
+    "Sending…" : {
+
+    },
+    "Sent to iPhone. Your transcript will arrive when it reconnects." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sent to iPhone. Your transcript will arrive when it reconnects."
+          }
+        }
+      }
+    },
+    "Set up your personal AI on iPhone first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Set up your personal AI on iPhone first."
+          }
+        }
+      }
+    },
     "settings.certTrust.keyUnpinnable.refusal" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2447,6 +2446,23 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Set up your AI on iPhone first."
+          }
+        }
+      }
+    },
+    "Starting…" : {
+
+    },
+    "Still answering your last question." : {
+
+    },
+    "Stop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Stop"
           }
         }
       }
@@ -2814,6 +2830,39 @@
         }
       }
     },
+    "Tap to Stop" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap to Stop"
+          }
+        }
+      }
+    },
+    "Thinking…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Thinking…"
+          }
+        }
+      }
+    },
+    "This conversation is empty." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This conversation is empty."
+          }
+        }
+      }
+    },
     "thread.speak.announce.paused" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -2865,6 +2914,50 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Spoken with the built-in voice"
+          }
+        }
+      }
+    },
+    "Transcribe" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcribe"
+          }
+        }
+      }
+    },
+    "Transcribing…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcribing…"
+          }
+        }
+      }
+    },
+    "Transcription complete. Sending to your AI." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Transcription complete. Sending to your AI."
+          }
+        }
+      }
+    },
+    "Try Again" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Try Again"
           }
         }
       }
@@ -2978,6 +3071,31 @@
           }
         }
       }
+    },
+    "Turned off for Apple Watch. Enable it in iPhone Settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Turned off for Apple Watch. Enable it in iPhone Settings."
+          }
+        }
+      }
+    },
+    "Waiting for iPhone to set up Conduck…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Waiting for iPhone to set up Conduck…"
+          }
+        }
+      }
+    },
+    "Watch" : {
+
     },
     "watch.ask.destination.noAI" : {
       "extractionState" : "extracted_with_value",
@@ -3140,6 +3258,28 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Couldn't read the reply from your AI."
+          }
+        }
+      }
+    },
+    "watch.row.a11y.inProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In project %@"
+          }
+        }
+      }
+    },
+    "watch.row.a11y.inUnnamedProject" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In a project"
           }
         }
       }
@@ -3397,8 +3537,66 @@
         }
       }
     },
-    "…" : {
+    "workdesk.error.projectArchived" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Restore this project before continuing its conversations or adding materials."
+          }
+        }
+      }
+    },
+    "workdesk.pro.selection.otherDevice" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Choose your active projects in Work on iPhone, iPad or Mac to continue."
+          }
+        }
+      }
+    },
+    "workdesk.projects.archived" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Archived"
+          }
+        }
+      }
+    },
+    "Yesterday" : {
 
+    },
+    "Your first one or two interactions may need a moment to warm up. It settles after that." : {
+
+    },
+    "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again."
+          }
+        }
+      }
+    },
+    "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
