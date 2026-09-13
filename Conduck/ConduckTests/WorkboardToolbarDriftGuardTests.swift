@@ -249,8 +249,16 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
             after: "var body: some View", in: persistentHost, path: hostPath
         )
         XCTAssertTrue(hostBody.contains("shell"))
-        XCTAssertTrue(hostBody.contains(".modifier(WorkSettingsPresentationModifier(router: model.router))"),
-                      "Settings presentation must live above the regular/compact shell branches")
+        // Matched piecewise: the call spans lines and gains arguments over time,
+        // and neither of those is the drift this guard exists to catch.
+        let presenterAt = try XCTUnwrap(
+            hostBody.range(of: ".modifier(WorkSettingsPresentationModifier(")?.upperBound,
+            "Settings presentation must live above the regular/compact shell branches"
+        )
+        let presenterArguments = hostBody[presenterAt...]
+            .prefix(upTo: hostBody[presenterAt...].range(of: "))")?.lowerBound ?? hostBody.endIndex)
+        XCTAssertTrue(presenterArguments.contains("router: model.router"),
+                      "Settings presentation must follow the live workbench router")
         let modifier = try RefusalLaneSource.trailingClosure(
             after: "private struct WorkSettingsPresentationModifier: ViewModifier", in: host, path: hostPath
         )
