@@ -31,20 +31,9 @@
 
 Conduck is the interface, not the AI service. There is no model inside the app and no Conduck account to create. You connect the AI you choose, then make it available wherever you already are: at your desk, on your wrist, in the car, or inside another app.
 
-The official app offers a free plan and an optional Conduck Pro subscription.
-Conduck-authored application code, including the purchase and access logic,
-is open source under Apache-2.0.
-
-The free allowance is three active Work projects and three configured gateways
-in total across OpenClaw, Hermes, and custom connections. Unconfigured built-in
-options take no slots, and OpenRouter is always outside the gateway allowance.
-Archive a completed project to free a slot while keeping its materials and
-conversations. Restore it before continuing its conversations or adding materials.
-Pro allows unlimited active projects and configured gateways;
-AI and speech-provider usage is billed separately by those providers. If a free
-library exceeds an allowance, choose which projects and gateways stay active.
-Unselected projects are archived only after confirmation; other gateway
-configurations are retained. Existing content remains available.
+The official app is available on the App Store. Conduck-authored application
+code is open source under Apache-2.0. AI and speech-provider usage is billed
+directly by those providers under your own keys.
 
 ## Why Conduck
 
@@ -117,20 +106,13 @@ Two builds share this codebase:
 | | Official app | Personal source build |
 |---|---|---|
 | **Distribution** | [App Store](https://apps.apple.com/app/id6773045286) | Build from source |
-| **Terms** | Free plan and optional Pro for individuals, including professional use; [organization-managed use requires a separate agreement](https://conduck.com/terms/) | Apache-2.0, including commercial source use |
+| **Terms** | Available to individuals, including professional use; [organization-managed use requires a separate agreement](https://conduck.com/terms/) | Apache-2.0, including commercial source use |
 | **Identity** | Conduck name and artwork | “Conduck Community” with neutral placeholder art |
 | **CarPlay** | Included | Not included because it requires an Apple per-team entitlement |
 
 The terms for the official app cover its distribution and the Conduck brand. They place no restriction on the source in this repository, which is licensed under Apache-2.0.
 
 The official build is made from this public application source with private branding, signing, and Apple's CarPlay entitlement added for distribution. No functional code is withheld.
-
-The official subscription product identifier is supplied by private build
-configuration. Community builds leave it empty and never sell a subscription
-for the official app. A distributor may configure its own StoreKit product;
-source users retain the freedom to modify the access policy. Apple-signed
-transactions grant access in official builds, without a Conduck account or
-licensing server.
 
 Personal builds may display the **Conduck Community** identity. If you redistribute a build, choose your own product name, icons, and identity as required by [TRADEMARKS.md](TRADEMARKS.md).
 
