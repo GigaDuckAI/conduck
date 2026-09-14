@@ -1438,6 +1438,25 @@ actor ConversationStore {
     /// content, titles, ids, or CloudKit payloads.
     private static let log = Logger(subsystem: Constants.identityNamespace, category: "ConversationStore")
 
+    #if DEBUG && !os(watchOS)
+    /// `-ConduckInitializeCloudKitSchema` (see `performLoad`). Read once at
+    /// launch, consumed once per process, and only by a load that actually
+    /// mounted a `NSPersistentCloudKitContainer` — a local-only session
+    /// opening first (sync off, or before the transition) leaves the request
+    /// standing for the mirrored one.
+    private static let cloudKitSchemaInitializationRequested: Bool =
+        ProcessInfo.processInfo.arguments.contains("-ConduckInitializeCloudKitSchema")
+    private static let cloudKitSchemaInitializationConsumed = OSAllocatedUnfairLock(initialState: false)
+    private static func consumeCloudKitSchemaInitializationRequest() -> Bool {
+        guard cloudKitSchemaInitializationRequested else { return false }
+        return cloudKitSchemaInitializationConsumed.withLock { consumed in
+            if consumed { return false }
+            consumed = true
+            return true
+        }
+    }
+    #endif
+
     /// Fetch passes quicker than this are not logged — steady-state reads must
     /// not spam the log. The signal a field baseline needs timestamps for is the
     /// SLOW pass (main-queue contention / attachment-heavy thread).
@@ -2313,6 +2332,43 @@ actor ConversationStore {
         // CloudKit metadata on device) actually cost the first caller.
         // Duration only.
         Self.log.notice("store.load ms=\(Int(Date().timeIntervalSince(loadStart) * 1000))")
+
+        #if DEBUG && !os(watchOS)
+        // `-ConduckInitializeCloudKitSchema` — one-shot developer flag. Core
+        // Data creates CloudKit record types and fields LAZILY, as records
+        // carrying them export, so the console's Development schema only
+        // ever shows what some dev device has actually written: an optional
+        // attribute no synced row has filled is simply absent, and a
+        // Production deploy taken from that schema leaves it absent for App
+        // Store users, whose first export carrying it is then rejected and
+        // stalls their sync. `initializeCloudKitSchema` writes one
+        // representative record per entity with EVERY attribute set, into
+        // each mirrored store's own container, so Development is complete
+        // before "Deploy Schema Changes". Runs once per process, only against
+        // a CloudKit-mirroring session, detached so the actor (and the UI
+        // waiting on it) never sits behind the network round trips. The work
+        // is admitted to `contentSyncContexts` for its whole duration, so a
+        // sync-preference flip mid-run drains (or refuses with
+        // `.activeOperations`) instead of removing the stores under a call
+        // that holds no removal guarantee. Inert without the arg; compiles
+        // out of Release; Development environment only — the call refuses a
+        // Production-signed build by design.
+        if let cloudContainer = container as? NSPersistentCloudKitContainer,
+           Self.consumeCloudKitSchemaInitializationRequest() {
+            NSLog("[ConversationStore] CloudKit schema initialization requested — writing one representative record per entity into every mirrored container's Development schema")
+            let registry = contentSyncContexts
+            registry.admit()
+            Task.detached(priority: .utility) {
+                defer { registry.finish() }
+                do {
+                    try cloudContainer.initializeCloudKitSchema(options: [])
+                    NSLog("[ConversationStore] CloudKit Development schema initialized for every mirrored store — refresh the console and deploy")
+                } catch {
+                    NSLog("[ConversationStore] CloudKit schema initialization FAILED: \(error)")
+                }
+            }
+        }
+        #endif
 
         // `viewContext` is deliberately UNCONFIGURED and UNUSED: every read AND
         // write in this file runs on a fresh `newBackgroundContext()` inside

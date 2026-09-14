@@ -55,5 +55,13 @@ enum DebugFlags {
     // target compiles `Utilities/Constants.swift` — where the flag gates
     // `Constants.maxCustomGateways` — but not `QA/`. Recorded so this file
     // stays the index of developer launch flags.
+    //
+    // `-ConduckInitializeCloudKitSchema` (write one representative record per
+    // entity, every attribute set, into each mirrored store's CloudKit
+    // Development schema so a Production deploy carries the WHOLE model, not
+    // just the fields some dev device happened to sync) lives in
+    // `Services/ConversationStore.swift` for the same reason: the Watch
+    // compiles that file but not `QA/`. One-shot per process, CloudKit
+    // session only, DEBUG only.
 }
 #endif
