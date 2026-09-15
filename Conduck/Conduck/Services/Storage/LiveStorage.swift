@@ -196,6 +196,8 @@ nonisolated final class LiveContentSyncPolicyLock: ContentSyncPolicyPersistence,
 nonisolated final class ContentSyncPolicyFile: ContentSyncPolicyPersistence, @unchecked Sendable {
     enum Failure: Error { case unavailable }
     private static let log = Logger(subsystem: Constants.identityNamespace, category: "ContentSyncPolicy")
+    private static let contentionMisses = OSAllocatedUnfairLock(initialState: 0)
+    private static let contentionLogStride = 50
     private let localLock = NSLock()
     private let directory: @Sendable () -> URL?
     private var lockedDirectory: URL?
@@ -230,6 +232,19 @@ nonisolated final class ContentSyncPolicyFile: ContentSyncPolicyPersistence, @un
             let code = errno
             if code != EWOULDBLOCK && code != EAGAIN {
                 Self.log.error("policy.lock stage=flock errno=\(code)")
+            } else {
+                // Contention is expected and harmless in itself, but a miss on
+                // a mirroring session can downgrade the CloudKit container
+                // (`ConversationStore.openLocalSessionForUnavailablePolicy`), so
+                // it must be countable from a field log. Rate-limited: the
+                // first miss, then every `contentionLogStride`-th.
+                let misses = Self.contentionMisses.withLock { misses -> Int in
+                    misses += 1
+                    return misses
+                }
+                if misses == 1 || misses % Self.contentionLogStride == 0 {
+                    Self.log.notice("policy.lock busy misses=\(misses)")
+                }
             }
             Darwin.close(descriptor)
             descriptor = -1

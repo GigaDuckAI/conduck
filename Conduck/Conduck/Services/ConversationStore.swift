@@ -1438,6 +1438,9 @@ actor ConversationStore {
     /// content, titles, ids, or CloudKit payloads.
     private static let log = Logger(subsystem: Constants.identityNamespace, category: "ConversationStore")
 
+    /// `remote.change n=` counter for the whole process — see `performLoad`.
+    private static let remoteChangeCount = OSAllocatedUnfairLock(initialState: 0)
+
     #if DEBUG && !os(watchOS)
     /// `-ConduckInitializeCloudKitSchema` (see `performLoad`). Read once at
     /// launch, consumed once per process, and only by a load that actually
@@ -2123,6 +2126,11 @@ actor ConversationStore {
     private func openLocalSessionForUnavailablePolicy() async throws {
         try await drainContentSyncContexts()
         if container is NSPersistentCloudKitContainer {
+            // The one place a mirroring session is downgraded without the
+            // person asking for it. Loud on purpose: a field log must be able
+            // to say whether a CloudKit container was ever removed under a
+            // transient policy-lock miss.
+            Self.log.notice("sync.session policy-unavailable → local generation=\(self.contentSyncSessionGeneration, privacy: .public)")
             try await detachContentSyncSession()
             contentSyncApplied = nil
             container = try makeContentSyncContainer(cloudKit: false)
@@ -2162,6 +2170,11 @@ actor ConversationStore {
             // A retry waiting on another process already has a local pair. It
             // only needs the barrier; do not reopen that pair every second.
             if contentSyncApplied != desired || loadTask == nil {
+                // Every container swap is logged at entry and exit (the exit
+                // line rides on `store.load`), so a re-mount is countable
+                // from a field log — the one signal that separates "the mirror
+                // was rebuilt" from "the mirror never fired".
+                Self.log.notice("sync.session transition desired=\(desired, privacy: .public) applied=\(self.contentSyncApplied.map(String.init(describing:)) ?? "nil", privacy: .public) generation=\(self.contentSyncSessionGeneration, privacy: .public)")
                 try await detachContentSyncSession()
                 contentSyncApplied = nil
                 let latestDesired = try readDesiredContentSyncPreference()
@@ -2266,6 +2279,7 @@ actor ConversationStore {
         await MainActor.run { for debouncer in debouncers { debouncer.cancel() } }
         var firstError: Error?
         let coordinator = container.persistentStoreCoordinator
+        let mounted = coordinator.persistentStores.count
         for store in coordinator.persistentStores {
             do { try coordinator.remove(store) }
             catch { if firstError == nil { firstError = error } }
@@ -2274,6 +2288,11 @@ actor ConversationStore {
             mirrorLease?.release()
             mirrorLease = nil
             loadTask = nil
+        }
+        // Silent on the cold-start no-op (nothing was mounted); every real
+        // detach says how many stores went and whether one refused.
+        if mounted > 0 {
+            Self.log.notice("sync.session detach stores=\(mounted, privacy: .public) remaining=\(coordinator.persistentStores.count, privacy: .public) failed=\(firstError != nil, privacy: .public)")
         }
         if let firstError { throw firstError }
     }
@@ -2328,10 +2347,11 @@ actor ConversationStore {
             throw StoreTopologyMismatch(expected: expectedStores, mounted: mountedStores)
         }
 
-        // One-time milestone: what the first-touch store load (sqlite open +
-        // CloudKit metadata on device) actually cost the first caller.
-        // Duration only.
-        Self.log.notice("store.load ms=\(Int(Date().timeIntervalSince(loadStart) * 1000))")
+        // Once per MOUNT, not per process: what the store load (sqlite open +
+        // CloudKit metadata on device) cost, whether this session mirrors, and
+        // which session generation it is — so a field log counts re-mounts
+        // by counting this line. Duration and flags only.
+        Self.log.notice("store.load ms=\(Int(Date().timeIntervalSince(loadStart) * 1000), privacy: .public) cloudKit=\(self.container is NSPersistentCloudKitContainer, privacy: .public) generation=\(self.contentSyncSessionGeneration, privacy: .public)")
 
         #if DEBUG && !os(watchOS)
         // `-ConduckInitializeCloudKitSchema` — one-shot developer flag. Core
@@ -2400,7 +2420,9 @@ actor ConversationStore {
         // per-notification counter log stays 1:1 so storm
         // density is measurable from a field log; lock-guarded because the
         // block is `@Sendable` even though `queue: .main` serializes it.
-        let remoteChangeCount = OSAllocatedUnfairLock(initialState: 0)
+        // PROCESS-WIDE (`Self.remoteChangeCount`), not per mount: a counter
+        // that restarted at 1 on every session swap would hide the swap.
+        let remoteChangeCount = Self.remoteChangeCount
         sessionDebouncers.append(debouncer)
         let remoteObserver = NotificationCenter.default.addObserver(
             forName: .NSPersistentStoreRemoteChange,

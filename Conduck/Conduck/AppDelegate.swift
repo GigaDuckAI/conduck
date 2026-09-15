@@ -24,6 +24,12 @@
 //     .openConversationDeepLink)` → `openWindow(id:)` (Settings is posted on
 //     `.openSettingsWindow` and consumed by MainWindowView's mode swap, not a window).
 //   - `@Environment(\.openWindow) private var openWindow` at App scope.
+//
+// No push registration here, deliberately. iCloud sync imports ride Apple's
+// silent CloudKit pushes, which `NSPersistentCloudKitContainer` receives
+// through its own listener; `NSApp.registerForRemoteNotifications()` was
+// measured (2026-09) to change neither the push topic's category nor delivery
+// timing on macOS, so the app holds no push token of its own.
 
 import AppKit
 import SwiftUI

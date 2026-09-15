@@ -288,15 +288,23 @@ final class CloudSyncMonitor {
     /// stale-error false alarms); live failures + account status drive the surface.
     private func catchUpOnEvents() async {
         let summaries = await ConversationStore.shared.recentSyncEventSummaries()
-        for summary in summaries { record(summary) }
+        for summary in summaries { record(summary, replayed: true) }
     }
 
-    private func record(_ summary: SyncEventSummary) {
+    /// `replayed` marks a summary re-read from the store's event history
+    /// (launch / every foreground) rather than delivered live. The tag is what
+    /// keeps a field log honest: the catch-up re-prints the last N events on
+    /// every activation, and untagged it reads as N fresh setups/imports.
+    private func record(_ summary: SyncEventSummary, replayed: Bool = false) {
+        let prefix = replayed ? "sync[replay]" : "sync"
         if summary.succeeded {
-            log.debug("sync \(summary.redactedLine, privacy: .public)")
+            log.debug("\(prefix, privacy: .public) \(summary.redactedLine, privacy: .public)")
         } else {
-            log.error("sync \(summary.redactedLine, privacy: .public)")
+            log.error("\(prefix, privacy: .public) \(summary.redactedLine, privacy: .public)")
         }
+        // The ring buffer keeps taking replays: it is how events that fired
+        // while the app was suspended (the live observer misses those) reach
+        // the diagnostics screen at all. Duplicates there are the known cost.
         appendToRingBuffer(summary.redactedLine)
     }
 

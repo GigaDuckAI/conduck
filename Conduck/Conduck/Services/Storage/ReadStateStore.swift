@@ -155,7 +155,7 @@ import Foundation
 /// from the storage seam — it opens the shared container for real. Injecting the
 /// writer is what keeps an overlay test from writing files next to the installed
 /// app's.
-protocol ConversationReadStateWriter: Sendable {
+nonisolated protocol ConversationReadStateWriter: Sendable {
     func markConversationViewed(_ id: UUID, at: Date) async
     func acknowledgeConversationFailure(_ id: UUID, attemptID: UUID) async
     func markConversationViewedAndAcknowledged(_ id: UUID, at: Date, attemptID: UUID?) async

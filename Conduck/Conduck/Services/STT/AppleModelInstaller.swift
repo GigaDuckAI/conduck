@@ -162,7 +162,7 @@ enum AppleModelInstaller {
 /// ships no speech assets, so live behaviour isn't deterministic). Production uses
 /// `LiveAppleModelInstaller` (forwards to the static `AppleModelInstaller`); tests
 /// inject a stub that returns a fixed `Locale`, throws, or drives `onProgress`.
-protocol AppleModelInstalling: Sendable {
+nonisolated protocol AppleModelInstalling: Sendable {
     func install(
         engine: AppleOnDeviceEngineMode,
         language: String?,
