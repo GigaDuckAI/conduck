@@ -112,7 +112,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "630432E02FB75BAE00994EC0"
             BuildableName = "ConduckWatchExtension.appex"
-            BlueprintName = "ConduckWatchExtension"
             ReferencedContainer = "container:Conduck.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

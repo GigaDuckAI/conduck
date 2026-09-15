@@ -61,7 +61,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "630432CD2FB759DB00994EC0"
             BuildableName = "ConduckWatch Watch App.app"
-            BlueprintName = "ConduckWatch Watch App"
             ReferencedContainer = "container:Conduck.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -84,7 +83,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "630432CD2FB759DB00994EC0"
             BuildableName = "ConduckWatch Watch App.app"
-            BlueprintName = "ConduckWatch Watch App"
             ReferencedContainer = "container:Conduck.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
