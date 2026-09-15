@@ -7,6 +7,29 @@ and build number Apple shows — and matches `v<version>-<build>` in this
 repository. Versions 1.3 and 1.4 shipped on macOS while iOS moved directly
 from 1.2 to 1.5.
 
+## [1.6.1-14] — the Mac sync fix
+
+App Store build, tagged `v1.6.1-14` on 15 September 2026. 5 commits since 1.6.
+
+### Fixed
+
+- The Mac app now carries the push entitlement macOS needs for iCloud sync. In 1.6
+  the Mac was signed without it, so a conversation or a Work capture made on iPhone,
+  iPad or Apple Watch reached the Mac only at the next scheduled import or when the
+  app was brought to the front. With the entitlement the Mac imports within about a
+  second of a push arriving. Apple's push service can still hold a Mac's
+  notifications for a while; that part is outside the app
+- Mac → iPhone, iPad and Watch, and every direction between the iOS devices, were
+  already immediate and are unchanged
+
+### Developer-facing
+
+- Debug builds log each iCloud import, export and setup event, and a
+  `-ConduckInitializeCloudKitSchema` launch flag fills the CloudKit Development
+  schema before a Production deploy (documented in `docs/qa/qa-mode.md`)
+- Builds with Xcode 27: two protocols gained the isolation annotation the new
+  compiler requires, and the Watch schemes drop an attribute Xcode 27 removes
+
 ## [1.6-13] — the Work release
 
 App Store build, tagged `v1.6-13` on 14 September 2026. 125 commits since 1.5.
