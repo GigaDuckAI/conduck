@@ -35,6 +35,29 @@ The official app is available on the App Store. Conduck-authored application
 code is open source under Apache-2.0. AI and speech-provider usage is billed
 directly by those providers under your own keys.
 
+## Try it in two minutes
+
+Both paths are free. Neither needs an account with us.
+
+**You already run Ollama on a Mac.** The same Wi-Fi is enough.
+
+1. Let Ollama answer on your network. By default it listens on the Mac alone:
+
+   ```bash
+   launchctl setenv OLLAMA_HOST "0.0.0.0:11434"
+   ```
+
+   then quit and reopen Ollama. Newer Ollama builds also offer this as a network toggle in the app's settings.
+2. Find the Mac's address on your network: System Settings → Wi-Fi → Details, or `ipconfig getifaddr en0`. It looks like `192.168.1.20`.
+3. In Conduck, open Settings → Personal AI and add a **Custom endpoint** with the address `http://192.168.1.20:11434`. No key is needed. Test the connection and pick a model from the list it loads.
+4. Ask something.
+
+Plain `http://` works only for a private address and only while you are on that network. That is Apple's rule, and Conduck says so wherever you review the connection. To reach the same server from anywhere, including the car and the Watch away from home, put HTTPS in front of it: [`conduck-connect`](https://github.com/gigaduckai/conduck-connect) walks you through it.
+
+**You have no server yet.** Open Settings → Personal AI and choose **Sign in with OpenRouter**. That creates a key in your own OpenRouter account, and you are chatting in about a minute. A hosted model chats and takes inline images and text files. Agent tools and file exchange need a self-hosted agent.
+
+**You run something else.** Anything that speaks the OpenAI chat API (LM Studio, vLLM, LiteLLM, Open WebUI, OpenClaw, Hermes) connects the same way as Ollama. For an AI of your own, hand the [adapter contract](https://conduck.com/setup/adapter/v1/) to the coding tool that built it; `conduck-connect --check-adapter` verifies the result before you pair.
+
 ## Why Conduck
 
 - **Ask from anywhere.** Use the Action Button, Control Center, or Shortcuts on iPhone and iPad, or ask from the Mac menu bar, a global hotkey, Apple Watch, or CarPlay.
