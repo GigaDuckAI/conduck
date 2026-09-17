@@ -239,6 +239,11 @@ struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #if os(iOS)
     @Environment(\.phoneWorkbenchRouter) private var phoneWorkbenchRouter
+    /// Work's copy of the configured flag. This host is its canonical writer
+    /// (`refreshConfiguredFlag()`); the read-back below covers a gateway saved
+    /// through Work's OWN Settings presenter, which never dismisses through
+    /// `handleSettingsDismiss()`.
+    @Environment(\.workbenchGatewayAvailability) private var workbenchGatewayAvailability
     #endif
     /// The wide shell's model (iPad); the phone reaches the same router
     /// through `phoneWorkbenchRouter`. Read only for "Show in Work".
@@ -373,6 +378,13 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
                 Task { await refreshConfiguredFlag() }
             }
+            #if os(iOS)
+            .onChange(of: workbenchGatewayAvailability?.canSendAnywhere) { _, canSend in
+                // Cannot loop: the refresh writes the value it just read back.
+                guard let canSend, canSend != isRemoteAgentConfigured else { return }
+                Task { await refreshConfiguredFlag() }
+            }
+            #endif
             .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
                 consumeGatewayFixRoute()
             }
@@ -841,6 +853,13 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .settingsDidChangeRemotely)) { _ in
                 Task { await refreshConfiguredFlag() }
             }
+            #if os(iOS)
+            .onChange(of: workbenchGatewayAvailability?.canSendAnywhere) { _, canSend in
+                // Cannot loop: the refresh writes the value it just read back.
+                guard let canSend, canSend != isRemoteAgentConfigured else { return }
+                Task { await refreshConfiguredFlag() }
+            }
+            #endif
             .onReceive(NotificationCenter.default.publisher(for: .openGatewayFixRoute)) { _ in
                 consumeGatewayFixRoute()
             }
@@ -1352,6 +1371,9 @@ struct ContentView: View {
         // are provably the same question — they drifted once, and the macOS half
         // is in a file the suite never compiles.
         isRemoteAgentConfigured = GatewayGate.canSendAnywhere(configured: refs)
+        #if os(iOS)
+        workbenchGatewayAvailability?.update(canSendAnywhere: isRemoteAgentConfigured)
+        #endif
 
         // Cross-device "set up later, then it synced" path: a gateway just
         // appeared where there was none. Gate on the FIRST load (an

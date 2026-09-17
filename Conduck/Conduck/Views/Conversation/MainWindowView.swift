@@ -329,6 +329,11 @@ struct MainWindowView: View {
         if let personalWorkbenchModel {
             persistentSplitView
                 .modifier(workboardExperience(for: personalWorkbenchModel).presentationModifier)
+                // AFTER the presentation chain, never before it: an environment
+                // value reaches descendants only, and the tour blocker inside
+                // that modifier must see the flag or it tours over the
+                // connect-your-AI state on an unconfigured Mac.
+                .environment(\.workDeskCanSendAnywhere, coordinator.hasAnyConfiguredGateway)
         } else {
             persistentSplitView
         }
@@ -578,6 +583,10 @@ struct MainWindowView: View {
             if let personalWorkbenchModel {
                 if mountsWorkLayer {
                     workboardExperience(for: personalWorkbenchModel).detailColumn
+                        // Same flag and same door as this window's Chats empty
+                        // state: Work with no gateway is the identical situation.
+                        .environment(\.workDeskCanSendAnywhere, coordinator.hasAnyConfiguredGateway)
+                        .environment(\.workDeskConnectAI, openGuidedSetupFromEmptyState)
                         .environment(\.workDeskConversationResolver, workConversationResolver)
                         .environment(\.workDeskSidebarIsHosted, true)
                         .environment(\.workDeskNavigationIsExternal, true)
@@ -1944,14 +1953,17 @@ struct MainWindowView: View {
     // MARK: - Empty states
 
     private var unconfiguredEmptyState: some View {
-        UnconfiguredEmptyState(mascot: hostMascot, mascotHeight: 140) {
-            // Deep-link straight into guided setup. Open Settings on Personal AI
-            // too (so the primer's "Set up manually" has the list to land on),
-            // then present the overlay — same view owns `guidedHost`, no latch.
-            settingsInitialCategory = .personalAI
-            showingSettings = true
-            guidedHost.present()
-        }
+        UnconfiguredEmptyState(mascot: hostMascot, mascotHeight: 140, action: openGuidedSetupFromEmptyState)
+    }
+
+    /// The one door from an unconfigured empty state — Chats' and Work's —
+    /// into guided setup. Deep-links straight into it, opening Settings on
+    /// Personal AI too (so the primer's "Set up manually" has the list to land
+    /// on), then presents the overlay — this view owns `guidedHost`, no latch.
+    private func openGuidedSetupFromEmptyState() {
+        settingsInitialCategory = .personalAI
+        showingSettings = true
+        guidedHost.present()
     }
 
     /// New-chat empty state — mirrors the iOS `ConversationThreadView.emptyThreadHint`

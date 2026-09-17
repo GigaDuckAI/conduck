@@ -48,6 +48,54 @@ extension EnvironmentValues {
     }
 }
 
+#if os(iOS)
+/// Chats' WRITE handle for `WorkbenchGatewayAvailability`. Injected on the Chats
+/// layer of EVERY iOS layout — unlike `personalWorkbenchModel`, whose presence
+/// doubles as the wide-layout flag, this one carries no layout meaning.
+private struct WorkbenchGatewayAvailabilityKey: EnvironmentKey {
+    static let defaultValue: WorkbenchGatewayAvailability? = nil
+}
+
+extension EnvironmentValues {
+    var workbenchGatewayAvailability: WorkbenchGatewayAvailability? {
+        get { self[WorkbenchGatewayAvailabilityKey.self] }
+        set { self[WorkbenchGatewayAvailabilityKey.self] = newValue }
+    }
+}
+
+/// `GatewayGate.canSendAnywhere` shared between the two iOS sections. Chats owns
+/// the canonical refresh (`ContentView.refreshConfiguredFlag()`) and writes the
+/// answer here; Work reads it to decide between the desk and the
+/// connect-your-AI state. `refresh()` exists for the moments Chats never sees —
+/// the shell's first mount and a Settings screen opened FROM Work — and asks
+/// the same predicate of the same configured roster, so the two writers cannot
+/// disagree. Starts `false` like Chats' flag: an unconfigured beginner state
+/// until the first read, never a desk that a send would then refuse.
+@MainActor
+@Observable
+final class WorkbenchGatewayAvailability {
+    private(set) var canSendAnywhere = false
+
+    @ObservationIgnored private let configuredRefs: @Sendable () async -> [RemoteAgentRef]
+
+    init(configuredRefs: @escaping @Sendable () async -> [RemoteAgentRef] = {
+        await SettingsManager.shared.configuredRemoteAgentRefs()
+    }) {
+        self.configuredRefs = configuredRefs
+    }
+
+    func update(canSendAnywhere: Bool) {
+        guard self.canSendAnywhere != canSendAnywhere else { return }
+        self.canSendAnywhere = canSendAnywhere
+    }
+
+    func refresh() async {
+        let refs = await configuredRefs()
+        update(canSendAnywhere: GatewayGate.canSendAnywhere(configured: refs))
+    }
+}
+#endif
+
 private struct WorkbenchNavigationTitleModifier: ViewModifier {
     let title: Text
     let isActive: Bool
@@ -957,6 +1005,9 @@ final class PersonalWorkbenchModel {
     var router: PersonalWorkbenchRouter
     let repository: WorkboardLiveRepository
     let workboardViewModel: WorkboardViewModel
+    #if os(iOS)
+    let gatewayAvailability = WorkbenchGatewayAvailability()
+    #endif
 
     @ObservationIgnored private let refreshCoordinator: WorkCaptureRefreshCoordinator
 
@@ -1270,7 +1321,8 @@ struct PersonalWorkbenchView<Chats: View>: View {
             // resizing an iPad cannot destroy a Settings editor opened in Work.
             .modifier(WorkSettingsPresentationModifier(
                 router: model.router,
-                tutorialSession: model.workboardViewModel.tutorialSession
+                tutorialSession: model.workboardViewModel.tutorialSession,
+                gatewayAvailability: model.gatewayAvailability
             ))
             #endif
             // The window view the system's share UI pops out of. It has to be a
@@ -1324,6 +1376,11 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 // serialized pass whenever this root experience is mounted.
                 model.scheduleRefresh(includeCaptureDrain: true)
                 reconcileDurableWorkStorage()
+                #if os(iOS)
+                // Work may be the first section a deep link shows; give it a
+                // real answer without waiting for Chats' initial load.
+                await model.gatewayAvailability.refresh()
+                #endif
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == ScenePhase.active {
@@ -1523,6 +1580,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
                             model.router.destination == .chats
                         )
                         .environment(\.phoneWorkbenchRouter, DeviceCapabilities.isiPad ? nil : model.router)
+                        .environment(\.workbenchGatewayAvailability, model.gatewayAvailability)
                         .toolbar(DeviceCapabilities.isiPad ? .visible : .hidden, for: .tabBar)
                 }
 
@@ -1537,6 +1595,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
                             model.router.destination == .work
                         )
                         .environment(\.phoneWorkbenchRouter, DeviceCapabilities.isiPad ? nil : model.router)
+                        .environment(\.workDeskCanSendAnywhere, model.gatewayAvailability.canSendAnywhere)
                         .toolbar(DeviceCapabilities.isiPad ? .visible : .hidden, for: .tabBar)
                 }
             }
@@ -1577,6 +1636,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
                     model.router.destination == .work
                 )
                 .environment(\.personalWorkbenchModel, model)
+                .environment(\.workDeskCanSendAnywhere, model.gatewayAvailability.canSendAnywhere)
                 .workbenchDestinationLayer(
                     isActive: model.router.destination == .work,
                     reduceMotion: reduceMotion
@@ -1588,6 +1648,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
                     model.router.destination == .chats
                 )
                 .environment(\.personalWorkbenchModel, model)
+                .environment(\.workbenchGatewayAvailability, model.gatewayAvailability)
                 .workbenchDestinationLayer(
                     isActive: model.router.destination == .chats,
                     reduceMotion: reduceMotion
@@ -1614,6 +1675,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
 private struct WorkSettingsPresentationModifier: ViewModifier {
     let router: PersonalWorkbenchRouter
     let tutorialSession: WorkboardTutorialSession
+    let gatewayAvailability: WorkbenchGatewayAvailability
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var settingsViewModel = SettingsViewModel()
     @State private var presentation: Presentation?
@@ -1621,25 +1683,47 @@ private struct WorkSettingsPresentationModifier: ViewModifier {
     private struct Presentation: Identifiable {
         let id = UUID()
         let usesFullScreen: Bool
+        /// The connect-your-AI door: land on Personal AI and raise the guided
+        /// setup cover through the container's own consume-once latch — the
+        /// same deep link Chats' empty state and locked composer use.
+        var autoOpenGuidedSetup = false
     }
 
     func body(content: Content) -> some View {
         content
-            .environment(\.workDeskOpenSettings, openSettings)
+            .environment(\.workDeskOpenSettings, { openSettings() })
+            .environment(\.workDeskConnectAI, { openSettings(autoOpenGuidedSetup: true) })
             .sheet(item: sheetPresentation) { route in
-                SettingsView(viewModel: settingsViewModel)
+                SettingsView(
+                    viewModel: settingsViewModel,
+                    initialCategory: route.autoOpenGuidedSetup ? .personalAI : nil,
+                    autoOpenGuidedSetup: route.autoOpenGuidedSetup
+                )
                     .id(route.id)
                     .environment(\.workbenchDestinationIsActive, true)
                     .interactiveDismissDisabled(settingsViewModel.editorHasUnsavedChanges)
             }
             .fullScreenCover(item: fullScreenPresentation) { route in
-                IpadSettingsView(viewModel: settingsViewModel, onDone: { presentation = nil })
+                IpadSettingsView(
+                    viewModel: settingsViewModel,
+                    initialCategory: route.autoOpenGuidedSetup ? .personalAI : nil,
+                    autoOpenGuidedSetup: route.autoOpenGuidedSetup,
+                    onDone: { presentation = nil }
+                )
                     .id(route.id)
                     .environment(\.workbenchDestinationIsActive, true)
             }
             .onChange(of: router.destination) { _, destination in
                 guard destination != .work, !settingsViewModel.editorHasUnsavedChanges else { return }
                 presentation = nil
+            }
+            .onChange(of: presentation?.id) { _, id in
+                // A gateway saved through THIS presenter never passes Chats'
+                // settings-dismiss refresh, so re-ask the roster here. Any
+                // dismissal, not only the guided door: the ordinary Settings
+                // screen reaches the same editors.
+                guard id == nil else { return }
+                Task { await gatewayAvailability.refresh() }
             }
             .appReviewBusy(presentation != nil)
             .workboardTutorialBusy(
@@ -1649,10 +1733,11 @@ private struct WorkSettingsPresentationModifier: ViewModifier {
             )
     }
 
-    private func openSettings() {
+    private func openSettings(autoOpenGuidedSetup: Bool = false) {
         guard router.destination == .work else { return }
         presentation = Presentation(
-            usesFullScreen: horizontalSizeClass == .regular && DeviceCapabilities.isiPad
+            usesFullScreen: horizontalSizeClass == .regular && DeviceCapabilities.isiPad,
+            autoOpenGuidedSetup: autoOpenGuidedSetup
         )
     }
 

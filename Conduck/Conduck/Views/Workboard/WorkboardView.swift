@@ -28,6 +28,23 @@ private struct WorkDeskOpenSettingsKey: EnvironmentKey {
     static let defaultValue: (() -> Void)? = nil
 }
 
+/// `GatewayGate.canSendAnywhere` as the host answers it. The desk column is
+/// mounted by three shells with two different truth sources — the macOS window
+/// reads its coordinator, the iOS workbench mirrors Chats' flag — so the answer
+/// arrives as an environment value rather than a second computation that could
+/// drift. Defaults to `true`: previews, tests and standalone hosts render the
+/// desk, and only a host that knows better locks it.
+private struct WorkDeskCanSendAnywhereKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+/// The host's door into guided gateway setup — the same door its Chats empty
+/// state uses. Nil where no host supplies one; the column then draws the
+/// unconfigured state with an inert button rather than inventing a route.
+private struct WorkDeskConnectAIKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
 extension EnvironmentValues {
     var workDeskSidebarIsHosted: Bool {
         get { self[WorkDeskSidebarHostKey.self] }
@@ -42,6 +59,16 @@ extension EnvironmentValues {
     var workDeskOpenSettings: (() -> Void)? {
         get { self[WorkDeskOpenSettingsKey.self] }
         set { self[WorkDeskOpenSettingsKey.self] = newValue }
+    }
+
+    var workDeskCanSendAnywhere: Bool {
+        get { self[WorkDeskCanSendAnywhereKey.self] }
+        set { self[WorkDeskCanSendAnywhereKey.self] = newValue }
+    }
+
+    var workDeskConnectAI: (() -> Void)? {
+        get { self[WorkDeskConnectAIKey.self] }
+        set { self[WorkDeskConnectAIKey.self] = newValue }
     }
 }
 
@@ -309,6 +336,7 @@ struct WorkboardPresentationModifier: ViewModifier {
     let reduceMotion: Bool
 
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.workDeskCanSendAnywhere) private var canSendAnywhere
 
     private var tutorial: WorkboardTutorialSession { viewModel.tutorialSession }
 
@@ -378,9 +406,14 @@ struct WorkboardPresentationModifier: ViewModifier {
         return WorkboardTutorialAvailability(
             isActive: isActive,
             isReady: viewModel.hasLoadedDesk && !viewModel.isLoading && scenePhase == .active,
+            // An unconfigured device shows the connect-your-AI prompt in place
+            // of the desk; the tour must not cover it. A presentation blocker,
+            // not an automatic one: that also pulls a tour already on screen
+            // when the last gateway leaves through sync, and `isRequested`
+            // survives either way, so the tour resumes once a gateway lands.
             isBlocked: (!viewModel.hasLoadedDesk && viewModel.isLoading) || viewModel.isCapturingIntoDesk
                 || viewModel.notice != nil || workspace.blocksWorkTourPresentation
-                || WorkVoiceCaptureLaunchRoute.shared.isPending,
+                || WorkVoiceCaptureLaunchRoute.shared.isPending || !canSendAnywhere,
             blocksAutomatic: workspace.isShowingConversation || workspace.isSearching
                 || workspace.isSelecting || workspace.scope != .all
                 || viewModel.hasComposerDraft || workspace.materialRevealRequest != nil
@@ -429,10 +462,20 @@ struct WorkboardPresentationModifier: ViewModifier {
 /// The desk as its own view node, so a Work state change invalidates this
 /// column alone rather than whichever shell mounts it. The load state and the
 /// desk's material are read HERE rather than in that shell.
+///
+/// A device with no usable gateway gets the same connect-your-AI state Chats
+/// shows, ahead of every desk arm: Work's only route to an AI is a project
+/// brief, and a desk with nowhere to send is the Chats empty state's exact
+/// situation, so it draws the same screen and opens the same guided setup.
 struct WorkboardDetailColumn: View {
     @Bindable var viewModel: WorkboardViewModel
 
     let isActive: Bool
+
+    @Environment(\.workDeskCanSendAnywhere) private var canSendAnywhere
+    @Environment(\.workDeskConnectAI) private var connectAI
+    /// Shuffle-bag pose, drawn once at `@State` creation like every host's.
+    @State private var hostMascot = MascotShuffleBag.next()
 
     /// The desk is titled by the workspace it is, never by the row behind it:
     /// the desk record carries no title or objective for anything to display.
@@ -443,6 +486,18 @@ struct WorkboardDetailColumn: View {
 
     @ViewBuilder
     var body: some View {
+        if !canSendAnywhere {
+            UnconfiguredEmptyState(mascot: hostMascot) { connectAI?() }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AppColors.background.ignoresSafeArea())
+                .workbenchNavigationTitle(Text(Self.deskTitle), isActive: isActive)
+        } else {
+            deskPresentation
+        }
+    }
+
+    @ViewBuilder
+    private var deskPresentation: some View {
         switch viewModel.deskPresentation {
         case .loading:
             VStack(spacing: 14) {

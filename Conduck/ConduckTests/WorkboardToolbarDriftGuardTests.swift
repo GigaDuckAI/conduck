@@ -273,16 +273,18 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
         let body = try RefusalLaneSource.trailingClosure(
             after: "func body(content: Content) -> some View", in: modifier, path: hostPath
         )
-        XCTAssertTrue(body.contains(".environment(\\.workDeskOpenSettings, openSettings)"))
+        XCTAssertTrue(body.contains(".environment(\\.workDeskOpenSettings, { openSettings() })"))
         let compact = try RefusalLaneSource.trailingClosure(
             after: ".sheet(item: sheetPresentation)", in: body, path: hostPath
         )
-        XCTAssertTrue(compact.contains("SettingsView(viewModel: settingsViewModel)"))
+        XCTAssertTrue(compact.contains("SettingsView(") && compact.contains("viewModel: settingsViewModel,"),
+                      "The compact container is the shared SettingsView on the shared view model")
         XCTAssertTrue(compact.contains(".interactiveDismissDisabled(settingsViewModel.editorHasUnsavedChanges)"))
         let wide = try RefusalLaneSource.trailingClosure(
             after: ".fullScreenCover(item: fullScreenPresentation)", in: body, path: hostPath
         )
-        XCTAssertTrue(wide.contains("IpadSettingsView(viewModel: settingsViewModel, onDone:"))
+        XCTAssertTrue(wide.contains("IpadSettingsView(") && wide.contains("viewModel: settingsViewModel,"))
+        XCTAssertTrue(wide.contains("onDone: { presentation = nil }"))
     }
 
     func testWorkSettingsFreezesItsStyleAndDismissesOnlyCleanEditorsOnConversationRoutes() throws {
