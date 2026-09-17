@@ -719,18 +719,10 @@ struct ContentView: View {
                         .accessibilityLabel("Conversations")  // xcstrings
                         .accessibilityIdentifier("toolbar.conversations")  // stable QA target (non-localized)
                     }
-                    // Open Work — iPhone only; compact iPad routes through its
-                    // native tab bar and receives no router. Declared BEFORE New
-                    // conversation so it sits to its left: the compose glyph is
-                    // trailing-most on every compact shell, and this bar keeps
-                    // exactly ONE dropdown — the gateway title. The thread's own
-                    // Copy item stays off the phone bar for the same budget.
-                    if let router = phoneWorkbenchRouter {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            PhoneWorkbenchFlipButton(router: router, from: .chats)
-                        }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
+                    // New conversation groups beside Conversations on the iPhone
+                    // (leading, declared right after it so that is the order).
+                    // Compact iPad keeps it trailing beside its native tab bar.
+                    ToolbarItem(placement: phoneWorkbenchRouter == nil ? .topBarTrailing : .topBarLeading) {
                         Button {
                             guard workbenchDestinationIsActive else { return }
                             startNewConversation()
@@ -739,6 +731,16 @@ struct ContentView: View {
                         }
                         .accessibilityLabel("New conversation")  // xcstrings: chat-ui
                         .accessibilityIdentifier("toolbar.newConversation")  // stable QA target (non-localized)
+                    }
+                    // Open Work — iPhone only; compact iPad routes through its
+                    // native tab bar and receives no router. The lone trailing
+                    // item on the phone bar, which keeps exactly ONE dropdown —
+                    // the gateway title. The thread's own Copy item stays off
+                    // the phone bar for the same budget.
+                    if let router = phoneWorkbenchRouter {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            PhoneWorkbenchFlipButton(router: router, from: .chats)
+                        }
                     }
                 }
             }

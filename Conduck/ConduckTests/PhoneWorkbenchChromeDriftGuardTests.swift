@@ -2,12 +2,13 @@
 // Conduck
 // PhoneWorkbenchChromeDriftGuardTests.swift
 //
-// Source guards for the compact conversation bar. One leading button opens
-// the Conversations sheet; the trailing edge holds the iPhone's Open Work
-// flip button and then New conversation, in that order, so the compose glyph
-// stays trailing-most on every compact shell and the bar keeps exactly one
-// dropdown — the gateway title. The thread's Copy item never joins this bar:
-// on the phone the whole-thread copy rides in each bubble's actions menu.
+// Source guards for the compact conversation bar. The leading edge opens the
+// Conversations sheet and, on the iPhone, holds New conversation right beside
+// it (compact iPad keeps New conversation trailing beside its native tab bar);
+// the iPhone's trailing edge holds only the Open Work flip button, so the bar
+// keeps exactly one dropdown — the gateway title. The thread's Copy item never
+// joins this bar: on the phone the whole-thread copy rides in each bubble's
+// actions menu.
 
 import XCTest
 
@@ -70,19 +71,19 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
                        "Every compact Chat item must sit inside the active-destination branch")
     }
 
-    /// One button in the leading slot opens the list, looks like the sidebar
-    /// toggle, and keeps both of its accessibility names.
-    func testConversationsButtonIsTheOnlyLeadingItemAndKeepsItsIdentity() throws {
+    /// The one unconditionally leading button opens the list, looks like the
+    /// sidebar toggle, and keeps both of its accessibility names.
+    func testConversationsButtonIsTheOnlyUnconditionalLeadingItemAndKeepsItsIdentity() throws {
         let toolbar = try phoneToolbar()
 
         XCTAssertEqual(
             occurrences(of: "ToolbarItem(placement: .topBarLeading)", in: toolbar), 1,
-            "The leading slot holds exactly one item. A second leading button re-crowds the bar "
-            + "this layout exists to relieve; New conversation is trailing on every compact shell."
+            "Conversations must keep its unconditional leading slot; New conversation is the only "
+            + "other leading item and it chooses its slot by shell."
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             toolbar.contains("? .topBarTrailing : .topBarLeading"),
-            "New conversation no longer chooses its slot by shell — it is trailing everywhere."
+            "New conversation is leading on iPhone and keeps its trailing slot on compact iPad."
         )
 
         let leading = try RefusalLaneSource.trailingClosure(
@@ -137,15 +138,16 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
         )
     }
 
-    /// Open Work is phone-only and declared before New conversation, so the
-    /// compose glyph is trailing-most and the flip sits to its left.
-    func testOpenWorkFlipIsPhoneOnlyAndSitsLeftOfNewConversation() throws {
+    /// Open Work is phone-only and the phone bar's lone trailing item; New
+    /// conversation sits leading, declared right after Conversations.
+    func testOpenWorkFlipIsThePhoneBarsOnlyTrailingItem() throws {
         let toolbar = try phoneToolbar()
         let source = try RefusalLaneSource.source(at: Self.path)
 
         XCTAssertEqual(
-            occurrences(of: "ToolbarItem(placement: .topBarTrailing)", in: toolbar), 2,
-            "The trailing edge holds exactly two items: Open Work (phone only) and New conversation."
+            occurrences(of: "ToolbarItem(placement: .topBarTrailing)", in: toolbar), 1,
+            "The phone's trailing edge holds exactly one item: Open Work. New conversation is "
+            + "leading there; a second unconditional trailing item re-crowds the bar."
         )
         XCTAssertEqual(occurrences(of: "PhoneWorkbenchFlipButton(", in: toolbar), 1)
 
@@ -162,12 +164,18 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
             + "opens the OTHER section, so a wrong `from:` sends the person to where they already are."
         )
 
-        let flipAt = try XCTUnwrap(toolbar.range(of: "PhoneWorkbenchFlipButton(")?.lowerBound)
+        let conversationsAt = try XCTUnwrap(toolbar.range(of: "toolbar.conversations")?.lowerBound)
         let newChatAt = try XCTUnwrap(toolbar.range(of: "toolbar.newConversation")?.lowerBound)
+        let flipAt = try XCTUnwrap(toolbar.range(of: "PhoneWorkbenchFlipButton(")?.lowerBound)
         XCTAssertLessThan(
-            flipAt, newChatAt,
-            "Open Work must be declared before New conversation: trailing items lay out in "
-            + "declaration order, and the compose glyph belongs at the very edge on every compact shell."
+            conversationsAt, newChatAt,
+            "Conversations must be declared before New conversation: leading items lay out in "
+            + "declaration order, and the list button belongs at the very edge."
+        )
+        XCTAssertLessThan(
+            newChatAt, flipAt,
+            "New conversation must be declared before Open Work, so the bar reads leading to "
+            + "trailing in source order."
         )
 
         for retired in [
@@ -182,13 +190,19 @@ final class PhoneWorkbenchChromeDriftGuardTests: XCTestCase {
         }
     }
 
-    func testNewConversationIsTrailingAndRetainsItsAction() throws {
+    /// New conversation joins Conversations on the leading edge only when the
+    /// phone navigation is present; compact iPad keeps it trailing.
+    func testNewConversationIsLeadingOnPhoneAndRetainsItsAction() throws {
         let toolbar = try phoneToolbar()
-        let afterFlip = try XCTUnwrap(toolbar.range(of: "PhoneWorkbenchFlipButton(")).upperBound
-        let tail = String(toolbar[afterFlip...])
+
+        let placement = "ToolbarItem(placement: phoneWorkbenchRouter == nil ? .topBarTrailing : .topBarLeading)"
+        XCTAssertEqual(
+            occurrences(of: placement, in: toolbar), 1,
+            "New conversation must be leading on iPhone and retain its trailing slot on compact iPad."
+        )
         let newChat = try RefusalLaneSource.trailingClosure(
-            after: "ToolbarItem(placement: .topBarTrailing)",
-            in: tail,
+            after: placement,
+            in: toolbar,
             path: Self.path
         )
 
