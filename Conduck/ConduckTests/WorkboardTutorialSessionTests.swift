@@ -82,28 +82,24 @@ final class WorkboardTutorialSessionTests: XCTestCase {
     }
 
     #if os(iOS)
-    func testPhoneSectionMenuClaimsFromAVisibleUserSelectionOnly() async {
-        let claimed = expectation(description: "Phone control claims")
+    /// The iPhone flip button calls `selectDestination` — the same explicit
+    /// selection as the wide switch. Only its first Chats → Work tap claims.
+    func testPhoneFlipClaimsFromAnExplicitChatsToWorkSelectionOnly() async {
+        let claimed = expectation(description: "Phone flip claims")
         let (router, session) = makeRouter { claimed.fulfill(); return true }
-        router.selectPhoneSection(.work)
+        // Re-selecting the current section is not a Chats → Work flip.
+        router.selectDestination(.chats)
         XCTAssertEqual(router.destination, .chats)
         XCTAssertFalse(session.isEligibleVisit)
-        router.togglePhoneSection(for: .chats)
-        router.selectPhoneSection(.chats)
-        XCTAssertFalse(session.isEligibleVisit)
 
-        router.togglePhoneSection(for: .chats)
-        router.selectPhoneSection(.work)
+        router.selectDestination(.work)
         await fulfillment(of: [claimed], timeout: 1)
         XCTAssertEqual(router.destination, .work)
-        XCTAssertNil(router.expandedPhoneSection)
         XCTAssertTrue(session.isPresented(available))
 
-        router.togglePhoneSection(for: .work)
-        router.selectPhoneSection(.chats)
+        router.selectDestination(.chats)
         XCTAssertFalse(session.isRequested)
-        router.togglePhoneSection(for: .chats)
-        router.selectPhoneSection(.work)
+        router.selectDestination(.work)
         XCTAssertFalse(session.isEligibleVisit)
         XCTAssertNil(session.beginChatToWorkTransition())
     }

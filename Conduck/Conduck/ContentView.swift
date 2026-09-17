@@ -601,13 +601,6 @@ struct ContentView: View {
 
                     threadContent
                 }
-
-                #if os(iOS)
-                // Last sibling: the thread contributes Copy conversation to
-                // this same bar. Collect section navigation after that item so
-                // it stays at the trailing edge when the first turn appears.
-                phoneSectionControlHost
-                #endif
             }
             #if os(iOS)
             .safeAreaInset(edge: .bottom) {
@@ -676,13 +669,6 @@ struct ContentView: View {
                 }
             }
             #endif
-            #if os(iOS)
-            .overlay {
-                if let router = phoneWorkbenchRouter {
-                    PhoneWorkbenchSectionOverlay(router: router, destination: .chats)
-                }
-            }
-            #endif
             .alert(
                 Text(String(localized: LocalizedStringResource(
                     "send.error.mintFailed.title",
@@ -712,9 +698,6 @@ struct ContentView: View {
                         gatewayTitleControl
                             .lineLimit(1)
                             .truncationMode(.middle)
-                            .simultaneousGesture(TapGesture().onEnded {
-                                phoneWorkbenchRouter?.dismissPhoneSection(for: .chats)
-                            })
                     }
                     // Conversations. The glyph is `sidebar.leading` for family
                     // resemblance with the system sidebar toggle the iPad split view
@@ -729,7 +712,6 @@ struct ContentView: View {
                     ToolbarItem(placement: .topBarLeading) {
                         Button {
                             guard workbenchDestinationIsActive else { return }
-                            phoneWorkbenchRouter?.dismissPhoneSection(for: .chats)
                             showingList = true
                         } label: {
                             Image(systemName: "sidebar.leading")
@@ -737,12 +719,20 @@ struct ContentView: View {
                         .accessibilityLabel("Conversations")  // xcstrings
                         .accessibilityIdentifier("toolbar.conversations")  // stable QA target (non-localized)
                     }
-                    // iPhone groups New Chat beside Conversations. Compact iPad
-                    // keeps its existing trailing action and native tab bar.
-                    ToolbarItem(placement: phoneWorkbenchRouter == nil ? .topBarTrailing : .topBarLeading) {
+                    // Open Work — iPhone only; compact iPad routes through its
+                    // native tab bar and receives no router. Declared BEFORE New
+                    // conversation so it sits to its left: the compose glyph is
+                    // trailing-most on every compact shell, and this bar keeps
+                    // exactly ONE dropdown — the gateway title. The thread's own
+                    // Copy item stays off the phone bar for the same budget.
+                    if let router = phoneWorkbenchRouter {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            PhoneWorkbenchFlipButton(router: router, from: .chats)
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             guard workbenchDestinationIsActive else { return }
-                            phoneWorkbenchRouter?.dismissPhoneSection(for: .chats)
                             startNewConversation()
                         } label: {
                             Image(systemName: "square.and.pencil")
@@ -859,12 +849,6 @@ struct ContentView: View {
             }
             .onAppear { consumeGatewayFixRoute() }
             #if os(iOS)
-            .onDisappear { phoneWorkbenchRouter?.dismissPhoneSection(for: .chats) }
-            .onChange(of: currentConversationID) { _, _ in phoneWorkbenchRouter?.dismissPhoneSection(for: .chats) }
-            .onChange(of: showingList) { _, shown in
-                if shown { phoneWorkbenchRouter?.dismissPhoneSection(for: .chats) }
-            }
-            .onChange(of: settingsRoute?.id) { _, _ in phoneWorkbenchRouter?.dismissPhoneSection(for: .chats) }
             .onChange(of: detailVM?.isAwaitingReply) { old, new in
                 handleInFlightHaptic(from: old, to: new)
             }
@@ -873,19 +857,6 @@ struct ContentView: View {
     }
 
     #if os(iOS)
-    @ViewBuilder
-    private var phoneSectionControlHost: some View {
-        if let router = phoneWorkbenchRouter, router.destination == .chats {
-            Color.clear
-                .frame(width: 0, height: 0)
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        PhoneWorkbenchSectionButton(router: router, destination: .chats)
-                    }
-                }
-        }
-    }
-
     /// The conversation the haptic observer last saw, so a thread SWITCH (which
     /// swaps `detailVM` and thus changes the observed `isAwaitingReply`) can be
     /// told apart from a genuine send/receive on the current thread.

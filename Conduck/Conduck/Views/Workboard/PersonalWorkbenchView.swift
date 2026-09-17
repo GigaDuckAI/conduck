@@ -34,8 +34,8 @@ import UIKit
 /// NavigationSplitView; the wide iOS shell injects it into BOTH of its mounted
 /// layers, and each layer's own navigation container is what declares the
 /// wide section control. Compact layouts omit this model; iPhone supplies its
-/// own `phoneWorkbenchRouter` for the expandable section control, while compact
-/// iPad uses the native tab bar. The optional default also keeps
+/// own `phoneWorkbenchRouter` for the icon-only flip button that opens the
+/// other section, while compact iPad uses the native tab bar. The optional default also keeps
 /// MainWindowView usable in isolated previews and tests.
 private struct PersonalWorkbenchModelKey: EnvironmentKey {
     static let defaultValue: PersonalWorkbenchModel? = nil
@@ -423,9 +423,6 @@ final class PersonalWorkbenchRouter {
         didSet {
             guard destination != oldValue else { return }
             tutorialSession?.setDestinationActive(destination == .work)
-            #if os(iOS)
-            dismissPhoneSection()
-            #endif
             guard destination != .work else { return }
             // Leaving Work retires any reveal still loading, so it cannot
             // select a thread under the Chats the person just returned to.
@@ -444,8 +441,10 @@ final class PersonalWorkbenchRouter {
 
     @ObservationIgnored var tutorialSession: WorkboardTutorialSession?
 
-    /// Only the person's section control can introduce Work. Capture routes
-    /// and deep links set the destination directly and never request a tour.
+    /// Only the person's section control — the wide Chats|Work switch, the
+    /// compact iPad tab bar, the iPhone flip button — can introduce Work.
+    /// Capture routes and deep links set the destination directly and never
+    /// request a tour.
     func selectDestination(_ selection: Destination) {
         if destination == .chats && selection == .work {
             tutorialSession?.beginChatToWorkTransition()
@@ -453,37 +452,6 @@ final class PersonalWorkbenchRouter {
         destination = selection
     }
 
-    #if os(iOS)
-    /// Expansion belongs to the section that opened it. A deep link or a stale
-    /// button from the departing tab cannot reopen or select on its behalf.
-    private(set) var expandedPhoneSection: Destination?
-
-    func isPhoneSectionExpanded(for owner: Destination) -> Bool {
-        expandedPhoneSection == owner && destination == owner
-    }
-
-    func togglePhoneSection(for owner: Destination) {
-        guard destination == owner else { return }
-        expandedPhoneSection = isPhoneSectionExpanded(for: owner) ? nil : owner
-    }
-
-    func dismissPhoneSection() {
-        expandedPhoneSection = nil
-    }
-
-    /// A departing tab may finish disappearing after the next one is active.
-    /// Its cleanup can close only its own expansion, never the next tab's.
-    func dismissPhoneSection(for owner: Destination) {
-        guard expandedPhoneSection == owner else { return }
-        dismissPhoneSection()
-    }
-
-    func selectPhoneSection(_ selection: Destination) {
-        guard isPhoneSectionExpanded(for: destination) else { return }
-        dismissPhoneSection()
-        selectDestination(selection)
-    }
-    #endif
     var materialPresentation: MaterialPresentation?
     var previewNotice: PreviewNotice?
 
@@ -1358,9 +1326,6 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 reconcileDurableWorkStorage()
             }
             .onChange(of: scenePhase) { _, phase in
-                #if os(iOS)
-                if phase != .active { model.router.dismissPhoneSection() }
-                #endif
                 if phase == ScenePhase.active {
                     model.scheduleRefresh(includeCaptureDrain: true)
                     reconcileDurableWorkStorage()
@@ -1686,7 +1651,6 @@ private struct WorkSettingsPresentationModifier: ViewModifier {
 
     private func openSettings() {
         guard router.destination == .work else { return }
-        router.dismissPhoneSection(for: .work)
         presentation = Presentation(
             usesFullScreen: horizontalSizeClass == .regular && DeviceCapabilities.isiPad
         )

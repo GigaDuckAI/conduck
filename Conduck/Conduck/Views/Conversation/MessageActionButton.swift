@@ -100,7 +100,9 @@ extension MessageActionButton where Label == AnyView {
 
 /// A visible menu keeps secondary actions discoverable without taking over
 /// text selection. File recovery belongs beside a relevant file problem,
-/// so every host offers only Copy and Save to Work here.
+/// so every host offers only Copy and Save to Work here. The one host whose
+/// bar has no room for a Copy-conversation item — the iPhone thread — hands
+/// in `onCopyConversation`, and the menu grows a separated thread-level row.
 /// The checkmark briefly acknowledges Copy even after the native menu closes.
 struct MessageActionsMenu: View {
     let didCopy: Bool
@@ -108,6 +110,8 @@ struct MessageActionsMenu: View {
     let tint: Color
     let onCopy: () -> Void
     let onSaveToWork: () -> Void
+    /// Whole-thread copy. Nil where the bar already carries that action.
+    var onCopyConversation: (() -> Void)? = nil
 
     var body: some View {
         Menu {
@@ -122,6 +126,17 @@ struct MessageActionsMenu: View {
                     LocalizedStringResource("workboard.chatCapture.action", defaultValue: "Save message to Work"),
                     systemImage: "rectangle.stack.badge.plus"
                 )
+            }
+            if let onCopyConversation {
+                // A divider and a different glyph: two rows that both say
+                // "copy" must never look like one action listed twice.
+                Divider()
+                Button(action: onCopyConversation) {
+                    Label(
+                        LocalizedStringResource("thread.copyAll.button", defaultValue: "Copy conversation"),
+                        systemImage: "doc.plaintext"
+                    )
+                }
             }
         } label: {
             Image(systemName: didCopy ? "checkmark" : "ellipsis")

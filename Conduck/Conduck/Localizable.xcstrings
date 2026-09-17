@@ -23266,6 +23266,28 @@
         }
       }
     },
+    "workbench.phone.openChats" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Chats"
+          }
+        }
+      }
+    },
+    "workbench.phone.openWork" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open Work"
+          }
+        }
+      }
+    },
     "workbench.section" : {
       "extractionState" : "extracted_with_value",
       "localizations" : {
@@ -23273,28 +23295,6 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "Section"
-          }
-        }
-      }
-    },
-    "workbench.section.collapseHint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Close section chooser"
-          }
-        }
-      }
-    },
-    "workbench.section.expandHint" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose Chats or Work"
           }
         }
       }

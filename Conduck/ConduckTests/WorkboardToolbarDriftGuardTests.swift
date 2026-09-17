@@ -119,7 +119,8 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
             after: navigationPlacement, in: active, path: Self.path
         )
         XCTAssertTrue(navigation.contains("WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)"))
-        XCTAssertTrue(navigation.contains("phoneWorkbenchRouter?.dismissPhoneSection(for: .work)"))
+        XCTAssertFalse(navigation.contains("dismissPhoneSection"),
+                       "The phone section menu was retired; there is nothing left for Projects to close")
         let detailControls = try RefusalLaneSource.trailingClosure(
             after: "if showsProjectNavigation", in: active, path: Self.path
         )
@@ -157,12 +158,18 @@ final class WorkboardToolbarDriftGuardTests: XCTestCase {
         let phone = try RefusalLaneSource.trailingClosure(
             after: "if let router = phoneWorkbenchRouter", in: active, path: Self.path
         )
-        XCTAssertEqual(occurrences(of: "PhoneWorkbenchSectionButton(", in: active), 1)
-        XCTAssertTrue(phone.contains("ToolbarItem(placement: .primaryAction)"))
-        XCTAssertTrue(phone.contains("PhoneWorkbenchSectionButton(router: router, destination: .work)"))
+        XCTAssertEqual(occurrences(of: "PhoneWorkbenchFlipButton(", in: active), 1,
+                       "The phone bar carries exactly one Open Chats flip button")
+        XCTAssertTrue(phone.contains("ToolbarItem(placement: .primaryAction)"),
+                      "Open Chats stays trailing-most on the phone's Work bar")
+        XCTAssertTrue(phone.contains("PhoneWorkbenchFlipButton(router: router, from: .work)"),
+                      "The Work bar's flip names Work as the surface it belongs to; it opens Chats")
         XCTAssertFalse(phone.contains("WorkDeskSidebarToolbarButton("))
-        XCTAssertTrue(stack.contains("PhoneWorkbenchSectionOverlay(router: router, destination: .work)"))
-        let phoneControlAt = try XCTUnwrap(active.range(of: "PhoneWorkbenchSectionButton(")?.lowerBound)
+        for retired in ["PhoneWorkbenchSectionOverlay", "PhoneWorkbenchSectionButton", "dismissPhoneSection"] {
+            XCTAssertFalse(source.contains(retired),
+                           "`\(retired)` was retired with the phone section menu; the flip button presents nothing")
+        }
+        let phoneControlAt = try XCTUnwrap(active.range(of: "PhoneWorkbenchFlipButton(")?.lowerBound)
         XCTAssertLessThan(navigationAt, phoneControlAt)
     }
 

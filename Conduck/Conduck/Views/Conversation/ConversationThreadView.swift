@@ -421,14 +421,16 @@ struct ConversationThreadView: View {
             ActiveViewTracker.untrack(viewModel.conversationID, ownerID: visibilityOwnerID)
             dismissTransientChatUI()
         }
-        // Copy conversation — declared HERE (not in the three host views) so
-        // the child `.toolbar` merges into each host's nav bar: iPhone
-        // `ContentView`, iPad `ConversationLibraryView` detail, macOS
-        // `MainWindowView`. `.primaryAction` is valid on iOS AND macOS
-        // (`.topBarTrailing` is iOS-only). Hidden — not disabled — on an
-        // empty thread: a brand-new chat has nothing to copy.
+        // Copy conversation — declared HERE (not in the host views) so the
+        // child `.toolbar` merges into each host's nav bar: iPad
+        // `ConversationLibraryView` detail and macOS `MainWindowView`.
+        // `.primaryAction` is valid on iOS AND macOS (`.topBarTrailing` is
+        // iOS-only). Hidden — not disabled — on an empty thread: a brand-new
+        // chat has nothing to copy. Never on the iPhone bar, which has no room
+        // for a fifth control: there Copy conversation rides in every bubble's
+        // actions menu instead (`showsCopyToolbarItem`).
         .toolbar {
-            if workbenchDestinationIsActive, !viewModel.messages.isEmpty {
+            if workbenchDestinationIsActive, showsCopyToolbarItem, !viewModel.messages.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
                     Button(action: copyAllTapped) {
                         Image(systemName: didCopyAll ? "checkmark" : "doc.on.doc")
@@ -522,6 +524,7 @@ struct ConversationThreadView: View {
                             awaitsCloneContinuation: awaitsCloneContinuation(message),
                             filePreview: filePreview,
                             onCopy: { viewModel.copy(message) },
+                            onCopyConversation: bubbleCopyConversation,
                             onAddToWork: { captureMessageInWork(message) },
                             onSpeak: { speaker.speak(message.text, messageID: message.id) },
                             onRetry: { Task { await viewModel.retry(message) } },
@@ -1467,10 +1470,25 @@ struct ConversationThreadView: View {
         .accessibilityElement(children: .contain)
     }
 
-    private func copyAllTapped() {
+    /// The bar's Copy item belongs to the shells with room for it — iPad's
+    /// detail bar and the Mac window. The phone bar is four glyphs and one
+    /// dropdown by budget, so there the whole-thread copy lives in the bubble
+    /// menu; `phoneWorkbenchRouter` is present only in that shell.
+    private var showsCopyToolbarItem: Bool {
         #if os(iOS)
-        phoneWorkbenchRouter?.dismissPhoneSection(for: .chats)
+        return phoneWorkbenchRouter == nil
+        #else
+        return true
         #endif
+    }
+
+    /// The bubble menu's whole-thread copy: present exactly where the bar's
+    /// Copy item is not. Typed here so the ternary never has to infer it.
+    private var bubbleCopyConversation: (() -> Void)? {
+        showsCopyToolbarItem ? nil : { copyAllTapped() }
+    }
+
+    private func copyAllTapped() {
         viewModel.copyEntireConversation()
         withAnimation(.easeOut(duration: 0.15)) { didCopyAll = true }
         Task {
@@ -1681,6 +1699,9 @@ private struct MessageBubble: View, Equatable {
     /// `==` alongside the closures).
     let filePreview: FilePreviewCoordinator
     let onCopy: () -> Void
+    /// Whole-thread copy from this bubble's menu — present only in the shell
+    /// whose bar carries no Copy item (iPhone); nil elsewhere.
+    let onCopyConversation: (() -> Void)?
     let onAddToWork: () -> Void
     let onSpeak: () -> Void
     /// Re-fire a failed user turn (drives the delivery row's "Try again").
@@ -2728,7 +2749,8 @@ private struct MessageBubble: View, Equatable {
                 didCopy: didCopy,
                 tint: footerTint,
                 onCopy: copyTapped,
-                onSaveToWork: onAddToWork
+                onSaveToWork: onAddToWork,
+                onCopyConversation: menuCopyConversation
             )
         }
     }
@@ -2806,6 +2828,21 @@ private struct MessageBubble: View, Equatable {
 
     private func copyTapped() {
         onCopy()
+        acknowledgeCopy()
+    }
+
+    /// The whole thread, from this bubble's menu. Same checkmark, same
+    /// announcement: what was copied differs, the acknowledgement does not.
+    /// Offered only when the host handed in a thread-level action.
+    private var menuCopyConversation: (() -> Void)? {
+        guard let onCopyConversation else { return nil }
+        return {
+            onCopyConversation()
+            acknowledgeCopy()
+        }
+    }
+
+    private func acknowledgeCopy() {
         AccessibilityAnnouncer.announce(String(localized: LocalizedStringResource(
             "bubble.copy.copied", defaultValue: "Copied"
         )))

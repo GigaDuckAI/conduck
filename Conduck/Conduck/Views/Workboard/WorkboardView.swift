@@ -106,8 +106,8 @@ struct WorkboardExperience: View {
     let reduceMotion: Bool
 
     /// The wide shell supplies its shared section control through this model.
-    /// iPhone supplies a separate router for expandable navigation; compact
-    /// iPad supplies neither because it uses the native tab bar.
+    /// iPhone supplies a separate router for its Open Chats flip button;
+    /// compact iPad supplies neither because it uses the native tab bar.
     @Environment(\.personalWorkbenchModel) private var personalWorkbenchModel
     #if os(iOS)
     @Environment(\.phoneWorkbenchRouter) private var phoneWorkbenchRouter
@@ -223,12 +223,6 @@ struct WorkboardExperience: View {
             detailColumn
                 .environment(\.workDeskSidebarIsHosted, true)
                 .toolbar { workbenchToolbar(showsProjectNavigation: true) }
-                .overlay {
-                    if let router = phoneWorkbenchRouter {
-                        PhoneWorkbenchSectionOverlay(router: router, destination: .work)
-                    }
-                }
-                .onDisappear { phoneWorkbenchRouter?.dismissPhoneSection(for: .work) }
         }
         .environment(\.workDeskNavigationIsExternal, false)
     }
@@ -268,9 +262,6 @@ struct WorkboardExperience: View {
             if showsProjectNavigation {
                 ToolbarItem(placement: .topBarLeading) {
                     WorkDeskSidebarToolbarButton(workspace: viewModel.deskWorkspace, isActive: isActive)
-                        .simultaneousGesture(TapGesture().onEnded {
-                            phoneWorkbenchRouter?.dismissPhoneSection(for: .work)
-                        })
                 }
             }
 
@@ -278,9 +269,10 @@ struct WorkboardExperience: View {
                 WorkbenchSectionToolbarItem(model: personalWorkbenchModel)
             }
 
+            // Open Chats — the phone's one-tap way back, trailing-most, icon only.
             if let router = phoneWorkbenchRouter {
                 ToolbarItem(placement: .primaryAction) {
-                    PhoneWorkbenchSectionButton(router: router, destination: .work)
+                    PhoneWorkbenchFlipButton(router: router, from: .work)
                 }
             }
         }

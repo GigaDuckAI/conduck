@@ -14,7 +14,6 @@ struct WorkDeskToolbarTitle: View {
     @Environment(\.workDeskConversationResolver) private var conversationResolver
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.phoneWorkbenchRouter) private var phoneWorkbenchRouter
     #endif
 
     private var title: String {
@@ -89,11 +88,6 @@ struct WorkDeskToolbarTitle: View {
                 #endif
                 .accessibilityLabel(Text(verbatim: title))
                 .accessibilityHint(Text(LocalizedStringResource("workdesk.project.actions", defaultValue: "Project actions")))
-                #if os(iOS)
-                .simultaneousGesture(TapGesture().onEnded {
-                    phoneWorkbenchRouter?.dismissPhoneSection(for: .work)
-                })
-                #endif
             } else {
                 pill(showsChevron: false)
                     .accessibilityAddTraits(.isHeader)
@@ -137,9 +131,6 @@ struct WorkDeskToolbarTitle: View {
             if canSwitch {
                 Button {
                     guard workspace.isActive, workspace.currentConversation?.id == model.conversationID else { return }
-                    #if os(iOS)
-                    phoneWorkbenchRouter?.dismissPhoneSection(for: .work)
-                    #endif
                     model.showingGatewaySheet = true
                 } label: {
                     gatewayLabel(model.backendDisplayName, presenceRef: presenceRef, interactive: true)
