@@ -557,7 +557,9 @@ struct RemoteAgentConfigBody: View {
     @ViewBuilder
     private var editorSections: some View {
         if !viewModel.isRemoteAgentActive(ref), viewModel.gatewayAllowanceRefs.contains(ref) {
-            Section { GatewayPlanControls(viewModel: viewModel, flow: planFlow) }
+            Section {
+                GatewayPlanControls(viewModel: viewModel, flow: planFlow, onlyWhenSelectionRequired: false)
+            }
         }
         if !viewModel.canConfigureRemoteAgent(ref) {
             Section {

@@ -21,19 +21,19 @@ final class GatewayPlanFlow {
 struct GatewayPlanControls: View {
     @Bindable var viewModel: SettingsViewModel
     @Bindable var flow: GatewayPlanFlow
+    var onlyWhenSelectionRequired = true
 
     var body: some View {
-        if viewModel.showsGatewaySelection {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(LocalizedStringResource("gateway.plan.choose.message", defaultValue: "Choose up to three active gateways for your free plan. Your other configurations and conversations stay saved."))
-                    .font(.callout).foregroundStyle(AppColors.textSecondary)
-                Button(LocalizedStringResource("gateway.plan.choose.action", defaultValue: "Choose active gateways")) {
-                    flow.showingSelection = true
-                }.buttonStyle(.bordered)
-                Button(LocalizedStringResource("gateway.plan.renew", defaultValue: "Get unlimited gateways with Pro")) {
-                    flow.showingUpgrade = true
-                }.buttonStyle(.bordered)
+        // Only unresolved selection needs a top-level reminder. An inactive
+        // gateway's editor also offers this link to revise a completed choice.
+        if viewModel.showsGatewaySelection
+            && (!onlyWhenSelectionRequired || viewModel.gatewayActivation.requiresSelection) {
+            Button(LocalizedStringResource("gateway.plan.choose.action", defaultValue: "Choose active gateways")) {
+                flow.showingSelection = true
             }
+            .font(.callout)
+            .foregroundStyle(AppColors.textSecondary)
+            .inlineLinkButton()
             .settingsCardPassiveRow()
         }
     }
