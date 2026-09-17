@@ -22,7 +22,7 @@ CONDUCK_DEVELOPMENT_TEAM =
 DEVELOPMENT_TEAM = $(CONDUCK_DEVELOPMENT_TEAM)
 
 // Single source for version numbers (removed from per-target settings)
-MARKETING_VERSION = 1.6.1
-CURRENT_PROJECT_VERSION = 14
+MARKETING_VERSION = 1.6.2
+CURRENT_PROJECT_VERSION = 15
 
 #include? "Identity-Override.xcconfig"

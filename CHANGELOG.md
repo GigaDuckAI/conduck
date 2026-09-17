@@ -7,6 +7,36 @@ and build number Apple shows — and matches `v<version>-<build>` in this
 repository. Versions 1.3 and 1.4 shipped on macOS while iOS moved directly
 from 1.2 to 1.5.
 
+## [1.6.2-15] — the iPhone bar tidy-up
+
+App Store build, tagged `v1.6.2-15` on 17 September 2026. 7 commits since 1.6.1.
+
+### Changed
+
+- iPhone: the chat bar keeps four glyphs — Conversations, New conversation, the
+  gateway title (the bar's only dropdown) and one icon that flips between Chats and
+  Work. The "Chats ⌄" section menu is gone. Copy conversation moves into each
+  bubble's actions menu. iPad and Mac are unchanged
+- Free plan: the "Choose active gateways" reminder in Settings shows only while a
+  choice is still needed; an inactive gateway's editor keeps the link for revising
+  a completed choice
+
+### Fixed
+
+- iPhone and iPad: the composer's trailing button no longer flickers send → mic →
+  Stop on every send. The attachment-only send keeps its slot while attachments
+  are staged, and the recording / transcribing status row has one fixed height, so
+  the bar stops jumping
+- Work opens to the same connect-your-AI screen as Chats when no gateway is
+  configured, with a button into the guided setup (iPhone, iPad, Mac)
+
+### Developer-facing
+
+- README gains a two-minute quick start (Ollama on the LAN, OpenRouter, the
+  adapter path)
+- `docs/qa/qa-mode.md` names the CloudKit environment of Xcode-installed builds
+  correctly (Development)
+
 ## [1.6.1-14] — the Mac sync fix
 
 App Store build, tagged `v1.6.1-14` on 15 September 2026. 5 commits since 1.6.
