@@ -920,7 +920,7 @@ struct ContentView: View {
     /// doesn't survive the round trip.
     private func clearComposerFeedback() {
         recorder.dismissError()
-        voiceRecovery = nil
+        withAnimation(ComposerMotion.rowChange) { voiceRecovery = nil }
     }
 
     /// Whether an in-app settings surface is presented. `settingsRoute` is
@@ -1511,8 +1511,14 @@ struct ContentView: View {
     private func handleTranscriptionResult(_ result: Result<String, AppError>) async {
         switch result {
         case .success(let text):
-            voiceRecovery = nil
-            composerDraft = appendingTranscript(text, to: composerDraft)
+            // The landing rides the composer's capture-slot spring: the slot
+            // collapsed one pass earlier (the recorder goes idle before it
+            // returns the transcript), so the field growing on the same curve
+            // reads as one motion rather than a collapse and then a jump.
+            withAnimation(ComposerMotion.landing) {
+                voiceRecovery = nil
+                composerDraft = appendingTranscript(text, to: composerDraft)
+            }
             AccessibilityAnnouncer.announce(LocalizedStringResource(
                 "voice.announce.transcriptAdded",
                 defaultValue: "Transcript added"
@@ -1529,10 +1535,11 @@ struct ContentView: View {
             // automatic teleport. If a cloud STT key is configured → "Use cloud
             // voice"; else → "Open Voice Settings".
             if isVoiceHardFailure(error) {
-                voiceRecovery = await resolveVoiceRecovery()
+                let option = await resolveVoiceRecovery()
+                withAnimation(ComposerMotion.rowChange) { voiceRecovery = option }
                 return
             }
-            voiceRecovery = nil
+            withAnimation(ComposerMotion.rowChange) { voiceRecovery = nil }
             // De-duplicate error surfaces: a retryable failure that armed the
             // pending-retry card would otherwise ALSO leave the composer's red
             // error banner up — two surfaces for one failure. The card carries
@@ -1573,7 +1580,7 @@ struct ContentView: View {
     /// recovery affordance either way.
     private func applyVoiceRecovery(_ option: VoiceRecoveryOption) {
         recorder.dismissError()
-        voiceRecovery = nil
+        withAnimation(ComposerMotion.rowChange) { voiceRecovery = nil }
         switch option {
         case .useCloud(let presetID):
             Task { await SettingsManager.shared.setActivePresetID(presetID) }
@@ -1709,7 +1716,9 @@ struct ContentView: View {
                     if expectedRef != nil {
                         detailVM?.reportComposerDispatchRejection()
                     } else {
-                        composerDraft = appendingTranscript(text, to: composerDraft)
+                        withAnimation(ComposerMotion.landing) {
+                            composerDraft = appendingTranscript(text, to: composerDraft)
+                        }
                         showSendFailedAlert = true
                     }
                     return false
@@ -1725,7 +1734,9 @@ struct ContentView: View {
                 // returns true. Legacy voice paths still need the historical
                 // host-side text restoration below.
                 if expectedRef == nil {
-                    composerDraft = appendingTranscript(text, to: composerDraft)
+                    withAnimation(ComposerMotion.landing) {
+                        composerDraft = appendingTranscript(text, to: composerDraft)
+                    }
                 }
                 showSendFailedAlert = true
                 return false

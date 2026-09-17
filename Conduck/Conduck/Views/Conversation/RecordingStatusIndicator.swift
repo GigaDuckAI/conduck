@@ -25,19 +25,12 @@ struct RecordingStatusIndicator: View {
     /// Amber-tints the timer and surfaces the "1 min left" row.
     var nearMaxDuration: Bool = false
 
-    @State private var isPulsing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 4) {
             HStack(spacing: 8) {
-                Circle()
-                    .fill(AppColors.error)
-                    .frame(width: 9, height: 9)
-                    .opacity(isPulsing ? 1.0 : 0.3)
-                    .animation(
-                        .easeInOut(duration: 0.8).repeatForever(autoreverses: true),
-                        value: isPulsing
-                    )
+                recordingDot
                 Text(formattedTime)
                     .font(.system(size: 16, weight: .light, design: .monospaced))
                     .foregroundStyle(nearMaxDuration ? AppColors.warning : AppColors.textPrimary)
@@ -57,9 +50,31 @@ struct RecordingStatusIndicator: View {
             .opacity(nearMaxDuration ? 1 : 0)
             .accessibilityHidden(!nearMaxDuration)
         }
-        .onAppear { isPulsing = true }
-        .onDisappear { isPulsing = false }
         .accessibilityElement(children: .combine)
+    }
+
+    /// The breathing red dot. An auto-cycling `phaseAnimator` rather than a
+    /// `repeatForever` animation keyed on `@State` from `onAppear`: that form
+    /// stalls or restarts when an ancestor's transaction passes through (the
+    /// composer's slot crossfade, the parent's `TimelineView` tick), while the
+    /// animator owns its own clock. Static, fully opaque under Reduce Motion.
+    @ViewBuilder
+    private var recordingDot: some View {
+        if reduceMotion {
+            dot
+        } else {
+            dot.phaseAnimator([1.0, 0.3]) { view, opacity in
+                view.opacity(opacity)
+            } animation: { _ in
+                Animation.easeInOut(duration: 0.8)
+            }
+        }
+    }
+
+    private var dot: some View {
+        Circle()
+            .fill(AppColors.error)
+            .frame(width: 9, height: 9)
     }
 
     private var formattedTime: String {

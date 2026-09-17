@@ -24,6 +24,13 @@
 //
 // Press feedback is a Reduce-Motion-aware scaleEffect via `CaptureButtonStyle`.
 // The pulsing halo is also Reduce-Motion-aware (static ring when motion is off).
+//
+// ONE effect on the glyph, deliberately. The glyph carries the `.replace`
+// content transition and nothing else: a repeating symbol pulse stacked on the
+// same `Image` toggled at the exact instant the glyph swapped (mic → stop, stop
+// → ellipsis) and the two contended for one layer, which read as the button
+// "morphing". Recording is already told twice — the red disc and the halo — and
+// the composer's status row adds a third; the glyph stays still.
 
 import SwiftUI
 
@@ -39,8 +46,6 @@ struct CaptureCircleButton: View {
     /// True only in the RECORDING state — draws the soft pulsing halo. Static
     /// ring under Reduce Motion.
     var showsPulse: Bool = false
-    /// True only when the glyph should run a repeating symbol pulse (recording).
-    var animatesSymbol: Bool = false
     /// Diameter of the disc. 44 on iOS (hit-target), 32 on the denser macOS row.
     var diameter: CGFloat = 44
     /// Point size of the white glyph inside the disc.
@@ -57,7 +62,6 @@ struct CaptureCircleButton: View {
                 .font(.system(size: glyphSize, weight: .semibold))
                 .foregroundStyle(.white)
                 .contentTransition(.symbolEffect(.replace))
-                .symbolEffect(.pulse.byLayer, options: .repeating, isActive: animatesSymbol && !reduceMotion)
                 .frame(width: diameter, height: diameter)
                 .background(
                     Circle()
@@ -89,24 +93,43 @@ struct CaptureCircleButton: View {
 
 /// A soft pulsing ring drawn behind the recording disc. Reduce-Motion → a static
 /// faint ring (no repeating animation), so the state is still legible.
+///
+/// An auto-cycling `phaseAnimator` rather than a `repeatForever` animation
+/// keyed on `@State` from `onAppear`: that form is re-issued only on appear and
+/// stalls or restarts when an ancestor's transaction (the bar's attachment
+/// spring, the slot crossfade) passes through mid-capture, while the animator
+/// owns its own clock. The expand phase animates out; the reset phase has NO
+/// animation, so the ring snaps back to the disc and expands again — the
+/// original one-way pulse, not a breathing in-and-out.
 private struct PulseHalo: View {
     let color: Color
     let diameter: CGFloat
     let reduceMotion: Bool
 
-    @State private var pulsing = false
-
     var body: some View {
+        Group {
+            if reduceMotion {
+                ring
+                    .opacity(0.25)
+                    .scaleEffect(1.25)
+            } else {
+                ring
+                    .phaseAnimator([false, true]) { view, expanded in
+                        view
+                            .opacity(expanded ? 0.0 : 0.35)
+                            .scaleEffect(expanded ? 1.6 : 1.0)
+                    } animation: { expanded in
+                        expanded ? Animation.easeOut(duration: 1.1) : nil
+                    }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var ring: some View {
         Circle()
-            .fill(color.opacity(reduceMotion ? 0.25 : (pulsing ? 0.0 : 0.35)))
+            .fill(color)
             .frame(width: diameter, height: diameter)
-            .scaleEffect(reduceMotion ? 1.25 : (pulsing ? 1.6 : 1.0))
-            .animation(
-                reduceMotion ? nil : .easeOut(duration: 1.1).repeatForever(autoreverses: false),
-                value: pulsing
-            )
-            .onAppear { if !reduceMotion { pulsing = true } }
-            .allowsHitTesting(false)
     }
 }
 

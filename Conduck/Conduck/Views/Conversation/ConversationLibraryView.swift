@@ -852,8 +852,12 @@ struct ConversationLibraryView: View {
     private func handleVoiceResult(_ result: Result<String, AppError>) async {
         switch result {
         case .success(let text):
-            voiceRecovery = nil
-            composerDraft = appendingTranscript(text, to: composerDraft)
+            // Same curve as the composer's capture slot, so the collapse and
+            // the field growing read as one motion (see `ComposerMotion`).
+            withAnimation(ComposerMotion.landing) {
+                voiceRecovery = nil
+                composerDraft = appendingTranscript(text, to: composerDraft)
+            }
             AccessibilityAnnouncer.announce(LocalizedStringResource(
                 "voice.announce.transcriptAdded",
                 defaultValue: "Transcript added"
@@ -866,13 +870,15 @@ struct ConversationLibraryView: View {
             // contextual, USER-TAPPED recovery — never an automatic teleport.
             switch error {
             case .appleSpeechModelNotInstalled, .appleSpeechLanguageUnsupported:
+                let option: VoiceRecoveryOption
                 if let cloudID = await SettingsManager.shared.firstConfiguredCloudSTTPresetID() {
-                    voiceRecovery = .useCloud(presetID: cloudID)
+                    option = .useCloud(presetID: cloudID)
                 } else {
-                    voiceRecovery = .openVoiceSettings
+                    option = .openVoiceSettings
                 }
+                withAnimation(ComposerMotion.rowChange) { voiceRecovery = option }
             default:
-                voiceRecovery = nil
+                withAnimation(ComposerMotion.rowChange) { voiceRecovery = nil }
             }
         }
     }
@@ -881,7 +887,7 @@ struct ConversationLibraryView: View {
     /// or open Settings → Voice (user-initiated). Clears the banner + affordance.
     private func applyVoiceRecovery(_ option: VoiceRecoveryOption) {
         recorder.dismissError()
-        voiceRecovery = nil
+        withAnimation(ComposerMotion.rowChange) { voiceRecovery = nil }
         switch option {
         case .useCloud(let presetID):
             Task { await SettingsManager.shared.setActivePresetID(presetID) }

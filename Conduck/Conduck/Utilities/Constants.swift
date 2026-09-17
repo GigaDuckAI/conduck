@@ -194,6 +194,13 @@ enum Constants {
     /// (`feedback_no_silent_retry_budget_extension`).
     static let transcribeStallHintDelay: TimeInterval = 10
 
+    /// Height of the composer's capture-status slot for EVERY active capture
+    /// phase (recording, transcribing, preparing voice). One box for all three
+    /// means the docked bar — a safe-area inset that re-insets the thread on
+    /// every height change — moves exactly twice per capture: open and close.
+    /// Sized for the tallest occupant, the two-line recording row.
+    static let composerCaptureSlotHeight: CGFloat = 40
+
     // MARK: - UserDefaults Keys
     //
     // KVS KEY-LENGTH BUDGET — 128 UTF-16 code units, for every key below that is

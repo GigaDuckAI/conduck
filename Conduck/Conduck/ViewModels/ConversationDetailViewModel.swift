@@ -722,6 +722,17 @@ final class ConversationDetailViewModel {
     /// reads as "the agent is working" belongs on `showsGatewayWaitIndicator`.
     var isAwaitingReply = false
 
+    /// True from the moment a send is ACCEPTED locally (the user row is durable
+    /// and `onLocalAcceptance(true)` has fired) until `beginInFlight` makes the
+    /// turn live, or the pre-dispatch route check refuses it. The composer
+    /// holds its Send look on it. NOT a Stop claim and NOT the wait indicator:
+    /// there is no cancel handle yet, so the thread and `canStopLiveTurn` stay
+    /// exactly as truthful as before. Without it the host clears the draft on
+    /// acceptance and the trailing control walks Send → mic → Stop on every
+    /// iOS send, because the awaits between acceptance and dispatch (permission,
+    /// Pro access, Keychain, history assembly) take a visible beat.
+    var isPreparingLiveTurn = false
+
     /// When a turn dispatched by THIS instance started — the stamp its elapsed
     /// clock counts from. Nil when this instance has nothing in flight, which is
     /// NOT the same as "nothing is running for this conversation": a sibling VM
@@ -857,6 +868,9 @@ final class ConversationDetailViewModel {
     /// rewrites stored properties into accessors, so a property observer there is
     /// a compile hazard, not a hook.
     private func beginInFlight(userMessageID: UUID, at date: Date = Date()) {
+        // The accepted turn is live from here; the composer's hold hands over
+        // to the Stop control in the same pass.
+        isPreparingLiveTurn = false
         inFlightStartedAt = date
         // The EXACT turn this VM has in flight, retained so a Stop cancels that
         // turn and no other. REQUIRED, not defaulted: every dispatch knows its
@@ -882,6 +896,7 @@ final class ConversationDetailViewModel {
     /// dropped on the first call and `noteEnded` on an already-ended token is a
     /// no-op — which is exactly what the two macOS release sites need.
     private func endInFlight() {
+        isPreparingLiveTurn = false
         inFlightStartedAt = nil
         // Dropped with the claim, never separately: a retained id outliving the
         // turn would aim the next Stop at a message that already resolved.
@@ -4241,6 +4256,13 @@ final class ConversationDetailViewModel {
             return
         }
         let userMessageID = userRecord.id
+        // Accepted locally: the row is durable, but no Stop token exists until
+        // `beginInFlight` several awaits below. Raise the preparing flag BEFORE
+        // the host learns of acceptance (it clears the draft on that callback)
+        // and drop it on every exit: `beginInFlight` clears it early on the
+        // live path, the `defer` covers the pre-dispatch refusal below.
+        isPreparingLiveTurn = true
+        defer { isPreparingLiveTurn = false }
         onLocalAcceptance?(true)
 
         // Notification auth (plan D4b) — iOS only. The user has committed a

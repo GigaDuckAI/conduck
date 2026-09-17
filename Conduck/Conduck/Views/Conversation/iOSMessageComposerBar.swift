@@ -111,6 +111,11 @@ struct iOSMessageComposerBar: View {
     @State private var showSlowTranscribeHint = false
     @State private var sendSubmissionInProgress = false
 
+    /// The capture slot's one height, scaled with Dynamic Type like the text
+    /// it holds (two `.caption`-class lines plus spacing). A fixed point value
+    /// would compress or clip the rows at accessibility sizes.
+    @ScaledMetric(relativeTo: .body) private var captureSlotHeight = Constants.composerCaptureSlotHeight
+
     /// Which of the two layouts this bar draws — and the ONLY place that decides
     /// it, so the card, its background suppression and the field's own fill can
     /// never disagree about which surface they are on.
@@ -173,6 +178,7 @@ struct iOSMessageComposerBar: View {
             || hasBlockingUpload
             || attachmentPreparationInProgress
             || sendSubmissionInProgress
+            || viewModel?.isPreparingLiveTurn == true
             || captureActive
     }
 
@@ -206,19 +212,6 @@ struct iOSMessageComposerBar: View {
     /// attachment with no caption (key UX decision #1).
     private var showsSubduedSend: Bool { hasAttachments && !hasDraft }
 
-    /// Whether the trailing control should be SEND (vs the mic). Send only when
-    /// there is a draft AND no capture is active — so typing mid-recording does
-    /// NOT hide the stop-recording control (the mic stays until capture ends).
-    /// In-flight takes priority over everything (handled before this in the
-    /// helpers), so it is excluded here.
-    private var showsSendControl: Bool {
-        guard !isInFlight, hasDraft else { return false }
-        switch recorder.state {
-        case .recording, .processing, .preparingVoice: return false
-        default: return true
-        }
-    }
-
     var body: some View {
         VStack(spacing: 6) {
             // Staged-attachment strip — FIRST child of the VStack, above the
@@ -232,29 +225,10 @@ struct iOSMessageComposerBar: View {
             )
             .allowsHitTesting(!sendSubmissionInProgress)
 
-            // Cause AND remedy — the iPhone/iPad twin of the macOS composer's
-            // `errorBanner`, and the same reasoning: this is the composer's only
-            // slot for a capture failure, `.error` carries the whole `AppError`
-            // taxonomy, and the certificate verdicts keep the part the user must
-            // act on (the interception warning, the server-side routes, the
-            // "your certificate is fine") in the remedy half alone.
-            if case .error(let error) = recorder.state {
-                let message = error.descriptionWithRecovery(for: viewModel?.boundRef)
-                Text(message.isEmpty ? String(localized: "Something went wrong.") : message)  // xcstrings
-                    .font(.caption)
-                    .foregroundStyle(AppColors.error)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 4)
-                    .transition(.opacity)
-            }
-
-            // Recording banner — the obvious "you are recording" affordance on
-            // iPhone/iPad (the 44pt pulsing Stop in the layout below stays the
-            // action). Shares the dot+timer look with the macOS surfaces. Part 2b:
-            // on .recording → .processing it crossfades into a small spinner +
-            // "Transcribing…" label (instant under Reduce Motion via the keyed
-            // animation below).
+            // Capture status slot — recording, transcribing, preparing voice,
+            // and the capture error, all in ONE phase-keyed group so every edge
+            // rides the same transaction. The three active phases share one
+            // fixed height (see `captureStatusBanner`).
             captureStatusBanner
 
             if usesRegularLayout {
@@ -311,62 +285,89 @@ struct iOSMessageComposerBar: View {
         }
     }
 
-    // MARK: - Capture status banner (recording ↔ transcribing crossfade, Part 2b)
+    // MARK: - Capture status slot (recording ↔ transcribing crossfade, Part 2b)
 
     /// The dot+timer recording row crossfading into the spinner+"Transcribing…"
-    /// row as capture stops. `.transition(.opacity)` + a spring keyed on the
-    /// state PHASE gives the crossfade; Reduce Motion swaps instantly (nil
-    /// animation). Idle/error show nothing (the error banner is rendered above).
+    /// row as capture stops, and into the calm "Setting up voice…" row on a
+    /// self-heal. `.transition(.opacity)` + a spring keyed on the state PHASE
+    /// gives the crossfade; Reduce Motion swaps instantly (nil animation).
+    ///
+    /// GEOMETRY INVARIANT: the slot has exactly two heights — nothing when idle,
+    /// `Constants.composerCaptureSlotHeight` for every active phase. The bar is
+    /// a safe-area inset, so each height change re-insets the thread; one box
+    /// for all three phases means the bar moves twice per capture (open, close)
+    /// instead of at every edge. Anything that would add a row inside a phase
+    /// (the slow-transcribe hint here, "1 min left" in the recording row) is a
+    /// reserved zero-opacity line, never a new row. The capture error is the
+    /// one occupant outside the fixed height: a terminal refusal has to be
+    /// readable, and it lands once.
     @ViewBuilder
     private var captureStatusBanner: some View {
         Group {
             switch recorder.state {
             case .recording(let startedAt):
                 LiveRecordingStatusIndicator(startedAt: startedAt)
-                .frame(maxWidth: .infinity)
-                .transition(.opacity)
+                    .frame(maxWidth: .infinity, minHeight: captureSlotHeight, maxHeight: captureSlotHeight)
+                    .transition(.opacity)
             case .preparingVoice(let progress):
                 // Self-heal: the on-device model is downloading before we
                 // transcribe the SAME audio. Calm label leads (progress is not
                 // the hero), crossfading like the transcribing row.
                 PreparingVoiceIndicator(progress: progress)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: captureSlotHeight, maxHeight: captureSlotHeight)
                     .transition(.opacity)
             case .processing:
                 VStack(spacing: 4) {
                     TranscribingIndicator()
-                    if showSlowTranscribeHint {
-                        HStack(spacing: 8) {
-                            Text(String(localized: LocalizedStringResource(
-                                "recording.transcribing.slow",
-                                defaultValue: "Still working — the provider is slow to respond."
-                            )))  // xcstrings: hardening
-                            .font(.caption2)
-                            .foregroundStyle(AppColors.textSecondary)
+                    // Always present (reserves its line), visible only once the
+                    // stall watchdog fires — the slot never grows mid-phase.
+                    HStack(spacing: 8) {
+                        Text(String(localized: LocalizedStringResource(
+                            "recording.transcribing.slow.v2",
+                            defaultValue: "Still working…"
+                        )))  // xcstrings: hardening
+                        .font(.caption2)
+                        .foregroundStyle(AppColors.textSecondary)
 
-                            Button {
-                                recorder.cancelProcessing()
-                            } label: {
-                                Text(String(localized: LocalizedStringResource(
-                                    "recording.transcribing.cancel",
-                                    defaultValue: "Cancel"
-                                )))  // xcstrings: hardening
-                                .font(.caption2.weight(.semibold))
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(AppColors.brandAmber)
+                        Button {
+                            recorder.cancelProcessing()
+                        } label: {
+                            Text(String(localized: LocalizedStringResource(
+                                "recording.transcribing.cancel",
+                                defaultValue: "Cancel"
+                            )))  // xcstrings: hardening
+                            .font(.caption2.weight(.semibold))
                         }
-                        .transition(.opacity)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(AppColors.brandAmber)
                     }
+                    .opacity(showSlowTranscribeHint ? 1 : 0)
+                    .allowsHitTesting(showSlowTranscribeHint)
+                    .accessibilityHidden(!showSlowTranscribeHint)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, minHeight: captureSlotHeight, maxHeight: captureSlotHeight)
                 .transition(.opacity)
-            case .idle, .error:
+            case .error(let error):
+                // Cause AND remedy — the iPhone/iPad twin of the macOS composer's
+                // `errorBanner`, and the same reasoning: this is the composer's
+                // only slot for a capture failure, `.error` carries the whole
+                // `AppError` taxonomy, and the certificate verdicts keep the part
+                // the user must act on (the interception warning, the server-side
+                // routes, the "your certificate is fine") in the remedy half alone.
+                let message = error.descriptionWithRecovery(for: viewModel?.boundRef)
+                Text(message.isEmpty ? String(localized: "Something went wrong.") : message)  // xcstrings
+                    .font(.caption)
+                    .foregroundStyle(AppColors.error)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 4)
+                    .transition(.opacity)
+            case .idle:
                 EmptyView()
             }
         }
         .animation(
-            reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.82),
+            reduceMotion ? nil : ComposerMotion.landingSpring,
             value: captureBannerPhase
         )
         .animation(
@@ -385,17 +386,20 @@ struct iOSMessageComposerBar: View {
         }
     }
 
-    /// A discrete phase tag for the banner crossfade animation: 0 = nothing,
-    /// 1 = recording, 2 = transcribing. Keying the animation on this discrete
-    /// phase (rather than the full `state`) keeps the crossfade firing exactly
-    /// once per phase change. (`state` is now stable across a capture — the
-    /// `mm:ss` tick lives inside `LiveRecordingStatusIndicator`'s TimelineView.)
+    /// A discrete phase tag for the slot crossfade animation: 0 = nothing,
+    /// 1 = recording, 2 = transcribing, 3 = preparing voice, 4 = capture error.
+    /// Keying the animation on this discrete phase (rather than the full
+    /// `state`) keeps the crossfade firing exactly once per phase change.
+    /// (`state` is stable across a capture — the `mm:ss` tick lives inside
+    /// `LiveRecordingStatusIndicator`'s TimelineView.) The error is its own
+    /// phase so its row rides the same transaction instead of snapping in.
     private var captureBannerPhase: Int {
         switch recorder.state {
         case .recording: return 1
         case .processing: return 2
         case .preparingVoice: return 3
-        case .idle, .error: return 0
+        case .error: return 4
+        case .idle: return 0
         }
     }
 
@@ -447,11 +451,18 @@ struct iOSMessageComposerBar: View {
         .disabled(sendSubmissionInProgress)
     }
 
-    /// The SUBDUED secondary Send — shown only when attachments are staged with
+    /// The SUBDUED secondary Send — usable only when attachments are staged with
     /// an empty draft (so the trailing mic stays the hero for voice-captioning).
+    ///
+    /// The SLOT exists whenever attachments are staged; only the button's
+    /// visibility follows the draft. The slot therefore arrives and leaves with
+    /// the attachment strip, on the bar's `.animation(value: attachments)`
+    /// transaction, and the first keystroke merely fades the disc in place —
+    /// it never reclaims the width, so the field does not jump while the
+    /// trailing disc is morphing mic → send.
     @ViewBuilder
     private var subduedSendButton: some View {
-        if showsSubduedSend {
+        if hasAttachments {
             // Part 2: a SMALLER filled circle (the mic stays the hero, so this
             // attachment-only send sits subdued at 36pt with a neutral fill) —
             // keeps the iMessage idiom without competing with the mic.
@@ -460,11 +471,14 @@ struct iOSMessageComposerBar: View {
                 fillColor: isSendDisabled ? AppColors.disabled : AppColors.textSecondary,
                 diameter: 36,
                 glyphSize: 15,
-                isDisabled: isSendDisabled,
+                isDisabled: isSendDisabled || !showsSubduedSend,
                 accessibilityLabel: String(localized: LocalizedStringResource("composer.send", defaultValue: "Send")),
                 action: sendTapped
             )
-            .transition(.opacity.combined(with: .scale))
+            .opacity(showsSubduedSend ? 1 : 0)
+            .allowsHitTesting(showsSubduedSend)
+            .accessibilityHidden(!showsSubduedSend)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: showsSubduedSend)
         }
     }
 
@@ -484,64 +498,95 @@ struct iOSMessageComposerBar: View {
         }
     }
 
-    /// Morphs between the mic control (empty draft) and the send control (draft
-    /// present). MUST be a SINGLE `Button` wrapping a SINGLE `Image(systemName:)`:
+    /// Morphs between the mic control (empty draft), the send control (draft
+    /// present), the held send (accepted, not yet live) and the in-flight Stop.
+    /// MUST be a SINGLE `Button` wrapping a SINGLE `Image(systemName:)`:
     /// `.contentTransition(.symbolEffect(.replace))` only animates a glyph swap
     /// when the view identity is stable. An `if/else` over two distinct `Button`s
     /// (the earlier form) gave each branch its own identity, so SwiftUI replaced
-    /// the whole view and the swap SNAPPED. With one Button + a computed symbol,
-    /// the action/color/disabled/label all switch via the helpers below while the
-    /// identity holds, so the mic↔send morph plays. `.animation(value:)` supplies
-    /// the transaction the content transition rides on (a `draft` keystroke is
-    /// not itself an animated change).
-    @ViewBuilder
+    /// the whole view and the swap SNAPPED. With one Button + a resolved control,
+    /// the action/color/disabled/label all switch while the identity holds, so
+    /// the morph plays. `.animation(value:)` inside `CaptureCircleButton`
+    /// supplies the transaction the content transition rides on (a `draft`
+    /// keystroke is not itself an animated change).
     private var morphingTrailingButton: some View {
-        // Part 2: a FILLED 44pt circle + white glyph. `CaptureCircleButton`
-        // preserves the single-Button + single-Image identity so the mic↔send
-        // morph (`.contentTransition(.symbolEffect(.replace))`) still plays, and
-        // folds in the press-scale + recording halo (both Reduce-Motion aware).
-        //
-        // Deliberately still ONE button: the safety comes from capturing
-        // `intent` here, not from splitting the control (which would lose the
-        // symbol-replacement animation).
-        let intent = trailingIntent
-        return CaptureCircleButton(
-            symbol: trailingSymbol,
-            fillColor: trailingColor,
-            showsPulse: isRecordingActive,
-            animatesSymbol: isRecordingActive,
-            diameter: 44,
-            glyphSize: 18,
-            isDisabled: trailingDisabled,
-            accessibilityLabel: trailingAccessibilityLabel,
-            action: { trailingAction(intent) }
+        trailingButton(compactTrailing)
+    }
+
+    /// What the trailing control IS on this body pass — glyph, tint, meaning,
+    /// enabled — resolved in ONE place (`ComposerTrailingControlResolver`) so
+    /// the four can never disagree and the priority order is unit-tested.
+    private var compactTrailing: ComposerTrailingControl {
+        trailingControl(for: .compact)
+    }
+
+    private var regularTrailing: ComposerTrailingControl {
+        trailingControl(for: .regular)
+    }
+
+    private func trailingControl(for layout: ComposerTrailingLayout) -> ComposerTrailingControl {
+        ComposerTrailingControlResolver.resolve(
+            capture: capturePhase,
+            hasDraft: hasDraft,
+            hasAttachments: hasAttachments,
+            isSubmitting: isSubmitting,
+            canStop: isInFlight,
+            isSendDisabled: isSendDisabled,
+            isMicDisabled: isMicDisabled,
+            layout: layout
         )
     }
 
-    /// SF Symbol for the morphing trailing control. Priority order:
-    /// in-flight-stop → recording-stop → processing → send (draft) → mic.
-    /// Part 2: FILLED glyphs (mic.fill/stop.fill/arrow.up) on a coloured disc,
-    /// not the old `.circle.fill` outline glyphs.
-    private var trailingSymbol: String {
-        if isInFlight { return "stop.fill" }
-        if showsSendControl { return "arrow.up" }
+    private var capturePhase: ComposerCapturePhase {
         switch recorder.state {
-        case .recording: return "stop.fill"
-        case .processing, .preparingVoice: return "ellipsis"
-        case .idle, .error: return "mic.fill"
+        case .idle: return .idle
+        case .recording: return .recording
+        case .processing: return .processing
+        case .preparingVoice: return .preparingVoice
+        case .error: return .error
         }
     }
 
-    /// The DISC fill colour per state (the glyph itself is always white).
-    private var trailingColor: Color {
-        // In-flight Stop = NEUTRAL tint (clearly tappable, NOT error-red /
-        // amber) to distinguish it from the recording-stop control.
-        if isInFlight { return AppColors.textSecondary }
-        if showsSendControl { return isSendDisabled ? AppColors.disabled : AppColors.brandAmber }
-        switch recorder.state {
-        case .recording: return AppColors.error
-        case .processing, .preparingVoice: return AppColors.disabled
-        case .idle, .error: return AppColors.brandAmber
+    /// The send has been tapped and is not yet visibly live: this bar's own
+    /// submission window (tap → local acceptance), then the VM's
+    /// accepted-but-not-dispatched window (`isPreparingLiveTurn`). The control
+    /// holds the Send look across both, so a send morphs exactly once — into
+    /// the Stop — instead of walking through the mic.
+    private var isSubmitting: Bool {
+        sendSubmissionInProgress || viewModel?.isPreparingLiveTurn == true
+    }
+
+    /// Part 2: a FILLED 44pt circle + white glyph. `CaptureCircleButton`
+    /// preserves the single-Button + single-Image identity so the morph
+    /// (`.contentTransition(.symbolEffect(.replace))`) plays, and folds in the
+    /// press-scale + recording halo (both Reduce-Motion aware).
+    ///
+    /// Deliberately ONE button: the safety comes from capturing `intent` here,
+    /// not from splitting the control (which would lose the symbol-replacement
+    /// animation).
+    private func trailingButton(_ control: ComposerTrailingControl) -> some View {
+        let intent = trailingIntent(for: control)
+        return CaptureCircleButton(
+            symbol: control.glyph.rawValue,
+            fillColor: tintColor(control.tint),
+            showsPulse: control.pulses,
+            diameter: 44,
+            glyphSize: 18,
+            isDisabled: !control.isEnabled,
+            accessibilityLabel: trailingAccessibilityLabel(for: control),
+            action: { if let intent { trailingAction(intent) } }
+        )
+    }
+
+    /// The DISC fill colour per role (the glyph itself is always white). The
+    /// in-flight Stop is NEUTRAL (clearly tappable, NOT error-red / amber) to
+    /// distinguish it from the recording-stop control.
+    private func tintColor(_ tint: ComposerTrailingControl.Tint) -> Color {
+        switch tint {
+        case .brand: return AppColors.brandAmber
+        case .error: return AppColors.error
+        case .neutral: return AppColors.textSecondary
+        case .inert: return AppColors.disabled
         }
     }
 
@@ -554,12 +599,17 @@ struct iOSMessageComposerBar: View {
     /// `.stop` carries the identity of the turn it was rendered for, so a stale
     /// tap cancels THAT turn or nothing — a live `isInFlight` re-check would
     /// still cancel a turn that started in the gap. See
-    /// `cancelInFlight(expecting:)`.
+    /// `cancelInFlight(expecting:)`. The held send resolves to NO intent: it
+    /// has no token to carry and nothing safe to do.
     private enum TrailingIntent { case stop(token: Date?), send, mic }
 
-    private var trailingIntent: TrailingIntent {
-        if isInFlight { return .stop(token: viewModel?.inFlightTurnToken) }
-        return showsSendControl ? .send : .mic
+    private func trailingIntent(for control: ComposerTrailingControl) -> TrailingIntent? {
+        switch control.intent {
+        case .stop: return .stop(token: viewModel?.inFlightTurnToken)
+        case .send: return .send
+        case .mic: return .mic
+        case .none: return nil
+        }
     }
 
     /// Acts on the CAPTURED intent. `.send` / `.mic` are safe to arrive late on
@@ -573,23 +623,19 @@ struct iOSMessageComposerBar: View {
         }
     }
 
-    private var trailingDisabled: Bool {
-        // In-flight Stop is ENABLED (the cancel control); only send/mic gate.
-        if isInFlight { return false }
-        return showsSendControl ? isSendDisabled : isMicDisabled
-    }
-
-    private var trailingAccessibilityLabel: String {
-        if isInFlight {
+    private func trailingAccessibilityLabel(for control: ComposerTrailingControl) -> String {
+        switch control.glyph {
+        case .stop where control.intent == .stop:
             return String(localized: "Stop")  // xcstrings: chat-ui
+        case .send:
+            return String(localized: LocalizedStringResource("composer.send", defaultValue: "Send"))
+        case .stop, .mic, .working:
+            return micAccessibilityLabel
         }
-        return showsSendControl
-            ? String(localized: LocalizedStringResource("composer.send", defaultValue: "Send"))
-            : micAccessibilityLabel
     }
 
-    /// Drives the repeating pulse on the stop-recording glyph only — false for
-    /// send/idle/processing so the symbol sits still.
+    /// Drives the halo on the regular layout's persistent mic — true only
+    /// while recording so the disc sits still otherwise.
     private var isRecordingActive: Bool {
         if case .recording = recorder.state { return true }
         return false
@@ -616,7 +662,6 @@ struct iOSMessageComposerBar: View {
                     symbol: regularMicSymbol,
                     fillColor: regularMicColor,
                     showsPulse: isRecordingActive,
-                    animatesSymbol: isRecordingActive,
                     diameter: 44,
                     glyphSize: 18,
                     isDisabled: isMicDisabled,
@@ -669,40 +714,11 @@ struct iOSMessageComposerBar: View {
         }
     }
 
-    private var regularTrailingColor: Color {
-        if isInFlight { return AppColors.textSecondary }
-        return (hasSendableContent && !isSendDisabled) ? AppColors.brandAmber : AppColors.disabled
-    }
-
     /// The regular-width bar keeps a persistent mic to this control's left, so
-    /// it morphs between two meanings rather than three — but the late-tap
-    /// hazard and the fix are the same as the compact bar's.
-    private var regularTrailingIntent: TrailingIntent {
-        isInFlight ? .stop(token: viewModel?.inFlightTurnToken) : .send
-    }
-
-    /// In-flight Stop morph (neutral) takes priority; otherwise the send arrow
-    /// (amber when a draft is ready). The persistent mic to its left handles
-    /// capture, so this control never shows the mic.
-    ///
-    /// A property rather than inline in the bar's `body` so the intent can be
-    /// captured before the button is built — a `ViewBuilder` has nowhere to put
-    /// the binding.
+    /// it morphs between send, the held send and the in-flight Stop — never the
+    /// mic. Same resolver, same captured-intent safety as the compact bar.
     private var regularTrailingButton: some View {
-        let intent = regularTrailingIntent
-        return CaptureCircleButton(
-            symbol: isInFlight ? "stop.fill" : "arrow.up",
-            fillColor: regularTrailingColor,
-            diameter: 44,
-            glyphSize: 18,
-            // In-flight Stop is always enabled (the cancel control). Otherwise
-            // Send enables on sendable content — a draft OR a staged attachment.
-            isDisabled: isInFlight ? false : (!hasSendableContent || isSendDisabled),
-            accessibilityLabel: isInFlight
-                ? String(localized: "Stop")  // xcstrings: chat-ui
-                : String(localized: LocalizedStringResource("composer.send", defaultValue: "Send")),
-            action: { trailingAction(intent) }
-        )
+        trailingButton(regularTrailing)
     }
 
     // MARK: - Shared text field

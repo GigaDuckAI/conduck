@@ -936,7 +936,6 @@ struct MessageComposerBar: View {
             symbol: micSymbol,
             fillColor: micColor,
             showsPulse: isRecording,
-            animatesSymbol: isRecording,
             diameter: 32,
             glyphSize: 14,
             isDisabled: !workbenchDestinationIsActive
