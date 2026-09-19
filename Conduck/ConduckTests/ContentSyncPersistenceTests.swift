@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Exercises real isolated SQLite reopen, context admission, and kernel mirror
-// leases. CloudKit is deliberately absent: these tests prove data preservation
+// Exercises real isolated SQLite reopen, context admission, and cross-process mirror
+// registrations. CloudKit is deliberately absent: these tests prove data preservation
 // and coordination, not that Apple's daemon stopped or resumed cloud traffic.
 
 import XCTest
@@ -115,14 +115,14 @@ final class ContentSyncPersistenceTests: XCTestCase {
         let fixture = try fixture(enabled: true)
         try await fixture.store.ensureLoaded()
         let otherMirror = try ContentSyncProcessLease(beside: fixture.url).acquireMirror()
-        defer { otherMirror.release() }
+        defer { try? otherMirror.release() }
         try fixture.preference.setEnabled(false)
         await fixture.store.reconcileContentSyncPreference(forceRetry: true)
         let waiting = await fixture.store.currentContentSyncState()
         XCTAssertEqual(waiting.failure, .anotherProcess)
         let saved = try await fixture.store.createConversation(backend: "openclaw")
 
-        otherMirror.release()
+        try otherMirror.release()
         await fixture.store.reconcileContentSyncPreference(forceRetry: true)
         let settled = await fixture.store.currentContentSyncState()
         let retained = try await fixture.store.fetchConversation(id: saved.id)
@@ -391,21 +391,48 @@ final class ContentSyncPersistenceTests: XCTestCase {
         XCTAssertEqual(Set(mounted.compactMap(\.url)), Set([originalLocations.materialStoreURL, originalLocations.blobStoreURL].compactMap { $0 }))
     }
 
-    func testMirrorLeaseBlocksExclusiveProofUntilEveryHolderReleases() throws {
+    func testUnregisterFailureAfterDetachStillRemountsWhenSyncIsReenabled() async throws {
+        let fixture = try fixture(enabled: true)
+        let saved = try await fixture.store.createConversation(backend: "openclaw")
+        let lease = ContentSyncProcessLease(beside: fixture.url)
+        let hold = try lease.acquireMirror()
+        await fixture.store._setMirrorLeaseForTesting(hold)
+        let marker = try XCTUnwrap(FileManager.default.contentsOfDirectory(
+            at: lease.registrationsURL, includingPropertiesForKeys: nil
+        ).first)
+        // Make unlink fail after the persistent stores have been removed.
+        try FileManager.default.removeItem(at: marker)
+        try FileManager.default.createDirectory(at: marker, withIntermediateDirectories: false)
+        try fixture.preference.setEnabled(false)
+        await fixture.store.reconcileContentSyncPreference(forceRetry: true)
+        let failed = await fixture.store.currentContentSyncState()
+        XCTAssertEqual(failed.failure, .storage)
+
+        try FileManager.default.removeItem(at: marker)
+        try Data().write(to: marker)
+        try fixture.preference.setEnabled(true)
+        await fixture.store.reconcileContentSyncPreference(forceRetry: true)
+        let mounted = try await fixture.store._mountedStoresForTesting()
+        let retained = try await fixture.store.fetchConversation(id: saved.id)
+        XCTAssertEqual(mounted.count, 2)
+        XCTAssertEqual(retained?.id, saved.id)
+    }
+
+    func testMirrorRegistrationKeepsOffPendingUntilEveryHolderReleases() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("conduck-sync-lock-tests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let lock = ContentSyncProcessLease(beside: directory.appendingPathComponent("Conversations.sqlite"))
         let first = try lock.acquireMirror()
         let second = try lock.acquireMirror()
-        defer { first.release(); second.release() }
+        defer { try? first.release(); try? second.release() }
         XCTAssertThrowsError(try lock.confirmNoMirrors())
-        first.release()
+        try first.release()
         XCTAssertThrowsError(try lock.confirmNoMirrors())
-        second.release()
+        try second.release()
         XCTAssertNoThrow(try lock.confirmNoMirrors())
         let replacement = try lock.acquireMirror()
-        replacement.release()
+        try replacement.release()
         XCTAssertNoThrow(try lock.confirmNoMirrors())
     }
 }

@@ -110,32 +110,60 @@ struct SyncEventSummary: Sendable {
     let errorDomain: String?
     let errorCode: Int?
     let storeID: String?
-    /// True iff this event failed with `CKError.quotaExceeded` (iCloud storage
-    /// full) — the one event-level error sticky + actionable enough to promote to
-    /// the user-facing surface.
+    /// Includes errors wrapped by Core Data and per-item CloudKit failures.
+    /// Only this classification leaves the error tree; its contents never do.
     let isQuotaExceeded: Bool
 
     init(event: NSPersistentCloudKitContainer.Event) {
+        let kind: Kind
         switch event.type {
         case .setup: kind = .setup
         case .import: kind = .importEvent
         case .export: kind = .exportEvent
         @unknown default: kind = .unknown
         }
-        succeeded = event.succeeded
-        started = event.startDate
-        ended = event.endDate
-        if let nsError = event.error as NSError? {
-            errorDomain = nsError.domain
-            errorCode = nsError.code
-            isQuotaExceeded = nsError.domain == CKErrorDomain
-                && nsError.code == CKError.Code.quotaExceeded.rawValue
-        } else {
-            errorDomain = nil
-            errorCode = nil
-            isQuotaExceeded = false
+        self.init(
+            kind: kind, succeeded: event.succeeded,
+            started: event.startDate, ended: event.endDate,
+            storeID: event.storeIdentifier, error: event.error
+        )
+    }
+
+    init(kind: Kind, succeeded: Bool, started: Date?, ended: Date?, storeID: String?, error: Error?) {
+        self.kind = kind
+        self.succeeded = succeeded
+        self.started = started
+        self.ended = ended
+        self.storeID = storeID
+        let nsError = error as NSError?
+        errorDomain = nsError?.domain
+        errorCode = nsError?.code
+        isQuotaExceeded = Self.containsQuotaExceeded(nsError)
+    }
+
+    /// The frameworks can wrap a CKError in an underlying error or in a
+    /// partial-failure dictionary. Bound traversal and remember identities so a
+    /// malformed/cyclic error cannot turn diagnostics into unbounded work.
+    private static func containsQuotaExceeded(_ error: NSError?) -> Bool {
+        guard let error else { return false }
+        var pending = [error]
+        var visited: Set<ObjectIdentifier> = []
+        let maximumErrors = 128
+        while let current = pending.popLast(), visited.count < maximumErrors {
+            guard visited.insert(ObjectIdentifier(current)).inserted else { continue }
+            if current.domain == CKErrorDomain,
+               current.code == CKError.Code.quotaExceeded.rawValue { return true }
+            if let underlying = current.userInfo[NSUnderlyingErrorKey] as? NSError {
+                pending.append(underlying)
+            }
+            if let underlying = current.userInfo[NSMultipleUnderlyingErrorsKey] as? [NSError] {
+                pending.append(contentsOf: underlying.prefix(maximumErrors - visited.count))
+            }
+            if let partial = current.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: NSError] {
+                pending.append(contentsOf: partial.values.prefix(maximumErrors - visited.count))
+            }
         }
-        storeID = event.storeIdentifier
+        return false
     }
 
     /// One-line redacted form for `os_log` + the diagnostic ring buffer.
@@ -2018,7 +2046,7 @@ actor ConversationStore {
         }
         // Cross-process notifications are only hints (App Nap can drop one).
         // Re-read durable policy while this process runs. A suspended holder
-        // retains its kernel lease, so another process cannot falsely say Off.
+        // retains its session registration, so another process cannot falsely say Off.
         contentSyncPollTask = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
@@ -2181,24 +2209,24 @@ actor ConversationStore {
                 let useCloudKit = latestDesired && contentSyncCloudKitCapable
                 if useCloudKit, let url = container.persistentStoreDescriptions.first?.url {
                     mirrorLease = try ContentSyncProcessLease(beside: url).acquireMirror()
-                    // Read AFTER taking the shared lease. An Off writer can
-                    // then either observe this lease or prevent this new mirror.
+                    // Read AFTER publishing the session registration. An Off
+                    // writer either sees it or prevents this new mirror.
                     let confirmedDesired: Bool
                     do { confirmedDesired = try readDesiredContentSyncPreference() }
                     catch {
-                        mirrorLease?.release()
+                        try mirrorLease?.release()
                         mirrorLease = nil
                         throw error
                     }
                     if !confirmedDesired {
-                        mirrorLease?.release()
+                        try mirrorLease?.release()
                         mirrorLease = nil
                         continue
                     }
                 }
                 do { container = try makeContentSyncContainer(cloudKit: useCloudKit) }
                 catch {
-                    mirrorLease?.release()
+                    try mirrorLease?.release()
                     mirrorLease = nil
                     throw error
                 }
@@ -2285,9 +2313,11 @@ actor ConversationStore {
             catch { if firstError == nil { firstError = error } }
         }
         if coordinator.persistentStores.isEmpty {
-            mirrorLease?.release()
-            mirrorLease = nil
+            // The successful load no longer describes a mounted store, even
+            // if removing the session registration fails and needs a retry.
             loadTask = nil
+            try mirrorLease?.release()
+            mirrorLease = nil
         }
         // Silent on the cold-start no-op (nothing was mounted); every real
         // detach says how many stores went and whether one refused.
@@ -2471,28 +2501,34 @@ actor ConversationStore {
         #endif
     }
 
-    /// Redacted, `Sendable` summaries of recent CloudKit mirroring events for the
-    /// silent `CloudSyncMonitor` diagnostics. Runs the
+    /// Redacted, `Sendable` summaries of CloudKit mirroring events for health
+    /// recovery and diagnostics. Runs the
     /// `NSPersistentCloudKitContainerEventRequest` on a fresh background context
     /// inside `perform` — the non-`Sendable` events never leave the block; only
     /// the `Sendable` snapshots return. Catches events that fired while the live
-    /// observer was suspended. Empty when the store isn't a CloudKit container
-    /// (Simulator / test seam) or on any failure — purely diagnostic, so it
-    /// never throws into a caller's path.
-    func recentSyncEventSummaries(limit: Int = 20) async -> [SyncEventSummary] {
-        do { try await ensureLoaded() } catch { return [] }
-        guard container is NSPersistentCloudKitContainer else { return [] }
-        guard let contextLease = try? await newReadContextLease() else { return [] }
+    /// observer was suspended. nil means history is unavailable (local-only
+    /// session or failed read); [] means a successful read found no completed
+    /// events. Callers must not mistake unavailable history for healthy sync.
+    func recentSyncEventSummaries(limit: Int = 20) async -> [SyncEventSummary]? {
+        do { try await ensureLoaded() } catch { return nil }
+        guard container is NSPersistentCloudKitContainer else { return nil }
+        guard let contextLease = try? await newReadContextLease() else { return nil }
         defer { contextLease.finish() }
         let context = contextLease.context
-        return try await context.perform { [context] in
+        return await context.perform { [context] () -> [SyncEventSummary]? in
             let request = NSPersistentCloudKitContainerEventRequest.fetchEvents(after: .distantPast)
             request.resultType = .events
             guard
                 let result = try? context.execute(request) as? NSPersistentCloudKitContainerEventResult,
                 let events = result.result as? [NSPersistentCloudKitContainer.Event]
-            else { return [] }
-            return events.suffix(limit).map { SyncEventSummary(event: $0) }
+            else { return nil }
+            // The history request does not establish an ordering. Completion
+            // time orders health evidence, and unfinished events cannot prove
+            // either a quota failure or recovery.
+            return events.filter { $0.endDate != nil }
+                .sorted { ($0.endDate ?? .distantPast) < ($1.endDate ?? .distantPast) }
+                .suffix(max(0, limit))
+                .map { SyncEventSummary(event: $0) }
         }
     }
 
@@ -5811,6 +5847,15 @@ actor ConversationStore {
         #endif
         try await detachContentSyncSession()
     }
+
+    #if CONDUCK_TESTING
+    /// Supply a real isolated registration without enabling CloudKit, so the
+    /// detach/unregister failure path can be exercised with local SQLite files.
+    func _setMirrorLeaseForTesting(_ lease: ContentSyncProcessLease.Hold) {
+        precondition(isIsolatedTestStore && mirrorLease == nil)
+        mirrorLease = lease
+    }
+    #endif
 
     func _contentSyncGenerationForTesting() -> Int {
         precondition(isIsolatedTestStore)

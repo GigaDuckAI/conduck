@@ -18,6 +18,9 @@
 //      NEVER for transient / network / throttled / first-sight errors (the system
 //      retries those). Drives a single quiet banner + a Settings row; everything
 //      else stays silent.
+//      Quota evidence is per store and ordered by event completion, for live
+//      delivery AND catch-up. Only a newer successful export from the affected
+//      store proves recovery; a signed-in account or successful import does not.
 //
 // Why no "force sync" / pull-to-refresh: `NSPersistentCloudKitContainer` exposes
 // no public force-fetch/force-export API — its scheduling is opaque — so this
@@ -39,6 +42,65 @@ import OSLog
 // shared file — including the watchOS app target, which reuses the store but does
 // NOT include this iOS/macOS-only monitor.
 
+/// Small deterministic reducer shared by live events and persisted event
+/// history. Keeping successful exports as well as failures makes replay order
+/// irrelevant and prevents an older failure from resurrecting a cleared banner.
+struct CloudSyncHealth {
+    private struct StoreEvidence {
+        var quotaFailure: Date?
+        var successfulExport: Date?
+
+        var isQuotaExceeded: Bool {
+            guard let quotaFailure else { return false }
+            return successfulExport.map { $0 <= quotaFailure } ?? true
+        }
+    }
+
+    private var stores: [String: StoreEvidence] = [:]
+    private var accountReason: CloudSyncMonitor.Reason?
+    private(set) var ignoreEventsBefore: Date?
+
+    init(ignoreEventsBefore: Date? = nil) {
+        self.ignoreEventsBefore = ignoreEventsBefore
+    }
+
+    var reason: CloudSyncMonitor.Reason? {
+        accountReason ?? (stores.values.contains(where: \.isQuotaExceeded) ? .quotaExceeded : nil)
+    }
+
+    private mutating func resetAfterSignOut(at date: Date) {
+        stores.removeAll()
+        accountReason = nil
+        ignoreEventsBefore = max(ignoreEventsBefore ?? .distantPast, date)
+    }
+
+    mutating func applyAccountStatus(_ status: CKAccountStatus, at date: Date) {
+        switch status {
+        case .noAccount:
+            if accountReason != .noAccount { resetAfterSignOut(at: date) }
+            accountReason = .noAccount
+        case .restricted: accountReason = .restricted
+        case .available: accountReason = nil
+        case .couldNotDetermine, .temporarilyUnavailable: break
+        @unknown default: break
+        }
+    }
+
+    mutating func ingest(_ summary: SyncEventSummary) {
+        guard accountReason != .noAccount,
+              let ended = summary.ended,
+              let storeID = summary.storeID else { return }
+        if let cutoff = ignoreEventsBefore, (summary.started ?? ended) <= cutoff { return }
+        let quotaFailure = !summary.succeeded && summary.isQuotaExceeded
+        let successfulExport = summary.succeeded && summary.kind == .exportEvent
+        guard quotaFailure || successfulExport else { return }
+        var evidence = stores[storeID] ?? StoreEvidence()
+        if quotaFailure { evidence.quotaFailure = max(evidence.quotaFailure ?? .distantPast, ended) }
+        if successfulExport { evidence.successfulExport = max(evidence.successfulExport ?? .distantPast, ended) }
+        stores[storeID] = evidence
+    }
+}
+
 @MainActor
 @Observable
 final class CloudSyncMonitor {
@@ -46,7 +108,7 @@ final class CloudSyncMonitor {
 
     /// The one user-actionable reason iCloud sync is broken. Mapped only from
     /// states the user can resolve; transient/network states never set it.
-    enum Reason: Sendable {
+    enum Reason: Equatable, Sendable {
         case noAccount
         case restricted
         case quotaExceeded
@@ -113,7 +175,20 @@ final class CloudSyncMonitor {
 
     private let log = Logger(subsystem: Constants.identityNamespace, category: "CloudSync")
     private static let ringBufferKey = "cloudSyncEventLog"
+    /// Device-local, content-free boundary: events from a signed-out account
+    /// must not reappear after a later catch-up or app restart. No account ID is
+    /// fetched or stored. Only confirmed sign-out resets this boundary: account
+    /// notifications can also mean temporary unavailability. An account replaced
+    /// without an observed sign-out conservatively retains quota evidence until
+    /// newer successful exports prove recovery.
+    private static let accountCutoffKey = "cloudSyncAccountEventCutoff"
     private let ringBufferCap = 50
+    private var health = CloudSyncHealth(
+        ignoreEventsBefore: SettingsDependencies.processDefault.defaults.object(forKey: CloudSyncMonitor.accountCutoffKey) as? Date
+    )
+    private var healthGeneration = 0
+    private var accountRefreshGeneration = 0
+    private var hasCaughtUp = false
 
     // Diagnostics ring-buffer persistence runs OFF the main actor on a dedicated
     // serial queue: the App-Group `UserDefaults` read-modify-write is plist I/O
@@ -188,17 +263,22 @@ final class CloudSyncMonitor {
             Task { @MainActor in self?.ingest(summary) }
         }
 
-        // Re-check account whenever iCloud sign-in state changes.
+        // The notification also covers temporary account-status changes. It
+        // invalidates in-flight lookups, but is not proof of sign-out and must
+        // not discard quota evidence from a still-signed-in account.
         accountObserver = NotificationCenter.default.addObserver(
             forName: .CKAccountChanged,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in await self?.refreshAccountStatus() }
+            Task { @MainActor in
+                guard let self else { return }
+                self.accountStatusDidChange()
+                await self.refresh()
+            }
         }
 
-        Task { await refreshAccountStatus() }
-        Task { await catchUpOnEvents() }
+        Task { await refresh() }
         #endif
     }
 
@@ -236,9 +316,12 @@ final class CloudSyncMonitor {
         // caller — present or future — may reach it without this check. `start()`
         // additionally declines to wire the observers that would call this.
         guard Constants.hasICloudContainerEntitlement else { return }
+        accountRefreshGeneration += 1
+        let generation = accountRefreshGeneration
         let container = CKContainer(identifier: Constants.iCloudCloudKitContainerID)
         do {
             let status = try await container.accountStatus()
+            guard generation == accountRefreshGeneration else { return }
             applyAccountStatus(status)
         } catch {
             // Couldn't read status (transient) — log only, never alarm.
@@ -261,34 +344,53 @@ final class CloudSyncMonitor {
     }
 
     private func applyAccountStatus(_ status: CKAccountStatus) {
-        if let reason = Self.actionableReason(for: status) {
-            setUnavailable(reason)
-        } else if status == .available {
-            clearUnavailable()
-        } else {
+        let previousCutoff = health.ignoreEventsBefore
+        health.applyAccountStatus(status, at: Date())
+        if previousCutoff != health.ignoreEventsBefore {
+            healthGeneration += 1
+            persistAccountCutoff()
+        }
+        publishHealth(allowClear: hasCaughtUp || iCloudUnavailable)
+        if status == .couldNotDetermine || status == .temporarilyUnavailable {
             // Transient (couldNotDetermine / temporarilyUnavailable) — log only.
             log.notice("iCloud account status transient: \(status.rawValue, privacy: .public)")
         }
+    }
+
+    private func accountStatusDidChange() {
+        healthGeneration += 1
+        accountRefreshGeneration += 1
+    }
+
+    private func persistAccountCutoff() {
+        SettingsDependencies.processDefault.defaults.set(health.ignoreEventsBefore, forKey: Self.accountCutoffKey)
+    }
+
+    private func publishHealth(allowClear: Bool = true) {
+        if let reason = health.reason { setUnavailable(reason) }
+        else if allowClear { clearUnavailable() }
     }
 
     // MARK: - Event telemetry
 
     private func ingest(_ summary: SyncEventSummary) {
         record(summary)
-        // Quota-full is sticky + user-actionable → promote a LIVE failure
-        // immediately. Every other event error is transient/system-retried →
-        // logged only (never promoted on first sight).
-        if summary.isQuotaExceeded && !summary.succeeded {
-            setUnavailable(.quotaExceeded)
-        }
+        health.ingest(summary)
+        publishHealth(allowClear: hasCaughtUp || iCloudUnavailable)
     }
 
     /// Pull events that fired while the app was suspended (the live observer
-    /// misses those). Log-only — never promotes UI from historical events (avoids
-    /// stale-error false alarms); live failures + account status drive the surface.
+    /// misses those). Read all retained evidence: a stream of later imports must
+    /// not push an unresolved quota failure outside a fixed diagnostics window.
+    /// Reduce before publishing, so a failure followed by recovery never flashes.
     private func catchUpOnEvents() async {
-        let summaries = await ConversationStore.shared.recentSyncEventSummaries()
-        for summary in summaries { record(summary, replayed: true) }
+        let generation = healthGeneration
+        guard let summaries = await ConversationStore.shared.recentSyncEventSummaries(limit: .max) else { return }
+        guard generation == healthGeneration else { return }
+        for summary in summaries { health.ingest(summary) }
+        for summary in summaries.suffix(20) { record(summary, replayed: true) }
+        hasCaughtUp = true
+        publishHealth()
     }
 
     /// `replayed` marks a summary re-read from the store's event history
