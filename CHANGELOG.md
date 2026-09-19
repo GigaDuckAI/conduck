@@ -7,6 +7,21 @@ and build number Apple shows — and matches `v<version>-<build>` in this
 repository. Versions 1.3 and 1.4 shipped on macOS while iOS moved directly
 from 1.2 to 1.5.
 
+## [1.6.3-16] — iCloud sync reliability
+
+Release build, tagged `v1.6.3-16` on 19 September 2026.
+
+### Fixed
+
+- An issue that could cause iOS to terminate Conduck when it moved into the
+  background with content sync enabled. Sync coordination no longer holds a
+  file lock while the app is suspended, and still waits for other Conduck
+  sessions to stop before confirming sync is off
+- iCloud storage warnings remain until the affected content successfully
+  uploads. Returning to the app, temporary account interruptions and successful
+  downloads no longer incorrectly clear an unresolved storage warning
+- Unresolved iCloud storage warnings are restored from retained sync history
+
 ## [1.6.2-15] — the iPhone bar tidy-up
 
 App Store build, tagged `v1.6.2-15` on 17 September 2026. 7 commits since 1.6.1.
