@@ -91,6 +91,22 @@ Conversation history follows you through your private iCloud. CarPlay runs throu
 
 [Walk through the setup guide](https://conduck.com/setup/).
 
+[![Conduck architecture: direct connections to your chosen AI, local storage, separate Apple sync services, and the voice-message flow.](docs/images/conduck-architecture.png)](docs/images/conduck-architecture.png)
+
+[Open the full-size diagram](docs/images/conduck-architecture.png) · [Explore the data flow](https://conduck.com/trust/#architecture)
+
+<details>
+<summary>Read the diagram as text</summary>
+
+- **Connect.** Conduck sends context from local conversation history directly to your chosen agent gateway or model endpoint. Each chat stays bound to its connection. An agent gateway can run tools and jobs; a plain model endpoint provides chat and inline attachments. Gateway file exchange uses a separately configured file server. No Conduck-operated server sits in these paths.
+- **Store.** Chats, projects and Work materials live on your devices; API keys and tokens live in Keychain. Eligible Work files can sync, while large files stay on their original device. Your chosen gateways and providers may retain the information you send under their own policies.
+- **Sync.** Content uses private CloudKit, selected settings use iCloud's key-value store, and credentials use end-to-end encrypted iCloud Keychain. These services synchronize independently and can take time. Turning content sync off keeps local and existing cloud copies; settings and key sync continue separately. Watch chats use CloudKit, while setup and keys come from the paired iPhone; Work file bytes do not sync to Watch.
+- **Speak.** On iPhone, iPad and Mac, Conduck records, transcribes, saves the text, assembles context, asks your AI and saves the reply. Apple speech is the default. Optional cloud speech receives audio for transcription or reply text for read-aloud. Recordings stay out of chat history, though local retry and relay copies can remain. Work captures reach AI only through an explicit handoff.
+
+Architecture illustration based on source reviewed 22 September 2026.
+
+</details>
+
 ## Connect your way
 
 | Path | Examples | What you get |
