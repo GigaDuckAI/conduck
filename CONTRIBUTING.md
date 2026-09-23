@@ -312,6 +312,97 @@ so the judgement is still yours.
   their notices is an obligation of every distributed build, not a one-time
   write.
 
+## The words this project uses
+
+Several of these words carry a narrower meaning here than they do elsewhere in
+the industry, and *gateway* carries nearly the opposite one. Read this glossary
+before working on the code or architecture.
+
+### Gateway
+
+In Conduck, a gateway is a machine you own that stays on and runs an agent for
+you: a VPS, home server, or always-on Mac mini. It holds the agent's tools, file
+system, and long-running jobs. Conduck is the thin client that talks to it over
+HTTPS — or over explicit plain HTTP at a local-only address — and keeps the
+conversation on your device.
+
+This differs from the common industry meaning of “AI gateway.” LiteLLM, Portkey,
+Kong AI Gateway, Cloudflare AI Gateway, and similar products are routing
+proxies: they sit in front of model providers and handle keys, failover,
+caching, rate limits, or spend. They do not themselves provide an agent loop,
+tools, or a working file system.
+
+If you use an AI gateway in that industry sense, it normally sits farther
+downstream:
+
+```text
+Conduck -> your agent runtime -> your AI gateway -> model provider
+```
+
+OpenRouter is an AI gateway in the industry sense. Conduck treats it as a
+hosted-model lane: you operate no server, and that lane provides chat rather
+than agent tools or full file exchange.
+
+### Agent runtime, or harness
+
+The scaffolding that turns a model into an agent: the loop that lets it call
+tools, read and write files, and continue across multiple steps. Claude Code,
+Codex CLI, OpenClaw, and Hermes are examples.
+
+Conduck does not contain an agent runtime. It talks to yours.
+
+### Hosted model
+
+A model reached through somebody else's API under your own key, with no server
+of your own in the path. Conduck's hosted lane is deliberately limited to chat.
+
+Images and text/code attachments can still be sent to the model. Agent tools, an
+agent loop, and full file exchange require a self-hosted agent gateway.
+
+### Model endpoint
+
+Any URL that answers OpenAI-compatible chat-completion requests. The term says
+nothing about what is behind the URL: it may be a hosted service, Ollama, vLLM,
+a routing proxy, or a custom agent.
+
+That is why Conduck asks you to declare the capabilities of a custom endpoint
+instead of guessing them.
+
+### Adapter
+
+The [published adapter contract](https://conduck.com/setup/adapter/v1/) defines
+the request and reply shapes a server implements to work with Conduck. Anything
+that speaks that contract can connect, regardless of what it is written in.
+
+The [adapter build brief](https://conduck.com/setup/adapter/build/) explains how
+to place one in front of an AI you wrote yourself.
+[`conduck-connect`](https://github.com/gigaduckai/conduck-connect) checks
+software written for Conduck with `--check-adapter`. A stock server that was not
+written specifically for Conduck — such as Ollama, vLLM, or LiteLLM — is checked
+against the more forgiving app compatibility surface with `--check-server`.
+
+### File server
+
+A WebDAV server that both your devices and agent can reach, used to move
+complete files in either direction. It is separate from the gateway and belongs
+to you.
+
+Conduck ships no file-server binary and is only a client of one you already run.
+The hosted-model lane has no file server, so it does not offer full file
+exchange.
+
+### Backend
+
+This word appears in two different senses.
+
+In public privacy claims, “backend” means a server operated by Conduck. There is
+none.
+
+In the source, `Conversation.backend` and `RemoteAgentBackend` are frozen
+persistence identifiers that record which kind of AI a conversation uses.
+Renaming them would orphan data already stored on users' devices. Public prose
+therefore says “gateway kind” or names the lane instead.
+
 ## Documentation
 
 Two documents under `docs/ai-context/` describe the project as a whole:
@@ -320,7 +411,7 @@ architecture, and [`project-structure.md`](docs/ai-context/project-structure.md)
 maps the folders and build targets. Both are written to be read by people and by
 AI coding agents, and both are deliberately small.
 
-Read the [glossary](README.md#the-words-this-project-uses) before either of
+Read the [glossary](#the-words-this-project-uses) above before either of
 them. Several words here are narrower than their industry sense and *gateway*
 is nearly the opposite one, so a contributor who skips it will consistently
 misread which layer a decision is about.

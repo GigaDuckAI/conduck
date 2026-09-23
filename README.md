@@ -7,8 +7,8 @@
 <p align="center"><strong>Your AI. Every Apple device. No Conduck middleman.</strong></p>
 
 <p align="center">
-  The native Apple client for your self-hosted or BYO-key AI.<br />
-  Talk, type, share, and carry the same conversation across iPhone, iPad, Mac, Apple Watch, and CarPlay.
+  The native Apple client for the AI you choose — your own server, a local model, or OpenRouter.<br />
+  One conversation across iPhone, iPad, Mac, Apple Watch, and CarPlay.
 </p>
 
 <p align="center">
@@ -20,8 +20,6 @@
 <p align="center">
   <a href="https://conduck.com/#film">Watch the 40-second film</a>
   ·
-  <a href="#build-from-source">Build Conduck Community</a>
-  ·
   <a href="https://conduck.com/setup/">Setup guide</a>
   ·
   <a href="https://conduck.com/discord/">Discord</a>
@@ -29,71 +27,55 @@
 
 [![Conduck on Mac, iPad, iPhone, Apple Watch, and CarPlay. Watch the 40-second product demo.](https://conduck.com/media/conduck-film-poster-v1.jpg)](https://conduck.com/#film)
 
-Conduck is the interface, not the AI service. There is no model inside the app and no Conduck account to create. You connect the AI you choose, then make it available wherever you already are: at your desk, on your wrist, in the car, or inside another app.
+Conduck is the app, not the AI. There is no model inside it and no Conduck account to create: you connect the AI you already use, and your device talks to it directly under your own keys. The code is open source under Apache-2.0.
 
-The official app is available on the App Store. Conduck-authored application
-code is open source under Apache-2.0. AI and speech-provider usage is billed
-directly by those providers under your own keys.
+## Why Conduck
 
-## Try it in two minutes
+- **Ask from anywhere.** Action Button, Control Center, Shortcuts, the Mac menu bar or a global hotkey, your Watch, or CarPlay.
+- **One conversation on every device.** Start on the Mac, continue on the iPhone, check the reply on your wrist — synced through your own private iCloud.
+- **Talk, type, or share.** On-device dictation, photos and text files, the share sheet, and Screenshot & Ask on Mac.
+- **Work, a desk for your projects.** Collect notes, screenshots, and files from any device, group them into projects, and hand a project to your AI only when you say so.
+- **See what you use.** Turns, tokens, response times, and reliability per gateway, device, and model — measured on your device, visible only to you.
+- **Nobody in the middle.** No Conduck server, no account, no analytics, ads, tracking, or telemetry.
 
-Both paths are free. Neither needs an account with us.
+<sub>Requires iOS, iPadOS, macOS, and watchOS 26.5 or later. The Mac app needs Apple silicon. CarPlay runs through the iPhone app.</sub>
 
-**You already run Ollama on a Mac.** The same Wi-Fi is enough.
+## Get started
 
-1. Let Ollama answer on your network. By default it listens on the Mac alone:
+Free, and no account with us.
+
+| You have… | In Conduck | You get |
+|---|---|---|
+| **No server yet** | Settings → Personal AI → **Sign in with OpenRouter** | Chat with images and text files, in about a minute |
+| **Ollama or LM Studio on a Mac** | Add a **Custom endpoint** ([steps below](#ollama-on-the-same-wi-fi)) | Your local models on the same Wi-Fi |
+| **An agent server** (OpenClaw, Hermes, or your own) | Scan a setup code from [`conduck-connect`](https://github.com/gigaduckai/conduck-connect) | Agent tools, memory, long-running jobs, and file exchange |
+
+Anything that speaks the OpenAI chat API works too — vLLM, LiteLLM, Open WebUI, and more. A plain model endpoint gives you chat and inline attachments; agent tools and full file exchange need an agent server. Built your own AI? Hand the [adapter contract](https://conduck.com/setup/adapter/v1/) to the coding tool that built it, and `conduck-connect --check-adapter` verifies the result.
+
+### Ollama on the same Wi-Fi
+
+<details>
+<summary>Four steps, no key needed</summary>
+
+1. Let Ollama answer on your network (by default it listens on the Mac alone), then quit and reopen it. Newer builds also have a network toggle in settings.
 
    ```bash
    launchctl setenv OLLAMA_HOST "0.0.0.0:11434"
    ```
 
-   then quit and reopen Ollama. Newer Ollama builds also offer this as a network toggle in the app's settings.
-2. Find the Mac's address on your network: System Settings → Wi-Fi → Details, or `ipconfig getifaddr en0`. It looks like `192.168.1.20`.
-3. In Conduck, open Settings → Personal AI and add a **Custom endpoint** with the address `http://192.168.1.20:11434`. No key is needed. Test the connection and pick a model from the list it loads.
+2. Find the Mac's address: System Settings → Wi-Fi → Details, or `ipconfig getifaddr en0` (looks like `192.168.1.20`).
+3. In Conduck, open Settings → Personal AI, add a **Custom endpoint** at `http://192.168.1.20:11434`, test the connection, and pick a model.
 4. Ask something.
 
-Plain `http://` works only for a private address and only while you are on that network. That is Apple's rule, and Conduck says so wherever you review the connection. To reach the same server from anywhere, including the car and the Watch away from home, put HTTPS in front of it: [`conduck-connect`](https://github.com/gigaduckai/conduck-connect) walks you through it.
+Plain `http://` works only for a private address on your own network — that is Apple's rule. To reach your server from anywhere, including the car and the Watch away from home, put HTTPS in front of it; `conduck-connect` walks you through it. The certificate must be one your device already trusts (a root pushed by MDM counts): Apple lets apps make certificate checks stricter, never looser, so there is no "ignore certificate errors" switch. The [certificates guide](https://conduck.com/setup/tls/) covers Tailscale Serve, Let's Encrypt, and Caddy.
 
-**You have no server yet.** Open Settings → Personal AI and choose **Sign in with OpenRouter**. That creates a key in your own OpenRouter account, and you are chatting in about a minute. A hosted model chats and takes inline images and text files. Agent tools and file exchange need a self-hosted agent.
+</details>
 
-**You run something else.** Anything that speaks the OpenAI chat API (LM Studio, vLLM, LiteLLM, Open WebUI, OpenClaw, Hermes) connects the same way as Ollama. For an AI of your own, hand the [adapter contract](https://conduck.com/setup/adapter/v1/) to the coding tool that built it; `conduck-connect --check-adapter` verifies the result before you pair.
+## Private by design
 
-## Why Conduck
-
-- **Ask from anywhere.** Use the Action Button, Control Center, or Shortcuts on iPhone and iPad, or ask from the Mac menu bar, a global hotkey, Apple Watch, or CarPlay.
-- **One conversation across your devices.** Start on Mac, continue on iPhone, and check the reply from your Watch. Your threads sync through your own private iCloud.
-- **Talk, type, or share what is in front of you.** Dictate with on-device speech, attach a photo or text file, share from another app, or use Screenshot & Ask on Mac.
-- **Bring the AI that fits you.** Connect a self-hosted agent, an OpenAI-compatible model endpoint, or a hosted model through OpenRouter.
-- **See what you actually use.** A Usage screen on iPhone, iPad, and Mac counts your turns, tokens, response times, and reliability, broken down by gateway, device, and model — measured on your device, visible only to you.
-- **Keep Conduck out of the middle.** No Conduck-operated intermediary server, no account, and no analytics, ads, tracking, or telemetry. Your device talks directly to the AI and providers you chose, under your own keys.
-
-## One client. Five surfaces.
-
-| Surface | What Conduck adds |
-|---|---|
-| **iPhone** | Native chat and voice, attachments, Action Button, Control Center, Shortcuts, and the share sheet |
-| **iPad** | Native chat and voice, attachments, Control Center, Shortcuts, and the share sheet |
-| **Mac** | Full desktop app, menu-bar companion, global hotkeys, Screenshot & Ask, and the share extension |
-| **Apple Watch** | Quick voice or text capture, conversations, and replies from your wrist |
-| **CarPlay** | Hands-free, multi-turn voice conversations on the road |
-
-**Work is your personal desk.** Collect thoughts, screenshots and files from the app, share sheet, Shortcuts, Mac menu bar, Watch or CarPlay. Arrange loose materials and project folders on Home. Filing puts a material inside its project; opening the folder fills your workspace, and returning Home restores your arrangement. Click the material count to preview a folder’s contents and move materials while staying on Home. Larger folder titles and automatically varied colors help you find each project; you can choose a different color in its menu. You can deliberately add the same material to other projects, with edits shared across every appearance. When you are ready, shape a project brief, review the included files and choose which configured AI should receive it. Only your explicit confirmation starts that conversation. Captures stay on the desk; grouping never copies or deletes their files. Voice notes keep their words, while transcription uses the speech provider you chose. Cards and project organization sync through your own private iCloud; very large files stay on the device that captured them.
-
-Conversation history follows you through your private iCloud. CarPlay runs through the iPhone app. Conduck requires iOS, iPadOS, macOS, and watchOS 26.5 or later; the Mac app requires Apple silicon (M1 or later).
-
-## How it works
-
-**Three steps. One is setup.**
-
-1. **Connect your AI.** Paste a URL and key, scan a setup code from [conduck-connect](https://github.com/gigaduckai/conduck-connect), or add an OpenRouter key if you do not run a server yet.
-2. **Talk, type, or share.** Use the full app or whichever system shortcut is closest at hand.
-3. **Continue anywhere.** Replies join the same conversation on your other devices through your own iCloud.
-
-[Walk through the setup guide](https://conduck.com/setup/).
+Your devices keep the library. Your chosen AI answers the requests. No Conduck-operated server sits anywhere in the path.
 
 [![Conduck architecture: direct connections to your chosen AI, local storage, separate Apple sync services, and the voice-message flow.](docs/images/conduck-architecture.png)](docs/images/conduck-architecture.png)
-
-[Open the full-size diagram](docs/images/conduck-architecture.png) · [Explore the data flow](https://conduck.com/trust/#architecture)
 
 <details>
 <summary>Read the diagram as text</summary>
@@ -107,159 +89,33 @@ Architecture illustration based on source reviewed 22 September 2026.
 
 </details>
 
-## Connect your way
+[See exactly how your data moves](https://conduck.com/trust/) · [Privacy policy](https://conduck.com/privacy/)
 
-| Path | Examples | What you get |
+## Official app or build it yourself
+
+| | Official app | Your own build |
 |---|---|---|
-| **Self-hosted agent gateway** | OpenClaw, Hermes, or an agent behind the [Conduck adapter](https://conduck.com/setup/adapter/v1/) | Server-side agent tools, memory, long-running work, and optional full file exchange |
-| **OpenAI-compatible model endpoint** | Ollama, LM Studio, vLLM, LiteLLM, a routing proxy, or another compatible service | Chat, vision, and declared capabilities; Conduck does not run an agent loop or execute returned tool calls |
-| **Hosted model** | OpenRouter | Multi-turn chat and inline image or text/code attachments in about a minute, with your own API key and no server to run |
+| **Get it** | [App Store](https://apps.apple.com/app/id6773045286) | Build from this repository |
+| **Terms** | Individuals, including professional use; [organizations need a separate agreement](https://conduck.com/terms/) | Apache-2.0, including commercial use |
+| **Name and art** | Conduck | “Conduck Community” with placeholder art |
+| **CarPlay** | Included | Not included (needs Apple's per-team entitlement) |
 
-Images and text/code attachments can ride inline on every compatible lane. Full arbitrary-file exchange, including files created by an agent, requires a self-hosted agent plus an optional WebDAV folder reachable by both sides. The hosted-model lane covers chat, not an agent loop or full file exchange.
+The official app is built from this same source, plus branding, signing, and the CarPlay entitlement — no functional code is withheld.
 
-## Private by architecture, not by promise
-
-```text
-your device   -> your AI (direct HTTPS, or explicit private-network HTTP)
-your device   -> your cloud voice provider (optional, direct HTTPS)
-your devices <-> your private iCloud
-your device  <-> your WebDAV file server (optional) <-> your agent
-```
-
-No Conduck-operated server sits on any of these paths.
-
-- Conversations live on your device and mirror to your own private iCloud database. Apple encrypts that data, and it is not available to us.
-- API keys and access tokens live in the Apple Keychain.
-- Voice stays on-device by default through Apple's speech and read-aloud engines.
-- If you choose cloud speech, audio goes directly to that provider under your own key.
-- Conduck contains no analytics, ads, tracking, or telemetry.
-
-The AI and optional providers you connect still receive the information you choose to send them. Their handling of it is governed by their own configuration and terms.
-
-[See exactly how your data moves](https://conduck.com/trust/) · [Read the privacy policy](https://conduck.com/privacy/) · [Inspect the architecture](docs/ai-context/spec.md)
-
-## Get it
-
-Two builds share this codebase:
-
-| | Official app | Personal source build |
-|---|---|---|
-| **Distribution** | [App Store](https://apps.apple.com/app/id6773045286) | Build from source |
-| **Terms** | Available to individuals, including professional use; [organization-managed use requires a separate agreement](https://conduck.com/terms/) | Apache-2.0, including commercial source use |
-| **Identity** | Conduck name and artwork | “Conduck Community” with neutral placeholder art |
-| **CarPlay** | Included | Not included because it requires an Apple per-team entitlement |
-
-The terms for the official app cover its distribution and the Conduck brand. They place no restriction on the source in this repository, which is licensed under Apache-2.0.
-
-The official build is made from this public application source with private branding, signing, and Apple's CarPlay entitlement added for distribution. No functional code is withheld.
-
-Personal builds may display the **Conduck Community** identity. If you redistribute a build, choose your own product name, icons, and identity as required by [TRADEMARKS.md](TRADEMARKS.md).
-
-## Build from source
-
-Conduck requires Xcode 26.5 or later.
+### Build from source
 
 1. Clone this repository.
-2. Open `Conduck/Conduck.xcodeproj`.
+2. Open `Conduck/Conduck.xcodeproj` in Xcode 26.5 or later.
 3. Build and run. Simulator builds need no configuration.
 
-An unsigned simulator build cannot write to the Keychain, so a gateway added there will not persist. To exercise the app against a real gateway, build with a signing identity or use the launch arguments described in [QA mode](docs/qa/qa-mode.md). To run on your own devices, see [Building from source](CONTRIBUTING.md#building-from-source).
+An unsigned simulator build can't save keys, so a gateway added there won't persist — see [QA mode](docs/qa/qa-mode.md) or [building for your own devices](CONTRIBUTING.md#building-from-source). If you redistribute a build, pick your own name and icons as [TRADEMARKS.md](TRADEMARKS.md) requires.
 
-The result is **Conduck Community**: the same application functionality, minus the CarPlay entitlement, under a neutral identity with placeholder art. Official Conduck brand artwork is not part of this repository and is not covered by the code license; see [TRADEMARKS.md](TRADEMARKS.md).
+## Contributing
 
-Before changing the application, read the [architecture document](docs/ai-context/spec.md). It records the decisions and deliberately rejected alternatives — the part the code alone cannot tell you.
-
-## The words this project uses
-
-Several of these words carry a narrower meaning here than they do elsewhere in the industry, and *gateway* carries nearly the opposite one. Read this glossary before working on the code or architecture.
-
-<details>
-<summary><strong>Open the contributor glossary</strong></summary>
-
-### Gateway
-
-In Conduck, a gateway is a machine you own that stays on and runs an agent for you: a VPS, home server, or always-on Mac mini. It holds the agent's tools, file system, and long-running jobs. Conduck is the thin client that talks to it over HTTPS — or over explicit plain HTTP at a local-only address — and keeps the conversation on your device.
-
-This differs from the common industry meaning of “AI gateway.” LiteLLM, Portkey, Kong AI Gateway, Cloudflare AI Gateway, and similar products are routing proxies: they sit in front of model providers and handle keys, failover, caching, rate limits, or spend. They do not themselves provide an agent loop, tools, or a working file system.
-
-If you use an AI gateway in that industry sense, it normally sits farther downstream:
-
-```text
-Conduck -> your agent runtime -> your AI gateway -> model provider
-```
-
-OpenRouter is an AI gateway in the industry sense. Conduck treats it as a hosted-model lane: you operate no server, and that lane provides chat rather than agent tools or full file exchange.
-
-### Agent runtime, or harness
-
-The scaffolding that turns a model into an agent: the loop that lets it call tools, read and write files, and continue across multiple steps. Claude Code, Codex CLI, OpenClaw, and Hermes are examples.
-
-Conduck does not contain an agent runtime. It talks to yours.
-
-### Hosted model
-
-A model reached through somebody else's API under your own key, with no server of your own in the path. Conduck's hosted lane is deliberately limited to chat.
-
-Images and text/code attachments can still be sent to the model. Agent tools, an agent loop, and full file exchange require a self-hosted agent gateway.
-
-### Model endpoint
-
-Any URL that answers OpenAI-compatible chat-completion requests. The term says nothing about what is behind the URL: it may be a hosted service, Ollama, vLLM, a routing proxy, or a custom agent.
-
-That is why Conduck asks you to declare the capabilities of a custom endpoint instead of guessing them.
-
-### Adapter
-
-The [published adapter contract](https://conduck.com/setup/adapter/v1/) defines the request and reply shapes a server implements to work with Conduck. Anything that speaks that contract can connect, regardless of what it is written in.
-
-The [adapter build brief](https://conduck.com/setup/adapter/build/) explains how to place one in front of an AI you wrote yourself. [`conduck-connect`](https://github.com/gigaduckai/conduck-connect) checks software written for Conduck with `--check-adapter`. A stock server that was not written specifically for Conduck — such as Ollama, vLLM, or LiteLLM — is checked against the more forgiving app compatibility surface with `--check-server`.
-
-### File server
-
-A WebDAV server that both your devices and agent can reach, used to move complete files in either direction. It is separate from the gateway and belongs to you.
-
-Conduck ships no file-server binary and is only a client of one you already run. The hosted-model lane has no file server, so it does not offer full file exchange.
-
-### Backend
-
-This word appears in two different senses.
-
-In public privacy claims, “backend” means a server operated by Conduck. There is none.
-
-In the source, `Conversation.backend` and `RemoteAgentBackend` are frozen persistence identifiers that record which kind of AI a conversation uses. Renaming them would orphan data already stored on users' devices. Public prose therefore says “gateway kind” or names the lane instead.
-
-</details>
-
-## Connecting to your gateway
-
-<details>
-<summary><strong>Transport and certificate requirements for self-hosted gateways</strong></summary>
-
-This applies only to self-hosted lanes. A hosted model needs an API key but no certificate setup of your own.
-
-Use HTTPS for gateways whenever possible. Conduck also accepts an explicitly configured plain-HTTP address only for loopback, a private IPv4 or IPv6 literal, or a Bonjour name ending in `.local`; it warns that the connection is unencrypted. Public and otherwise routable plain-HTTP addresses are rejected. A Tailscale address still needs HTTPS because it is not a local-only address under this rule.
-
-For HTTPS, Conduck refuses a self-signed certificate or one issued by a private certificate authority the device does not trust.
-
-Conduck cannot offer an “ignore certificate errors” switch. App Transport Security — the platform rule Apple applies to app network traffic — allows an app to make certificate checks stricter, not looser.
-
-On a managed fleet, a root certificate already trusted by the devices works, whether pushed by MDM or installed and enabled in Certificate Trust Settings. Otherwise, fix trust on the server side. The [setup guide](https://conduck.com/setup/) covers Tailscale Serve, Let's Encrypt, and reverse-proxy options such as Caddy.
-
-</details>
-
-## Documentation
-
-Two documents cover the project. They are written for both people and AI coding agents. Individual files document themselves through mandatory header comments, while the test suite records detailed behavior.
-
-- [`docs/ai-context/spec.md`](docs/ai-context/spec.md) explains the architecture, its boundaries, the decisions behind them, and the alternatives deliberately rejected.
-- [`docs/ai-context/project-structure.md`](docs/ai-context/project-structure.md) maps the folders and build targets and explains where to begin for each kind of change.
-
-## Community and contributing
-
-- Chat, questions, and setup help: [Discord](https://conduck.com/discord/).
-- Bugs and feature requests: GitHub issues.
-- Contributions are welcome under the Developer Certificate of Origin (`git commit -s`, no CLA). See [CONTRIBUTING.md](CONTRIBUTING.md).
-- Report security vulnerabilities privately as described in [SECURITY.md](SECURITY.md), not through a public issue.
+- Start with [CONTRIBUTING.md](CONTRIBUTING.md) — including the glossary, since *gateway* means something different here — then the [architecture document](docs/ai-context/spec.md) and the [project map](docs/ai-context/project-structure.md).
+- Questions and setup help: [Discord](https://conduck.com/discord/). Bugs and feature requests: GitHub issues.
+- Contributions use the Developer Certificate of Origin (`git commit -s`), no CLA.
+- Report security issues privately via [SECURITY.md](SECURITY.md).
 
 ## License and trademarks
 

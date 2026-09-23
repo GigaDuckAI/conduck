@@ -33,7 +33,7 @@ Three parties exist, and keeping them straight explains almost every decision be
 
 We — the people who publish Conduck — are in none of those. There is no fourth party. That is not a promise about how we behave; it is a statement about what exists, and it is the reason most of the design looks the way it does.
 
-Several words in this document carry a narrower sense here than they do elsewhere in the industry, and *gateway* carries nearly the opposite one — it names the user's own always-on machine, not a routing proxy in front of model providers. The glossary in [`README.md`](../../README.md#the-words-this-project-uses) settles each of them, and a reader who has not read it will misplace which layer of their own stack this document is about.
+Several words in this document carry a narrower sense here than they do elsewhere in the industry, and *gateway* carries nearly the opposite one — it names the user's own always-on machine, not a routing proxy in front of model providers. The glossary in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#the-words-this-project-uses) settles each of them, and a reader who has not read it will misplace which layer of their own stack this document is about.
 
 ---
 

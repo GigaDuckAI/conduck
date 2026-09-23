@@ -11,11 +11,11 @@ and those are the copy of record.
 
 ## Read these, in this order
 
-1. [`README.md`](README.md), and inside it the
-   [glossary](README.md#the-words-this-project-uses) — not optional. Several
-   words here are narrower than their industry sense and *gateway* is nearly
-   the opposite one, so skipping it means consistently misreading which layer a
-   decision is about.
+1. [`README.md`](README.md), then the
+   [glossary](CONTRIBUTING.md#the-words-this-project-uses) in
+   `CONTRIBUTING.md` — not optional. Several words here are narrower than their
+   industry sense and *gateway* is nearly the opposite one, so skipping it means
+   consistently misreading which layer a decision is about.
 2. [`docs/ai-context/spec.md`](docs/ai-context/spec.md) — the decisions, the
    boundaries, and the alternatives that were deliberately rejected. It is the
    part the code cannot tell you. Read the sections bearing on the change you

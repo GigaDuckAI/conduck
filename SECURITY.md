@@ -61,7 +61,7 @@ the shipping version.
 One vocabulary note before the boundaries, because it moves them: Conduck uses
 *gateway* to mean a machine the user runs an agent on, **not** a routing proxy
 in front of model providers (LiteLLM, Portkey, Cloudflare AI Gateway). The
-[glossary](README.md#the-words-this-project-uses) settles that word and the
+[glossary](CONTRIBUTING.md#the-words-this-project-uses) settles that word and the
 rest, and it is worth two minutes before deciding whether something is ours.
 
 In scope:
