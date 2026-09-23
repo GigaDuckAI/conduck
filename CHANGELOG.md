@@ -7,6 +7,37 @@ and build number Apple shows — and matches `v<version>-<build>` in this
 repository. Versions 1.3 and 1.4 shipped on macOS while iOS moved directly
 from 1.2 to 1.5.
 
+## [1.6.4-17] — choose your Apple voice
+
+App Store build, tagged `v1.6.4-17` on 23 September 2026. 7 commits since 1.6.3.
+
+### Added
+
+- iPhone, iPad and Mac: Apple's on-device Text-to-Speech gains a Voice setting.
+  It lists the voices installed for your device's language, grouped Premium,
+  Enhanced and Standard, and plays a sample when you tap one. Automatic keeps
+  the system default. The choice stays on that device, because each device has
+  its own installed voices, and applies to replies in the device's language.
+  CarPlay replies use it too
+
+### Fixed
+
+- A chosen voice whose files are missing no longer leaves a reply silent. The
+  reply is spoken again in the default voice and marked Built-in voice, and
+  later replies use the default until the voice plays again or you choose
+  another
+- Deleting the chosen voice in system settings returns Conduck to Automatic
+- Settings and Diagnostics voice previews interrupted by another sound no
+  longer stay on Playing, and Diagnostics samples the voice a reply would use
+
+### Developer-facing
+
+- README: shorter, with an architecture diagram and card layouts for features
+  and the ways to get started. The Ollama walkthrough is gone, and the
+  contributor glossary moves to `CONTRIBUTING.md`
+- The StoreKit purchase tests run on the iOS 27 simulator instead of failing
+  there
+
 ## [1.6.3-16] — iCloud sync reliability
 
 Release build, tagged `v1.6.3-16` on 19 September 2026.
