@@ -47,29 +47,10 @@ Free, and no account with us.
 | You have… | In Conduck | You get |
 |---|---|---|
 | **No server yet** | Settings → Personal AI → **Sign in with OpenRouter** | Chat with images and text files, in about a minute |
-| **Ollama or LM Studio on a Mac** | Add a **Custom endpoint** ([steps below](#ollama-on-the-same-wi-fi)) | Your local models on the same Wi-Fi |
+| **A local model server** (Ollama, LM Studio, and others) | Add a **Custom endpoint** with its address | Your own models, chat plus inline attachments |
 | **An agent server** (OpenClaw, Hermes, or your own) | Scan a setup code from [`conduck-connect`](https://github.com/gigaduckai/conduck-connect) | Agent tools, memory, long-running jobs, and file exchange |
 
-Anything that speaks the OpenAI chat API works too — vLLM, LiteLLM, Open WebUI, and more. A plain model endpoint gives you chat and inline attachments; agent tools and full file exchange need an agent server. Built your own AI? Hand the [adapter contract](https://conduck.com/setup/adapter/v1/) to the coding tool that built it, and `conduck-connect --check-adapter` verifies the result.
-
-### Ollama on the same Wi-Fi
-
-<details>
-<summary>Four steps, no key needed</summary>
-
-1. Let Ollama answer on your network (by default it listens on the Mac alone), then quit and reopen it. Newer builds also have a network toggle in settings.
-
-   ```bash
-   launchctl setenv OLLAMA_HOST "0.0.0.0:11434"
-   ```
-
-2. Find the Mac's address: System Settings → Wi-Fi → Details, or `ipconfig getifaddr en0` (looks like `192.168.1.20`).
-3. In Conduck, open Settings → Personal AI, add a **Custom endpoint** at `http://192.168.1.20:11434`, test the connection, and pick a model.
-4. Ask something.
-
-Plain `http://` works only for a private address on your own network — that is Apple's rule. To reach your server from anywhere, including the car and the Watch away from home, put HTTPS in front of it; `conduck-connect` walks you through it. The certificate must be one your device already trusts (a root pushed by MDM counts): Apple lets apps make certificate checks stricter, never looser, so there is no "ignore certificate errors" switch. The [certificates guide](https://conduck.com/setup/tls/) covers Tailscale Serve, Let's Encrypt, and Caddy.
-
-</details>
+Anything that speaks the OpenAI chat API works too — vLLM, LiteLLM, Open WebUI, and more. Agent tools and full file exchange need an agent server. Built your own AI? Hand the [adapter contract](https://conduck.com/setup/adapter/v1/) to the coding tool that built it, and `conduck-connect --check-adapter` verifies the result. Step-by-step walkthroughs for every path are in the [setup guide](https://conduck.com/setup/).
 
 ## Private by design
 
