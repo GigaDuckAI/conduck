@@ -676,6 +676,27 @@ enum Constants {
         "tts.voice.\(ttsProviderID)"
     }
 
+    /// App Groups UserDefaults key — DEVICE-LOCAL ONLY, never iCloud KVS, never
+    /// the Watch envelope — for the Apple on-device voice the user picked for
+    /// one device voice locale. Format `tts.appleVoice.<locale>` (e.g.
+    /// `tts.appleVoice.en-GB`); the value is an `AVSpeechSynthesisVoice`
+    /// identifier. Deliberately NOT `ttsVoiceKey(for: "apple-tts")`: that key
+    /// syncs, and installed voices differ per device, so a synced pick would
+    /// name a voice the other device does not have. Disjoint from the
+    /// `tts.voice.` prefix the KVS inbound mirror scans.
+    static func appleVoiceKey(forLocale locale: String) -> String {
+        "tts.appleVoice.\(locale)"
+    }
+
+    /// App Groups UserDefaults key — DEVICE-LOCAL ONLY — recording the picked
+    /// Apple voice identifier that most recently failed to start speaking for
+    /// one device voice locale. While it equals the stored pick, spoken replies
+    /// go straight to the system default voice (no repeated start delay) and
+    /// Settings shows the pick as unavailable. The pick itself is kept.
+    static func appleVoiceUnavailableKey(forLocale locale: String) -> String {
+        "tts.appleVoiceUnavailable.\(locale)"
+    }
+
     /// App Groups UserDefaults **and** iCloud KVS key for a SPECIFIC TTS
     /// provider's optional MODEL override (non-secret → not Keychain). Format
     /// `tts.customModel.<ttsProviderID>`. Empty/absent → the provider's pinned

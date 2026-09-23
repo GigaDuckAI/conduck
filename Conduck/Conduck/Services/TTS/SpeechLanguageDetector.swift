@@ -132,7 +132,9 @@ enum SpeechLanguageDetector {
     /// Lowercased base-language subtag. Uses Foundation's `Locale.Language`
     /// (the codebase idiom — cf. `AppleSpeechRunner`) so script-first, legacy,
     /// 3-letter, and underscore-delimited identifiers canonicalize correctly.
-    private static func baseLanguage(_ code: String) -> String {
+    /// Internal (not private) so the Apple voice picker filters its candidates
+    /// with the SAME canonicalization this reconciliation uses.
+    static func baseLanguage(_ code: String) -> String {
         (Locale.Language(identifier: code).languageCode?.identifier ?? code).lowercased()
     }
 

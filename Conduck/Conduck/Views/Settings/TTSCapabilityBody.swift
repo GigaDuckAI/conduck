@@ -31,7 +31,8 @@ import SwiftUI
 /// Shared TTS config body (iOS + macOS). Recommended-model line → "Speak a
 /// sample" → error line → Advanced[voice + model]. Apple (`bodyFactory == nil`)
 /// collapses to just the button + error line — no model line, no disclosure,
-/// no voice field (the override is inert; the system voice is chosen by locale).
+/// no voice field (the synced override is inert for Apple; its voice is the
+/// device-local pick made in `AppleVoicePicker`, above this body).
 struct TTSCapabilityBody: View {
     let provider: TTSProvider
 

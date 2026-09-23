@@ -4,6 +4,193 @@
     "" : {
 
     },
+    "settings.voice.apple.voice.automatic" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Automatic"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.automatic.subtitle" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your device's default voice"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.download.ios" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "For more natural voices, download Enhanced or Premium voices in Settings → Accessibility → Read & Speak → Voices. Siri voices aren't available to other apps."
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.download.mac" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "For more natural voices, download Enhanced or Premium voices in System Settings → Accessibility → Read & Speak, using the info button next to System Voice. Siri voices aren't available to other apps."
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.footer" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tap a voice to hear it. Your choice applies to replies in your device's language on this device."
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.row" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Voice"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.row.unavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Voice unavailable — using the system voice"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.row.unavailable.a11y" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Unavailable"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.section.enhanced" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Enhanced"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.section.premium" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Premium"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.section.standard" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Standard"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.summary.enhanced" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ (Enhanced)"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.summary.missing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not installed"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.summary.premium" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%@ (Premium)"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Voice"
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.unavailable.ios" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This voice didn't play. Download it again in Settings → Accessibility → Read & Speak → Voices, then tap it here to try again, or pick another. Replies use the system voice until then."
+          }
+        }
+      }
+    },
+    "settings.voice.apple.voice.unavailable.mac" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This voice didn't play. Download it again in System Settings → Accessibility → Read & Speak (the info button next to System Voice), then click it here to try again, or pick another. Replies use the system voice until then."
+          }
+        }
+      }
+    },
     "…" : {
 
     },

@@ -16,10 +16,14 @@ import os.log
 ///   swap at this service boundary if field feedback ever says the default
 ///   voice feels too clinical.
 ///
-/// Voice selection mirrors the device language (not transcript language) and
-/// excludes Novelty voices (Zarvox/Trinoids) and Personal Voices (user-cloned).
-/// Both exclusions matter — we do not want a Conduck system ack spoken in a
-/// robotic alien voice or in the user's own cloned voice.
+/// Voice selection = the system default voice for the device language (not
+/// the transcript language). That default is never a Novelty voice
+/// (Zarvox/Trinoids) or a Personal Voice (user-cloned) — a Conduck system ack
+/// must never sound like either. The user's PICKED Apple voice is deliberately
+/// NOT used here: these fixed acks have no start watchdog to replace a picked
+/// voice that turns out to be silent, and a silent ack is the worst failure
+/// hands-free. Agent replies in the car do use the pick — they go through
+/// CarPlay's own `ReplyVoice`, which guards it.
 @MainActor
 final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
     // MARK: - Singleton
@@ -279,9 +283,9 @@ final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
     /// voices that were downloaded once and later removed (common after an iOS
     /// major upgrade) with no installed flag, and selecting an uninstalled one
     /// synthesizes SILENCE — the worst possible failure hands-free in the car.
-    /// The language-default voice is always installed and honours the user's
-    /// Settings → Accessibility → Spoken Content choice. Mirrors
-    /// `SpeechPlayer.selectVoice` + `WatchReplySpeaker`.
+    /// The language-default voice is always installed. The user's picked voice
+    /// (`AppleVoice.swift`) is not applied to these fixed acks — see the type
+    /// doc. Mirrors `SpeechPlayer.selectVoice` + `WatchReplySpeaker`.
     private static func selectVoice() -> AVSpeechSynthesisVoice? {
         AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
     }

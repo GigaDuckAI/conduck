@@ -353,8 +353,15 @@ extension SettingsViewModel {
     /// (we never reuse `ttsSynthesisFailed.errorDescription`, whose "…Using the
     /// built-in voice." copy is the chat-fallback wording and is wrong here, nor
     /// do we surface the provider's error body). The Apple provider previews
-    /// via the synthesizer (nil key) and always reports `.valid`.
+    /// via the synthesizer (nil key) and reports `.valid` — unless this device
+    /// has a PICKED Apple voice that fails to reach a word, which reports
+    /// `.invalid` and marks the pick unavailable (`AppleVoice.swift`).
     func previewTTS(for providerID: String) async {
+        // Only the LATEST preview request for a provider may write its state:
+        // an older request resuming after a newer one started must not
+        // overwrite "Playing…" or the newer result.
+        let request = (ttsPreviewRequests[providerID] ?? 0) + 1
+        ttsPreviewRequests[providerID] = request
         ttsPreviewStates[providerID] = .checking
 
         // ONE atomic actor hop resolves provider / key / typed key-state / voice /
@@ -365,6 +372,7 @@ extension SettingsViewModel {
         // preview must audit what the store will ACTUALLY use, so it reads the
         // store, not the caches.
         let snapshot = await SettingsManager.shared.ttsSnapshot(forProviderID: providerID)
+        guard ttsPreviewRequests[providerID] == request else { return }
 
         // PREFLIGHT — a cloud provider that REQUIRES a key but has none available
         // on this device fails LOUD here rather than calling `previewSample` (which
@@ -398,6 +406,33 @@ extension SettingsViewModel {
             break
         }
 
+        // Apple: audition this device's PICKED voice (device-local, never in
+        // the synced snapshot). A pick the system no longer resolves fails
+        // loud here — `SpeechPlayer` would otherwise quietly use the default
+        // voice and report a false green. A pick marked unavailable is still
+        // auditioned: the preview is how the user checks whether it is back.
+        var appleVoice: AppleVoicePick?
+        if providerID == TTSProvider.appleTTS.id {
+            let locale = LiveAppleVoices.deviceLocale()
+            if let identifier = AppleVoicePreferences.pickedIdentifier(forLocale: locale) {
+                guard LiveAppleVoices.descriptor(forIdentifier: identifier) != nil else {
+                    AppleVoicePreferences.markUnavailable(identifier, forLocale: locale)
+                    refreshAppleVoices()
+                    TTSOutcomeLog.shared.record(
+                        surface: .preview,
+                        stage: .apple,
+                        outcome: .failedLoud,
+                        errorCode: nil,
+                        keyState: snapshot.keyState,
+                        configSignature: TTSOutcomeLog.configSignature(for: snapshot)
+                    )
+                    ttsPreviewStates[providerID] = .invalid(message: Self.appleVoiceUnavailableMessage)
+                    return
+                }
+                appleVoice = AppleVoicePick(identifier: identifier, locale: locale)
+            }
+        }
+
         // Hand off to the boundary the other agent owns. `previewSample` plays a
         // short clip (cloud → fetch+play; Apple/no-key → synth) and reports the
         // OUTCOME exactly once: `.success` on a played sample, `.failure(error)`
@@ -410,23 +445,48 @@ extension SettingsViewModel {
         // turn on the shared instance.
         SpeechExclusivity.shared.claim(ReplyVoice.shared)
         #endif
-        let outcome: Result<Void, AppError> = await withCheckedContinuation { continuation in
+        // nil = the sample was dropped before it settled (another sound took
+        // over — a speech test, a reply, a newer sample). `previewSample` then
+        // never reports, so its separate abandonment signal resumes this wait
+        // instead of leaving the row on "Playing…" forever.
+        let settled: Result<Void, AppError>? = await withCheckedContinuation { continuation in
             ReplyVoice.shared.previewSample(
                 providerID: providerID,
                 voice: snapshot.voice,
                 customModel: snapshot.customModel,
                 apiKey: snapshot.apiKey,
-                customConfig: snapshot.customConfig
+                customConfig: snapshot.customConfig,
+                appleVoice: appleVoice,
+                onAbandoned: { continuation.resume(returning: nil) }
             ) { result in
                 continuation.resume(returning: result)
             }
         }
 
+        guard ttsPreviewRequests[providerID] == request else { return }
+        guard let outcome = settled else {
+            ttsPreviewStates[providerID] = nil
+            return
+        }
+
         switch outcome {
         case .success:
             ttsPreviewStates[providerID] = .valid
+            // The picked voice just spoke — it is available again.
+            if let appleVoice {
+                AppleVoicePreferences.clearUnavailable(forLocale: appleVoice.locale)
+                refreshAppleVoices()
+            }
         case .failure(let error):
-            ttsPreviewStates[providerID] = .invalid(message: Self.previewFailureMessage(for: error))
+            if let appleVoice {
+                // The picked voice did not reach a word: mark it so replies
+                // skip straight to the system default, and say where to fix it.
+                AppleVoicePreferences.markUnavailable(appleVoice.identifier, forLocale: appleVoice.locale)
+                refreshAppleVoices()
+                ttsPreviewStates[providerID] = .invalid(message: Self.appleVoiceUnavailableMessage)
+            } else {
+                ttsPreviewStates[providerID] = .invalid(message: Self.previewFailureMessage(for: error))
+            }
         }
     }
 
@@ -443,6 +503,9 @@ extension SettingsViewModel {
     /// never logged, never surfaced.
     func previewCustomTTSFromBuffers(for uuid: UUID, voice: String, typedKey: String) async {
         let providerID = TTSProvider.customEndpointID(for: uuid)
+        // Latest request wins, as in `previewTTS`.
+        let request = (ttsPreviewRequests[providerID] ?? 0) + 1
+        ttsPreviewRequests[providerID] = request
         ttsPreviewStates[providerID] = .checking
 
         // Build the synthesis URL from the BUFFER base URL (may be unsaved). Fail
@@ -545,16 +608,24 @@ extension SettingsViewModel {
         // other macOS speakers before it starts.
         SpeechExclusivity.shared.claim(ReplyVoice.shared)
         #endif
-        let outcome: Result<Void, AppError> = await withCheckedContinuation { continuation in
+        // nil = the sample was dropped before it settled (see `previewTTS`).
+        let settled: Result<Void, AppError>? = await withCheckedContinuation { continuation in
             ReplyVoice.shared.previewSample(
                 providerID: providerID,
                 voice: trimmedVoice.isEmpty ? nil : trimmedVoice,
                 customModel: nil,
                 apiKey: apiKey,
-                customConfig: config
+                customConfig: config,
+                onAbandoned: { continuation.resume(returning: nil) }
             ) { result in
                 continuation.resume(returning: result)
             }
+        }
+
+        guard ttsPreviewRequests[providerID] == request else { return }
+        guard let outcome = settled else {
+            ttsPreviewStates[providerID] = nil
+            return
         }
 
         switch outcome {

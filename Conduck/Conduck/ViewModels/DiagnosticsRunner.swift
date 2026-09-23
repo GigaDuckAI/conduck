@@ -1221,10 +1221,23 @@ final class DiagnosticsRunner {
             endpoint: sttSnapshot.customConfig.map { Self.endpointComponent(url: $0.url, model: $0.model, auth: $0.auth, pin: $0.certFingerprint) },
             engine: sttConfiguration.appleEngine?.rawValue
         )
+        // The device-local Apple voice pick is a sample input too (see
+        // `runVoicePreview`): picking another voice, or the pick being marked
+        // unavailable, must reset a carried "Played a sample".
+        #if os(watchOS)
+        let appleVoicePick: String? = nil
+        #else
+        let appleVoicePick: String? = {
+            let locale = LiveAppleVoices.deviceLocale()
+            guard let id = AppleVoicePreferences.pickedIdentifier(forLocale: locale) else { return nil }
+            return AppleVoicePreferences.isPickUnavailable(forLocale: locale) ? id + "|unavailable" : id
+        }()
+        #endif
         let newTTSSignature = Self.voiceSignature(
             id: ttsSnapshot.providerID, apiKey: ttsSnapshot.apiKey, model: ttsSnapshot.customModel,
             endpoint: ttsSnapshot.customConfig.map { Self.endpointComponent(url: $0.url, model: $0.model, auth: $0.auth, pin: $0.certFingerprint) },
-            voice: ttsSnapshot.voice
+            voice: ttsSnapshot.voice,
+            appleVoice: appleVoicePick
         )
 
         // --- Section visibility (sync widened in phase 2 if iCloud is down) ----
@@ -2378,7 +2391,13 @@ final class DiagnosticsRunner {
         let sigAtStart = activeTTSSignature
         setStatus("voice.tts.preview", .running)
 
-        let snapshot = await SettingsManager.shared.activeTTSSnapshot()
+        var snapshot = await SettingsManager.shared.activeTTSSnapshot()
+        #if !os(watchOS)
+        // The sample speaks in the voice a reply would: this device's Apple
+        // voice pick, unless it is marked unavailable (replies then use the
+        // default too — the Settings picker is where a marked pick is retried).
+        snapshot.appleVoice = AppleVoicePreferences.currentPick().flatMap { $0.isUnavailable ? nil : $0 }
+        #endif
 
         // Preflight on the TYPED key state (the snapshot resolved key + state from
         // ONE Keychain read). `.present` / `.notRequired` proceed — `.notRequired`
@@ -2421,17 +2440,26 @@ final class DiagnosticsRunner {
         #endif
 
         voicePreview = .playing
-        let outcome: Result<Void, AppError> = await withCheckedContinuation { continuation in
+        // nil = the sample was dropped before it settled (another sound took
+        // over); `previewSample` then never reports, so its abandonment signal
+        // resumes this wait instead of leaving the row at `.playing`.
+        let settled: Result<Void, AppError>? = await withCheckedContinuation { continuation in
             ReplyVoice.shared.previewSample(
                 providerID: snapshot.providerID,
                 voice: snapshot.voice,
                 customModel: snapshot.customModel,
                 apiKey: snapshot.apiKey,
                 customConfig: snapshot.customConfig,
-                recordSurface: .diagnostics
+                appleVoice: snapshot.appleVoice,
+                recordSurface: .diagnostics,
+                onAbandoned: { continuation.resume(returning: nil) }
             ) { result in
                 continuation.resume(returning: result)
             }
+        }
+        guard let outcome = settled else {
+            voicePreview = .idle
+            return
         }
 
         // Set the terminal preview state UNCONDITIONALLY — never leave it stuck
@@ -3770,7 +3798,7 @@ final class DiagnosticsRunner {
     /// comparable field; the `#<hash>` still flips when the key/model is edited on the
     /// active provider, so a stale probe result is reset rather than carried. Stable
     /// within one process (the only scope a runner compares across).
-    private static func voiceSignature(id: String, apiKey: String?, model: String?, endpoint: String? = nil, voice: String? = nil, engine: String? = nil) -> String {
+    private static func voiceSignature(id: String, apiKey: String?, model: String?, endpoint: String? = nil, voice: String? = nil, engine: String? = nil, appleVoice: String? = nil) -> String {
         var hasher = Hasher()
         hasher.combine(id)
         hasher.combine(apiKey)
@@ -3778,6 +3806,7 @@ final class DiagnosticsRunner {
         hasher.combine(endpoint)
         hasher.combine(voice)
         hasher.combine(engine)
+        hasher.combine(appleVoice)
         return "\(id)#\(hasher.finalize())"
     }
 

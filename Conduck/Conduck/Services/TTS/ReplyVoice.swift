@@ -18,7 +18,10 @@
 //   - FALLBACK TRANSPARENCY: every substitution leaves a trace — the
 //     `.fallbackStarted` activity (per-message marker) + a device-local
 //     `TTSOutcomeLog` ring event, both privacy-safe. "Silent" fallback means no
-//     AUDIBLE interruption, never an unrecorded one.
+//     AUDIBLE interruption, never an unrecorded one. That includes the user's
+//     PICKED Apple voice (`AppleVoice.swift`) failing to start: the system
+//     default voice re-speaks the reply, and the substitution is marked the
+//     same way.
 //   - VALIDATION HONESTY: `previewSample` NEVER substitutes — a cloud failure
 //     (fetch OR playback) reports `.failure` and plays nothing.
 //
@@ -117,6 +120,24 @@ protocol SpeechPlaying: AnyObject {
         onProgress: (@MainActor @Sendable () -> Void)?,
         onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     )
+    /// Voice-aware variant — `voiceIdentifier` is the user's picked Apple
+    /// voice (nil → the language default). The extension default below drops
+    /// it and forwards to the language/progress variant, so fakes that don't
+    /// care need no changes; `SpeechPlayer` overrides it to honor it.
+    ///
+    /// PROGRESS CONTRACT the picked-voice guard relies on: `onStart` fires with
+    /// the synth's `didStart`, and that same event delivers exactly ONE
+    /// `onProgress` tick right after it; every later tick is a spoken word
+    /// boundary. `didStart` alone does not prove a voice is audible — a word
+    /// boundary is the evidence `ReplyVoice` accepts.
+    func playApple(
+        _ text: String,
+        language: String?,
+        voiceIdentifier: String?,
+        onStart: (@MainActor @Sendable () -> Void)?,
+        onProgress: (@MainActor @Sendable () -> Void)?,
+        onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
+    )
     func stop()
     /// Pause in-flight playback preserving position (chat play/pause/resume) —
     /// does NOT fire the done-handler or tear down the player. No-op if idle.
@@ -146,6 +167,18 @@ extension SpeechPlaying {
     ) {
         playApple(text, onStart: onStart, onDone: onDone)
     }
+    /// Default for the voice-aware requirement: drop the identifier and
+    /// forward to the language/progress variant.
+    func playApple(
+        _ text: String,
+        language: String?,
+        voiceIdentifier _: String?,
+        onStart: (@MainActor @Sendable () -> Void)?,
+        onProgress: (@MainActor @Sendable () -> Void)?,
+        onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
+    ) {
+        playApple(text, language: language, onStart: onStart, onProgress: onProgress, onDone: onDone)
+    }
 }
 
 /// Production fetch seam — forwards to the `TTSClient` actor.
@@ -163,12 +196,28 @@ extension SpeechPlayer: SpeechPlaying { }
 /// `TTSFetching`).
 protocol TTSSnapshotResolving {
     func activeTTSSnapshot() async -> TTSSnapshot
+    /// Record that `pick` did not start speaking, so later turns go straight
+    /// to the system default voice and Settings can say why. The extension
+    /// default is a no-op, so fakes that don't exercise a pick need nothing.
+    func markAppleVoiceUnavailable(_ pick: AppleVoicePick)
 }
 
-/// Production snapshot seam — one actor hop into `SettingsManager`.
+extension TTSSnapshotResolving {
+    func markAppleVoiceUnavailable(_ pick: AppleVoicePick) { }
+}
+
+/// Production snapshot seam — one actor hop into `SettingsManager`, plus the
+/// device-local Apple voice pick, which lives outside the synced settings the
+/// actor owns.
 struct LiveTTSSnapshotResolver: TTSSnapshotResolving {
     func activeTTSSnapshot() async -> TTSSnapshot {
-        await SettingsManager.shared.activeTTSSnapshot()
+        var snapshot = await SettingsManager.shared.activeTTSSnapshot()
+        snapshot.appleVoice = AppleVoicePreferences.currentPick()
+        return snapshot
+    }
+
+    func markAppleVoiceUnavailable(_ pick: AppleVoicePick) {
+        AppleVoicePreferences.markUnavailable(pick.identifier, forLocale: pick.locale)
     }
 }
 
@@ -290,6 +339,34 @@ final class ReplyVoice: SpeakEngine {
     /// expires on a genuinely dead leg. Injectable for tests.
     private let appleInactivityTimeout: Duration
 
+    /// PICKED-VOICE START DEADLINE — bounds an Apple leg that speaks in the
+    /// user's picked voice (`AppleVoicePick`) until its FIRST WORD BOUNDARY.
+    /// A picked Enhanced/Premium voice can be listed yet absent (its assets
+    /// removed) and then synthesizes silence; the inactivity watchdog would
+    /// only give up on such a leg, while this deadline REPLACES it: stop, mark
+    /// the pick unavailable, and speak the same text in the system default
+    /// voice (`substitutedPick`). Disarmed on the first word, the turn
+    /// terminal, `cancel()`, supersede; suspended by pause and re-armed by
+    /// resume. Never armed for a default-voice leg.
+    private var pickedVoiceDeadline: Task<Void, Never>?
+
+    /// Re-arm closure for the live picked-voice deadline (pause → resume).
+    private var pickedVoiceDeadlineRearm: (@MainActor () -> Void)?
+
+    /// The live preview's OPTIONAL abandonment signal (`previewSample`'s
+    /// `onAbandoned`). A preview that is cancelled or superseded never fires
+    /// its completion (the same no-completion contract as `speak`), which
+    /// would leave a Settings caller awaiting that completion stuck on
+    /// "Playing…". This separate signal tells it the sample was dropped.
+    /// Cleared when the preview reports; fired and cleared by
+    /// `abandonPendingPreview()` on `cancel()` and every supersede.
+    private var previewAbandon: (@MainActor () -> Void)?
+
+    /// How long a picked voice may take to reach its first word. Long enough
+    /// for a large Premium voice to load its model, short enough that a
+    /// silent one is replaced before the listener gives up. Injectable.
+    private let pickedVoiceStartTimeout: Duration
+
     /// - Parameters:
     ///   - fetcher: cloud-fetch seam (default: live `TTSClient`).
     ///   - player: playback seam (default: a fresh `SpeechPlayer`).
@@ -305,6 +382,8 @@ final class ReplyVoice: SpeakEngine {
     ///   - firstAudioTimeout: first-audio watchdog deadline (default 45 s;
     ///     tests inject a tiny value to exercise the stall handoff).
     ///   - appleInactivityTimeout: Apple-leg inactivity deadline (default 10 s).
+    ///   - pickedVoiceStartTimeout: picked-voice first-word deadline
+    ///     (default 3 s).
     init(
         fetcher: TTSFetching? = nil,
         player: SpeechPlaying? = nil,
@@ -314,7 +393,8 @@ final class ReplyVoice: SpeakEngine {
         chunkPolicy: SpeechSegmentationPolicy = .standard,
         chunkPlayers: ChunkPlayerProviding? = nil,
         firstAudioTimeout: Duration = .seconds(45),
-        appleInactivityTimeout: Duration = .seconds(10)
+        appleInactivityTimeout: Duration = .seconds(10),
+        pickedVoiceStartTimeout: Duration = .seconds(3)
     ) {
         // Construct the live seams INSIDE this `@MainActor` init body (not as
         // default-argument expressions) so the call lands in an isolated
@@ -331,6 +411,7 @@ final class ReplyVoice: SpeakEngine {
         self.chunkPlayers = chunkPlayers ?? AVChunkPlayerFactory()
         self.firstAudioTimeout = firstAudioTimeout
         self.appleInactivityTimeout = appleInactivityTimeout
+        self.pickedVoiceStartTimeout = pickedVoiceStartTimeout
     }
 
     // MARK: - Public API
@@ -373,15 +454,22 @@ final class ReplyVoice: SpeakEngine {
         chunkQueue = nil
         disarmFirstAudioWatchdog()
         disarmAppleInactivityWatchdog()
+        abandonPendingPreview()
         generation += 1
         let turn = generation
 
         // Disarm both watchdogs whenever the turn terminates through the
         // latch — an Apple leg that completes without ever signalling start
-        // must not leave a stale watchdog to re-speak the reply.
+        // must not leave a stale watchdog to re-speak the reply. Only while
+        // this turn is still current: a superseded utterance can still finish
+        // naturally (a supersede does not stop the player until the new turn
+        // reaches audio), and its late terminal must not disarm the NEWER
+        // turn's watchdogs.
         let fire = Self.makeOneShot { [weak self] terminal in
-            self?.disarmFirstAudioWatchdog()
-            self?.disarmAppleInactivityWatchdog()
+            if let self, turn == self.generation {
+                self.disarmFirstAudioWatchdog()
+                self.disarmAppleInactivityWatchdog()
+            }
             completion(terminal)
         }
         let toSpeak = sanitize ? ReplySanitizer.spoken(text) : text
@@ -448,6 +536,10 @@ final class ReplyVoice: SpeakEngine {
     ///   - customConfig: the resolved BYO-endpoint config — non-nil ONLY when
     ///     auditioning the custom provider (`custom-openai-tts`). Carries the
     ///     synthesis URL, model, auth scheme, and cert pin. Nil for the others.
+    ///   - appleVoice: the device-local Apple voice pick to audition (Apple
+    ///     provider only; nil → the language default voice). A pick that does
+    ///     not reach its first word reports `.failure(.ttsSynthesisFailed)` —
+    ///     the preview never substitutes the default voice for it.
     ///   - recordSurface: ring-event surface (default `.preview`; Diagnostics
     ///     passes `.diagnostics`).
     ///   - completion: called exactly once with the outcome (`.success` on a
@@ -458,7 +550,9 @@ final class ReplyVoice: SpeakEngine {
         customModel: String? = nil,
         apiKey: String?,
         customConfig: CustomTTSConfig? = nil,
+        appleVoice: AppleVoicePick? = nil,
         recordSurface: TTSOutcomeEvent.Surface = .preview,
+        onAbandoned: (@MainActor () -> Void)? = nil,
         completion: @escaping @MainActor @Sendable (Result<Void, AppError>) -> Void
     ) {
         // Supersede any prior in-flight turn (e.g. a previous preview still
@@ -471,9 +565,18 @@ final class ReplyVoice: SpeakEngine {
         chunkQueue = nil
         disarmFirstAudioWatchdog()
         disarmAppleInactivityWatchdog()
+        abandonPendingPreview()
         generation += 1
+        let turn = generation
 
-        let report = Self.makeOneShotResult(completion)
+        // Reporting settles the preview, so it can no longer be abandoned.
+        previewAbandon = onAbandoned
+        let report = Self.makeOneShotResult { [weak self] result in
+            if let self, turn == self.generation {
+                self.previewAbandon = nil
+            }
+            completion(result)
+        }
         // Build the explicit-provider snapshot. Key state derives from the
         // ARGUMENTS (the VM resolved them from the store/buffers): a non-empty
         // key is `.present`; Apple / a keyless custom endpoint need none; an
@@ -496,7 +599,8 @@ final class ReplyVoice: SpeakEngine {
             keyState: keyState,
             voice: voice,
             customModel: customModel,
-            customConfig: customConfig
+            customConfig: customConfig,
+            appleVoice: providerID == TTSProvider.appleTTS.id ? appleVoice : nil
         )
         routePreview(text: Self.sampleText, snapshot: snap, surface: recordSurface, report: report)
     }
@@ -514,8 +618,17 @@ final class ReplyVoice: SpeakEngine {
         chunkQueue = nil
         disarmFirstAudioWatchdog()
         disarmAppleInactivityWatchdog()
+        abandonPendingPreview()
         generation += 1
         player.stop()
+    }
+
+    /// Tell a live preview's caller its sample was dropped (see
+    /// `previewAbandon`). Never fires the preview's completion.
+    private func abandonPendingPreview() {
+        let abandon = previewAbandon
+        previewAbandon = nil
+        abandon?()
     }
 
     /// Pause the in-flight spoken reply, PRESERVING position — chat-only (the
@@ -533,6 +646,10 @@ final class ReplyVoice: SpeakEngine {
     func pause() {
         appleInactivityWatchdog?.cancel()
         appleInactivityWatchdog = nil
+        // Suspend (not disarm) a picked voice's start deadline: a paused synth
+        // speaks no words, and its re-arm closure survives for `resume()`.
+        pickedVoiceDeadline?.cancel()
+        pickedVoiceDeadline = nil
         if let chunkQueue {
             chunkQueue.pause()
         } else {
@@ -550,6 +667,7 @@ final class ReplyVoice: SpeakEngine {
             player.resume()
         }
         appleInactivityRearm?()
+        pickedVoiceDeadlineRearm?()
     }
 
     // MARK: - First-audio watchdog (cloud phase)
@@ -584,6 +702,9 @@ final class ReplyVoice: SpeakEngine {
                 reason: .stallTimeout,
                 snapshotKeyState: nil,
                 configSignature: nil,
+                // The snapshot may not have resolved when the stall fires, so
+                // this handoff always speaks in the system default voice.
+                appleVoice: nil,
                 turn: turn,
                 startedAlready: false,
                 onStateChange: onStateChange,
@@ -620,19 +741,28 @@ final class ReplyVoice: SpeakEngine {
     ///     happen);
     ///   - `.startedPlaying` is emitted only when this leg is the turn's first
     ///     audio (`startedAlready == false`), so CarPlay's Thinking→Replying
-    ///     flip and the chat UI behave identically to before.
+    ///     flip and the chat UI behave identically to before;
+    ///   - a leg that speaks in the user's PICKED voice must reach its first
+    ///     word within `pickedVoiceStartTimeout`, or it is replaced by this
+    ///     same entry point in the system default voice (`substitutedPick`),
+    ///     which emits `.fallbackStarted` and records `appleVoiceSubstituted`
+    ///     when its audio starts. The replacement reuses the turn's one-shot
+    ///     `fire`, so the completion still fires exactly once.
     private func startAppleLeg(
         text: String,
         language: String?,
         reason: TTSFallbackReason?,
         snapshotKeyState: APIKeyState?,
         configSignature: String?,
+        appleVoice: AppleVoicePick?,
+        substitutedPick: Bool = false,
         turn: Int,
         startedAlready: Bool,
         onStateChange: (@MainActor @Sendable (SpeechActivity) -> Void)?,
         fire: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
         disarmFirstAudioWatchdog()
+        disarmPickedVoiceDeadline()
 
         let keyState = snapshotKeyState ?? .notRequired
         let sig = configSignature ?? ""
@@ -647,31 +777,141 @@ final class ReplyVoice: SpeakEngine {
         appleInactivityRearm = rearm
         rearm()
 
+        // The pick that would speak this reply (it applies to the reply's
+        // language), if any. One already marked unavailable is not retried —
+        // the default speaks, still marked as a substitution (no ring event:
+        // the failure was recorded when it happened).
+        let applicablePick = appleVoice.flatMap { $0.applies(toReplyLanguage: language) ? $0 : nil }
+        let knownUnavailablePick = applicablePick?.isUnavailable == true
+
+        // This leg's audio ACTUALLY began — the honest moment for the
+        // additive signals and the ring events. A fallback leg records its
+        // cloud-failure reason; a leg that replaced a silent picked voice
+        // records the substitution (both, when a cloud fallback also lost its
+        // pick). The message marker is emitted once either way.
+        let began: @MainActor () -> Void = { [weak self] in
+            guard let self, turn == self.generation else { return }
+            if !startedAlready {
+                onStateChange?(.startedPlaying)
+            }
+            if reason != nil || substitutedPick || knownUnavailablePick {
+                onStateChange?(.fallbackStarted)
+            }
+            if let reason {
+                self.outcomeLog.record(
+                    surface: surface,
+                    stage: Self.stage(for: reason),
+                    outcome: .appleFallback,
+                    errorCode: Self.errorCode(for: reason),
+                    keyState: keyState,
+                    configSignature: sig
+                )
+            }
+            if substitutedPick {
+                self.outcomeLog.record(
+                    surface: surface,
+                    stage: .apple,
+                    outcome: .appleVoiceSubstituted,
+                    keyState: keyState,
+                    configSignature: sig
+                )
+            }
+        }
+
+        // No applicable pick, or one known to be unavailable → the language
+        // default voice, trusted from `didStart` as always.
+        guard let appleVoice = applicablePick, !knownUnavailablePick else {
+            player.playApple(
+                text,
+                language: language,
+                voiceIdentifier: nil,
+                onStart: { began() },
+                onProgress: { rearm() },
+                onDone: fire
+            )
+            return
+        }
+
+        // PICKED voice: not trusted until its first word boundary (see
+        // `pickedVoiceDeadline`). Until then the additive signals are held
+        // back, so a silent pick never flips the UI to "playing" before the
+        // default voice actually speaks. Replacement paths: the deadline
+        // expires, or the synth reports a natural finish without ever
+        // speaking a word. A system cancel (`.incomplete`) is an
+        // interruption, not a broken voice — it settles the turn as usual.
+        let attempt = PickedVoiceAttempt()
+        let substitute: @MainActor () -> Void = { [weak self] in
+            guard let self, turn == self.generation, !attempt.resolved else { return }
+            attempt.resolved = true
+            self.disarmPickedVoiceDeadline()
+            self.player.stop()
+            self.snapshot.markAppleVoiceUnavailable(appleVoice)
+            self.startAppleLeg(
+                text: text, language: language, reason: reason,
+                snapshotKeyState: snapshotKeyState, configSignature: configSignature,
+                appleVoice: nil, substitutedPick: true,
+                turn: turn, startedAlready: startedAlready,
+                onStateChange: onStateChange, fire: fire
+            )
+        }
+        armPickedVoiceDeadline(turn: turn, onExpiry: substitute)
+
         player.playApple(
             text,
             language: language,
-            onStart: { [weak self] in
-                guard let self, turn == self.generation else { return }
-                if !startedAlready {
-                    onStateChange?(.startedPlaying)
-                }
-                if let reason {
-                    // Fallback audio ACTUALLY started — the honest moment for
-                    // both the marker and the ring event.
-                    onStateChange?(.fallbackStarted)
-                    self.outcomeLog.record(
-                        surface: surface,
-                        stage: Self.stage(for: reason),
-                        outcome: .appleFallback,
-                        errorCode: Self.errorCode(for: reason),
-                        keyState: keyState,
-                        configSignature: sig
-                    )
-                }
+            voiceIdentifier: appleVoice.identifier,
+            onStart: {
+                attempt.awaitingStartTick = true
             },
-            onProgress: { rearm() },
-            onDone: fire
+            onProgress: { [weak self] in
+                rearm()
+                guard let self, turn == self.generation, !attempt.resolved else { return }
+                // The tick `didStart` delivers alongside `onStart` is not a word.
+                if attempt.awaitingStartTick {
+                    attempt.awaitingStartTick = false
+                    return
+                }
+                attempt.resolved = true
+                attempt.proven = true
+                self.disarmPickedVoiceDeadline()
+                began()
+            },
+            onDone: { terminal in
+                if attempt.proven || terminal == .incomplete {
+                    fire(terminal)
+                } else {
+                    substitute()
+                }
+            }
         )
+    }
+
+    /// Arm the picked-voice start deadline for the live leg (or preview);
+    /// `onExpiry` runs once if no word boundary disarms it first. The arm
+    /// closure is kept so `resume()` can restart a deadline `pause()` cut.
+    private func armPickedVoiceDeadline(turn: Int, onExpiry: @escaping @MainActor () -> Void) {
+        let arm: @MainActor () -> Void = { [weak self] in
+            guard let self, turn == self.generation else { return }
+            self.pickedVoiceDeadline?.cancel()
+            let timeout = self.pickedVoiceStartTimeout
+            self.pickedVoiceDeadline = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: timeout)
+                guard !Task.isCancelled, let self, turn == self.generation else { return }
+                self.pickedVoiceDeadline = nil
+                self.pickedVoiceDeadlineRearm = nil
+                onExpiry()
+            }
+        }
+        pickedVoiceDeadlineRearm = arm
+        arm()
+    }
+
+    /// Disarm sites: the first word, a replacement, the turn terminal, and —
+    /// through `disarmAppleInactivityWatchdog` — `cancel()` and every supersede.
+    private func disarmPickedVoiceDeadline() {
+        pickedVoiceDeadline?.cancel()
+        pickedVoiceDeadline = nil
+        pickedVoiceDeadlineRearm = nil
     }
 
     /// (Re-)arm the Apple inactivity watchdog for the current leg. Expiry —
@@ -714,6 +954,8 @@ final class ReplyVoice: SpeakEngine {
         appleInactivityWatchdog?.cancel()
         appleInactivityWatchdog = nil
         appleInactivityRearm = nil
+        // Every site that ends an Apple leg ends its picked-voice deadline too.
+        disarmPickedVoiceDeadline()
     }
 
     /// Ring stage token for a fallback reason.
@@ -775,6 +1017,7 @@ final class ReplyVoice: SpeakEngine {
             startAppleLeg(
                 text: text, language: language, reason: nil,
                 snapshotKeyState: snap.keyState, configSignature: sig,
+                appleVoice: snap.appleVoice,
                 turn: turn, startedAlready: false,
                 onStateChange: onStateChange, fire: fire
             )
@@ -793,6 +1036,7 @@ final class ReplyVoice: SpeakEngine {
                 text: text, language: language,
                 reason: snap.keyState == .missing ? .missingKey : .keyUnreadable,
                 snapshotKeyState: snap.keyState, configSignature: sig,
+                appleVoice: snap.appleVoice,
                 turn: turn, startedAlready: false,
                 onStateChange: onStateChange, fire: fire
             )
@@ -853,6 +1097,7 @@ final class ReplyVoice: SpeakEngine {
                             text: text, language: language,
                             reason: .unplayableAudio(stage),
                             snapshotKeyState: snap.keyState, configSignature: sig,
+                            appleVoice: snap.appleVoice,
                             turn: turn, startedAlready: startedFlag.value,
                             onStateChange: onStateChange, fire: fire
                         )
@@ -880,6 +1125,7 @@ final class ReplyVoice: SpeakEngine {
                     text: text, language: language,
                     reason: .fetchFailed(errorCode: code),
                     snapshotKeyState: snap.keyState, configSignature: sig,
+                    appleVoice: snap.appleVoice,
                     turn: turn, startedAlready: false,
                     onStateChange: onStateChange, fire: fire
                 )
@@ -962,6 +1208,7 @@ final class ReplyVoice: SpeakEngine {
                     text: remaining, language: language,
                     reason: .chunkFailed,
                     snapshotKeyState: snap.keyState, configSignature: sig,
+                    appleVoice: snap.appleVoice,
                     turn: turn, startedAlready: firstAudioFired,
                     onStateChange: onStateChange, fire: fire
                 )
@@ -998,11 +1245,24 @@ final class ReplyVoice: SpeakEngine {
         // a bypassed preflight still leaves a truthful trace.
         guard provider.id != TTSProvider.appleTTS.id,
               keyState == .present || keyState == .notRequired else {
+            // Auditioning the user's picked Apple voice: it must PROVE it
+            // speaks (reach a word), or the preview fails loud — substituting
+            // the default voice here would green-light a voice that is gone.
+            if provider.id == TTSProvider.appleTTS.id, let pick = snap.appleVoice {
+                previewPickedAppleVoice(
+                    text: text, pick: pick, surface: surface,
+                    keyState: keyState, configSignature: sig, turn: turn, report: report
+                )
+                return
+            }
             // The preview contract predates the typed terminal and keeps its
             // behavior: any settled Apple sample reports `.success` (the
             // terminal value is a chat/CarPlay concern, not a preview one).
             player.playApple(text) { [weak self] _ in
-                self?.outcomeLog.record(
+                // A superseded sample that still finishes must not report
+                // success into a newer preview.
+                guard let self, turn == self.generation else { return }
+                self.outcomeLog.record(
                     surface: surface, stage: .apple, outcome: .appleOK,
                     keyState: keyState, configSignature: sig
                 )
@@ -1070,6 +1330,68 @@ final class ReplyVoice: SpeakEngine {
         }
     }
 
+    /// Preview of a picked Apple voice. Success = the synth reached a word
+    /// boundary and then settled. Failure (`.ttsSynthesisFailed`, recorded
+    /// `failedLoud` at the `.apple` stage) = the start deadline expired first,
+    /// or the synth finished without speaking a word. Never substitutes.
+    private func previewPickedAppleVoice(
+        text: String,
+        pick: AppleVoicePick,
+        surface: TTSOutcomeEvent.Surface,
+        keyState: APIKeyState,
+        configSignature sig: String,
+        turn: Int,
+        report: @escaping @MainActor @Sendable (Result<Void, AppError>) -> Void
+    ) {
+        let attempt = PickedVoiceAttempt()
+        let fail: @MainActor () -> Void = { [weak self] in
+            guard let self, turn == self.generation, !attempt.resolved else { return }
+            attempt.resolved = true
+            self.disarmPickedVoiceDeadline()
+            self.player.stop()
+            self.outcomeLog.record(
+                surface: surface, stage: .apple, outcome: .failedLoud,
+                errorCode: AppError.ttsSynthesisFailed.errorCode,
+                keyState: keyState, configSignature: sig
+            )
+            report(.failure(.ttsSynthesisFailed))
+        }
+        armPickedVoiceDeadline(turn: turn, onExpiry: fail)
+
+        player.playApple(
+            text,
+            language: nil,
+            voiceIdentifier: pick.identifier,
+            onStart: {
+                attempt.awaitingStartTick = true
+            },
+            onProgress: { [weak self] in
+                guard let self, turn == self.generation, !attempt.resolved else { return }
+                if attempt.awaitingStartTick {
+                    attempt.awaitingStartTick = false
+                    return
+                }
+                attempt.resolved = true
+                attempt.proven = true
+                self.disarmPickedVoiceDeadline()
+            },
+            onDone: { [weak self] _ in
+                guard let self, turn == self.generation else { return }
+                guard attempt.proven else {
+                    fail()
+                    return
+                }
+                // Proven by a spoken word: the voice works, even if the rest
+                // of the sample was then interrupted.
+                self.outcomeLog.record(
+                    surface: surface, stage: .apple, outcome: .appleOK,
+                    keyState: keyState, configSignature: sig
+                )
+                report(.success(()))
+            }
+        )
+    }
+
     // MARK: - Turn-started flag
 
     /// Tiny reference box tracking "any audio started this turn" across the
@@ -1077,6 +1399,18 @@ final class ReplyVoice: SpeakEngine {
     @MainActor
     private final class StartedFlag {
         var value = false
+    }
+
+    /// Per-attempt state for a leg (or preview) speaking in a PICKED voice.
+    /// `awaitingStartTick`: `didStart` fired and its paired progress tick has
+    /// not arrived yet (that tick is not a word). `resolved`: the attempt is
+    /// decided — proven by a word, or replaced/failed — so no second decision
+    /// can run. `proven`: a word boundary arrived.
+    @MainActor
+    private final class PickedVoiceAttempt {
+        var awaitingStartTick = false
+        var resolved = false
+        var proven = false
     }
 
     // MARK: - One-shot completion latch

@@ -304,8 +304,8 @@ struct TTSProvider: Sendable {
     /// Pinned default voice. OpenAI: a named built-in (`alloy`). Mistral: a
     /// voice slug from `GET /v1/audio/voices` (`en_paul_neutral`). ElevenLabs:
     /// a real premade `voice_id` (Aria — `9BWtsMINqrJLrRacOk9x`). Apple: empty
-    /// sentinel (the system voice is chosen by `AVSpeechSynthesizer`, never via
-    /// this field). NOT a locked storage key — only `id` is locked, so a
+    /// sentinel (the Apple voice is the device-local pick in `AppleVoice.swift`
+    /// or the language default — never this synced field). NOT a locked storage key — only `id` is locked, so a
     /// `defaultVoice` change orphans nothing.
     let defaultVoice: String
 

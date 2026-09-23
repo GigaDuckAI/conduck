@@ -424,6 +424,9 @@ private struct MacVoiceVendorDetail: View {
     @Bindable var viewModel: SettingsViewModel
     let vendor: VoiceVendor
 
+    /// Apple only — the on-device voice picker push.
+    @State private var showingAppleVoicePicker = false
+
     var body: some View {
         if let uuid = VoiceVendorRegistry.customVendorUUID(from: vendor.id) {
             // The editor supplies its own `bufferedEditorChrome` macOS header
@@ -466,6 +469,9 @@ private struct MacVoiceVendorDetail: View {
             }
         }
         .macSettingsSubScreenChrome(title: vendor.displayName)
+        .navigationDestination(isPresented: $showingAppleVoicePicker) {
+            AppleVoicePickerView(viewModel: viewModel)
+        }
         .task {
             if vendor.isOnDevice {
                 await viewModel.refreshAppleOnDeviceEngineMode()
@@ -644,6 +650,13 @@ private struct MacVoiceVendorDetail: View {
     private func availableTTSSection(ttsID: String) -> some View {
         let provider = TTSProvider.lookup(id: ttsID)
         Section {
+            // Apple: which on-device voice speaks (device-local pick), above
+            // the sample button that auditions it.
+            if vendor.isOnDevice {
+                AppleVoiceSummaryRow(viewModel: viewModel) {
+                    showingAppleVoicePicker = true
+                }
+            }
             TTSCapabilityBody(
                 provider: provider,
                 currentVoice: viewModel.ttsVoices[ttsID],
@@ -675,7 +688,10 @@ private struct MacVoiceVendorDetail: View {
 
     @ViewBuilder
     private func ttsPreviewStatusFooter(ttsID: String) -> some View {
-        if case .invalid(let message) = viewModel.ttsPreviewStates[ttsID] {
+        // Apple's own section already shows the error inside the body
+        // (`TTSCapabilityBody`), and its picked-voice message is long —
+        // repeating it here would print it twice.
+        if case .invalid(let message) = viewModel.ttsPreviewStates[ttsID], !vendor.isOnDevice {
             Text(message)
                 .font(.caption)
                 .foregroundStyle(AppColors.error)

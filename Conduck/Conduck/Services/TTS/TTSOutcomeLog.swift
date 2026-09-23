@@ -16,6 +16,8 @@
 //     audio actually STARTS, not when it is merely attempted),
 //   - a turn the engine had to give up on (`gaveUp` — the Apple leg never
 //     produced audio and the inactivity watchdog settled the turn),
+//   - a turn whose picked Apple voice did not start and the system default
+//     voice spoke instead (`appleVoiceSubstituted`),
 //   - preview / diagnostics failures (loud) and USER-INITIATED successes
 //     (`cloudOK` / `appleOK`).
 // Routine successful chat playback is NOT recorded (noise, and privacy posture:
@@ -76,6 +78,10 @@ struct TTSOutcomeEvent: Codable, Equatable, Sendable {
         /// The turn could not be spoken at all — the Apple leg never produced
         /// audio and the inactivity watchdog settled the completion.
         case gaveUp
+        /// The user's picked Apple voice did not start speaking, and the
+        /// system default Apple voice spoke the reply instead (recorded when
+        /// the replacement's audio actually starts).
+        case appleVoiceSubstituted
     }
 
     let timestamp: Date
@@ -174,8 +180,9 @@ final class TTSOutcomeLog {
 
     /// Opaque signature over the NON-SECRET config fields that determine a
     /// synthesis request: provider id, voice override, per-provider model
-    /// override, custom-endpoint model, and — for the BYO endpoint — only its
-    /// PRESENCE and auth scheme (the URL itself never feeds the hash; a
+    /// override, custom-endpoint model, the device-local Apple voice pick,
+    /// and — for the BYO endpoint — only its PRESENCE and auth scheme (the
+    /// URL itself never feeds the hash; a
     /// truncated unsalted digest over a low-entropy URL would be
     /// dictionary-testable, conflicting with the never-log-URLs rule).
     /// 8 hex chars: enough to answer "same config or different?" across ring
@@ -184,9 +191,10 @@ final class TTSOutcomeLog {
         providerID: String,
         voice: String?,
         customModel: String?,
-        customConfig: CustomTTSConfig?
+        customConfig: CustomTTSConfig?,
+        appleVoiceIdentifier: String? = nil
     ) -> String {
-        let parts = [
+        var parts = [
             providerID,
             voice ?? "",
             customModel ?? "",
@@ -194,6 +202,11 @@ final class TTSOutcomeLog {
             // Presence + auth scheme only — never the endpoint URL (see doc).
             customConfig.map { "custom:\(String(describing: $0.auth))" } ?? ""
         ]
+        // The device-local Apple voice pick, appended ONLY when one is set so
+        // every signature recorded without a pick keeps its existing value.
+        if let appleVoiceIdentifier {
+            parts.append("appleVoice:\(appleVoiceIdentifier)")
+        }
         let digest = SHA256.hash(data: Data(parts.joined(separator: "|").utf8))
         return digest.prefix(4).map { String(format: "%02x", $0) }.joined()
     }
@@ -204,7 +217,8 @@ final class TTSOutcomeLog {
             providerID: snapshot.providerID,
             voice: snapshot.voice,
             customModel: snapshot.customModel,
-            customConfig: snapshot.customConfig
+            customConfig: snapshot.customConfig,
+            appleVoiceIdentifier: snapshot.appleVoice?.identifier
         )
     }
 }

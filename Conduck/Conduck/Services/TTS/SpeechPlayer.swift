@@ -198,13 +198,31 @@ final class SpeechPlayer: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDe
         onProgress: (@MainActor @Sendable () -> Void)? = nil,
         onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
     ) {
+        playApple(text, language: language, voiceIdentifier: nil, onStart: onStart, onProgress: onProgress, onDone: onDone)
+    }
+
+    /// Voice-aware variant. `voiceIdentifier` is the user's picked Apple voice
+    /// (`AppleVoicePick`), already gated by `ReplyVoice` to replies in the
+    /// device language; nil → the language default voice. An identifier the
+    /// system no longer resolves also degrades to the default. This player
+    /// never judges whether the picked voice actually produced audio —
+    /// `ReplyVoice` owns that guard, because only it can re-speak the reply.
+    func playApple(
+        _ text: String,
+        language: String?,
+        voiceIdentifier: String?,
+        onStart: (@MainActor @Sendable () -> Void)? = nil,
+        onProgress: (@MainActor @Sendable () -> Void)? = nil,
+        onDone: @escaping @MainActor @Sendable (SpeakTerminal) -> Void
+    ) {
         stopInFlight()
         self.appleCompletion = onDone
         self.onStart = onStart
         self.onAppleProgress = onProgress
 
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = Self.selectVoice(language: language)
+        utterance.voice = voiceIdentifier.flatMap(AVSpeechSynthesisVoice.init(identifier:))
+            ?? Self.selectVoice(language: language)
         currentUtteranceID = ObjectIdentifier(utterance)
         synthesizer.speak(utterance)
     }
@@ -342,17 +360,18 @@ final class SpeechPlayer: NSObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDe
 
     // MARK: - Voice selection (Apple fallback)
 
-    /// The Apple fallback voice = the system DEFAULT voice for the current
-    /// language. We deliberately do NOT scan `speechVoices()` for the
-    /// highest-`quality` voice: that list keeps reporting enhanced/premium
+    /// The system DEFAULT voice for the reply's language — used whenever no
+    /// picked voice applies. Never an automatic scan of `speechVoices()` for
+    /// the highest-`quality` voice: that list keeps reporting enhanced/premium
     /// voices that were downloaded once and later removed (common after an iOS
     /// major upgrade) with no installed flag, and selecting an uninstalled one
-    /// synthesizes SILENCE. The language-default voice is always installed and
-    /// honours the user's Settings → Accessibility → Spoken Content choice.
-    /// Content-language selection mirrors `WatchReplySpeaker.speakApple` (the
-    /// wrist sink); `CarPlaySpeechService.selectVoice` deliberately does NOT —
-    /// it voices FIXED localized strings ("Done.", sign-offs), which stay in the
-    /// device language, not the agent reply's.
+    /// synthesizes SILENCE. A better voice is only ever the user's explicit
+    /// pick (`AppleVoice.swift`), guarded at playback by `ReplyVoice`; the
+    /// language-default voice is always installed. Content-language selection
+    /// mirrors `WatchReplySpeaker.speakApple` (the wrist sink);
+    /// `CarPlaySpeechService.selectVoice` deliberately does NOT — it voices
+    /// FIXED localized strings ("Done.", sign-offs), which stay in the device
+    /// language, not the agent reply's.
     private static func selectVoice(language: String?) -> AVSpeechSynthesisVoice? {
         let deviceCode = AVSpeechSynthesisVoice.currentLanguageCode()
         // Prefer the reply's language when a voice for it is installed; a hint

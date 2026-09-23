@@ -69,7 +69,9 @@ enum SpeechActivity {
     /// emitted first, so `.startedPlaying`-only consumers (CarPlay's
     /// Thinking → Replying flip) are unaffected. `ThreadSpeaker` maps this to
     /// the per-message "used built-in voice" marker. An INTENDED Apple turn
-    /// (`apple-tts` active) never emits it.
+    /// (`apple-tts` active) never emits it — except when the user's picked
+    /// Apple voice failed to start and the system default voice replaced it
+    /// (iOS / macOS only; the Watch has no picked voice).
     case fallbackStarted
 }
 

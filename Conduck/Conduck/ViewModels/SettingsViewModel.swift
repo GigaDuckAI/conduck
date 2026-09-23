@@ -438,6 +438,24 @@ final class SettingsViewModel {
     /// failure. Kept separate from any persisted state (preview is ephemeral).
     var ttsPreviewStates: [String: KeyValidationState] = [:]
 
+    /// Monotonic per-provider preview request counter — only the latest
+    /// `previewTTS` call for a provider writes `ttsPreviewStates`.
+    @ObservationIgnored var ttsPreviewRequests: [String: Int] = [:]
+
+    /// The Apple on-device voices this device can pick for spoken replies
+    /// (`AppleVoiceCatalog.candidates`), best quality first. Refreshed by
+    /// `refreshAppleVoices()`; device-local like the pick itself.
+    var appleVoiceOptions: [AppleVoiceDescriptor] = []
+
+    /// The picked Apple voice identifier for this device's voice locale, nil
+    /// = Automatic (system default). Mirrors `AppleVoicePreferences`.
+    var appleVoicePickID: String?
+
+    /// True when the picked voice last failed to start (or is no longer
+    /// installed), so spoken replies use the system default until it is
+    /// picked again or a sample of it plays.
+    var appleVoicePickUnavailable = false
+
     // MARK: - Remote Agent (Personal AI) — Custom gateways (ref-keyed)
 
     // Custom-gateways: the per-backend dicts are re-keyed from

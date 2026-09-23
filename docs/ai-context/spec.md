@@ -247,13 +247,15 @@ Every address the app stores must be an `https` one, with a single carve-out: pl
 
 Fresh installs transcribe and speak on-device with Apple's engines. Cloud providers are opt-in. When a cloud voice fails mid-conversation, the reply is still spoken — Apple's synthesiser substitutes.
 
-**Why:** the privacy-preserving option has to be what a user gets without making a decision, or the claim is hollow. And a spoken-reply feature that goes silent when a network call fails is worse than one that speaks in a different voice.
+**Why:** the privacy-preserving option has to be what a user gets without making a decision, or the claim is hollow. And a reply that goes silent when a network call fails is worse than one spoken in another voice.
 
-Every spoken reply passes through a single point in the code with exactly-once completion. That is load-bearing beyond tidiness: CarPlay must deactivate its audio session exactly once, and both a second completion and a missing one break the car.
+Every spoken reply passes through one point with exactly-once completion: CarPlay must deactivate its audio session exactly once, and a second or a missing completion breaks the car.
 
-**There is exactly one deliberate exception**, and it is worth knowing before you "fix" it: the voice *preview* in Settings does **not** fall back to Apple. A preview exists to tell the user whether the provider they just configured works. Substituting a working voice there would report a false green.
+**One deliberate exception**, worth knowing before you "fix" it: the Settings voice *preview* never substitutes. It exists to tell the user whether the voice they configured works; a substitute would report a false green.
 
-**A substitution is never allowed to be silent.** When the built-in voice stands in for a failed cloud one, it is announced on the message it affected and recorded in a small ring of recent speech outcomes held on the device, which never syncs and never leaves it. That ring is how the diagnostics screen can later tell a user why their chosen voice was not the one they heard — without it, the fallback would look like the feature simply not working.
+**A substitution is never silent.** It is announced on the message it affected and recorded in a small ring of recent speech outcomes that never leaves the device. That ring lets diagnostics tell a user why their chosen voice was not the one they heard; otherwise the fallback looks like a broken feature.
+
+**The chosen Apple voice stays on the device**, because installed voices differ per device, and applies only to replies in the device's language. **Rejected:** following the system's accessibility voice setting, which other apps cannot rely on receiving. A listed voice can have lost its files and speak silence, so a chosen voice that has not reached its first word promptly is replaced by the default.
 
 ### A transcription provider speaks for the user
 

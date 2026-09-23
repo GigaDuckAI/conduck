@@ -34,4 +34,12 @@ struct TTSSnapshot: Sendable {
     let voice: String?
     let customModel: String?
     let customConfig: CustomTTSConfig?
+    /// The device-local Apple voice pick every Apple leg of the turn speaks in
+    /// (intended or fallback), or nil for the system default. NOT resolved in
+    /// the `SettingsManager` hop: it lives in device-local storage outside the
+    /// synced settings, so the live resolver adds it after (see
+    /// `LiveTTSSnapshotResolver`). Defaulted so snapshots built without one —
+    /// the Settings preview's explicit-provider snapshot, test fakes — stay
+    /// unchanged.
+    var appleVoice: AppleVoicePick? = nil
 }

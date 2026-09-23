@@ -33,8 +33,10 @@
 //   g11. No `audio` in `UIBackgroundModes`. The converse hop is a BACKGROUND
 //        URLSession (survives suspension); the STT hop stays foreground inside
 //        a short `beginBackgroundTask`.
-//   g12. `AVSpeechSynthesizer` voice filter `.contains()` on `voiceTraits` —
-//        inside `CarPlaySpeechService.selectVoice()`.
+//   g12. Fixed acks speak the device-language DEFAULT voice
+//        (`CarPlaySpeechService.selectVoice()`), never the user's picked
+//        voice — they have no watchdog to replace a silent one. Picked-voice
+//        trait filtering (`voiceTraits.contains`) lives in `AppleVoiceCatalog`.
 //   g13. 15s cold-connect initial-silence guard + 30s follow-up zero-input
 //        guard + 300s per-recording hard cap — below;
 //        `Constants.carPlayInitialSilenceTimeout`,

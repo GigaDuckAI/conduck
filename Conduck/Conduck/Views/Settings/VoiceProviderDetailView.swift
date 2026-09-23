@@ -13,7 +13,8 @@
 //     model lifecycle).
 //   - TTS section — only when the vendor ships TTS (`.available`): "Set as
 //     active for text-to-speech", a free-text voice override field (placeholder
-//     = the provider's defaultVoice), and a "Speak a sample" preview. A
+//     = the provider's defaultVoice), and a "Speak a sample" preview. Apple
+//     instead leads with the on-device voice row (`AppleVoicePicker.swift`). A
 //     `.coming` vendor renders a disabled "coming soon" row; a `.none` vendor
 //     (Custom) shows no TTS section at all.
 //
@@ -28,6 +29,9 @@ import SwiftUI
 struct VoiceProviderDetailView: View {
     @Bindable var viewModel: SettingsViewModel
     let vendor: VoiceVendor
+
+    /// Apple only — the on-device voice picker push.
+    @State private var showingAppleVoicePicker = false
 
     var body: some View {
         Group {
@@ -91,6 +95,9 @@ struct VoiceProviderDetailView: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+        .navigationDestination(isPresented: $showingAppleVoicePicker) {
+            AppleVoicePickerView(viewModel: viewModel)
+        }
     }
 
     // MARK: - OpenRouter key reuse (gateway → voice)
@@ -300,6 +307,13 @@ struct VoiceProviderDetailView: View {
         // gate): the shared `TTSCapabilityBody` is symmetric with the STT section,
         // which also shows config before a key is stored.
         Section {
+            // Apple: which on-device voice speaks (device-local pick), above
+            // the sample button that auditions it.
+            if vendor.isOnDevice {
+                AppleVoiceSummaryRow(viewModel: viewModel) {
+                    showingAppleVoicePicker = true
+                }
+            }
             TTSCapabilityBody(
                 provider: provider,
                 currentVoice: viewModel.ttsVoices[ttsID],
@@ -329,7 +343,10 @@ struct VoiceProviderDetailView: View {
 
     @ViewBuilder
     private func ttsPreviewStatusFooter(ttsID: String) -> some View {
-        if case .invalid(let message) = viewModel.ttsPreviewStates[ttsID] {
+        // Apple's own section already shows the error inside the body
+        // (`TTSCapabilityBody`), and its picked-voice message is long —
+        // repeating it here would print it twice.
+        if case .invalid(let message) = viewModel.ttsPreviewStates[ttsID], !vendor.isOnDevice {
             Text(message)
                 .font(.caption)
                 .foregroundStyle(AppColors.error)
