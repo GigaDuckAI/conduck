@@ -407,29 +407,18 @@ extension SettingsViewModel {
         }
 
         // Apple: audition this device's PICKED voice (device-local, never in
-        // the synced snapshot). A pick the system no longer resolves fails
-        // loud here — `SpeechPlayer` would otherwise quietly use the default
-        // voice and report a false green. A pick marked unavailable is still
-        // auditioned: the preview is how the user checks whether it is back.
+        // the synced snapshot). A pick whose voice was deleted is forgotten
+        // first, so the sample plays Automatic — what replies now use. A pick
+        // marked unavailable is still auditioned: the preview is how the user
+        // checks whether it is back.
         var appleVoice: AppleVoicePick?
         if providerID == TTSProvider.appleTTS.id {
             let locale = LiveAppleVoices.deviceLocale()
-            if let identifier = AppleVoicePreferences.pickedIdentifier(forLocale: locale) {
-                guard LiveAppleVoices.descriptor(forIdentifier: identifier) != nil else {
-                    AppleVoicePreferences.markUnavailable(identifier, forLocale: locale)
-                    refreshAppleVoices()
-                    TTSOutcomeLog.shared.record(
-                        surface: .preview,
-                        stage: .apple,
-                        outcome: .failedLoud,
-                        errorCode: nil,
-                        keyState: snapshot.keyState,
-                        configSignature: TTSOutcomeLog.configSignature(for: snapshot)
-                    )
-                    ttsPreviewStates[providerID] = .invalid(message: Self.appleVoiceUnavailableMessage)
-                    return
-                }
-                appleVoice = AppleVoicePick(identifier: identifier, locale: locale)
+            let stored = AppleVoicePreferences.pickedIdentifier(forLocale: locale)
+            let kept = AppleVoicePreferences.forgetPickIfRemoved(forLocale: locale)
+            if kept != stored { refreshAppleVoices() }
+            if let kept {
+                appleVoice = AppleVoicePick(identifier: kept, locale: locale)
             }
         }
 

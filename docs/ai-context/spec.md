@@ -255,7 +255,7 @@ Every spoken reply passes through one point with exactly-once completion: CarPla
 
 **A substitution is never silent.** It is announced on the message it affected and recorded in a small ring of recent speech outcomes that never leaves the device. That ring lets diagnostics tell a user why their chosen voice was not the one they heard; otherwise the fallback looks like a broken feature.
 
-**The chosen Apple voice stays on the device**, because installed voices differ per device, and applies only to replies in the device's language. **Rejected:** following the system's accessibility voice setting, which other apps cannot rely on receiving. A listed voice can have lost its files and speak silence, so a chosen voice that has not reached its first word promptly is replaced by the default.
+**The chosen Apple voice stays on the device**, since devices install different voices, and speaks only replies in the device's language. **Rejected:** following the system's accessibility voice setting, which apps cannot rely on. A listed voice can lose its files and go silent, so one missing its first word is replaced by the default; an unlisted voice was usually deleted deliberately, so the choice is forgotten.
 
 ### A transcription provider speaks for the user
 

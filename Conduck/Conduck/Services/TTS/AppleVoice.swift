@@ -31,9 +31,12 @@
 // does not start speaking is replaced by the system default, the
 // substitution is shown, and the pick is recorded here as unavailable until
 // the user re-picks it, a sample of it plays, or the installed-voice list
-// changes. The mark stores a fingerprint of the installed-voice list, so it
+// changes. A pick whose voice the list no longer names at all is different:
+// that voice was removed, usually on purpose, so the pick is forgotten and
+// the device returns to Automatic without a warning (`forgetPickIfRemoved`).
+// The mark stores a fingerprint of the installed-voice list, so it
 // expires by itself when a download or deletion changes that list — the
-// process-lifetime `VoiceListFingerprintCache` observers catch the change
+// process-lifetime `InstalledVoiceListCache` observers catch the change
 // with no Settings screen open. While marked, replies the
 // pick would have spoken still carry the substitution marker.
 //
@@ -162,22 +165,35 @@ enum LiveAppleVoices {
         AVSpeechSynthesisVoice.speechVoices().map { descriptor(for: $0) }
     }
 
+    /// The installed-voice list, cached per process (`InstalledVoiceListCache`):
+    /// every reply with a pick reads it, and enumerating every installed voice
+    /// per reply is wasted work when the list rarely changes.
+    static func installedList() -> InstalledVoiceList {
+        InstalledVoiceListCache.live.value()
+    }
+
     /// A stable digest of the installed-voice list. Changes when a voice is
     /// downloaded or removed, which is when an unavailable mark should expire.
-    /// Cached per process (`VoiceListFingerprintCache`): while a pick is
-    /// marked, every reply reads it, and enumerating every installed voice per
-    /// reply is wasted work when the list rarely changes.
     static func fingerprint() -> String {
-        VoiceListFingerprintCache.live.value()
+        installedList().fingerprint
     }
 
-    nonisolated static func computeFingerprint() -> String {
-        let ids = AVSpeechSynthesisVoice.speechVoices().map(\.identifier).sorted()
-        let digest = SHA256.hash(data: Data(ids.joined(separator: "\n").utf8))
-        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    nonisolated static func readInstalledList() -> InstalledVoiceList {
+        InstalledVoiceList(identifiers: AVSpeechSynthesisVoice.speechVoices().map(\.identifier))
     }
 
-    /// The voice for `identifier`, or nil when the system no longer knows it.
+    /// Whether the system lists `identifier` as installed — the ONLY signal
+    /// `AppleVoicePreferences` treats as the voice being removed. A miss
+    /// against the cached list is confirmed with a fresh read before anyone
+    /// acts on it, since the cached (or a just-raced) read may predate a
+    /// download.
+    static func isListed(_ identifier: String) -> Bool {
+        if installedList().identifiers.contains(identifier) { return true }
+        InstalledVoiceListCache.live.invalidate()
+        return installedList().identifiers.contains(identifier)
+    }
+
+    /// The voice for `identifier`, or nil when the system cannot resolve it.
     static func descriptor(forIdentifier identifier: String) -> AppleVoiceDescriptor? {
         AVSpeechSynthesisVoice(identifier: identifier).map { descriptor(for: $0) }
     }
@@ -200,14 +216,27 @@ enum LiveAppleVoices {
     }
 }
 
-/// Holds the installed-voice fingerprint between replies. Two signals drop
-/// it: the system's voice-list change notification, and the app becoming
-/// active — a download finished in the system Settings app while this app was
+/// The identifiers the system lists as installed, and their digest.
+nonisolated struct InstalledVoiceList: Sendable, Equatable {
+    let identifiers: Set<String>
+    let fingerprint: String
+
+    init(identifiers: [String]) {
+        self.identifiers = Set(identifiers)
+        let digest = SHA256.hash(data: Data(self.identifiers.sorted().joined(separator: "\n").utf8))
+        fingerprint = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// Holds the installed-voice list between replies. Two signals drop it: the
+/// system's voice-list change notification, and the app becoming active — a
+/// download or deletion in the system Settings app while this app was
 /// suspended may never deliver the first. Observers live for the process, so
-/// a mark still expires without any Settings screen open.
-nonisolated final class VoiceListFingerprintCache: @unchecked Sendable {
-    static let live: VoiceListFingerprintCache = {
-        let cache = VoiceListFingerprintCache(compute: LiveAppleVoices.computeFingerprint)
+/// a removed pick is noticed, and a mark expires, without any Settings screen
+/// open.
+nonisolated final class InstalledVoiceListCache: @unchecked Sendable {
+    static let live: InstalledVoiceListCache = {
+        let cache = InstalledVoiceListCache(compute: LiveAppleVoices.readInstalledList)
         #if os(iOS)
         let foreground = UIApplication.didBecomeActiveNotification
         #else
@@ -222,20 +251,20 @@ nonisolated final class VoiceListFingerprintCache: @unchecked Sendable {
     }()
 
     private let lock = NSLock()
-    private let compute: @Sendable () -> String
-    private var cached: String?
+    private let compute: @Sendable () -> InstalledVoiceList
+    private var cached: InstalledVoiceList?
     /// Bumped by every invalidation, so a value computed across one is used
     /// for that call but never stored.
     private var generation = 0
 
-    init(compute: @escaping @Sendable () -> String) {
+    init(compute: @escaping @Sendable () -> InstalledVoiceList) {
         self.compute = compute
     }
 
     /// Enumerates OUTSIDE the lock: an observer that fires on the posting
     /// thread while the voice list is read calls `invalidate()`, which would
     /// otherwise wait on a lock its own thread holds.
-    func value() -> String {
+    func value() -> InstalledVoiceList {
         lock.lock()
         if let cached {
             lock.unlock()
@@ -329,22 +358,48 @@ enum AppleVoicePreferences {
         defaults.removeObject(forKey: Constants.appleVoiceUnavailableKey(forLocale: locale))
     }
 
-    /// The pick for spoken replies, or nil when nothing is picked. A pick
-    /// marked unavailable comes back with `isUnavailable` set, so replies it
-    /// applies to use the default voice AND carry the substitution marker. A
-    /// pick the system no longer knows, or that is no longer selectable for
-    /// this locale, is marked unavailable here, so Settings says why the
-    /// default is speaking. `deviceLocale` / `lookup` / `fingerprint` default
-    /// to the live device (nil); tests pass them.
+    /// Forgets the pick when the system no longer lists its voice, and
+    /// returns the pick that remains. A voice gone from the list was removed,
+    /// most often on purpose in the system settings, so the device quietly
+    /// returns to Automatic: no warning, no substitution marker. (A voice the
+    /// list still names but that speaks silence is the other case — the
+    /// playback guard marks it unavailable instead, and keeps it.)
+    /// `isListed` defaults to the live list; tests pass one.
+    @discardableResult
+    static func forgetPickIfRemoved(
+        forLocale locale: String,
+        isListed: ((String) -> Bool)? = nil,
+        defaults: any DefaultsStore = SettingsDependencies.processDefault.defaults
+    ) -> String? {
+        let isListed = isListed ?? { LiveAppleVoices.isListed($0) }
+        guard let identifier = pickedIdentifier(forLocale: locale, defaults: defaults) else { return nil }
+        guard isListed(identifier) else {
+            setPickedIdentifier(nil, forLocale: locale, defaults: defaults)
+            return nil
+        }
+        return identifier
+    }
+
+    /// The pick for spoken replies, or nil when nothing is picked or its
+    /// voice was removed (`forgetPickIfRemoved`). A pick marked unavailable
+    /// comes back with `isUnavailable` set, so replies it applies to use the
+    /// default voice AND carry the substitution marker. A listed pick the
+    /// system cannot resolve, or that is no longer selectable for this
+    /// locale, is marked unavailable here (and kept), so Settings says why the
+    /// default is speaking. `deviceLocale` / `isListed` / `lookup` /
+    /// `fingerprint` default to the live device (nil); tests pass them.
     static func currentPick(
         deviceLocale: String? = nil,
+        isListed: ((String) -> Bool)? = nil,
         lookup: ((String) -> AppleVoiceDescriptor?)? = nil,
         fingerprint: String? = nil,
         defaults: any DefaultsStore = SettingsDependencies.processDefault.defaults
     ) -> AppleVoicePick? {
         let deviceLocale = deviceLocale ?? LiveAppleVoices.deviceLocale()
         let lookup = lookup ?? { LiveAppleVoices.descriptor(forIdentifier: $0) }
-        guard let identifier = pickedIdentifier(forLocale: deviceLocale, defaults: defaults) else { return nil }
+        guard let identifier = forgetPickIfRemoved(forLocale: deviceLocale, isListed: isListed, defaults: defaults) else {
+            return nil
+        }
         if isPickUnavailable(forLocale: deviceLocale, fingerprint: fingerprint, defaults: defaults) {
             return AppleVoicePick(identifier: identifier, locale: deviceLocale, isUnavailable: true)
         }

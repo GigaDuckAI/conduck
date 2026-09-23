@@ -107,6 +107,7 @@ final class AppleVoiceTests: XCTestCase {
         AppleVoicePreferences.setPickedIdentifier("ava", forLocale: "en-US", defaults: store)
         let pick = AppleVoicePreferences.currentPick(
             deviceLocale: "en-US",
+            isListed: { _ in true },
             lookup: { [self] id in voice(id, "en-US", .premium) },
             defaults: store
         )
@@ -118,7 +119,7 @@ final class AppleVoiceTests: XCTestCase {
         AppleVoicePreferences.setPickedIdentifier("ava", forLocale: "en-US", defaults: store)
         AppleVoicePreferences.markUnavailable("ava", forLocale: "en-US", fingerprint: "list-1", defaults: store)
         let pick = AppleVoicePreferences.currentPick(
-            deviceLocale: "en-US", lookup: { [self] id in voice(id, "en-US") },
+            deviceLocale: "en-US", isListed: { _ in true }, lookup: { [self] id in voice(id, "en-US") },
             fingerprint: "list-1", defaults: store
         )
         XCTAssertEqual(pick?.isUnavailable, true,
@@ -136,21 +137,59 @@ final class AppleVoiceTests: XCTestCase {
         XCTAssertTrue(AppleVoicePreferences.isPickUnavailable(forLocale: "en-US", fingerprint: "list-1", defaults: store))
         XCTAssertFalse(AppleVoicePreferences.isPickUnavailable(forLocale: "en-US", fingerprint: "list-2", defaults: store))
         let pick = AppleVoicePreferences.currentPick(
-            deviceLocale: "en-US", lookup: { [self] id in voice(id, "en-US") },
+            deviceLocale: "en-US", isListed: { _ in true }, lookup: { [self] id in voice(id, "en-US") },
             fingerprint: "list-2", defaults: store
         )
         XCTAssertEqual(pick?.isUnavailable, false, "The next reply tries the pick again.")
     }
 
-    func testAPickTheSystemNoLongerKnowsIsMarkedUnavailable() {
+    /// Deleting the picked voice in the system settings removes it from the
+    /// list: the pick is forgotten and replies return to Automatic, with no
+    /// warning and no substitution marker.
+    func testAPickWhoseVoiceWasRemovedIsForgotten() {
         let store = InMemoryDefaultsStore()
         AppleVoicePreferences.setPickedIdentifier("gone", forLocale: "en-US", defaults: store)
         let pick = AppleVoicePreferences.currentPick(
-            deviceLocale: "en-US", lookup: { _ in nil }, fingerprint: "list-1", defaults: store
+            deviceLocale: "en-US", isListed: { _ in false }, lookup: { _ in nil }, fingerprint: "list-1", defaults: store
+        )
+        XCTAssertNil(pick, "Replies use the default voice as if Automatic were picked.")
+        XCTAssertNil(AppleVoicePreferences.pickedIdentifier(forLocale: "en-US", defaults: store),
+                     "Settings shows Automatic.")
+        XCTAssertFalse(AppleVoicePreferences.isPickUnavailable(forLocale: "en-US", fingerprint: "list-1", defaults: store),
+                       "Nothing is left to warn about.")
+    }
+
+    /// A voice that already failed and was then deleted is forgotten too —
+    /// its old unavailable mark must not linger.
+    func testARemovedVoiceThatWasMarkedIsForgottenWithItsMark() {
+        let store = InMemoryDefaultsStore()
+        AppleVoicePreferences.setPickedIdentifier("tom", forLocale: "en-US", defaults: store)
+        AppleVoicePreferences.markUnavailable("tom", forLocale: "en-US", fingerprint: "list-1", defaults: store)
+        XCTAssertNil(AppleVoicePreferences.forgetPickIfRemoved(forLocale: "en-US", isListed: { _ in false }, defaults: store))
+        XCTAssertNil(store.string(forKey: Constants.appleVoiceUnavailableKey(forLocale: "en-US")))
+    }
+
+    /// Still listed but silent is the OTHER case: the pick is kept (marked by
+    /// the playback guard), so it comes back once the voice plays again.
+    func testAListedPickIsKeptByTheRemovalRule() {
+        let store = InMemoryDefaultsStore()
+        AppleVoicePreferences.setPickedIdentifier("ava", forLocale: "en-US", defaults: store)
+        XCTAssertEqual(
+            AppleVoicePreferences.forgetPickIfRemoved(forLocale: "en-US", isListed: { _ in true }, defaults: store),
+            "ava"
+        )
+    }
+
+    /// Removal is decided by the list alone: a voice the list still names but
+    /// the system cannot resolve is kept and marked, not forgotten.
+    func testAListedButUnresolvablePickIsMarkedNotForgotten() {
+        let store = InMemoryDefaultsStore()
+        AppleVoicePreferences.setPickedIdentifier("ava", forLocale: "en-US", defaults: store)
+        let pick = AppleVoicePreferences.currentPick(
+            deviceLocale: "en-US", isListed: { _ in true }, lookup: { _ in nil }, fingerprint: "list-1", defaults: store
         )
         XCTAssertEqual(pick?.isUnavailable, true)
-        XCTAssertTrue(AppleVoicePreferences.isPickUnavailable(forLocale: "en-US", fingerprint: "list-1", defaults: store),
-                      "Settings must be able to say why the default voice is speaking.")
+        XCTAssertEqual(AppleVoicePreferences.pickedIdentifier(forLocale: "en-US", defaults: store), "ava")
     }
 
     func testPickingAgainClearsTheUnavailableMark() {
@@ -197,29 +236,36 @@ final class AppleVoiceTests: XCTestCase {
                        "The key must stay outside the `tts.voice.` prefix the KVS inbound mirror scans.")
     }
 
-    /// Replies read the fingerprint while a pick is marked; the voice list is
+    /// Every reply with a pick reads the installed-voice list; it is
     /// enumerated once, then again only after a change signal.
-    func testFingerprintIsComputedOnceUntilInvalidated() {
-        let calls = FingerprintCalls()
-        let cache = VoiceListFingerprintCache { calls.next() }
-        XCTAssertEqual(cache.value(), "list-1")
-        XCTAssertEqual(cache.value(), "list-1")
+    func testTheVoiceListIsReadOnceUntilInvalidated() {
+        let calls = VoiceListReads()
+        let cache = InstalledVoiceListCache { calls.next() }
+        XCTAssertEqual(cache.value().identifiers, ["list-1"])
+        XCTAssertEqual(cache.value().identifiers, ["list-1"])
         XCTAssertEqual(calls.count, 1)
         cache.invalidate()
-        XCTAssertEqual(cache.value(), "list-2", "A voice-list change or foregrounding re-reads the list.")
+        XCTAssertEqual(cache.value().identifiers, ["list-2"], "A voice-list change or foregrounding re-reads the list.")
         XCTAssertEqual(calls.count, 2)
     }
 
     /// A voice-list change posted while the list is being read must neither
     /// deadlock nor leave the pre-change value cached.
     func testAnInvalidationDuringTheReadIsNotLost() {
-        let calls = FingerprintCalls()
-        let cache = VoiceListFingerprintCache { calls.next() }
+        let calls = VoiceListReads()
+        let cache = InstalledVoiceListCache { calls.next() }
         calls.onFirstRead = { cache.invalidate() }
-        XCTAssertEqual(cache.value(), "list-1", "The call itself still gets the value it read.")
-        XCTAssertEqual(cache.value(), "list-2", "The read that raced the change is not kept.")
-        XCTAssertEqual(cache.value(), "list-2")
+        XCTAssertEqual(cache.value().identifiers, ["list-1"], "The call itself still gets the value it read.")
+        XCTAssertEqual(cache.value().identifiers, ["list-2"], "The read that raced the change is not kept.")
+        XCTAssertEqual(cache.value().identifiers, ["list-2"])
         XCTAssertEqual(calls.count, 2)
+    }
+
+    func testTheFingerprintIgnoresOrderAndDuplicates() {
+        XCTAssertEqual(InstalledVoiceList(identifiers: ["b", "a", "a"]).fingerprint,
+                       InstalledVoiceList(identifiers: ["a", "b"]).fingerprint)
+        XCTAssertNotEqual(InstalledVoiceList(identifiers: ["a"]).fingerprint,
+                          InstalledVoiceList(identifiers: ["a", "b"]).fingerprint)
     }
 
     // MARK: - Diagnostics signature
@@ -239,7 +285,7 @@ final class AppleVoiceTests: XCTestCase {
     }
 }
 
-private nonisolated final class FingerprintCalls: @unchecked Sendable {
+private nonisolated final class VoiceListReads: @unchecked Sendable {
     private let lock = NSLock()
     private var calls = 0
     /// Runs inside the first read, outside this counter's lock.
@@ -251,13 +297,13 @@ private nonisolated final class FingerprintCalls: @unchecked Sendable {
         return calls
     }
 
-    func next() -> String {
+    func next() -> InstalledVoiceList {
         lock.lock()
         calls += 1
         let n = calls
         lock.unlock()
         if n == 1 { onFirstRead?() }
-        return "list-\(n)"
+        return InstalledVoiceList(identifiers: ["list-\(n)"])
     }
 }
 #endif

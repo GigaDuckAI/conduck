@@ -1229,7 +1229,7 @@ final class DiagnosticsRunner {
         #else
         let appleVoicePick: String? = {
             let locale = LiveAppleVoices.deviceLocale()
-            guard let id = AppleVoicePreferences.pickedIdentifier(forLocale: locale) else { return nil }
+            guard let id = AppleVoicePreferences.forgetPickIfRemoved(forLocale: locale) else { return nil }
             return AppleVoicePreferences.isPickUnavailable(forLocale: locale) ? id + "|unavailable" : id
         }()
         #endif

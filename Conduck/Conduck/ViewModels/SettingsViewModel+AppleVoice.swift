@@ -11,9 +11,10 @@
 // also where a pick that no longer plays is marked unavailable, or cleared of
 // that mark when it plays again. A mark also expires by itself when the
 // installed-voice list changes (its fingerprint), so a refresh is all a
-// download needs. The refresh re-reads that list rather than trusting the
-// per-process fingerprint cache, because the view's change handler may run
-// before the cache's own observer drops the old value.
+// download needs, and a pick whose voice was deleted is forgotten here
+// (back to Automatic). The refresh re-reads that list rather than trusting
+// the per-process cache, because the view's change handler may run before
+// the cache's own observer drops the old value.
 
 import Foundation
 
@@ -23,10 +24,16 @@ extension SettingsViewModel {
     /// call on every appearance, on return to the foreground, and on the
     /// system's voice-list change notification.
     func refreshAppleVoices() {
-        VoiceListFingerprintCache.live.invalidate()
+        InstalledVoiceListCache.live.invalidate()
         let locale = LiveAppleVoices.deviceLocale()
         let options = AppleVoiceCatalog.candidates(from: LiveAppleVoices.installed(), deviceLocale: locale)
-        let pick = AppleVoicePreferences.pickedIdentifier(forLocale: locale)
+        let stored = AppleVoicePreferences.pickedIdentifier(forLocale: locale)
+        let pick = AppleVoicePreferences.forgetPickIfRemoved(forLocale: locale)
+        // A forgotten pick takes its old sample result with it: a "didn't
+        // play" message must not linger under Automatic.
+        if pick != stored, ttsPreviewStates[TTSProvider.appleTTS.id] != .checking {
+            ttsPreviewStates[TTSProvider.appleTTS.id] = nil
+        }
         appleVoiceOptions = options
         appleVoicePickID = pick
         if let pick {
