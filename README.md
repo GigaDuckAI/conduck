@@ -31,26 +31,61 @@ Conduck is the app, not the AI. There is no model inside it and no Conduck accou
 
 ## Why Conduck
 
-- **Ask from anywhere.** Action Button, Control Center, Shortcuts, the Mac menu bar or a global hotkey, your Watch, or CarPlay.
-- **One conversation on every device.** Start on the Mac, continue on the iPhone, check the reply on your wrist — synced through your own private iCloud.
-- **Talk, type, or share.** On-device dictation, photos and text files, the share sheet, and Screenshot & Ask on Mac.
-- **Work, a desk for your projects.** Collect notes, screenshots, and files from any device, group them into projects, and hand a project to your AI only when you say so.
-- **See what you use.** Turns, tokens, response times, and reliability per gateway, device, and model — measured on your device, visible only to you.
-- **Nobody in the middle.** No Conduck server, no account, no analytics, ads, tracking, or telemetry.
+<table>
+<tr>
+<td width="33%" valign="top">
+<h3>🎙️ Ask from anywhere</h3>
+<p>Action Button, Control Center, Shortcuts, the Mac menu bar, a hotkey, your Watch, or CarPlay.</p>
+</td>
+<td width="33%" valign="top">
+<h3>🔄 One chat, every device</h3>
+<p>Start on the Mac, check the reply on your wrist. Synced through your own private iCloud.</p>
+</td>
+<td width="33%" valign="top">
+<h3>📎 Talk, type, or share</h3>
+<p>Dictate on-device, attach photos and files, or use Screenshot & Ask on Mac.</p>
+</td>
+</tr>
+<tr>
+<td width="33%" valign="top">
+<h3>🗂️ A desk for your projects</h3>
+<p>Collect notes, screenshots, and files. Hand a project to your AI when you're ready.</p>
+</td>
+<td width="33%" valign="top">
+<h3>📊 See what you use</h3>
+<p>Tokens, speed, and reliability per model and device, measured on your device only.</p>
+</td>
+<td width="33%" valign="top">
+<h3>🔒 Nobody in the middle</h3>
+<p>No Conduck server, no account, no analytics or tracking. Your keys, your AI.</p>
+</td>
+</tr>
+</table>
 
 <sub>Requires iOS, iPadOS, macOS, and watchOS 26.5 or later. The Mac app needs Apple silicon. CarPlay runs through the iPhone app.</sub>
 
 ## Get started
 
-Free, and no account with us.
+Free, with no account needed. Pick the one that sounds like you:
 
-| You have… | In Conduck | You get |
-|---|---|---|
-| **No server yet** | Settings → Personal AI → **Sign in with OpenRouter** | Chat with images and text files, in about a minute |
-| **A local model server** (Ollama, LM Studio, and others) | Add a **Custom endpoint** with its address | Your own models, chat plus inline attachments |
-| **An agent server** (OpenClaw, Hermes, or your own) | Scan a setup code from [`conduck-connect`](https://github.com/gigaduckai/conduck-connect) | Agent tools, memory, long-running jobs, and file exchange |
+<table>
+<tr>
+<td width="33%" valign="top">
+<h3>✨ “I just want to try it.”</h3>
+<p>Tap <b>Sign in with OpenRouter</b> in the app. You're chatting in about a minute, no server needed.</p>
+</td>
+<td width="33%" valign="top">
+<h3>🖥️ “I run models myself.”</h3>
+<p>Add your Ollama, LM Studio, or any OpenAI-compatible server by its address.</p>
+</td>
+<td width="33%" valign="top">
+<h3>🤖 “I run an AI agent.”</h3>
+<p>Pair OpenClaw, Hermes, or your own agent with <a href="https://github.com/gigaduckai/conduck-connect"><code>conduck-connect</code></a> for tools, memory, and file sharing.</p>
+</td>
+</tr>
+</table>
 
-Anything that speaks the OpenAI chat API works too — vLLM, LiteLLM, Open WebUI, and more. Agent tools and full file exchange need an agent server. Built your own AI? Hand the [adapter contract](https://conduck.com/setup/adapter/v1/) to the coding tool that built it, and `conduck-connect --check-adapter` verifies the result. Step-by-step walkthroughs for every path are in the [setup guide](https://conduck.com/setup/).
+Step-by-step for each path: **[setup guide →](https://conduck.com/setup/)**
 
 ## Private by design
 
